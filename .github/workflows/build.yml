@@ -40,6 +40,13 @@ jobs:
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
+      # 安装 NSIS 编译器以确保 Windows 下能成功生成安装包
+      - name: Install NSIS (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install nsis -y
+        shell: pwsh
+
       # Windows 打包流程 (NSIS 安装程序)
       - name: Build and Package (Windows)
         if: matrix.os == 'windows-latest'
