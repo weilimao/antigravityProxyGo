@@ -45,12 +45,16 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           choco install nsis -y
+          # 将 NSIS 写入 GITHUB_PATH 确保后续步骤能读取到 makensis 路径
+          echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
         shell: pwsh
 
       # Windows 打包流程 (NSIS 安装程序)
       - name: Build and Package (Windows)
         if: matrix.os == 'windows-latest'
         run: |
+          # 双重保险：在当前 Step 进程的内存中直接追加 PATH 环境变量
+          $env:PATH += ";C:\Program Files (x86)\NSIS"
           # windows-latest 镜像内置了 makensis 编译器，直接调用 -nsis 即可
           wails build -nsis -platform windows/amd64
           # 重命名生成产物为美观的名字
