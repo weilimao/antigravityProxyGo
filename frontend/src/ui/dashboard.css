@@ -1,0 +1,166 @@
+/* Custom styles for Antigravity Proxy Console */
+
+body {
+    background-color: #f8fafc;
+    color: #0f172a;
+    transition: background-color 0.2s, color 0.2s;
+}
+
+.dark body {
+    background-color: #0e111a;
+    color: #e0e2ef;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.2);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.4);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.25);
+}
+
+/* Glass Card styling overrides */
+.glass-card {
+    background: #ffffff;
+    border: 1px solid rgba(226, 232, 240, 0.8);
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+    transition: border-color 0.2s, background-color 0.2s, box-shadow 0.2s;
+}
+
+.dark .glass-card {
+    background: #1a1f30;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.dark .glass-card:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+/* SVG Chart styles */
+.chart-area {
+    position: relative;
+    overflow: hidden;
+}
+.chart-line {
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+}
+
+/* System Logs Console (collapsible footer) */
+#systemConsole {
+    background: #f1f5f9;
+    border-top: 1px solid #e2e8f0;
+    height: 36px;
+    display: flex;
+    flex-direction: column;
+    transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    flex-shrink: 0;
+    z-index: 40;
+}
+.dark #systemConsole {
+    background: #0b0e17;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+#systemConsole.expanded {
+    height: 180px;
+}
+
+.console-header {
+    height: 36px;
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+}
+.dark .console-header {
+    color: #988d9f;
+}
+.console-header:hover {
+    background: rgba(100, 116, 139, 0.05);
+}
+
+.console-body {
+    flex: 1;
+    padding: 12px 24px;
+    overflow-y: auto;
+    font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+    font-size: 11px;
+    color: #475569;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.dark .console-body {
+    color: #a0aec0;
+}
+.console-entry {
+    margin-bottom: 4px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.02);
+    padding-bottom: 2px;
+}
+.dark .console-entry {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+}
+.console-entry.warn { color: #d97706; }
+.console-entry.error { color: #ef4444; }
+.console-entry.info { color: #3b82f6; }
+
+.dark .console-entry.warn { color: #f59e0b; }
+.dark .console-entry.error { color: #f43f5e; }
+.dark .console-entry.info { color: #22d3ee; }
+
+.hidden {
+    display: none !important;
+}
+
+.empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 120px;
+    color: #94a3b8;
+    font-size: 13px;
+    font-style: italic;
+}
+
+/* 交互图表 Tooltip 与网格标签 */
+#chartTooltip {
+    box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.08), 0 8px 16px -8px rgba(0, 0, 0, 0.12);
+}
+.chart-area svg text {
+    font-size: 10px;
+    fill: #64748b;
+}
+.dark .chart-area svg text {
+    fill: #94a3b8;
+}
+#trendSvg .chart-line {
+    transition: stroke 0.2s ease;
+}
+#chartGridLines line {
+    stroke: rgba(226, 232, 240, 0.8);
+}
+.dark #chartGridLines line {
+    stroke: rgba(255, 255, 255, 0.06);
+}
