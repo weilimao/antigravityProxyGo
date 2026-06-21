@@ -75,15 +75,15 @@ jobs:
             --volname "Antigravity Proxy" \
             --window-size 500 300 \
             --icon-size 100 \
-            --icon "antigravity-proxy-desktop-go.app" 100 120 \
-            --hide-extension "antigravity-proxy-desktop-go.app" \
+            --icon "antigravity-proxy.app" 100 120 \
+            --hide-extension "antigravity-proxy.app" \
             --app-drop-link 300 120 \
             "build/bin/antigravity-proxy-${{ github.ref_name }}-mac-universal.dmg" \
-            "build/bin/antigravity-proxy-desktop-go.app"
+            "build/bin/antigravity-proxy.app"
             
           # 压缩为 .zip 格式的直接运行包
           cd build/bin
-          zip -r "antigravity-proxy-${{ github.ref_name }}-mac-universal.zip" "antigravity-proxy-desktop-go.app"
+          zip -r "antigravity-proxy-${{ github.ref_name }}-mac-universal.zip" "antigravity-proxy.app"
         shell: bash
 
       - name: Upload Build Artifacts
