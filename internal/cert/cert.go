@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"syscall"
 )
 
 const certCommonName = "NodeMITMProxyCA"
@@ -16,7 +15,7 @@ const certCommonName = "NodeMITMProxyCA"
 func CheckCertStatus() bool {
 	if runtime.GOOS == "windows" {
 		cmd := exec.Command("certutil", "-user", "-store", "ROOT", certCommonName)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		hideWindow(cmd)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		err := cmd.Run()
@@ -37,7 +36,7 @@ func InstallCert(caCertPath string) (bool, string) {
 
 	if runtime.GOOS == "windows" {
 		cmd := exec.Command("certutil", "-user", "-addstore", "-f", "ROOT", caCertPath)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		hideWindow(cmd)
 		var out bytes.Buffer
 		cmd.Stderr = &out
 		cmd.Stdout = &out
@@ -73,7 +72,7 @@ func InstallCert(caCertPath string) (bool, string) {
 func UninstallCert() (bool, string) {
 	if runtime.GOOS == "windows" {
 		cmd := exec.Command("certutil", "-user", "-delstore", "ROOT", certCommonName)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		hideWindow(cmd)
 		var out bytes.Buffer
 		cmd.Stderr = &out
 		cmd.Stdout = &out
