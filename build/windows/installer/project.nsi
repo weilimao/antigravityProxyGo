@@ -82,6 +82,18 @@ FunctionEnd
 Section
     !insertmacro wails.setShellContext
 
+    # 检测文件是否存在，若存在则检查是否在运行
+    IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" check_running install_start
+
+    check_running:
+      ClearErrors
+      FileOpen $0 "$INSTDIR\${PRODUCT_EXECUTABLE}" "a"
+      FileClose $0
+      IfErrors 0 install_start
+        MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${INFO_PRODUCTNAME} 正在后台运行。请先在系统托盘退出程序，或在任务管理器中结束该进程，然后点击“重试”继续，或点击“取消”退出安装。" IDRETRY check_running
+        Abort
+
+    install_start:
     !insertmacro wails.webview2runtime
 
     SetOutPath $INSTDIR
