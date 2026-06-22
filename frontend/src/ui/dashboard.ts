@@ -468,6 +468,32 @@ export function initDashboardEvents() {
         });
     }
 
+    if (modalCopyHeadersBtn) {
+        modalCopyHeadersBtn.addEventListener('click', () => {
+            const textToCopy = modalHeaderArea?.textContent || '';
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                const span = modalCopyHeadersBtn!.querySelector('span:not(.material-symbols-outlined)');
+                if (span) {
+                    span.textContent = state.currentLanguage === 'zh' ? '已复制！' : 'Copied!';
+                    setTimeout(() => { span.textContent = state.currentLanguage === 'zh' ? '复制' : 'Copy'; }, 1500);
+                }
+            });
+        });
+    }
+
+    if (modalCopyBtn) {
+        modalCopyBtn.addEventListener('click', () => {
+            const textToCopy = modalJsonArea?.textContent || '';
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                const span = modalCopyBtn!.querySelector('span:not(.material-symbols-outlined)');
+                if (span) {
+                    span.textContent = state.currentLanguage === 'zh' ? '已复制！' : 'Copied!';
+                    setTimeout(() => { span.textContent = state.currentLanguage === 'zh' ? '复制 JSON' : 'Copy JSON'; }, 1500);
+                }
+            });
+        });
+    }
+
     proxyToggle = document.getElementById('proxyToggle') as HTMLInputElement | null;
     btnInstallCert = document.getElementById('btnInstallCert') as HTMLButtonElement | null;
     btnUninstallCert = document.getElementById('btnUninstallCert') as HTMLButtonElement | null;
@@ -807,6 +833,10 @@ export function hideModal() {
     detailsModal.classList.add('opacity-0', 'pointer-events-none');
     modalContainer.classList.add('scale-95');
     modalContainer.classList.remove('scale-100');
+
+    // Clear massive text areas to release memory of large API requests/responses in DOM tree immediately
+    if (modalJsonArea) modalJsonArea.textContent = '';
+    if (modalHeaderArea) modalHeaderArea.textContent = '';
 }
 
 export function showModal(log: any) {
@@ -863,30 +893,6 @@ export function showModal(log: any) {
     }
     if (modalHeaderArea) modalHeaderArea.textContent = formattedHeaders;
 
-    if (modalCopyHeadersBtn) {
-        modalCopyHeadersBtn.onclick = () => {
-            navigator.clipboard.writeText(formattedHeaders).then(() => {
-                const span = modalCopyHeadersBtn!.querySelector('span:not(.material-symbols-outlined)');
-                if (span) {
-                    span.textContent = state.currentLanguage === 'zh' ? '已复制！' : 'Copied!';
-                    setTimeout(() => { span.textContent = state.currentLanguage === 'zh' ? '复制' : 'Copy'; }, 1500);
-                }
-            });
-        };
-    }
-
-    if (modalCopyBtn) {
-        modalCopyBtn.onclick = () => {
-            navigator.clipboard.writeText(formattedJson).then(() => {
-                const span = modalCopyBtn!.querySelector('span:not(.material-symbols-outlined)');
-                if (span) {
-                    span.textContent = state.currentLanguage === 'zh' ? '已复制！' : 'Copied!';
-                    setTimeout(() => { span.textContent = state.currentLanguage === 'zh' ? '复制 JSON' : 'Copy JSON'; }, 1500);
-                }
-            });
-        };
-    }
-    
     detailsModal.classList.remove('opacity-0', 'pointer-events-none');
     modalContainer.classList.remove('scale-95');
     modalContainer.classList.add('scale-100');
