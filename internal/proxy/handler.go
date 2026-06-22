@@ -238,7 +238,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	attemptRequest := func(attemptIndex int) (int, map[string][]string, []byte, error) {
+	attemptRequest := func(attemptIndex int) (int, map[string][]string, []byte, bool, error) {
 		if attemptIndex > 0 && !isIgnoredTelemetry(targetPath) {
 			h.statsTracker.TrackRetry(1)
 		}
@@ -254,7 +254,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			available := h.accountMgr.GetAvailableAccounts(currentModel)
 			poolAccount = h.sessionRouter.GetOrAssignAccount(sessionKey, available, h.logFn)
 			if poolAccount == nil {
-				return 0, nil, nil, errors.New("QUOTA_EXHAUSTED")
+				return 0, nil, nil, false, errors.New("QUOTA_EXHAUSTED")
 			}
 		}
 
@@ -355,23 +355,67 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		targetUrl := "https://" + targetHost + targetPath
 		proxyReq, errReq := http.NewRequest(r.Method, targetUrl, bytes.NewReader(finalReqBody))
 		if errReq != nil {
-			return 0, nil, nil, errReq
+			return 0, nil, nil, false, errReq
 		}
 		proxyReq.Header = customHeaders
 
 		resp, errDo := h.client.Do(proxyReq)
 		if errDo != nil {
-			return 0, nil, nil, errDo
+			return 0, nil, nil, false, errDo
 		}
 		defer resp.Body.Close()
 
-		respBodyBytes, errRead := io.ReadAll(resp.Body)
+		var respBodyBytes []byte
+		var errRead error
+		isStreaming := strings.Contains(targetPath, "streamGenerateContent")
+
+		if isStreaming && resp.StatusCode == 200 {
+			// Copy headers to writer
+			for k, values := range resp.Header {
+				for _, v := range values {
+					w.Header().Add(k, v)
+				}
+			}
+			w.Header().Del("Content-Length")
+			w.WriteHeader(resp.StatusCode)
+
+			var accumulatedBytes bytes.Buffer
+			flusher, hasFlusher := w.(http.Flusher)
+			if hasFlusher {
+				flusher.Flush()
+			}
+
+			buf := make([]byte, 4096)
+			for {
+				n, errR := resp.Body.Read(buf)
+				if n > 0 {
+					_, writeErr := w.Write(buf[:n])
+					if writeErr != nil {
+						break
+					}
+					accumulatedBytes.Write(buf[:n])
+					if hasFlusher {
+						flusher.Flush()
+					}
+				}
+				if errR != nil {
+					if errR != io.EOF {
+						h.logFn(fmt.Sprintf("%s ⚠️ Read error during streaming: %v", logPrefix, errR))
+					}
+					break
+				}
+			}
+			respBodyBytes = accumulatedBytes.Bytes()
+		} else {
+			respBodyBytes, errRead = io.ReadAll(resp.Body)
+		}
+
 		if errRead != nil {
-			return resp.StatusCode, nil, nil, errRead
+			return resp.StatusCode, nil, nil, false, errRead
 		}
 
 		if resp.StatusCode == 401 {
-			return 401, resp.Header, respBodyBytes, errors.New("TOKEN_EXPIRED")
+			return 401, resp.Header, respBodyBytes, false, errors.New("TOKEN_EXPIRED")
 		}
 
 		// Handle Google Quota 429 Interception to prevent IDE infinite loop
@@ -408,7 +452,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			headersCopy["Content-Length"] = []string{strconv.Itoa(len(mockBytes))}
 			headersCopy["Content-Type"] = []string{"application/json"}
-			return 200, headersCopy, mockBytes, nil
+			return 200, headersCopy, mockBytes, false, nil
 		}
 
 		// 429 Quota Error
@@ -418,13 +462,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			isCreditExempt := strings.Contains(bodyStrLower, "credit") || strings.Contains(bodyStrLower, "balance") || strings.Contains(bodyStrLower, "overage") || strings.Contains(bodyStrLower, "insufficient")
 
 			if isCreditExempt {
-				return resp.StatusCode, resp.Header, respBodyBytes, errors.New("CREDITS_EXHAUSTED")
+				return resp.StatusCode, resp.Header, respBodyBytes, false, errors.New("CREDITS_EXHAUSTED")
 			}
 
 			if resp.StatusCode == 429 {
 				isQuotaError := strings.Contains(bodyStr, "RESOURCE_EXHAUSTED") || strings.Contains(bodyStr, "quota") || strings.Contains(bodyStr, "exhausted") || strings.Contains(bodyStr, "limit") || strings.Contains(bodyStr, "MODEL_CAPACITY_EXHAUSTED")
 				if isQuotaError {
-					return 429, resp.Header, respBodyBytes, errors.New("QUOTA_EXHAUSTED")
+					return 429, resp.Header, respBodyBytes, false, errors.New("QUOTA_EXHAUSTED")
 				}
 			}
 		}
@@ -432,7 +476,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// 503 Capacity Exhausted
 		if resp.StatusCode == 503 {
 			if strings.Contains(string(respBodyBytes), "MODEL_CAPACITY_EXHAUSTED") {
-				return 503, resp.Header, respBodyBytes, errors.New("CAPACITY_EXHAUSTED")
+				return 503, resp.Header, respBodyBytes, false, errors.New("CAPACITY_EXHAUSTED")
 			}
 		}
 
@@ -488,7 +532,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		return resp.StatusCode, resp.Header, respBodyBytes, nil
+		return resp.StatusCode, resp.Header, respBodyBytes, isStreaming && resp.StatusCode == 200, nil
 	}
 
 	maxRetries := 20
@@ -506,7 +550,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			lastUsedAccount = h.sessionRouter.GetOrAssignAccount(sessionKey, available, nil)
 		}
 
-		status, headers, body, errAttempt := attemptRequest(attempt)
+		status, headers, body, isStreamed, errAttempt := attemptRequest(attempt)
 
 		if errAttempt == nil {
 			// Successful request
@@ -515,14 +559,16 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			logRequestToTracker(status, "")
 
-			// Write response back to client
-			for k, values := range headers {
-				for _, v := range values {
-					w.Header().Add(k, v)
+			if !isStreamed {
+				// Write response back to client
+				for k, values := range headers {
+					for _, v := range values {
+						w.Header().Add(k, v)
+					}
 				}
+				w.WriteHeader(status)
+				w.Write(body)
 			}
-			w.WriteHeader(status)
-			w.Write(body)
 			return
 		}
 
@@ -561,8 +607,32 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}(lastUsedAccount)
 			}
 
-			if errAttempt.Error() == "CAPACITY_EXHAUSTED" || errAttempt.Error() == "QUOTA_EXHAUSTED" {
-				h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 额度已耗尽 (%s)。标记冷静期...", email, errAttempt.Error()))
+			if errAttempt.Error() == "CAPACITY_EXHAUSTED" {
+				h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 模型容量耗尽 (CAPACITY_EXHAUSTED，服务超载或限频)。标记临时冷静期并获取真实配额...", email))
+				h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+5*60*1000, currentModel)
+
+				go func(a *account.Account) {
+					res, qErr := h.quotaFetch(a)
+					if qErr == nil && len(res.Buckets) > 0 {
+						h.accountMgr.UpdateAccountCooldownFromQuota(a.ID, res.Buckets)
+						// 重新检查当前冷静期状态，确认是否清零
+						refreshedAcc := h.accountMgr.GetAccountByID(a.ID)
+						if refreshedAcc != nil {
+							cat := h.accountMgr.GetModelCategory(currentModel)
+							cooldown := refreshedAcc.CooldownUntil
+							if refreshedAcc.Cooldowns != nil {
+								if c, ok := refreshedAcc.Cooldowns[cat]; ok {
+									cooldown = c
+								}
+							}
+							if cooldown == 0 {
+								h.logFn(fmt.Sprintf("✅ [负载均衡] 账号 %s 额度充足，已自动解除冷静期，恢复可用状态。", email))
+							}
+						}
+					}
+				}(lastUsedAccount)
+			} else if errAttempt.Error() == "QUOTA_EXHAUSTED" {
+				h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 配额已耗尽 (QUOTA_EXHAUSTED)。标记冷静期并获取真实配额...", email))
 				h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+5*60*1000, currentModel)
 
 				go func(a *account.Account) {
