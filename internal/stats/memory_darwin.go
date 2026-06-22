@@ -18,12 +18,12 @@ func GetAppMemoryStats() (uint64, int, float64, error) {
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
-		return 0, 0, err
+		return 0, 0, 0.0, err
 	}
 
 	lines := strings.Split(out.String(), "\n")
 	if len(lines) < 2 {
-		return 0, 0, fmt.Errorf("unexpected ps output")
+		return 0, 0, 0.0, fmt.Errorf("unexpected ps output")
 	}
 
 	parentToChildren := make(map[int][]int)
