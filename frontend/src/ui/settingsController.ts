@@ -67,17 +67,8 @@ export function initSettings() {
             });
         }
 
-        // Fetch initial state
+        // Toggle listener
         if (chkEnableSystemLog) {
-            try {
-                const enabled = ipcRenderer.sendSync('settings:get-system-log-enabled');
-                chkEnableSystemLog.checked = !!enabled;
-                updateConsoleVisibility(!!enabled);
-            } catch (err) {
-                console.error('[SettingsController] Failed to fetch initial log settings:', err);
-            }
-
-            // Toggle listener
             chkEnableSystemLog.addEventListener('change', (e: any) => {
                 const enabled = e.target.checked;
                 try {
@@ -87,16 +78,6 @@ export function initSettings() {
                     console.error('[SettingsController] Failed to save log settings:', err);
                 }
             });
-        }
-
-        try {
-            if (chkEnableAutoStart && chkEnableSilentStart) {
-                const startupOptions = ipcRenderer.sendSync('settings:get-startup-options');
-                chkEnableAutoStart.checked = !!startupOptions.autoStart;
-                chkEnableSilentStart.checked = !!startupOptions.silentStart;
-            }
-        } catch (err) {
-            console.error('[SettingsController] Failed to fetch startup options:', err);
         }
 
         if (chkEnableAutoStart) {
@@ -130,7 +111,44 @@ export function initSettings() {
                 }
             }
         }
+
+        // Initial load
+        refreshSettingsUI();
+
     } catch (globalErr) {
         console.error('[SettingsController] Global init error:', globalErr);
     }
 }
+
+export function refreshSettingsUI() {
+    try {
+        const chkEnableSystemLog = document.getElementById('chkEnableSystemLog') as HTMLInputElement | null;
+        const systemConsole = document.getElementById('systemConsole');
+        const chkEnableAutoStart = document.getElementById('chkEnableAutoStart') as HTMLInputElement | null;
+        const chkEnableSilentStart = document.getElementById('chkEnableSilentStart') as HTMLInputElement | null;
+
+        if (chkEnableSystemLog) {
+            const enabled = ipcRenderer.sendSync('settings:get-system-log-enabled');
+            if (enabled !== null && enabled !== undefined) {
+                chkEnableSystemLog.checked = !!enabled;
+                if (systemConsole) {
+                    systemConsole.style.display = enabled ? 'flex' : 'none';
+                }
+            }
+        }
+
+        if (chkEnableAutoStart && chkEnableSilentStart) {
+            const startupOptions = ipcRenderer.sendSync('settings:get-startup-options');
+            if (startupOptions) {
+                chkEnableAutoStart.checked = !!startupOptions.autoStart;
+                chkEnableSilentStart.checked = !!startupOptions.silentStart;
+            }
+        }
+    } catch (err) {
+        console.error('[SettingsController] Failed to refresh settings UI:', err);
+    }
+}
+
+// Global hook
+(window as any).refreshSettingsUI = refreshSettingsUI;
+

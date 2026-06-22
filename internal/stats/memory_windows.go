@@ -4,6 +4,8 @@ package stats
 
 import (
 	"os"
+	"runtime"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -20,19 +22,32 @@ type PROCESS_MEMORY_COUNTERS struct {
 	QuotaNonPagedPoolUsage     uintptr
 	PagefileUsage              uintptr
 	PeakPagefileUsage          uintptr
+	PrivateUsage               uintptr
 }
 
 var (
 	psapi                = windows.NewLazySystemDLL("psapi.dll")
 	getProcessMemoryInfo = psapi.NewProc("GetProcessMemoryInfo")
+	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
+	getProcessTimes      = kernel32.NewProc("GetProcessTimes")
 )
 
-func GetAppMemoryStats() (uint64, int, error) {
+type processCpuRecord struct {
+	kernelTime uint64
+	userTime   uint64
+}
+
+var (
+	lastCpuQueryTime int64
+	lastProcessCpu   = make(map[uint32]processCpuRecord)
+)
+
+func GetAppMemoryStats() (uint64, int, float64, error) {
 	myPid := uint32(os.Getpid())
 
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0.0, err
 	}
 	defer windows.CloseHandle(snapshot)
 
@@ -64,6 +79,10 @@ func GetAppMemoryStats() (uint64, int, error) {
 
 	var totalMemory uint64
 	var count int
+	var totalCpuTimeDiff uint64
+
+	nowNano := time.Now().UnixNano()
+	newProcessCpu := make(map[uint32]processCpuRecord)
 
 	for _, pid := range pidsToQuery {
 		h, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ, false, pid)
@@ -71,6 +90,7 @@ func GetAppMemoryStats() (uint64, int, error) {
 			continue
 		}
 
+		// 1. Query memory counters
 		var counters PROCESS_MEMORY_COUNTERS
 		counters.CB = uint32(unsafe.Sizeof(counters))
 
@@ -79,13 +99,55 @@ func GetAppMemoryStats() (uint64, int, error) {
 			uintptr(unsafe.Pointer(&counters)),
 			uintptr(counters.CB),
 		)
-		windows.CloseHandle(h)
 
 		if r1 != 0 {
-			totalMemory += uint64(counters.WorkingSetSize)
+			// Using PrivateUsage instead of WorkingSetSize to avoid shared DLL double counting.
+			totalMemory += uint64(counters.PrivateUsage)
 			count++
+		}
+
+		// 2. Query process times for CPU usage calculation
+		var creationTime, exitTime, kernelTime, userTime windows.Filetime
+		rCpu, _, _ := getProcessTimes.Call(
+			uintptr(h),
+			uintptr(unsafe.Pointer(&creationTime)),
+			uintptr(unsafe.Pointer(&exitTime)),
+			uintptr(unsafe.Pointer(&kernelTime)),
+			uintptr(unsafe.Pointer(&userTime)),
+		)
+		windows.CloseHandle(h)
+
+		if rCpu != 0 {
+			kVal := (uint64(kernelTime.HighDateTime) << 32) | uint64(kernelTime.LowDateTime)
+			uVal := (uint64(userTime.HighDateTime) << 32) | uint64(userTime.LowDateTime)
+
+			if lastRecord, exists := lastProcessCpu[pid]; exists {
+				kDiff := kVal - lastRecord.kernelTime
+				uDiff := uVal - lastRecord.userTime
+				totalCpuTimeDiff += (kDiff + uDiff) * 100 // Convert 100ns units to nanoseconds
+			}
+
+			newProcessCpu[pid] = processCpuRecord{kernelTime: kVal, userTime: uVal}
 		}
 	}
 
-	return totalMemory, count, nil
+	var cpuPercent float64
+	if lastCpuQueryTime > 0 {
+		deltaNs := nowNano - lastCpuQueryTime
+		if deltaNs > 0 {
+			numCpu := runtime.NumCPU()
+			cpuPercent = (float64(totalCpuTimeDiff) / (float64(deltaNs) * float64(numCpu))) * 100.0
+			if cpuPercent > 100.0 {
+				cpuPercent = 100.0
+			}
+			if cpuPercent < 0.0 {
+				cpuPercent = 0.0
+			}
+		}
+	}
+
+	lastCpuQueryTime = nowNano
+	lastProcessCpu = newProcessCpu
+
+	return totalMemory, count, cpuPercent, nil
 }

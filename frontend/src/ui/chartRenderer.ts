@@ -182,47 +182,69 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     maxTokens = Math.ceil(maxTokens * 1.15);
     maxCost = maxCost * 1.15;
 
-    // Reset Axis Containers
-    gridLinesGroup.innerHTML = '';
-    leftAxis.innerHTML = '';
-    rightAxis.innerHTML = '';
-    xAxis.innerHTML = '';
+    // Reset Axis Containers only if counts are incorrect to avoid complete DOM destruction
+    if (gridLinesGroup.children.length !== 5) {
+        gridLinesGroup.innerHTML = '';
+    }
+    if (leftAxis.children.length !== 5) {
+        leftAxis.innerHTML = '';
+    }
+    if (rightAxis.children.length !== 5) {
+        rightAxis.innerHTML = '';
+    }
 
-    // 1. Draw horizontal grid lines (SVG) & Y labels (HTML)
+    const existingLines = gridLinesGroup.children;
+    const existingLeftLabels = leftAxis.children;
+    const existingRightLabels = rightAxis.children;
+
+    // 1. Draw horizontal grid lines (SVG) & Y labels (HTML) with node reuse
     for (let i = 4; i >= 0; i--) {
         const ratio = i / 4;
         const y = yMax - ratio * (yMax - yMin);
+        const idx = 4 - i;
         
-        // Grid Line
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        line.setAttribute('x1', String(xMin));
-        line.setAttribute('y1', y.toFixed(1));
-        line.setAttribute('x2', String(xMax));
-        line.setAttribute('y2', y.toFixed(1));
-        line.setAttribute('stroke-width', '1');
-        if (i > 0 && i < 4) {
-            line.setAttribute('stroke-dasharray', '3,3');
+        // 1a. Grid Line (Coordinate y is constant as yMin/yMax are constants, so we only append if missing)
+        if (existingLines.length < 5) {
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', String(xMin));
+            line.setAttribute('y1', y.toFixed(1));
+            line.setAttribute('x2', String(xMax));
+            line.setAttribute('y2', y.toFixed(1));
+            line.setAttribute('stroke-width', '1');
+            if (i > 0 && i < 4) {
+                line.setAttribute('stroke-dasharray', '3,3');
+            }
+            gridLinesGroup.appendChild(line);
         }
-        gridLinesGroup.appendChild(line);
 
-        // Left HTML Token label
+        // 1b. Left HTML Token label
         const tokenVal = ratio * maxTokens;
-        const leftLabel = document.createElement('div');
-        leftLabel.className = 'absolute right-2 -translate-y-1/2 font-sans text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap select-none';
-        leftLabel.style.top = `${(y / 300) * 100}%`;
+        let leftLabel: HTMLElement;
+        if (existingLeftLabels.length < 5) {
+            leftLabel = document.createElement('div');
+            leftLabel.className = 'absolute right-2 -translate-y-1/2 font-sans text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap select-none';
+            leftLabel.style.top = `${(y / 300) * 100}%`;
+            leftAxis.appendChild(leftLabel);
+        } else {
+            leftLabel = existingLeftLabels[idx] as HTMLElement;
+        }
         leftLabel.textContent = formatCompactNumber(tokenVal);
-        leftAxis.appendChild(leftLabel);
 
-        // Right HTML Cost label
+        // 1c. Right HTML Cost label
         const costVal = ratio * maxCost;
-        const rightLabel = document.createElement('div');
-        rightLabel.className = 'absolute left-2 -translate-y-1/2 font-sans text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap select-none';
-        rightLabel.style.top = `${(y / 300) * 100}%`;
+        let rightLabel: HTMLElement;
+        if (existingRightLabels.length < 5) {
+            rightLabel = document.createElement('div');
+            rightLabel.className = 'absolute left-2 -translate-y-1/2 font-sans text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap select-none';
+            rightLabel.style.top = `${(y / 300) * 100}%`;
+            rightAxis.appendChild(rightLabel);
+        } else {
+            rightLabel = existingRightLabels[idx] as HTMLElement;
+        }
         rightLabel.textContent = costVal === 0 ? '$0' : `$${costVal.toFixed(costVal < 1 ? 4 : 2)}`;
-        rightAxis.appendChild(rightLabel);
     }
 
-    // 2. Draw X Labels in HTML using absolute percentages
+    // 2. Draw X Labels in HTML using absolute percentages with element reuse
     let isSingleDay = range === 'today';
     if (range === 'custom' && trends.length > 0) {
         const firstDay = trends[0].time.split(' ')[0];
@@ -243,32 +265,49 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
         indices.push(N - 1);
     }
 
-    indices.forEach(idx => {
+    const existingXLabels = xAxis.children;
+    const targetCount = indices.length;
+
+    // Prune excess elements
+    while (existingXLabels.length > targetCount) {
+        xAxis.removeChild(xAxis.lastChild!);
+    }
+
+    indices.forEach((idx, i) => {
         const d = trends[idx];
         const percent = N > 1 ? (idx / (N - 1)) * 100 : 50;
-        const label = document.createElement('div');
-        label.className = 'absolute -translate-x-1/2 text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap font-sans';
+        let label: HTMLElement;
+
+        if (i < existingXLabels.length) {
+            label = existingXLabels[i] as HTMLElement;
+        } else {
+            label = document.createElement('div');
+            label.className = 'absolute -translate-x-1/2 text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap font-sans';
+            xAxis.appendChild(label);
+        }
+
         label.style.left = `${percent}%`;
         
+        let textVal = '';
         if (range === '24h') {
             if (idx === 0) {
-                label.textContent = d.time || '';
+                textVal = d.time || '';
             } else {
                 const prevD = trends[idx - 1];
                 const currentDay = d.time ? d.time.split(' ')[0] : '';
                 const prevDay = prevD && prevD.time ? prevD.time.split(' ')[0] : '';
                 if (currentDay && prevDay && currentDay !== prevDay) {
-                    label.textContent = d.time || '';
+                    textVal = d.time || '';
                 } else {
-                    label.textContent = d.time ? (d.time.split(' ')[1] || d.time) : '';
+                    textVal = d.time ? (d.time.split(' ')[1] || d.time) : '';
                 }
             }
         } else if (isSingleDay) {
-            label.textContent = d.time ? (d.time.split(' ')[1] || d.time) : '';
+            textVal = d.time ? (d.time.split(' ')[1] || d.time) : '';
         } else {
-            label.textContent = d.time ? d.time.split(' ')[0] : '';
+            textVal = d.time ? d.time.split(' ')[0] : '';
         }
-        xAxis.appendChild(label);
+        label.textContent = textVal;
     });
 
     // 3. Coordinate calculation helpers

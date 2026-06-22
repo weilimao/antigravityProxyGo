@@ -268,7 +268,6 @@ export function renderAccounts(accounts: any[]) {
     if (accountCountBadge) {
         accountCountBadge.textContent = `共 ${filteredAccounts.length} 个账号`;
     }
-    accountsList.innerHTML = '';
     
     if (!accountsEmptyState) {
         accountsEmptyState = document.getElementById('accountsEmptyState');
@@ -280,6 +279,7 @@ export function renderAccounts(accounts: any[]) {
             accountsEmptyState.classList.add('flex');
         }
         accountsList.classList.add('hidden');
+        accountsList.innerHTML = '';
         return;
     }
     
@@ -289,65 +289,21 @@ export function renderAccounts(accounts: any[]) {
     }
     accountsList.classList.remove('hidden');
     
+    // 1. DOM Pruning: Remove cards of accounts that are no longer present in the active list
+    const targetIds = new Set(filteredAccounts.map(a => a.id));
+    const currentCards = Array.from(accountsList.children);
+    currentCards.forEach(child => {
+        const accId = child.getAttribute('data-account-id');
+        if (accId && !targetIds.has(accId)) {
+            accountsList!.removeChild(child);
+        }
+    });
+
+    // 2. Loop through filtered accounts, either creating new card or updating existing card's attributes
     filteredAccounts.forEach(acc => {
-        const card = document.createElement('div');
-        card.className = 'bg-white dark:bg-[#1a1f30] border border-outline-variant/30 rounded-xl p-4 flex flex-col gap-3 shadow-sm relative overflow-hidden';
-        
-        // Background decorative icon
-        const bgIcon = document.createElement('div');
-        bgIcon.className = 'absolute -right-4 -bottom-4 text-primary opacity-[0.03] pointer-events-none';
-        bgIcon.innerHTML = '<span class="material-symbols-outlined" style="font-size: 80px;">account_circle</span>';
-        card.appendChild(bgIcon);
-        
-        // ---- Header ----
-        const header = document.createElement('div');
-        header.className = 'flex justify-between items-start';
-
-        const info = document.createElement('div');
-        info.className = 'flex flex-col flex-1 min-w-0 mr-2';
-
-        const providerBadge = acc.provider === 'antigravity'
-            ? '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 ml-2 mt-0.5 self-center">Antigravity</span>'
-            : (acc.provider === 'gemini-cli'
-                ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Gemini CLI</span>'
-                : '');
-
-        const projectBadge = (acc.provider !== 'antigravity' && acc.projectId)
-            ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center">Project</span>'
-            : '';
-
-        let tierBadge = '';
-        if (acc.tier) {
-            const tierStr = acc.tier.toUpperCase();
-            if (tierStr === 'PRO') {
-                tierBadge = '<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 dark:text-rose-400 text-[9px] font-bold border border-rose-500/20 ml-2 mt-0.5 self-center">Pro</span>';
-            } else if (tierStr === 'ULTRA') {
-                tierBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center font-extrabold tracking-wide">Ultra</span>';
-            } else if (tierStr === 'ENTERPRISE') {
-                tierBadge = '<span class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[9px] font-bold border border-blue-500/20 ml-2 mt-0.5 self-center">Enterprise</span>';
-            } else if (tierStr === 'STANDARD') {
-                tierBadge = '<span class="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[9px] font-bold border border-sky-500/20 ml-2 mt-0.5 self-center">Standard</span>';
-            } else if (tierStr === 'FREE') {
-                tierBadge = '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Free</span>';
-            } else {
-                tierBadge = `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">${acc.tier}</span>`;
-            }
-        }
-
-        let projectInfoStr = '';
-        if (acc.provider === 'antigravity' && acc.projectId) {
-            projectInfoStr = ` | 绑定项目: ${acc.projectId}`;
-        }
-
-        info.innerHTML = `
-            <div class="flex items-center">
-                <span class="text-[13px] font-bold text-on-surface dark:text-white truncate" title="${acc.email}">${acc.email}</span>
-                ${providerBadge}
-                ${projectBadge}
-                ${tierBadge}
-            </div>
-            <span class="text-[11px] text-outline mt-0.5 truncate">添加于: ${new Date(acc.addedAt).toLocaleString()}${projectInfoStr}</span>
-        `;
+        let card = accountsList!.querySelector(`[data-account-id="${acc.id}"]`) as HTMLElement | null;
+        let quotaBars: HTMLElement | null = null;
+        let refreshBtn: HTMLElement | null = null;
         
         let isCooling = false;
         let coolingCategories: string[] = [];
@@ -375,194 +331,325 @@ export function renderAccounts(accounts: any[]) {
         const totalCategoriesCount = 2;
         const isOverallCooling = coolingCategories.includes('all') || (coolingCategories.length === totalCategoriesCount);
 
-        const statusBadge = document.createElement('div');
-        if (isOverallCooling) {
-            statusBadge.className = 'flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
-            const dateStr = formatCooldownTime(maxCooldownTime);
-            statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> 冷静中 (${dateStr}恢复)`;
-        } else {
-            statusBadge.className = 'flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
-            statusBadge.innerHTML = '<span class="material-symbols-outlined text-[12px]">check_circle</span> 有效';
-        }
-        
-        header.appendChild(info);
-        header.appendChild(statusBadge);
-        
-        // ---- AI Credit Section ----
-        let creditSection: HTMLElement | null = null;
-        if (acc.provider === 'antigravity') {
-            creditSection = document.createElement('div');
-            creditSection.className = 'flex flex-col gap-1.5 border-t border-outline-variant/20 pt-3';
+        if (!card) {
+            // Card doesn't exist, create it from scratch and bind events
+            card = document.createElement('div');
+            card.setAttribute('data-account-id', acc.id);
+            card.className = 'bg-white dark:bg-[#1a1f30] border border-outline-variant/30 rounded-xl p-4 flex flex-col gap-3 shadow-sm relative overflow-hidden';
             
-            const creditHeader = document.createElement('div');
-            creditHeader.className = 'flex justify-between items-center';
+            // Background decorative icon
+            const bgIcon = document.createElement('div');
+            bgIcon.className = 'absolute -right-4 -bottom-4 text-primary opacity-[0.03] pointer-events-none';
+            bgIcon.innerHTML = '<span class="material-symbols-outlined" style="font-size: 80px;">account_circle</span>';
+            card.appendChild(bgIcon);
             
-            const creditTitle = document.createElement('span');
-            creditTitle.className = 'text-[11px] font-semibold text-outline dark:text-outline-variant';
-            creditTitle.textContent = 'AI 积分 (AI Credit)';
-            
-            const creditValue = document.createElement('span');
-            creditValue.className = 'text-[11px] font-bold text-on-surface dark:text-white font-data-mono';
-            const creditVal = typeof acc.credits === 'number' ? `$${acc.credits.toFixed(2)}` : '未加载';
-            creditValue.textContent = creditVal;
-            
-            creditHeader.appendChild(creditTitle);
-            creditHeader.appendChild(creditValue);
-            creditSection.appendChild(creditHeader);
-            
-            // Overages Toggle Button
-            const overagesToggleWrapper = document.createElement('div');
-            overagesToggleWrapper.className = 'flex items-center justify-between text-[11px] mt-1.5 select-none cursor-pointer';
-            
-            const overagesSwitchId = `overagesToggle-${acc.id}`;
-            const isOveragesChecked = acc.enableOverages === true;
-            overagesToggleWrapper.innerHTML = `
-                <span class="text-outline dark:text-outline-variant">使用积分抵扣超额度部分</span>
-                <div class="relative inline-block w-8 align-middle transition duration-200 ease-in flex-shrink-0 ml-2">
-                    <input class="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out" 
-                        id="${overagesSwitchId}" type="checkbox" ${isOveragesChecked ? 'checked' : ''}/>
-                    <label class="toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer" for="${overagesSwitchId}"></label>
+            // ---- Header ----
+            const header = document.createElement('div');
+            header.className = 'flex justify-between items-start';
+
+            const info = document.createElement('div');
+            info.className = 'flex flex-col flex-1 min-w-0 mr-2';
+
+            const providerBadge = acc.provider === 'antigravity'
+                ? '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 ml-2 mt-0.5 self-center">Antigravity</span>'
+                : (acc.provider === 'gemini-cli'
+                    ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Gemini CLI</span>'
+                    : '');
+
+            const projectBadge = (acc.provider !== 'antigravity' && acc.projectId)
+                ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center">Project</span>'
+                : '';
+
+            let tierBadge = '';
+            if (acc.tier) {
+                const tierStr = acc.tier.toUpperCase();
+                if (tierStr === 'PRO') {
+                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 dark:text-rose-400 text-[9px] font-bold border border-rose-500/20 ml-2 mt-0.5 self-center">Pro</span>';
+                } else if (tierStr === 'ULTRA') {
+                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center font-extrabold tracking-wide">Ultra</span>';
+                } else if (tierStr === 'ENTERPRISE') {
+                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[9px] font-bold border border-blue-500/20 ml-2 mt-0.5 self-center">Enterprise</span>';
+                } else if (tierStr === 'STANDARD') {
+                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[9px] font-bold border border-sky-500/20 ml-2 mt-0.5 self-center">Standard</span>';
+                } else if (tierStr === 'FREE') {
+                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Free</span>';
+                } else {
+                    tierBadge = `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">${acc.tier}</span>`;
+                }
+            }
+
+            let projectInfoStr = '';
+            if (acc.provider === 'antigravity' && acc.projectId) {
+                projectInfoStr = ` | 绑定项目: ${acc.projectId}`;
+            }
+
+            info.innerHTML = `
+                <div class="flex items-center">
+                    <span class="text-[13px] font-bold text-on-surface dark:text-white truncate" title="${acc.email}">${acc.email}</span>
+                    ${providerBadge}
+                    ${projectBadge}
+                    ${tierBadge}
                 </div>
+                <span class="text-[11px] text-outline mt-0.5 truncate">添加于: ${new Date(acc.addedAt).toLocaleString()}${projectInfoStr}</span>
             `;
             
-            const overagesCheckbox = overagesToggleWrapper.querySelector('input') as HTMLInputElement;
-            const overagesLabel = overagesToggleWrapper.querySelector('label') as HTMLLabelElement;
+            const statusBadge = document.createElement('div');
+            statusBadge.className = 'acc-status-badge';
+            if (isOverallCooling) {
+                statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
+                const dateStr = formatCooldownTime(maxCooldownTime);
+                statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> 冷静中 (${dateStr}恢复)`;
+            } else {
+                statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
+                statusBadge.innerHTML = '<span class="material-symbols-outlined text-[12px]">check_circle</span> 有效';
+            }
             
-            overagesCheckbox.addEventListener('change', (e: any) => {
-                const enabled = e.target.checked;
-                ipcRenderer.send('accounts:toggle-overages', acc.id, enabled);
-                acc.enableOverages = enabled;
-                if (enabled) {
+            header.appendChild(info);
+            header.appendChild(statusBadge);
+            card.appendChild(header);
+            
+            // ---- AI Credit Section ----
+            if (acc.provider === 'antigravity') {
+                const creditSection = document.createElement('div');
+                creditSection.className = 'flex flex-col gap-1.5 border-t border-outline-variant/20 pt-3';
+                
+                const creditHeader = document.createElement('div');
+                creditHeader.className = 'flex justify-between items-center';
+                
+                const creditTitle = document.createElement('span');
+                creditTitle.className = 'text-[11px] font-semibold text-outline dark:text-outline-variant';
+                creditTitle.textContent = 'AI 积分 (AI Credit)';
+                
+                const creditValue = document.createElement('span');
+                creditValue.className = 'acc-credit-value text-[11px] font-bold text-on-surface dark:text-white font-data-mono';
+                const creditVal = typeof acc.credits === 'number' ? `$${acc.credits.toFixed(2)}` : '未加载';
+                creditValue.textContent = creditVal;
+                
+                creditHeader.appendChild(creditTitle);
+                creditHeader.appendChild(creditValue);
+                creditSection.appendChild(creditHeader);
+                
+                // Overages Toggle Button
+                const overagesToggleWrapper = document.createElement('div');
+                overagesToggleWrapper.className = 'flex items-center justify-between text-[11px] mt-1.5 select-none cursor-pointer';
+                
+                const overagesSwitchId = `overagesToggle-${acc.id}`;
+                const isOveragesChecked = acc.enableOverages === true;
+                overagesToggleWrapper.innerHTML = `
+                    <span class="text-outline dark:text-outline-variant">使用积分抵扣超额度部分</span>
+                    <div class="relative inline-block w-8 align-middle transition duration-200 ease-in flex-shrink-0 ml-2">
+                        <input class="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out" 
+                            id="${overagesSwitchId}" type="checkbox" ${isOveragesChecked ? 'checked' : ''}/>
+                        <label class="toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer" for="${overagesSwitchId}"></label>
+                    </div>
+                `;
+                
+                const overagesCheckbox = overagesToggleWrapper.querySelector('input') as HTMLInputElement;
+                const overagesLabel = overagesToggleWrapper.querySelector('label') as HTMLLabelElement;
+                
+                overagesCheckbox.addEventListener('change', (e: any) => {
+                    const enabled = e.target.checked;
+                    ipcRenderer.send('accounts:toggle-overages', acc.id, enabled);
+                    acc.enableOverages = enabled;
+                    if (enabled) {
+                        overagesCheckbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
+                        overagesLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-primary cursor-pointer';
+                    } else {
+                        overagesCheckbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
+                        overagesLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
+                    }
+                    updateAggregateQuotaUI();
+                });
+                
+                if (isOveragesChecked) {
                     overagesCheckbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
                     overagesLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-primary cursor-pointer';
                 } else {
                     overagesCheckbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
                     overagesLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
                 }
+                
+                creditSection.appendChild(overagesToggleWrapper);
+                card.appendChild(creditSection);
+            }
+
+            // ---- Quota Section ----
+            const quotaSection = document.createElement('div');
+            quotaSection.className = 'flex flex-col gap-2 border-t border-outline-variant/20 pt-3';
+
+            const quotaHeader = document.createElement('div');
+            quotaHeader.className = 'flex justify-between items-center';
+            quotaHeader.innerHTML = '<span class="text-[11px] font-semibold text-outline dark:text-outline-variant">剩余配额</span>';
+
+            refreshBtn = document.createElement('button');
+            refreshBtn.className = 'text-outline hover:text-primary transition-colors z-10';
+            refreshBtn.title = '刷新配额';
+            refreshBtn.setAttribute('data-quota-refresh-btn', '');
+            refreshBtn.innerHTML = '<span class="material-symbols-outlined text-[14px]">refresh</span>';
+
+            quotaHeader.appendChild(refreshBtn);
+            quotaSection.appendChild(quotaHeader);
+
+            quotaBars = document.createElement('div');
+            quotaBars.id = `quotaBars-${acc.id}`;
+            quotaBars.className = 'flex flex-col gap-2';
+            quotaSection.appendChild(quotaBars);
+
+            refreshBtn.onclick = () => loadAccountQuota(acc.id, quotaBars, refreshBtn, true, acc.cooldowns);
+            card.appendChild(quotaSection);
+
+            // ---- Footer ----
+            const footer = document.createElement('div');
+            footer.className = 'flex justify-between items-center pt-1 border-t border-outline-variant/20';
+            
+            const toggleWrapper = document.createElement('div');
+            toggleWrapper.className = 'flex items-center gap-1.5 select-none cursor-pointer';
+            
+            const switchId = `accToggle-${acc.id}`;
+            const isChecked = acc.enabled !== false;
+            toggleWrapper.innerHTML = `
+                <div class="relative inline-block w-8 mr-1 align-middle select-none transition duration-200 ease-in">
+                    <input class="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out" 
+                        id="${switchId}" type="checkbox" ${isChecked ? 'checked' : ''}/>
+                    <label class="toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer" for="${switchId}"></label>
+                </div>
+                <span class="text-[11px] font-bold ${isChecked ? 'text-emerald-500' : 'text-outline'} acc-toggle-label-text">${isChecked ? '启用中' : '已停用'}</span>
+            `;
+            
+            const checkbox = toggleWrapper.querySelector('input') as HTMLInputElement;
+            const accLabel = toggleWrapper.querySelector('label') as HTMLLabelElement;
+            const labelText = toggleWrapper.querySelector('span') as HTMLSpanElement;
+            
+            checkbox.addEventListener('change', (e: any) => {
+                const enabled = e.target.checked;
+                ipcRenderer.send('accounts:toggle-enabled', acc.id, enabled);
+                acc.enabled = enabled;
+                if (enabled) {
+                    checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
+                    accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-primary cursor-pointer';
+                    labelText.className = 'text-[11px] font-bold text-emerald-500 acc-toggle-label-text';
+                    labelText.textContent = '启用中';
+                    card!.classList.remove('opacity-60');
+                } else {
+                    checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
+                    accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
+                    labelText.className = 'text-[11px] font-bold text-outline acc-toggle-label-text';
+                    labelText.textContent = '已停用';
+                    card!.classList.add('opacity-60');
+                }
                 updateAggregateQuotaUI();
             });
             
-            if (isOveragesChecked) {
-                overagesCheckbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
-                overagesLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-primary cursor-pointer';
-            } else {
-                overagesCheckbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
-                overagesLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
-            }
-            
-            creditSection.appendChild(overagesToggleWrapper);
-        }
-
-        // ---- Quota Section ----
-        const quotaSection = document.createElement('div');
-        quotaSection.className = 'flex flex-col gap-2 border-t border-outline-variant/20 pt-3';
-
-        const quotaHeader = document.createElement('div');
-        quotaHeader.className = 'flex justify-between items-center';
-        quotaHeader.innerHTML = '<span class="text-[11px] font-semibold text-outline dark:text-outline-variant">剩余配额</span>';
-
-        const refreshBtn = document.createElement('button');
-        refreshBtn.className = 'text-outline hover:text-primary transition-colors z-10';
-        refreshBtn.title = '刷新配额';
-        refreshBtn.setAttribute('data-quota-refresh-btn', '');
-        refreshBtn.innerHTML = '<span class="material-symbols-outlined text-[14px]">refresh</span>';
-
-        quotaHeader.appendChild(refreshBtn);
-        quotaSection.appendChild(quotaHeader);
-
-        const quotaBars = document.createElement('div');
-        quotaBars.id = `quotaBars-${acc.id}`;
-        quotaBars.className = 'flex flex-col gap-2';
-        quotaSection.appendChild(quotaBars);
-
-        refreshBtn.onclick = () => loadAccountQuota(acc.id, quotaBars, refreshBtn, true, acc.cooldowns);
-
-        // ---- Footer ----
-        const footer = document.createElement('div');
-        footer.className = 'flex justify-between items-center pt-1 border-t border-outline-variant/20';
-        
-        const toggleWrapper = document.createElement('div');
-        toggleWrapper.className = 'flex items-center gap-1.5 select-none cursor-pointer';
-        
-        const switchId = `accToggle-${acc.id}`;
-        const isChecked = acc.enabled !== false;
-        toggleWrapper.innerHTML = `
-            <div class="relative inline-block w-8 mr-1 align-middle select-none transition duration-200 ease-in">
-                <input class="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out" 
-                    id="${switchId}" type="checkbox" ${isChecked ? 'checked' : ''}/>
-                <label class="toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer" for="${switchId}"></label>
-            </div>
-            <span class="text-[11px] font-bold ${isChecked ? 'text-emerald-500' : 'text-outline'}">${isChecked ? '启用中' : '已停用'}</span>
-        `;
-        
-        const checkbox = toggleWrapper.querySelector('input') as HTMLInputElement;
-        const accLabel = toggleWrapper.querySelector('label') as HTMLLabelElement;
-        const labelText = toggleWrapper.querySelector('span') as HTMLSpanElement;
-        
-        checkbox.addEventListener('change', (e: any) => {
-            const enabled = e.target.checked;
-            ipcRenderer.send('accounts:toggle-enabled', acc.id, enabled);
-            acc.enabled = enabled;
-            if (enabled) {
-                checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
-                accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-primary cursor-pointer';
-                labelText.className = 'text-[11px] font-bold text-emerald-500';
-                labelText.textContent = '启用中';
-                card.classList.remove('opacity-60');
-            } else {
+            if (!isChecked) {
+                card.classList.add('opacity-60');
                 checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
                 accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
-                labelText.className = 'text-[11px] font-bold text-outline';
-                labelText.textContent = '已停用';
-                card.classList.add('opacity-60');
+            } else {
+                checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
+                accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-primary cursor-pointer';
             }
-            updateAggregateQuotaUI();
-        });
-        
-        if (!isChecked) {
-            card.classList.add('opacity-60');
-            checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
-            accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
+            
+            const btnDownload = document.createElement('button');
+            btnDownload.className = 'text-[11px] font-medium text-primary hover:text-primary/80 hover:bg-primary/5 dark:hover:bg-primary/10 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 mr-1';
+            btnDownload.innerHTML = '<span class="material-symbols-outlined text-[14px]">download</span> 导出';
+            btnDownload.title = '导出该账号文件';
+            btnDownload.onclick = () => {
+                ipcRenderer.send('accounts:export-single', acc.id);
+            };
+
+            const btnDelete = document.createElement('button');
+            btnDelete.className = 'text-[11px] font-medium text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10';
+            btnDelete.innerHTML = '<span class="material-symbols-outlined text-[14px]">delete</span> 移除';
+            btnDelete.onclick = () => {
+                if (confirm(`确定要移除账号 ${acc.email} 吗？`)) {
+                    ipcRenderer.send('accounts:remove', acc.id);
+                }
+            };
+            
+            const rightGroup = document.createElement('div');
+            rightGroup.className = 'flex items-center gap-1';
+            rightGroup.appendChild(btnDownload);
+            rightGroup.appendChild(btnDelete);
+            
+            footer.appendChild(toggleWrapper);
+            footer.appendChild(rightGroup);
+            card.appendChild(footer);
         } else {
-            checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
-            accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-primary cursor-pointer';
-        }
-        
-        const btnDownload = document.createElement('button');
-        btnDownload.className = 'text-[11px] font-medium text-primary hover:text-primary/80 hover:bg-primary/5 dark:hover:bg-primary/10 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 mr-1';
-        btnDownload.innerHTML = '<span class="material-symbols-outlined text-[14px]">download</span> 导出';
-        btnDownload.title = '导出该账号文件';
-        btnDownload.onclick = () => {
-            ipcRenderer.send('accounts:export-single', acc.id);
-        };
-
-        const btnDelete = document.createElement('button');
-        btnDelete.className = 'text-[11px] font-medium text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10';
-        btnDelete.innerHTML = '<span class="material-symbols-outlined text-[14px]">delete</span> 移除';
-        btnDelete.onclick = () => {
-            if (confirm(`确定要移除账号 ${acc.email} 吗？`)) {
-                ipcRenderer.send('accounts:remove', acc.id);
+            // Card exists, selectively patch attributes only to avoid DOM recreation
+            
+            // 1. Update cooldown status
+            const statusBadge = card.querySelector('.acc-status-badge') as HTMLElement;
+            if (statusBadge) {
+                if (isOverallCooling) {
+                    statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
+                    const dateStr = formatCooldownTime(maxCooldownTime);
+                    statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> 冷静中 (${dateStr}恢复)`;
+                } else {
+                    statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
+                    statusBadge.innerHTML = '<span class="material-symbols-outlined text-[12px]">check_circle</span> 有效';
+                }
             }
-        };
-        
-        const rightGroup = document.createElement('div');
-        rightGroup.className = 'flex items-center gap-1';
-        rightGroup.appendChild(btnDownload);
-        rightGroup.appendChild(btnDelete);
-        
-        footer.appendChild(toggleWrapper);
-        footer.appendChild(rightGroup);
-        
-        card.appendChild(header);
-        if (creditSection) {
-            card.appendChild(creditSection);
-        }
-        card.appendChild(quotaSection);
-        card.appendChild(footer);
-        accountsList?.appendChild(card);
 
-        // Auto-load quota
-        loadAccountQuota(acc.id, quotaBars, refreshBtn, false, acc.cooldowns);
+            // 2. Update AI Credits (Antigravity only)
+            if (acc.provider === 'antigravity') {
+                const creditValue = card.querySelector('.acc-credit-value') as HTMLElement;
+                if (creditValue) {
+                    const creditVal = typeof acc.credits === 'number' ? `$${acc.credits.toFixed(2)}` : '未加载';
+                    creditValue.textContent = creditVal;
+                }
+
+                const overagesCheckbox = card.querySelector(`#overagesToggle-${acc.id}`) as HTMLInputElement;
+                const overagesLabel = card.querySelector(`[for="overagesToggle-${acc.id}"]`) as HTMLElement;
+                if (overagesCheckbox && overagesLabel) {
+                    const isOveragesChecked = acc.enableOverages === true;
+                    if (overagesCheckbox.checked !== isOveragesChecked) {
+                        overagesCheckbox.checked = isOveragesChecked;
+                        if (isOveragesChecked) {
+                            overagesCheckbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
+                            overagesLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-primary cursor-pointer';
+                        } else {
+                            overagesCheckbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
+                            overagesLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
+                        }
+                    }
+                }
+            }
+
+            // 3. Update enabled/disabled status and style classes
+            const checkbox = card.querySelector(`#accToggle-${acc.id}`) as HTMLInputElement;
+            const accLabel = card.querySelector(`[for="accToggle-${acc.id}"]`) as HTMLElement;
+            const labelText = card.querySelector('.acc-toggle-label-text') as HTMLSpanElement;
+            const isChecked = acc.enabled !== false;
+            if (checkbox && accLabel && labelText) {
+                if (checkbox.checked !== isChecked) {
+                    checkbox.checked = isChecked;
+                    if (isChecked) {
+                        checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
+                        accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-primary cursor-pointer';
+                        labelText.className = 'text-[11px] font-bold text-emerald-500 acc-toggle-label-text';
+                        labelText.textContent = '启用中';
+                        card.classList.remove('opacity-60');
+                    } else {
+                        checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
+                        accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
+                        labelText.className = 'text-[11px] font-bold text-outline acc-toggle-label-text';
+                        labelText.textContent = '已停用';
+                        card.classList.add('opacity-60');
+                    }
+                }
+            }
+
+            quotaBars = document.getElementById(`quotaBars-${acc.id}`);
+            refreshBtn = card.querySelector('[data-quota-refresh-btn]') as HTMLElement;
+        }
+
+        // Reposition card in accountsList to maintain sequence order
+        accountsList!.appendChild(card);
+
+        // Load / update quota bars
+        if (quotaBars) {
+            loadAccountQuota(acc.id, quotaBars, refreshBtn, false, acc.cooldowns);
+        }
     });
 }
 

@@ -20,6 +20,15 @@ import (
 	"antigravity-proxy/internal/stats"
 )
 
+// 包级正则变量：避免每次请求重复编译，消除 GC 压力
+var (
+	reModelInPath     = regexp.MustCompile(`/models/([^:]+)`)
+	reModelInBody     = regexp.MustCompile(`(?:models/)?(.+)`)
+	rePromptTokens    = regexp.MustCompile(`"promptTokenCount"\s*:\s*(\d+)`)
+	reCandidateTokens = regexp.MustCompile(`"candidatesTokenCount"\s*:\s*(\d+)`)
+	reCachedTokens    = regexp.MustCompile(`"cachedContentTokenCount"\s*:\s*(\d+)`)
+)
+
 type ProxyHandler struct {
 	accountMgr   *account.Manager
 	sessionRouter *session.Router
@@ -136,7 +145,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logPrefix := fmt.Sprintf("[%s -> %s%s]", r.Method, targetHost, r.URL.Path)
 
 	currentModel := "unknown"
-	modelMatch := regexp.MustCompile(`/models/([^:]+)`).FindStringSubmatch(targetPath)
+	modelMatch := reModelInPath.FindStringSubmatch(targetPath)
 	if len(modelMatch) > 1 {
 		currentModel = modelMatch[1]
 	} else if strings.Contains(targetPath, "streamGenerateContent") {
@@ -146,7 +155,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Model string `json:"model"`
 			}
 			if json.Unmarshal(bodyBytes, &bodyJson) == nil && bodyJson.Model != "" {
-				m := regexp.MustCompile(`(?:models/)?(.+)`).FindStringSubmatch(bodyJson.Model)
+				m := reModelInBody.FindStringSubmatch(bodyJson.Model)
 				if len(m) > 1 {
 					currentModel = m[1]
 				}
@@ -437,9 +446,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Analyze normal token counts from response body (if success)
 		if resp.StatusCode == 200 && strings.Contains(targetPath, "GenerateContent") {
 			bodyStr := string(respBodyBytes)
-			pm := regexp.MustCompile(`"promptTokenCount"\s*:\s*(\d+)`).FindAllStringSubmatch(bodyStr, -1)
-			cm := regexp.MustCompile(`"candidatesTokenCount"\s*:\s*(\d+)`).FindAllStringSubmatch(bodyStr, -1)
-			cc := regexp.MustCompile(`"cachedContentTokenCount"\s*:\s*(\d+)`).FindAllStringSubmatch(bodyStr, -1)
+			pm := rePromptTokens.FindAllStringSubmatch(bodyStr, -1)
+			cm := reCandidateTokens.FindAllStringSubmatch(bodyStr, -1)
+			cc := reCachedTokens.FindAllStringSubmatch(bodyStr, -1)
 
 			if len(pm) > 0 && len(pm[len(pm)-1]) > 1 {
 				inTokens, _ = strconv.Atoi(pm[len(pm)-1][1])

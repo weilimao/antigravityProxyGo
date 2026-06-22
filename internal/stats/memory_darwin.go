@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-func GetAppMemoryStats() (uint64, int, error) {
+func GetAppMemoryStats() (uint64, int, float64, error) {
 	myPid := os.Getpid()
 
 	cmd := exec.Command("ps", "-ax", "-o", "pid,ppid,rss")
@@ -71,5 +71,5 @@ func GetAppMemoryStats() (uint64, int, error) {
 		}
 	}
 
-	return totalMemory, count, nil
+	return totalMemory, count, 0.0, nil
 }

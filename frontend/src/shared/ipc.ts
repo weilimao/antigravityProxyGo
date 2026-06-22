@@ -75,6 +75,22 @@ export const shell = {
         (window as any).wailsPendingListeners = [];
     }
 
+    // Refresh UI with latest configurations now that window.wailsConfigCache is populated
+    if ((window as any).refreshSettingsUI) {
+        try {
+            (window as any).refreshSettingsUI();
+        } catch (err) {
+            console.error('[IPC] Failed to run refreshSettingsUI:', err);
+        }
+    }
+    if ((window as any).refreshDataDir) {
+        try {
+            (window as any).refreshDataDir();
+        } catch (err) {
+            console.error('[IPC] Failed to run refreshDataDir:', err);
+        }
+    }
+
     // Request initial state, accounts, and certificate status once channels are established
     ipcRenderer.send('get-state');
     ipcRenderer.send('accounts:get');

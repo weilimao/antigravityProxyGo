@@ -146,7 +146,10 @@ func (m *Manager) SetAutoStart(enabled bool) error {
 	m.Lock()
 	defer m.Unlock()
 	m.config.AutoStart = enabled
-	return m.SaveConfig()
+	if err := m.SaveConfig(); err != nil {
+		return err
+	}
+	return setOSAutoStart(enabled)
 }
 
 func (m *Manager) GetSilentStart() bool {

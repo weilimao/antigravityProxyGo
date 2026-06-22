@@ -78,6 +78,8 @@ let paginationControls: HTMLElement | null;
 let consoleHeader: HTMLElement | null;
 let systemConsole: HTMLElement | null;
 let consoleBody: HTMLElement | null;
+let isConsoleScrollScheduled = false;
+let lastStatsUpdatedSig = '';
 
 // Toggles in Header
 let toggleZH: HTMLElement | null;
@@ -590,6 +592,11 @@ export function initDashboardEvents() {
             valProcessCount.textContent = data.processCount;
         }
 
+        const valCpuUsage = document.getElementById('valCpuUsage');
+        if (valCpuUsage && typeof data.cpuUsage === 'number') {
+            valCpuUsage.textContent = `${data.cpuUsage.toFixed(1)}%`;
+        }
+
         // Render Go HeapAlloc (Go backend heap memory)
         const valMemory = document.getElementById('valMemory');
         if (valMemory && typeof data.heapAlloc === 'number') {
@@ -616,6 +623,19 @@ export function initDashboardEvents() {
         if (!payload) return;
 
         const { stats, trends, requests, usage } = payload;
+
+        // Construct current payload signature for dirty-checking
+        const statsSig = stats ? `${stats.totalRequests}_${stats.totalErrors}_${stats.totalRetries}_${stats.totalInputTokens}_${stats.totalOutputTokens}_${stats.totalCachedTokens}_${stats.totalCost}` : '';
+        const trendsLen = trends ? trends.length : 0;
+        const lastReqSig = (requests && requests.length > 0) ? `${requests[0].timestamp}_${requests[0].statusCode}_${requests[0].cost}` : '';
+        const reqsLen = requests ? requests.length : 0;
+        const usageSig = usage ? JSON.stringify(usage) : '';
+        
+        const currentSig = `${statsSig}|${trendsLen}|${reqsLen}_${lastReqSig}|${usageSig}`;
+        if (currentSig === lastStatsUpdatedSig) {
+            return; // Skip rendering if no relevant metrics have changed
+        }
+        lastStatsUpdatedSig = currentSig;
         
         if (stats) state.statsData = stats;
         if (trends !== undefined && trends !== null) {
@@ -641,12 +661,27 @@ export function initDashboardEvents() {
         entry.textContent = log;
         consoleBody.appendChild(entry);
         
-        while (consoleBody.children.length > 150) {
-            if (consoleBody.firstChild) {
-                consoleBody.removeChild(consoleBody.firstChild);
+        // Batch prune console elements if count exceeds 150 to reduce child removal frequency
+        if (consoleBody.children.length > 150) {
+            while (consoleBody.children.length > 120) {
+                if (consoleBody.firstChild) {
+                    consoleBody.removeChild(consoleBody.firstChild);
+                }
             }
         }
-        consoleBody.scrollTop = consoleBody.scrollHeight;
+
+        // Scroll to bottom only if console pane is expanded, using rAF throttling to prevent layout thrashing
+        if (systemConsole && systemConsole.classList.contains('expanded')) {
+            if (!isConsoleScrollScheduled) {
+                isConsoleScrollScheduled = true;
+                requestAnimationFrame(() => {
+                    if (consoleBody) {
+                        consoleBody.scrollTop = consoleBody.scrollHeight;
+                    }
+                    isConsoleScrollScheduled = false;
+                });
+            }
+        }
     });
 
     // CA status check

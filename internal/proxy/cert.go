@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const maxCertCacheSize = 50
+
 type CertManager struct {
 	sync.RWMutex
 	caCert        *x509.Certificate
@@ -216,6 +218,10 @@ func (cm *CertManager) GetCertificate(host string) (*tls.Certificate, error) {
 		PrivateKey:  cm.leafPrivateKey,
 	}
 
+	// 超过上限时清空缓存，防止 certCache 无限增长
+	if len(cm.certCache) >= maxCertCacheSize {
+		cm.certCache = make(map[string]*tls.Certificate)
+	}
 	cm.certCache[host] = tlsCert
 	return tlsCert, nil
 }

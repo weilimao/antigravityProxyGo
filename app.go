@@ -71,6 +71,12 @@ func (a *App) startup(ctx context.Context) {
 	}
 	_, _ = settings.EnsureConfigExists(defaultUserData)
 	a.settingsMgr.Init(defaultUserData)
+
+	// Ensure registry key points to the correct/current executable path if autostart is enabled
+	if a.settingsMgr.GetAutoStart() {
+		_ = a.settingsMgr.SetAutoStart(true)
+	}
+
 	activeDir := a.settingsMgr.GetActiveDataDirectory()
 
 	// 2. Initialize Pricing
@@ -268,6 +274,20 @@ func (a *App) domReady(ctx context.Context) {
 	bytesCache, _ := json.Marshal(cache)
 	js := fmt.Sprintf("window.wailsConfigCache = %s; if (window.initWailsReady) { window.initWailsReady(); }", string(bytesCache))
 	wailsRuntime.WindowExecJS(ctx, js)
+
+	// Check if this was an autostart and silent start is enabled.
+	// If not, show the window (since we set StartHidden: true in main.go)
+	isAutostart := false
+	for _, arg := range os.Args {
+		if arg == "--autostart" || arg == "-autostart" {
+			isAutostart = true
+			break
+		}
+	}
+
+	if !(isAutostart && a.settingsMgr.GetSilentStart()) {
+		wailsRuntime.WindowShow(ctx)
+	}
 }
 
 // IPCSend routes Electron's send requests
@@ -862,7 +882,7 @@ func (a *App) startMemoryMonitor(ctx context.Context) {
 }
 
 func (a *App) emitMemoryStats() {
-	total, count, err := stats.GetAppMemoryStats()
+	total, count, cpuPercent, err := stats.GetAppMemoryStats()
 	if err != nil {
 		return
 	}
@@ -875,5 +895,6 @@ func (a *App) emitMemoryStats() {
 		"total":        total,
 		"processCount": count,
 		"heapAlloc":    ms.HeapAlloc,
+		"cpuUsage":     cpuPercent,
 	})
 }
