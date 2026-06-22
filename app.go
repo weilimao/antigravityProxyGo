@@ -496,6 +496,15 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 
 	case "packet:clear":
 		a.packetCap.ClearPackets()
+
+	case "app:install-update":
+		filePath := getStringArg(0)
+		a.AddLog("⏳ 正在启动应用程序更新安装: " + filePath)
+		err := a.updateMgr.InstallUpdate(filePath)
+		if err != nil {
+			a.AddLog("❌ 启动更新安装失败: " + err.Error())
+			wailsRuntime.EventsEmit(a.ctx, "app:update-error", err.Error())
+		}
 	}
 }
 
