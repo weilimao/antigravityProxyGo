@@ -121,44 +121,61 @@ func (r *Router) GetOrAssignAccount(sessionKey string, availableAccounts []*acco
 		return nil
 	}
 
-	r.Lock()
-	defer r.Unlock()
-
 	now := time.Now().UnixNano() / int64(time.Millisecond)
+
+	// ── Fast path: read-lock only ──────────────────────────────────────────
+	// In the vast majority of requests the session is already bound, so we
+	// try a cheap RLock first to avoid serialising every goroutine behind a
+	// global write lock.
+	r.RLock()
 	existing, found := r.sessionMap[sessionKey]
+	r.RUnlock()
 
 	if found {
-		// 校验当前绑定账号是否依然存在于可用池中
-		var targetAccount *account.Account
+		// Validate the bound account still exists in the available pool
 		for _, a := range availableAccounts {
 			if a.ID == existing.AccountID {
-				targetAccount = a
-				break
+				// Refresh last-active timestamp – needs a write lock, but only
+				// for this tiny update so contention is minimal.
+				r.Lock()
+				r.sessionMap[sessionKey] = SessionEntry{
+					AccountID:  existing.AccountID,
+					LastActive: now,
+				}
+				r.Unlock()
+				r.scheduleSave()
+				if logFn != nil {
+					logFn(fmt.Sprintf("🔒 [粘性路由] 会话 %s 命中已分配账号: %s", sessionKey, a.Email))
+				}
+				return a
 			}
 		}
-
-		if targetAccount != nil {
-			// 更新活跃时间戳
-			r.sessionMap[sessionKey] = SessionEntry{
-				AccountID:  existing.AccountID,
-				LastActive: now,
-			}
-			r.scheduleSave()
-			if logFn != nil {
-				logFn(fmt.Sprintf("🔒 [粘性路由] 会话 %s 命中已分配账号: %s", sessionKey, targetAccount.Email))
-			}
-			return targetAccount
-		}
-
-		// 原绑定账号不可用（如进入冷静期或停用），作废并重新分配
-		delete(r.sessionMap, sessionKey)
+		// Bound account no longer available – fall through to re-assign
 		if logFn != nil {
 			logFn(fmt.Sprintf("🔄 [粘性路由] 会话 %s 原绑定账号不可用，重新分配...", sessionKey))
 		}
 	}
 
-	// 策略 1：空闲优先分配
-	boundAccountIDs := make(map[string]bool)
+	// ── Slow path: write-lock for new assignment ───────────────────────────
+	r.Lock()
+	defer r.Unlock()
+
+	// Re-check inside the write lock to avoid TOCTOU race where two goroutines
+	// both missed the fast path and are racing to assign for the same key.
+	if existing2, found2 := r.sessionMap[sessionKey]; found2 {
+		for _, a := range availableAccounts {
+			if a.ID == existing2.AccountID {
+				r.sessionMap[sessionKey] = SessionEntry{AccountID: existing2.AccountID, LastActive: now}
+				r.scheduleSave()
+				return a
+			}
+		}
+		// Still invalid – clear stale entry before assigning
+		delete(r.sessionMap, sessionKey)
+	}
+
+	// Strategy 1: prefer idle accounts
+	boundAccountIDs := make(map[string]bool, len(r.sessionMap))
 	for _, entry := range r.sessionMap {
 		boundAccountIDs[entry.AccountID] = true
 	}
@@ -172,14 +189,13 @@ func (r *Router) GetOrAssignAccount(sessionKey string, availableAccounts []*acco
 
 	var assigned *account.Account
 	if len(idleAccounts) > 0 {
-		// 哈希散列空闲账号
 		index := r.hashToIndex(sessionKey, len(idleAccounts))
 		assigned = idleAccounts[index]
 		if logFn != nil {
 			logFn(fmt.Sprintf("🆕 [粘性路由] 会话 %s 分配至空闲账号: %s (空闲 %d/%d)", sessionKey, assigned.Email, len(idleAccounts), len(availableAccounts)))
 		}
 	} else {
-		// 策略 2：一致性哈希散列
+		// Strategy 2: consistent hash scatter
 		index := r.hashToIndex(sessionKey, len(availableAccounts))
 		assigned = availableAccounts[index]
 		if logFn != nil {

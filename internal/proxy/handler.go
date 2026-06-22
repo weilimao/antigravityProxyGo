@@ -78,6 +78,7 @@ func isIgnoredTelemetry(path string) bool {
 }
 
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
 	if r.Method == http.MethodConnect {
 		http.Error(w, "CONNECT not supported inside Decrypted Server", http.StatusBadRequest)
 		return
@@ -103,7 +104,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if strings.HasPrefix(authHeader, "Bearer ") {
 					token := authHeader[7:]
 					for _, acc := range h.accountMgr.GetRawAccounts() {
-						if acc.AccessToken == token {
+						if acc.GetAccessToken() == token {
 							email = acc.Email
 							break
 						}
@@ -235,6 +236,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			RequestBody:    reqBody,
 			RequestHeaders: headersMap,
 			SessionID:      sessionKey,
+			DurationMs:     time.Since(startTime).Milliseconds(),
 		})
 	}
 
@@ -260,7 +262,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		var finalReqBody = bodyBytes
 		if poolAccount != nil {
-			customHeaders.Set("Authorization", "Bearer "+poolAccount.AccessToken)
+			customHeaders.Set("Authorization", "Bearer "+poolAccount.GetAccessToken())
 			allocatedAccount = poolAccount.Email
 
 			if attemptIndex == 0 {
@@ -480,6 +482,11 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Server Errors (500 Internal Server Error, 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout)
+		if resp.StatusCode == 500 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			return resp.StatusCode, resp.Header, respBodyBytes, false, errors.New("SERVER_ERROR")
+		}
+
 		// Capture packet logging (Save to PacketCapturer)
 		if resp.StatusCode == 200 && !isIgnoredTelemetry(targetPath) {
 			if !h.packetCap.IsCaptured(r.Method, targetHost, targetPath) {
@@ -537,6 +544,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	maxRetries := 20
 	var lastUsedAccount *account.Account
+	var lastAccountID string
+	var lastAccountFailCount int
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		currentAttemptIndex = attempt
@@ -548,6 +557,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.accountMgr.GetPoolMode() || h.accountMgr.GetProjectPoolMode() {
 			available := h.accountMgr.GetAvailableAccounts(currentModel)
 			lastUsedAccount = h.sessionRouter.GetOrAssignAccount(sessionKey, available, nil)
+		}
+
+		if lastUsedAccount != nil {
+			if lastUsedAccount.ID != lastAccountID {
+				lastAccountID = lastUsedAccount.ID
+				lastAccountFailCount = 0
+			}
 		}
 
 		status, headers, body, isStreamed, errAttempt := attemptRequest(attempt)
@@ -576,7 +592,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		isRetryable := errAttempt.Error() == "CAPACITY_EXHAUSTED" ||
 			errAttempt.Error() == "QUOTA_EXHAUSTED" ||
 			errAttempt.Error() == "TOKEN_EXPIRED" ||
-			errAttempt.Error() == "CREDITS_EXHAUSTED"
+			errAttempt.Error() == "CREDITS_EXHAUSTED" ||
+			errAttempt.Error() == "SERVER_ERROR"
 
 		if lastUsedAccount != nil {
 			accId := lastUsedAccount.ID
@@ -586,7 +603,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				h.logFn(fmt.Sprintf("🔑 [负载均衡] 检测到账号 %s Token 已过期 (401)。正在自动刷新...", email))
 				newToken, refreshErr := h.tokenRefresh(lastUsedAccount)
 				if refreshErr == nil {
-					lastUsedAccount.AccessToken = newToken
+					lastUsedAccount.SetAccessToken(newToken)
 					h.accountMgr.UpdateAccessToken(accId, newToken)
 					h.logFn(fmt.Sprintf("🔑 [负载均衡] 账号 %s Token 自动刷新成功，即将重试...", email))
 				} else {
@@ -643,6 +660,16 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}(lastUsedAccount)
 			}
 
+			if errAttempt.Error() == "SERVER_ERROR" {
+				lastAccountFailCount++
+				if lastAccountFailCount >= 3 {
+					h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 连续遇到服务器错误 (%d) 达到 %d 次。标记临时冷静期 (60s) 并切换账号重试...", email, status, lastAccountFailCount))
+					h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+60*1000, currentModel)
+				} else {
+					h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 遇到服务器错误 (%d)（第 %d/3 次）。不标记冷静期，将继续用当前账号尝试...", email, status, lastAccountFailCount))
+				}
+			}
+
 			if errAttempt.Error() == "CAPACITY_EXHAUSTED" || errAttempt.Error() == "QUOTA_EXHAUSTED" {
 				h.accountMgr.RecordAccountError(accId, status, currentModel, h.logFn)
 			}
@@ -679,7 +706,12 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.logFn(fmt.Sprintf("%s ⚠️ 请求失败 (%s)。将在 %dms 后自动切换账号重试...", logPrefix, errAttempt.Error(), int(delay)))
 
 			h.errLogger.Log("RETRY", targetPath, currentModel, allocatedAccount, attempt+1, errAttempt.Error())
-			time.Sleep(time.Duration(delay) * time.Millisecond)
+			select {
+			case <-r.Context().Done():
+				h.logFn(fmt.Sprintf("%s ⚠️ 请求在等待重试时被客户端取消", logPrefix))
+				return
+			case <-time.After(time.Duration(delay) * time.Millisecond):
+			}
 		} else {
 			h.logFn(fmt.Sprintf("%s ❌ [负载均衡] 尝试失败: %v", logPrefix, errAttempt))
 			logRequestToTracker(429, errAttempt.Error())

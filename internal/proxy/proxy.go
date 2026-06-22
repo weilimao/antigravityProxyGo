@@ -23,7 +23,7 @@ type MitmListener struct {
 
 func NewMitmListener() *MitmListener {
 	return &MitmListener{
-		conns:  make(chan net.Conn, 100),
+		conns:  make(chan net.Conn, 2048), // 提升高并发连接缓冲队列大小至 2048
 		closed: make(chan struct{}),
 	}
 }
@@ -304,8 +304,8 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Enqueue to decrypted HTTP Server
 	select {
 	case pe.mitmListener.conns <- tlsClientConn:
-	default:
-		// Channel buffer full, close connection
+	case <-time.After(3 * time.Second): // 允许排队等待最长 3 秒，避免高并发下瞬间溢出丢弃
+		// Timeout, close connection
 		tlsClientConn.Close()
 	}
 }

@@ -61,6 +61,7 @@ type RequestLog struct {
 	RequestBody    interface{} `json:"requestBody"`
 	RequestHeaders interface{} `json:"requestHeaders"`
 	SessionID      string      `json:"sessionId"`
+	DurationMs     int64       `json:"durationMs"`
 }
 
 type StatsData struct {
@@ -316,6 +317,7 @@ func (t *Tracker) GetPayload(usagePayload interface{}) map[string]interface{} {
 			RequestBody:    req.RequestBody,
 			RequestHeaders: req.RequestHeaders,
 			SessionID:      req.SessionID,
+			DurationMs:     req.DurationMs,
 		}
 	}
 
@@ -373,6 +375,7 @@ func (t *Tracker) GetPayloadSimplified(usagePayload interface{}) map[string]inte
 			RequestBody:    req.RequestBody,
 			RequestHeaders: req.RequestHeaders,
 			SessionID:      req.SessionID,
+			DurationMs:     req.DurationMs,
 		}
 	}
 
@@ -415,12 +418,42 @@ func (t *Tracker) SaveToDisk() {
 		return
 	}
 
-	data := StatsData{
-		Stats:    t.stats,
-		Trends:   t.trends,
-		Requests: t.requests,
+	// Deep-copy all mutable slices while holding the read lock so that
+	// json.Marshal (which uses reflection) never races with concurrent writes.
+	statsCopy := GlobalStats{
+		TotalRequests:     t.stats.TotalRequests,
+		TotalInputTokens:  t.stats.TotalInputTokens,
+		TotalOutputTokens: t.stats.TotalOutputTokens,
+		TotalCachedTokens: t.stats.TotalCachedTokens,
+		TotalCost:         t.stats.TotalCost,
+		TotalRetries:      t.stats.TotalRetries,
+		TotalErrors:       t.stats.TotalErrors,
+		Models:            make(map[string]*ModelStats, len(t.stats.Models)),
+	}
+	for k, v := range t.stats.Models {
+		ms := *v // value copy, not pointer
+		statsCopy.Models[k] = &ms
+	}
+
+	trendsCopy := make([]*HourlyTrend, len(t.trends))
+	for i, tr := range t.trends {
+		cp := *tr // value copy
+		trendsCopy[i] = &cp
+	}
+
+	reqsCopy := make([]*RequestLog, len(t.requests))
+	for i, req := range t.requests {
+		cp := *req // value copy
+		reqsCopy[i] = &cp
 	}
 	t.RUnlock()
+
+	// Marshal from fully-owned copies – no shared pointers, no data race.
+	data := StatsData{
+		Stats:    statsCopy,
+		Trends:   trendsCopy,
+		Requests: reqsCopy,
+	}
 
 	bytesData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {

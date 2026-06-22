@@ -21,33 +21,32 @@ import (
 func NewTransport() *http.Transport {
 	return &http.Transport{
 		Proxy: GetSystemProxy,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          200,
+		MaxIdleConnsPerHost:   100, // 高并发核心：复用空闲连接，避免频繁关闭
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
 		},
 	}
 }
 
-// GetSystemProxy returns the system proxy configured in Windows registry, environment variables, or auto-detected local VPNs.
+// GetSystemProxy returns the system proxy configured in Windows registry, environment variables, etc.
+// Proactive local VPN scanning (like scanning 7890/7897) has been removed to allow direct routing via virtual network adapter/TUN interface,
+// eliminating connection establishment latency.
 func GetSystemProxy(req *http.Request) (*url.URL, error) {
-	// 1. Resolve system proxy using go-ieproxy (handles PAC, WPAD, bypass lists, registry, macOS CFNetwork)
+	// Resolve system proxy using go-ieproxy (handles PAC, WPAD, bypass lists, registry, macOS CFNetwork)
 	proxyURL, err := ieproxy.GetProxyFunc()(req)
 	if err == nil && proxyURL != nil {
 		if !isLocalProxy(proxyURL) {
 			return proxyURL, nil
 		}
 	}
-
-	// 2. Fallback: Proactive auto-detection of local VPN proxies (Clash/v2ray)
-	detectedProxy := detectLocalVPNProxy()
-	if detectedProxy != "" {
-		proxyURL, err := url.Parse(detectedProxy)
-		if err == nil && proxyURL != nil {
-			if !isLocalProxy(proxyURL) {
-				return proxyURL, nil
-			}
-		}
-	}
-
 	return nil, nil
 }
 

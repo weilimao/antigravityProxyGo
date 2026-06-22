@@ -67,6 +67,7 @@ let modalStatus: HTMLElement | null = null;
 let modalCost: HTMLElement | null = null;
 let modalAccount: HTMLElement | null = null;
 let modalAccountWrapper: HTMLElement | null = null;
+let modalDuration: HTMLElement | null = null;
 let modalJsonArea: HTMLElement | null = null;
 let modalHeaderArea: HTMLElement | null = null;
 
@@ -87,6 +88,12 @@ let toggleEN: HTMLElement | null;
 let toggleTheme: HTMLElement | null;
 let themeIcon: HTMLElement | null;
 let btnExportLogs: HTMLButtonElement | null;
+
+function formatDuration(ms: number | undefined): string {
+    if (ms === undefined || ms === null || ms === 0) return '-';
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+}
 
 // Filter and render logs table with pagination
 export function renderLogsTable() {
@@ -121,7 +128,7 @@ export function renderLogsTable() {
     
     valShowingText = document.getElementById('valShowingText');
     if (paginated.length === 0) {
-        logsTableBody.innerHTML = `<tr><td colspan="10" class="p-8 text-center text-outline dark:text-outline-variant italic">${dict.noLogs || '暂无日志'}</td></tr>`;
+        logsTableBody.innerHTML = `<tr><td colspan="11" class="p-8 text-center text-outline dark:text-outline-variant italic">${dict.noLogs || '暂无日志'}</td></tr>`;
         if (valShowingText) {
             valShowingText.textContent = state.currentLanguage === 'zh' ? `共 0 条记录` : `Showing 0 entries`;
         }
@@ -167,6 +174,7 @@ export function renderLogsTable() {
                     </div>
                 </td>
                 <td class="p-3 text-right font-data-mono text-emerald-600 dark:text-emerald-400 font-bold">$${(log.cost || 0).toFixed(6)}</td>
+                <td class="p-3 text-right font-data-mono">${formatDuration(log.durationMs)}</td>
                 <td class="p-3 text-center font-data-mono ${hitRateColor}">${hitRateVal}%</td>
                 <td class="p-3 text-center">
                     <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${statusClass}">${statusLabel}</span>
@@ -457,6 +465,7 @@ export function initDashboardEvents() {
     modalCost = document.getElementById('modalCost');
     modalAccount = document.getElementById('modalAccount');
     modalAccountWrapper = document.getElementById('modalAccountWrapper');
+    modalDuration = document.getElementById('modalDuration');
     modalJsonArea = document.getElementById('modalJsonArea');
     modalHeaderArea = document.getElementById('modalHeaderArea');
 
@@ -846,6 +855,7 @@ export function showModal(log: any) {
     if (modalSession) modalSession.textContent = log.sessionId || '-';
     if (modalModel) modalModel.textContent = log.model || '-';
     if (modalPath) modalPath.textContent = `${log.method || 'POST'} ${log.host || ''}${log.path || ''}`;
+    if (modalDuration) modalDuration.textContent = formatDuration(log.durationMs);
     if (modalCost) modalCost.textContent = `$${(log.cost || 0).toFixed(6)}`;
     
     if (log.account) {

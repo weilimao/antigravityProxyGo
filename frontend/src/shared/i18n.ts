@@ -101,6 +101,7 @@ const translations: Translations = {
         colSession: "会话 ID",
         colPrice: "价格",
         colCacheStatus: "缓存状态",
+        colDuration: "耗时",
         
         statusHit: "命中 (HIT)",
         statusMiss: "未命中 (MISS)",
@@ -236,6 +237,7 @@ const translations: Translations = {
         colSession: "Session ID",
         colPrice: "Price",
         colCacheStatus: "Cache Status",
+        colDuration: "Duration",
         
         statusHit: "HIT",
         statusMiss: "MISS",

@@ -12,21 +12,38 @@ import (
 )
 
 type Account struct {
-	ID             string             `json:"id"`
-	Email          string             `json:"email"`
-	AccessToken    string             `json:"access_token"`
-	RefreshToken   string             `json:"refresh_token"`
-	Provider       string             `json:"provider"`
-	ProjectID      string             `json:"projectId"`
-	ProjectLabel   string             `json:"projectLabel"`
-	ScopeType      string             `json:"scopeType"`
-	AddedAt        string             `json:"addedAt"`
-	Tier           string             `json:"tier"`
-	Enabled        bool               `json:"enabled"`
-	EnableOverages bool               `json:"enableOverages"`
-	Credits        *float64           `json:"credits"`
-	Cooldowns      map[string]int64   `json:"cooldowns"`      // category -> untilTimeMs
-	CooldownUntil  int64              `json:"cooldownUntil"`  // max(cooldowns)
+	// tokenMu protects concurrent reads/writes of AccessToken and RefreshToken
+	tokenMu sync.RWMutex `json:"-"`
+
+	ID             string           `json:"id"`
+	Email          string           `json:"email"`
+	AccessToken    string           `json:"access_token"`
+	RefreshToken   string           `json:"refresh_token"`
+	Provider       string           `json:"provider"`
+	ProjectID      string           `json:"projectId"`
+	ProjectLabel   string           `json:"projectLabel"`
+	ScopeType      string           `json:"scopeType"`
+	AddedAt        string           `json:"addedAt"`
+	Tier           string           `json:"tier"`
+	Enabled        bool             `json:"enabled"`
+	EnableOverages bool             `json:"enableOverages"`
+	Credits        *float64         `json:"credits"`
+	Cooldowns      map[string]int64 `json:"cooldowns"`     // category -> untilTimeMs
+	CooldownUntil  int64            `json:"cooldownUntil"` // max(cooldowns)
+}
+
+// GetAccessToken safely reads the access token under read lock.
+func (a *Account) GetAccessToken() string {
+	a.tokenMu.RLock()
+	defer a.tokenMu.RUnlock()
+	return a.AccessToken
+}
+
+// SetAccessToken safely updates the access token under write lock.
+func (a *Account) SetAccessToken(token string) {
+	a.tokenMu.Lock()
+	a.AccessToken = token
+	a.tokenMu.Unlock()
 }
 
 type QuotaBucket struct {
@@ -332,15 +349,21 @@ func (m *Manager) GetAccountByID(id string) *Account {
 }
 
 func (m *Manager) UpdateAccessToken(id, newToken string) {
-	m.Lock()
+	m.RLock()
+	var target *Account
 	for _, a := range m.accounts {
 		if a.ID == id {
-			a.AccessToken = newToken
+			target = a
 			break
 		}
 	}
-	m.Unlock()
-	_ = m.SaveAccounts(true)
+	m.RUnlock()
+
+	// Use per-account token lock to update safely without holding the global Manager write lock
+	if target != nil {
+		target.SetAccessToken(newToken)
+		_ = m.SaveAccounts(true)
+	}
 }
 
 func (m *Manager) UpdateAccountCredits(id string, credits float64) {
@@ -910,66 +933,75 @@ func (m *Manager) StopCooldownMonitor() {
 }
 
 func (m *Manager) RecordAccountError(id string, statusCode int, modelName string, logFn func(string)) {
+	if statusCode != 503 && statusCode != 429 {
+		return
+	}
+
+	category := m.GetModelCategory(modelName)
+	now := time.Now().UnixNano() / int64(time.Millisecond)
+
 	m.Lock()
-	acc := m.GetAccountByID(id)
+	var acc *Account
+	for _, a := range m.accounts {
+		if a.ID == id {
+			acc = a
+			break
+		}
+	}
 	if acc == nil {
 		m.Unlock()
 		return
 	}
 
-	if statusCode == 503 || statusCode == 429 {
-		category := m.GetModelCategory(modelName)
-		now := time.Now().UnixNano() / int64(time.Millisecond)
-
-		cooldownUntil := acc.CooldownUntil
-		if acc.Cooldowns != nil {
-			if v, ok := acc.Cooldowns[category]; ok {
-				cooldownUntil = v
-			}
-		}
-		hasQuota := cooldownUntil == 0 || now >= cooldownUntil
-
-		if hasQuota {
-			currentCount := m.errorCounts[id] + 1
-			m.errorCounts[id] = currentCount
-			m.Unlock()
-
-			msg := fmt.Sprintf("⚠️ [负载均衡] 账号 %s 遇到 %d 报错，连续报错次数: %d/5", acc.Email, statusCode, currentCount)
-			if logFn != nil {
-				logFn(msg)
-			}
-
-			if currentCount >= 5 {
-				msgAlert := fmt.Sprintf("🔄 [负载均衡] 账号 %s 连续遇到 503/429 达到 5 次，触发自动刷新配额以修正冷静状态...", acc.Email)
-				if logFn != nil {
-					logFn(msgAlert)
-				}
-
-				m.Lock()
-				delete(m.errorCounts, id) // 触发刷新时清除计数，防止并发多次触发刷新
-				m.Unlock()
-
-				if m.FetchQuota != nil {
-					go func(a *Account) {
-						res, err := m.FetchQuota(a)
-						if err == nil && res != nil {
-							m.UpdateAccountCooldownFromQuota(a.ID, res.Buckets)
-							if res.Tier != "" {
-								m.UpdateAccountTier(a.ID, res.Tier)
-							}
-							if res.Credits != nil {
-								m.UpdateAccountCredits(a.ID, *res.Credits)
-							}
-						} else if err != nil && logFn != nil {
-							logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 自动刷新配额失败: %v", a.Email, err))
-						}
-					}(acc)
-				}
-			}
-			return
+	cooldownUntil := acc.CooldownUntil
+	if acc.Cooldowns != nil {
+		if v, ok := acc.Cooldowns[category]; ok {
+			cooldownUntil = v
 		}
 	}
+	hasQuota := cooldownUntil == 0 || now >= cooldownUntil
+
+	if !hasQuota {
+		m.Unlock()
+		return
+	}
+
+	currentCount := m.errorCounts[id] + 1
+	m.errorCounts[id] = currentCount
+	email := acc.Email
+
+	// If threshold reached, clear error count atomically before releasing lock
+	shouldFetch := currentCount >= 5
+	if shouldFetch {
+		delete(m.errorCounts, id) // 清除计数，防止并发多次触发刷新
+	}
 	m.Unlock()
+
+	if logFn != nil {
+		logFn(fmt.Sprintf("⚠️ [负载均衡] 账号 %s 遇到 %d 报错，连续报错次数: %d/5", email, statusCode, currentCount))
+	}
+
+	if shouldFetch {
+		if logFn != nil {
+			logFn(fmt.Sprintf("🔄 [负载均衡] 账号 %s 连续遇到 503/429 达到 5 次，触发自动刷新配额以修正冷静状态...", email))
+		}
+		if m.FetchQuota != nil {
+			go func(a *Account) {
+				res, err := m.FetchQuota(a)
+				if err == nil && res != nil {
+					m.UpdateAccountCooldownFromQuota(a.ID, res.Buckets)
+					if res.Tier != "" {
+						m.UpdateAccountTier(a.ID, res.Tier)
+					}
+					if res.Credits != nil {
+						m.UpdateAccountCredits(a.ID, *res.Credits)
+					}
+				} else if err != nil && logFn != nil {
+					logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 自动刷新配额失败: %v", a.Email, err))
+				}
+			}(acc)
+		}
+	}
 }
 
 func (m *Manager) ResetAccountError(id string) {

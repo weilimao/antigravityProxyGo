@@ -523,6 +523,9 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			a.AddLog("❌ 启动更新安装失败: " + err.Error())
 			wailsRuntime.EventsEmit(a.ctx, "app:update-error", err.Error())
 		}
+
+	case "settings:open-folder":
+		a.OpenPath(getStringArg(0))
 	}
 }
 
