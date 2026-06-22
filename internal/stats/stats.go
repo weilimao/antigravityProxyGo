@@ -327,6 +327,63 @@ func (t *Tracker) GetPayload(usagePayload interface{}) map[string]interface{} {
 	}
 }
 
+func (t *Tracker) GetPayloadSimplified(usagePayload interface{}) map[string]interface{} {
+	t.RLock()
+	defer t.RUnlock()
+
+	// deep copy map/arrays for thread safety when returning payload
+	modelsCopy := make(map[string]*ModelStats)
+	for k, v := range t.stats.Models {
+		modelsCopy[k] = &ModelStats{
+			Reqs:         v.Reqs,
+			InTokens:     v.InTokens,
+			OutTokens:    v.OutTokens,
+			CachedTokens: v.CachedTokens,
+			Cost:         v.Cost,
+		}
+	}
+
+	statsCopy := GlobalStats{
+		TotalRequests:     t.stats.TotalRequests,
+		TotalInputTokens:  t.stats.TotalInputTokens,
+		TotalOutputTokens: t.stats.TotalOutputTokens,
+		TotalCachedTokens: t.stats.TotalCachedTokens,
+		TotalCost:         t.stats.TotalCost,
+		TotalRetries:      t.stats.TotalRetries,
+		TotalErrors:       t.stats.TotalErrors,
+		Models:            modelsCopy,
+	}
+
+	requestsCopy := make([]*RequestLog, len(t.requests))
+	for i, req := range t.requests {
+		requestsCopy[i] = &RequestLog{
+			ID:             req.ID,
+			Timestamp:      req.Timestamp,
+			Method:         req.Method,
+			Host:           req.Host,
+			Path:           req.Path,
+			Model:          req.Model,
+			InTokens:       req.InTokens,
+			OutTokens:      req.OutTokens,
+			CachedTokens:   req.CachedTokens,
+			CacheStatus:    req.CacheStatus,
+			StatusCode:     req.StatusCode,
+			Cost:           req.Cost,
+			Account:        req.Account,
+			RequestBody:    req.RequestBody,
+			RequestHeaders: req.RequestHeaders,
+			SessionID:      req.SessionID,
+		}
+	}
+
+	return map[string]interface{}{
+		"stats":    statsCopy,
+		"trends":   nil, // Omit trends to optimize memory/IPC overhead
+		"requests": requestsCopy,
+		"usage":    usagePayload,
+	}
+}
+
 func (t *Tracker) scheduleSave() {
 	t.saveTimeoutLock.Lock()
 	defer t.saveTimeoutLock.Unlock()

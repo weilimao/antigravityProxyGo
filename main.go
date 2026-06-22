@@ -3,16 +3,21 @@ package main
 import (
 	"context"
 	"embed"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
+	// Set WebView2 environment variable to disable unused features (audio, video capture and crashpad) and restrict V8 heap size to save memory
+	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--mute-audio --disable-audio --disable-features=AudioServiceSandbox,VideoCaptureService --disable-breakpad --js-flags=\"--max-old-space-size=128\" --disable-gpu-program-caches --disable-gpu-shader-disk-cache --prune-gpu-command-buffer")
+
 	// Create an instance of the app structure
 	app := NewApp()
 
@@ -31,6 +36,9 @@ func main() {
 		OnBeforeClose:    app.onBeforeClose,
 		Bind: []interface{}{
 			app,
+		},
+		Windows: &windows.Options{
+			WebviewGpuIsDisabled: true, // Disable GPU acceleration to save memory
 		},
 	})
 

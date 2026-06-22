@@ -66,6 +66,20 @@ export function formatCooldownTime(cooldownTime: any): string {
 export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[], cooldowns: any = {}) {
     if (!containerEl) return;
     containerEl.innerHTML = '';
+
+    // 针对 Project 渠道（API 级别/按量付费项目）进行特殊展示，不显示假周限额进度条
+    const accountId = containerEl.id ? containerEl.id.replace('quotaBars-', '') : '';
+    const acc = state.currentAccountsList?.find(a => a.id === accountId);
+    if (acc && acc.provider !== 'antigravity') {
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">云项目 API (按量付费)，无额度限制</span>
+            </div>
+        `;
+        return;
+    }
+
     if (!buckets || buckets.length === 0) {
         containerEl.innerHTML = '<span class="text-[10px] text-outline/50 italic">暂无配额数据</span>';
         return;
@@ -559,7 +573,7 @@ export function updateAggregateQuotaUI() {
     if (!panel || !grid || !info) return;
 
     const isPool = poolModeToggle ? poolModeToggle.checked : false;
-    if (!isPool || !state.currentAccountsList || state.currentAccountsList.length === 0) {
+    if (!isPool || !state.currentAccountsList || state.currentAccountsList.length === 0 || state.currentActiveChannel === 'project') {
         panel.classList.add('hidden');
         panel.classList.remove('flex');
         return;

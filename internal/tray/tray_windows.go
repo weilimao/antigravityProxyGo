@@ -8,7 +8,7 @@ import (
 	"image/png"
 	"syscall"
 
-	"github.com/getlantern/systray"
+	"github.com/energye/systray"
 )
 
 //go:embed tray-icon.png
@@ -103,6 +103,16 @@ func onReady() {
 	systray.SetIcon(icoBytes)
 	systray.SetTooltip("Antigravity Proxy")
 
+	systray.SetOnDClick(func(menu systray.IMenu) {
+		if onShowCallback != nil {
+			onShowCallback()
+		}
+	})
+
+	systray.SetOnRClick(func(menu systray.IMenu) {
+		menu.ShowMenu()
+	})
+
 	var showLabel, quitLabel string
 	if isChineseLocale() {
 		showLabel = "显示控制面板"
@@ -116,21 +126,17 @@ func onReady() {
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem(quitLabel, quitLabel)
 
-	go func() {
-		for {
-			select {
-			case <-mShow.ClickedCh:
-				if onShowCallback != nil {
-					onShowCallback()
-				}
-			case <-mQuit.ClickedCh:
-				if onQuitCallback != nil {
-					onQuitCallback()
-				}
-				return
-			}
+	mShow.Click(func() {
+		if onShowCallback != nil {
+			onShowCallback()
 		}
-	}()
+	})
+
+	mQuit.Click(func() {
+		if onQuitCallback != nil {
+			onQuitCallback()
+		}
+	})
 }
 
 func onExit() {

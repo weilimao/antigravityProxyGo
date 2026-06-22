@@ -600,12 +600,10 @@ func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]accou
 
 func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*account.Account) (string, error), updateTokenCallback func(string, string)) (*account.QuotaResult, error) {
 	if acc.Provider == "project" {
-		// Project account is Pay-As-You-Go: return virtual 100% quota
+		// Project account is Pay-As-You-Go: return empty buckets list
 		return &account.QuotaResult{
-			Tier: "Project Pay-As-You-Go",
-			Buckets: []account.QuotaBucket{
-				{ModelID: "Weekly Limit", Group: "Gemini Models", RemainingFraction: 1.0, RemainPercent: 100},
-			},
+			Tier:    "Project Pay-As-You-Go",
+			Buckets: []account.QuotaBucket{},
 		}, nil
 	}
 

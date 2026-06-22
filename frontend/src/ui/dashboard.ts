@@ -346,6 +346,8 @@ export function switchTab(tab: string) {
     if (tab === 'pricing') {
         pricingController.fetchPricing();
     }
+
+    renderActiveView();
 }
 
 // Update Certificate Installation UI
@@ -395,6 +397,7 @@ export function requestCertStatus() {
 
 // Global page tab-switching router
 export function switchView(viewName: string) {
+    state.activeView = viewName;
     const viewDashboard = document.getElementById('view-dashboard');
     const viewAccounts = document.getElementById('view-accounts');
     const viewSettings = document.getElementById('view-settings');
@@ -431,6 +434,8 @@ export function switchView(viewName: string) {
         state.callbacks.refreshPacketsList();
         state.callbacks.updateAnalyzeAccountSelect();
     }
+
+    renderActiveView();
 }
 
 export function initDashboardEvents() {
@@ -575,21 +580,21 @@ export function initDashboardEvents() {
     ipcRenderer.on('memory-stats-updated', (event: any, data: any) => {
         if (!data) return;
         let totalMBVal = 0;
-        const valMemory = document.getElementById('valMemory');
-        if (valMemory && typeof data.total === 'number') {
+        const valHeapAlloc = document.getElementById('valHeapAlloc');
+        if (valHeapAlloc && typeof data.total === 'number') {
             totalMBVal = parseFloat((data.total / (1024 * 1024)).toFixed(1));
-            valMemory.textContent = `${totalMBVal.toFixed(1)} MB`;
+            valHeapAlloc.textContent = `${totalMBVal.toFixed(1)} MB`;
         }
         const valProcessCount = document.getElementById('valProcessCount');
         if (valProcessCount && typeof data.processCount === 'number') {
             valProcessCount.textContent = data.processCount;
         }
 
-        // Render Go HeapAlloc (actual memory in use by Go runtime)
-        const valHeapAlloc = document.getElementById('valHeapAlloc');
-        if (valHeapAlloc && typeof data.heapAlloc === 'number') {
+        // Render Go HeapAlloc (Go backend heap memory)
+        const valMemory = document.getElementById('valMemory');
+        if (valMemory && typeof data.heapAlloc === 'number') {
             const heapMB = (data.heapAlloc / (1024 * 1024)).toFixed(1);
-            valHeapAlloc.textContent = `${heapMB} MB`;
+            valMemory.textContent = `${heapMB} MB`;
         }
 
         if (typeof data.total === 'number') {
@@ -611,8 +616,95 @@ export function initDashboardEvents() {
         if (!payload) return;
 
         const { stats, trends, requests, usage } = payload;
-        state.trendsData = trends;
-        state.allRequests = requests;
+        
+        if (stats) state.statsData = stats;
+        if (trends !== undefined && trends !== null) {
+            state.trendsData = trends;
+        }
+        if (requests) state.allRequests = requests;
+        if (usage) state.usageData = usage;
+
+        renderActiveView();
+    });
+
+    // Appending raw logs to console tray
+    ipcRenderer.on('log', (event: any, log: string) => {
+        if (!consoleBody) {
+            consoleBody = document.getElementById('consoleBody');
+        }
+        if (!consoleBody) return;
+        const entry = document.createElement('div');
+        entry.className = 'console-entry';
+        if (log.includes('⚠️')) entry.classList.add('warn');
+        if (log.includes('❌')) entry.classList.add('error');
+        if (log.includes('✅') || log.includes('🚀')) entry.classList.add('info');
+        entry.textContent = log;
+        consoleBody.appendChild(entry);
+        
+        while (consoleBody.children.length > 150) {
+            if (consoleBody.firstChild) {
+                consoleBody.removeChild(consoleBody.firstChild);
+            }
+        }
+        consoleBody.scrollTop = consoleBody.scrollHeight;
+    });
+
+    // CA status check
+    ipcRenderer.on('cert-status-res', (event: any, isInstalled: boolean) => {
+        if (certStatusRetryTimer) {
+            clearTimeout(certStatusRetryTimer);
+            certStatusRetryTimer = null;
+        }
+        updateCertUI(isInstalled);
+    });
+}
+
+export function renderModelsTable(stats: any) {
+    if (!modelsTableBody) {
+        modelsTableBody = document.querySelector('#modelsTable tbody');
+    }
+    if (!modelsTableBody) return;
+    
+    modelsTableBody.innerHTML = '';
+    const dict = i18n[state.currentLanguage] || {};
+    const modelEntries = Object.entries(stats.models || {}).sort((a: any, b: any) => {
+        const totalA = (a[1].inTokens || 0) + (a[1].outTokens || 0);
+        const totalB = (b[1].inTokens || 0) + (b[1].outTokens || 0);
+        if (totalB !== totalA) return totalB - totalA;
+        return (b[1].reqs || 0) - (a[1].reqs || 0);
+    });
+    
+    if (modelEntries.length === 0) {
+        modelsTableBody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-outline dark:text-outline-variant italic">${dict.noData || '暂无数据'}</td></tr>`;
+    } else {
+        modelEntries.forEach(([model, data]: [string, any]) => {
+            if (model === 'unknown' && data.reqs === 0) return;
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors';
+
+            const modelHitRate = data.inTokens > 0 ? (data.cachedTokens / data.inTokens * 100) : 0;
+            const avgCost = data.reqs > 0 ? (data.cost / data.reqs) : 0;
+            const totalTokens = data.inTokens + data.outTokens;
+
+            tr.innerHTML = `
+                <td class="p-3 font-sans font-semibold text-on-surface dark:text-white">${model}</td>
+                <td class="p-3 text-right">${data.reqs}</td>
+                <td class="p-3 text-right font-semibold">${totalTokens.toLocaleString()}</td>
+                <td class="p-3 text-right text-outline dark:text-outline-variant">${data.inTokens.toLocaleString()}</td>
+                <td class="p-3 text-right text-on-surface dark:text-white">${data.outTokens.toLocaleString()}</td>
+                <td class="p-3 text-right">${modelHitRate.toFixed(1)}%</td>
+                <td class="p-3 text-right text-primary dark:text-primary-fixed-dim font-bold">$${data.cost.toFixed(4)}</td>
+                <td class="p-3 text-right text-outline dark:text-outline-variant">$${avgCost.toFixed(5)}</td>
+            `;
+            modelsTableBody!.appendChild(tr);
+        });
+    }
+}
+
+export function renderActiveView() {
+    if (state.activeView === 'dashboard') {
+        const stats = state.statsData;
+        if (!stats) return;
 
         // 1. Update Metrics Cards
         const totalRequests = (stats.totalRequests || 0) + (stats.totalErrors || 0);
@@ -656,83 +748,23 @@ export function initDashboardEvents() {
 
         if (gaugeCircle) gaugeCircle.setAttribute('stroke-dasharray', `${hitRate.toFixed(1)}, 100`);
 
-        // 2. Draw SVG Area Trend line
-        const filteredTrends = chartRenderer.getFilteredTrends(state.trendsData, state.currentRange);
-        chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange);
-
-        // 3. Render Model Stats Table
-        if (modelsTableBody) {
-            modelsTableBody.innerHTML = '';
-            const dict = i18n[state.currentLanguage] || {};
-            const modelEntries = Object.entries(stats.models || {}).sort((a: any, b: any) => {
-                const totalA = (a[1].inTokens || 0) + (a[1].outTokens || 0);
-                const totalB = (b[1].inTokens || 0) + (b[1].outTokens || 0);
-                if (totalB !== totalA) return totalB - totalA;
-                return (b[1].reqs || 0) - (a[1].reqs || 0);
-            });
-            
-            if (modelEntries.length === 0) {
-                modelsTableBody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-outline dark:text-outline-variant italic">${dict.noData || '暂无数据'}</td></tr>`;
-            } else {
-                modelEntries.forEach(([model, data]: [string, any]) => {
-                    if (model === 'unknown' && data.reqs === 0) return;
-                    const tr = document.createElement('tr');
-                    tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors';
-
-                    const modelHitRate = data.inTokens > 0 ? (data.cachedTokens / data.inTokens * 100) : 0;
-                    const avgCost = data.reqs > 0 ? (data.cost / data.reqs) : 0;
-                    const totalTokens = data.inTokens + data.outTokens;
-
-                    tr.innerHTML = `
-                        <td class="p-3 font-sans font-semibold text-on-surface dark:text-white">${model}</td>
-                        <td class="p-3 text-right">${data.reqs}</td>
-                        <td class="p-3 text-right font-semibold">${totalTokens.toLocaleString()}</td>
-                        <td class="p-3 text-right text-outline dark:text-outline-variant">${data.inTokens.toLocaleString()}</td>
-                        <td class="p-3 text-right text-on-surface dark:text-white">${data.outTokens.toLocaleString()}</td>
-                        <td class="p-3 text-right">${modelHitRate.toFixed(1)}%</td>
-                        <td class="p-3 text-right text-primary dark:text-primary-fixed-dim font-bold">$${data.cost.toFixed(4)}</td>
-                        <td class="p-3 text-right text-outline dark:text-outline-variant">$${avgCost.toFixed(5)}</td>
-                    `;
-                    modelsTableBody!.appendChild(tr);
-                });
-            }
+        // 2. Draw SVG Area Trend line (only if we have trendsData)
+        if (state.trendsData && state.trendsData.length > 0) {
+            const filteredTrends = chartRenderer.getFilteredTrends(state.trendsData, state.currentRange);
+            chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange);
         }
 
-        // 4. Render Request Logs
-        renderLogsTable();
-        usageDetails.render(usage);
-    });
-
-    // Appending raw logs to console tray
-    ipcRenderer.on('log', (event: any, log: string) => {
-        if (!consoleBody) {
-            consoleBody = document.getElementById('consoleBody');
+        // 3. Render sub-tabs table (only the active one!)
+        if (state.activeTab === 'models') {
+            renderModelsTable(stats);
+        } else if (state.activeTab === 'logs') {
+            renderLogsTable();
         }
-        if (!consoleBody) return;
-        const entry = document.createElement('div');
-        entry.className = 'console-entry';
-        if (log.includes('⚠️')) entry.classList.add('warn');
-        if (log.includes('❌')) entry.classList.add('error');
-        if (log.includes('✅') || log.includes('🚀')) entry.classList.add('info');
-        entry.textContent = log;
-        consoleBody.appendChild(entry);
-        
-        while (consoleBody.children.length > 150) {
-            if (consoleBody.firstChild) {
-                consoleBody.removeChild(consoleBody.firstChild);
-            }
+    } else if (state.activeView === 'accounts') {
+        if (state.usageData) {
+            usageDetails.render(state.usageData);
         }
-        consoleBody.scrollTop = consoleBody.scrollHeight;
-    });
-
-    // CA status check
-    ipcRenderer.on('cert-status-res', (event: any, isInstalled: boolean) => {
-        if (certStatusRetryTimer) {
-            clearTimeout(certStatusRetryTimer);
-            certStatusRetryTimer = null;
-        }
-        updateCertUI(isInstalled);
-    });
+    }
 }
 
 export function hideModal() {

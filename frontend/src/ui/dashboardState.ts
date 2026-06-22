@@ -20,6 +20,9 @@ export interface DashboardState {
     currentViewTab: string;
     memoryHistory: number[];
     maxMemoryHistoryPoints: number;
+    activeView: string;
+    statsData: any | null;
+    usageData: any | null;
 
     // Pagination
     currentPage: number;
@@ -65,6 +68,9 @@ const state: DashboardState = {
     currentViewTab: '',
     memoryHistory: [],
     maxMemoryHistoryPoints: 25,
+    activeView: 'dashboard',
+    statsData: null,
+    usageData: null,
 
     // Pagination
     currentPage: 1,

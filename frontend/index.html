@@ -15,102 +15,8 @@
             "get-userdata-path": ""
         };
     </script>
-    <!-- 引入本地离线 Tailwind CSS 引擎 -->
-    <script src="/tailwind.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
-    <!-- Tailwind 自定义配色及配置 -->
-    <script id="tailwind-config">
-        tailwind.config = {
-          darkMode: "class",
-          theme: {
-            extend: {
-              "colors": {
-                      "on-primary-fixed-variant": "#6900b3",
-                      "primary-container": "#9c48ea",
-                      "tertiary-fixed": "#ffdead",
-                      "on-secondary": "#ffffff",
-                      "surface-container-highest": "#eadfed",
-                      "surface-tint": "#842bd2",
-                      "primary-fixed-dim": "#ddb7ff",
-                      "error-container": "#ffdad6",
-                      "on-secondary-fixed": "#07006c",
-                      "on-primary-fixed": "#2c0051",
-                      "outline-variant": "#cfc2d6",
-                      "surface-bright": "#fff7fe",
-                      "on-tertiary": "#ffffff",
-                      "on-secondary-container": "#fffbff",
-                      "tertiary-container": "#9b6b00",
-                      "secondary": "#4648d4",
-                      "primary": "#8127cf",
-                      "tertiary": "#7b5500",
-                      "surface-container-lowest": "#ffffff",
-                      "on-error-container": "#93000a",
-                      "tertiary-fixed-dim": "#fabc4e",
-                      "on-primary": "#ffffff",
-                      "surface-container-low": "#fbf0fe",
-                      "on-tertiary-fixed-variant": "#604100",
-                      "surface-dim": "#e1d7e4",
-                      "surface-container-high": "#f0e5f2",
-                      "on-error": "#ffffff",
-                      "inverse-on-surface": "#f8edfb",
-                      "secondary-fixed": "#e1e0ff",
-                      "background": "#fff7fe",
-                      "inverse-surface": "#342e38",
-                      "outline": "#7e7385",
-                      "surface-container": "#f5eaf8",
-                      "secondary-fixed-dim": "#c0c1ff",
-                      "surface-variant": "#eadfed",
-                      "primary-fixed": "#f0dbff",
-                      "on-secondary-fixed-variant": "#2f2ebe",
-                      "on-background": "#1f1a23",
-                      "on-tertiary-fixed": "#281900",
-                      "on-tertiary-container": "#fffbff",
-                      "error": "#ba1a1a",
-                      "secondary-container": "#6063ee",
-                      "surface": "#10131c",
-                      "on-surface": "#1f1a23",
-                      "on-surface-variant": "#4d4354",
-                      "inverse-primary": "#ddb7ff"
-              },
-              "borderRadius": {
-                      "DEFAULT": "0.25rem",
-                      "lg": "0.5rem",
-                      "xl": "0.75rem",
-                      "full": "9999px"
-              },
-              "spacing": {
-                      "margin-md": "16px",
-                      "margin-lg": "32px",
-                      "container-padding": "24px",
-                      "unit": "8px",
-                      "gutter": "16px",
-                      "margin-sm": "8px"
-              },
-              "fontFamily": {
-                      "headline-lg-mobile": ["Inter"],
-                      "label-zh": ["Inter"],
-                      "body-sm": ["Inter"],
-                      "label-en": ["Inter"],
-                      "headline-md": ["Inter"],
-                      "data-mono": ["JetBrains Mono"],
-                      "headline-lg": ["Inter"],
-                      "body-lg": ["Inter"]
-              },
-              "fontSize": {
-                      "headline-lg-mobile": ["28px", {"lineHeight": "1.2", "fontWeight": "700"}],
-                      "label-zh": ["13px", {"lineHeight": "1", "fontWeight": "500"}],
-                      "body-sm": ["14px", {"lineHeight": "1.5", "fontWeight": "400"}],
-                      "label-en": ["12px", {"lineHeight": "1", "letterSpacing": "0.05em", "fontWeight": "600"}],
-                      "headline-md": ["24px", {"lineHeight": "1.3", "fontWeight": "600"}],
-                      "data-mono": ["14px", {"lineHeight": "1.4", "fontWeight": "500"}],
-                      "headline-lg": ["32px", {"lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "700"}],
-                      "body-lg": ["16px", {"lineHeight": "1.6", "fontWeight": "400"}]
-              }
-            }
-          }
-        }
-    </script>
     <link rel="stylesheet" href="/src/ui/dashboard.css">
 </head>
 <body class="antialiased min-h-screen flex flex-col font-sans">
@@ -285,7 +191,7 @@
             <!-- 指标 4: 内存占用 -->
             <div class="glass-card rounded-xl p-5 flex flex-col gap-2 relative">
                 <div class="flex items-center gap-1.5">
-                    <div class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider">实际内存</div>
+                    <div class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider">系统物理内存</div>
                     <!-- Tooltip 说明 -->
                     <div class="relative group">
                         <span class="material-symbols-outlined text-[14px] text-outline/60 cursor-help select-none">help</span>
@@ -293,20 +199,20 @@
                             <div class="bg-slate-900 dark:bg-slate-800 text-white text-[11px] leading-relaxed rounded-lg shadow-xl px-3 py-2.5">
                                 <div class="absolute left-3 bottom-full w-0 h-0 border-x-4 border-x-transparent border-b-4 border-b-slate-900 dark:border-b-slate-800"></div>
                                 <p class="font-bold text-blue-300 mb-1">📌 关于内存数字说明</p>
-                                <p class="text-slate-300"><span class="text-emerald-400 font-semibold">实际内存</span>：Go 运行时当前真正占用的堆内存，反映程序的真实内存消耗。</p>
-                                <p class="text-slate-300 mt-1.5"><span class="text-slate-400 font-semibold">预留内存</span>：系统为本应用（含 WebView2 渲染子进程）分配的工作集总量，包含 WebView2 内核开销，数字偏高属于正常现象。</p>
+                                <p class="text-slate-300"><span class="text-emerald-400 font-semibold">系统物理内存</span>：主进程及所有渲染/网络子进程在物理内存 (RAM) 中的实际占用总和，与任务管理器相符。</p>
+                                <p class="text-slate-300 mt-1.5"><span class="text-blue-400 font-semibold">Go 堆内存</span>：Go 后端运行时当前分配的堆对象大小，反映核心引擎的数据处理开销。</p>
                             </div>
                         </div>
                     </div>
                 </div>
                 <div class="flex items-center justify-between mt-1">
                     <div class="flex flex-col z-10 shrink-0">
-                        <!-- 主数值：实际内存 (HeapAlloc) -->
+                        <!-- 主数值：系统物理内存 (Total Working Set) -->
                         <span class="text-[24px] font-data-mono font-medium text-emerald-600 dark:text-emerald-400 leading-none" id="valHeapAlloc">0.0 MB</span>
-                        <!-- 辅助信息：预留内存 (WorkingSet) -->
+                        <!-- 辅助信息：Go 后端堆内存 (HeapAlloc) -->
                         <span class="text-[13px] text-slate-500 dark:text-slate-400 mt-1.5 flex items-center gap-1">
                             <span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-                            <span>预留内存: </span>
+                            <span>Go 堆内存: </span>
                             <span class="font-data-mono font-bold text-blue-500 dark:text-blue-400" id="valMemory">0.0 MB</span>
                         </span>
                         <span class="text-[13px] text-slate-500 dark:text-slate-400 mt-0.5"><span data-i18n="sysProcess">活跃进程:</span> <span class="font-data-mono font-bold text-on-surface dark:text-white" id="valProcessCount">0</span></span>

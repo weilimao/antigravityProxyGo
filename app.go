@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -139,11 +140,11 @@ func (a *App) startup(ctx context.Context) {
 
 	// Bind UI update callbacks
 	a.statsTracker.SetOnPayloadUpdate(func() {
-		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayload(a.usageTracker.GetPayload()))
+		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayloadSimplified(a.usageTracker.GetPayload()))
 	})
 
 	a.usageTracker.SetOnPayloadUpdate(func() {
-		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayload(a.usageTracker.GetPayload()))
+		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayloadSimplified(a.usageTracker.GetPayload()))
 	})
 
 	// 6. Initialize Proxy Engine
@@ -826,17 +827,27 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 }
 
 func (a *App) startMemoryMonitor(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	a.emitMemoryStats()
+
+	trendCounter := 0
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			runtime.GC()
+			debug.FreeOSMemory()
 			a.emitMemoryStats()
+
+			trendCounter++
+			if trendCounter >= 6 { // 6 * 10s = 60s
+				trendCounter = 0
+				wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayload(a.usageTracker.GetPayload()))
+			}
 		}
 	}
 }
