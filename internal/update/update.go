@@ -8,7 +8,6 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -259,32 +258,15 @@ func (m *Manager) InstallUpdate(filePath string) error {
 		return fmt.Errorf("未找到安装包文件: %s", filePath)
 	}
 
-	if runtime.GOOS == "windows" {
-		// Windows silent install /S and auto launch
-		cmd := exec.Command(filePath, "/S", "--force-run")
-		err := cmd.Start()
-		if err != nil {
-			return err
-		}
-		// Exit host application
-		go func() {
-			time.Sleep(500 * time.Millisecond)
-			os.Exit(0)
-		}()
-		return nil
-	} else if runtime.GOOS == "darwin" {
-		// macOS open package
-		cmd := exec.Command("open", filePath)
-		err := cmd.Start()
-		if err != nil {
-			return err
-		}
-		go func() {
-			time.Sleep(500 * time.Millisecond)
-			os.Exit(0)
-		}()
-		return nil
+	err := installUpdateOS(filePath)
+	if err != nil {
+		return err
 	}
 
-	return errors.New("仅 Windows 和 macOS 系统支持自动安装更新")
+	// Exit host application
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
+	return nil
 }

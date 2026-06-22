@@ -141,6 +141,12 @@ Section
     # Write InstallLocation for future reinstalls/updates
     SetRegView 64
     WriteRegStr HKLM "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
+
+    # If silent, launch the application after installation
+    IfSilent launch_silent done_launch
+    launch_silent:
+      Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
+    done_launch:
 SectionEnd
 
 Section "uninstall"

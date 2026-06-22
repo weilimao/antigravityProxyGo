@@ -11,6 +11,7 @@ import { initChartFilters } from './ui/chartRenderer';
 import { init as initUsageDetails } from './ui/usageDetails';
 import { initMigrationEvents } from './ui/migrationController';
 import { initUpdaterEvents } from './ui/updaterController';
+import { initRetryErrorLogsEvents } from './ui/retryErrorLogsController';
 
 // Mount global interaction functions requested by DOM inline click events
 (window as any).switchView = switchView;
@@ -28,6 +29,7 @@ function initApp() {
         initUsageDetails();
         initMigrationEvents();
         initUpdaterEvents();
+        initRetryErrorLogsEvents();
 
         // Set default language
         setLanguage('zh');

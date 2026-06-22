@@ -108,6 +108,11 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     let totalOutputCostVal = 0;
     let totalCachedCostVal = 0;
 
+    let totalInputTokensVal = 0;
+    let totalOutputTokensVal = 0;
+    let totalCachedTokensVal = 0;
+    let totalCacheCreatedTokensVal = 0;
+
     trends.forEach(bin => {
         const binCost = bin.cost || 0;
         let binInputCost = bin.inputCost;
@@ -141,7 +146,14 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
         totalInputCostVal += binInputCost;
         totalOutputCostVal += binOutputCost;
         totalCachedCostVal += binCachedCost;
+
+        totalInputTokensVal += bin.input || 0;
+        totalOutputTokensVal += bin.output || 0;
+        totalCachedTokensVal += bin.cached || 0;
+        totalCacheCreatedTokensVal += bin.cacheCreated || 0;
     });
+
+    const totalTokensVal = totalInputTokensVal + totalOutputTokensVal;
 
     const labelSummaryTotal = document.getElementById('labelSummaryTotal');
     const valSummaryTotal = document.getElementById('valSummaryTotal');
@@ -149,8 +161,16 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     const valSummaryOutput = document.getElementById('valSummaryOutput');
     const valSummaryCached = document.getElementById('valSummaryCached');
 
+    const labelSummaryTotalTokens = document.getElementById('labelSummaryTotalTokens');
+    const valSummaryTotalTokens = document.getElementById('valSummaryTotalTokens');
+    const valSummaryInputTokens = document.getElementById('valSummaryInputTokens');
+    const valSummaryOutputTokens = document.getElementById('valSummaryOutputTokens');
+    const valSummaryCachedTokens = document.getElementById('valSummaryCachedTokens');
+    const valSummaryCacheCreatedTokens = document.getElementById('valSummaryCacheCreatedTokens');
+
+    const dict = i18n[state.currentLanguage] || {};
+
     if (labelSummaryTotal) {
-        const dict = i18n[state.currentLanguage] || {};
         let labelKey = 'summaryTotalCostCustom';
         if (range === 'today') labelKey = 'summaryTotalCostToday';
         else if (range === '24h') labelKey = 'summaryTotalCost24h';
@@ -164,6 +184,22 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     if (valSummaryInput) valSummaryInput.textContent = `$${totalInputCostVal.toFixed(4)}`;
     if (valSummaryOutput) valSummaryOutput.textContent = `$${totalOutputCostVal.toFixed(4)}`;
     if (valSummaryCached) valSummaryCached.textContent = `$${totalCachedCostVal.toFixed(4)}`;
+
+    if (labelSummaryTotalTokens) {
+        let labelKey = 'summaryTotalTokensCustom';
+        if (range === 'today') labelKey = 'summaryTotalTokensToday';
+        else if (range === '24h') labelKey = 'summaryTotalTokens24h';
+        else if (range === '3d') labelKey = 'summaryTotalTokens3d';
+        else if (range === '7d') labelKey = 'summaryTotalTokens7d';
+        else if (range === '30d') labelKey = 'summaryTotalTokens30d';
+        labelSummaryTotalTokens.textContent = dict[labelKey] || '总 Token:';
+    }
+
+    if (valSummaryTotalTokens) valSummaryTotalTokens.textContent = totalTokensVal.toLocaleString();
+    if (valSummaryInputTokens) valSummaryInputTokens.textContent = totalInputTokensVal.toLocaleString();
+    if (valSummaryOutputTokens) valSummaryOutputTokens.textContent = totalOutputTokensVal.toLocaleString();
+    if (valSummaryCachedTokens) valSummaryCachedTokens.textContent = totalCachedTokensVal.toLocaleString();
+    if (valSummaryCacheCreatedTokens) valSummaryCacheCreatedTokens.textContent = totalCacheCreatedTokensVal.toLocaleString();
 
     const N = trends.length;
     const xMin = 0, xMax = 1000;
