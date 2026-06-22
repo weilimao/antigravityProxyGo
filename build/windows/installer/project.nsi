@@ -60,6 +60,7 @@ ManifestDPIAware true
 # !insertmacro MUI_PAGE_LICENSE "resources\eula.txt" # Adds a EULA page to the installer
 !insertmacro MUI_PAGE_DIRECTORY # In which folder install page.
 !insertmacro MUI_PAGE_INSTFILES # Installing page.
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${PRODUCT_EXECUTABLE}"
 !insertmacro MUI_PAGE_FINISH # Finished installation page.
 
 !insertmacro MUI_UNPAGE_INSTFILES # Uinstalling page
@@ -77,12 +78,33 @@ ShowInstDetails show # This will always show the installation details.
 
 Function .onInit
    !insertmacro wails.checkArchitecture
+
+   # Detect previous installation directory from registry
+   SetRegView 64
+   ReadRegStr $0 HKLM "${UNINST_KEY}" "UninstallString"
+   StrCmp $0 "" done_detect
+
+   # Strip quotes and \uninstall.exe to extract installation directory
+   StrCpy $1 $0 1 # Get the first character
+   StrCmp $1 `"` 0 no_quotes
+     # If it has quotes, e.g. "C:\Program Files\weilimao\Antigravity Proxy\uninstall.exe"
+     # \uninstall.exe" is 15 characters, so strip them and copy from index 1
+     StrCpy $0 $0 -15 1
+     Goto check_dir
+   no_quotes:
+     # If it has no quotes, e.g. C:\Program Files\weilimao\Antigravity Proxy\uninstall.exe
+     # \uninstall.exe is 14 characters
+     StrCpy $0 $0 -14
+   check_dir:
+     IfFileExists "$0\${PRODUCT_EXECUTABLE}" 0 done_detect
+       StrCpy $INSTDIR $0
+   done_detect:
 FunctionEnd
 
 Section
     !insertmacro wails.setShellContext
 
-    # 检测文件是否存在，若存在则检查是否在运行
+    # Check if file exists, if yes, check if running
     IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" check_running install_start
 
     check_running:
@@ -90,8 +112,17 @@ Section
       FileOpen $0 "$INSTDIR\${PRODUCT_EXECUTABLE}" "a"
       FileClose $0
       IfErrors 0 install_start
-        MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${INFO_PRODUCTNAME} 正在后台运行。请先在系统托盘退出程序，或在任务管理器中结束该进程，然后点击“重试”继续，或点击“取消”退出安装。" IDRETRY check_running
-        Abort
+        # Try to silently kill old running process
+        nsExec::Exec 'taskkill /F /IM "${PRODUCT_EXECUTABLE}"'
+        Sleep 500
+        # Re-check if file lock is released
+        ClearErrors
+        FileOpen $0 "$INSTDIR\${PRODUCT_EXECUTABLE}" "a"
+        FileClose $0
+        IfErrors 0 install_start
+          # Still locked, show warning message box
+          MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Antigravity Proxy is currently running in the background. Please close the application from the system tray (right-click the icon and choose Exit) or close it via Task Manager, then click Retry to continue, or Cancel to exit." IDRETRY check_running
+          Abort
 
     install_start:
     !insertmacro wails.webview2runtime
@@ -107,6 +138,9 @@ Section
     !insertmacro wails.associateCustomProtocols
 
     !insertmacro wails.writeUninstaller
+    # Write InstallLocation for future reinstalls/updates
+    SetRegView 64
+    WriteRegStr HKLM "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
 SectionEnd
 
 Section "uninstall"

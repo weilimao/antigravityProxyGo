@@ -28,7 +28,7 @@ import (
 	"antigravity-proxy/internal/update"
 )
 
-const appVersion = "1.0.0"
+const appVersion = "1.0.1"
 
 type App struct {
 	ctx           context.Context
