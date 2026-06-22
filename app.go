@@ -28,8 +28,6 @@ import (
 	"antigravity-proxy/internal/update"
 )
 
-const appVersion = "1.0.1"
-
 type App struct {
 	ctx           context.Context
 	settingsMgr   *settings.Manager
