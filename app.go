@@ -241,7 +241,11 @@ func (a *App) AddLog(msg string) {
 // OpenPath opens system browser or path
 func (a *App) OpenPath(p string) {
 	if runtime.GOOS == "windows" {
-		_ = exec.Command("cmd", "/c", "start", "", p).Start()
+		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+			wailsRuntime.BrowserOpenURL(a.ctx, p)
+		} else {
+			_ = exec.Command("cmd", "/c", "start", "", p).Start()
+		}
 	} else if runtime.GOOS == "darwin" {
 		_ = exec.Command("open", p).Start()
 	}
