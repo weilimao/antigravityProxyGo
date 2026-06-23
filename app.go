@@ -718,6 +718,8 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		wailsRuntime.EventsEmit(a.ctx, "settings:migration-progress", map[string]string{"step": "stop-proxy", "status": "正在停止代理服务器..."})
 		a.proxyEngine.Stop()
 
+		defaultUserData := a.settingsMgr.GetDefaultUserDataPath()
+
 		errMigrate := a.settingsMgr.MigrateData(
 			targetDir,
 			func(step, status string) {
@@ -729,7 +731,7 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 			},
 			func(caPemPath string) error {
 				homeDir, _ := os.UserHomeDir()
-				return patch.PatchAll(true, a.settingsMgr.GetDefaultUserDataPath(), homeDir, caPemPath, a.AddLog)
+				return patch.PatchAll(true, defaultUserData, homeDir, caPemPath, a.AddLog)
 			},
 			func(newDir string) {
 				a.accountMgr.UpdatePath(newDir)
