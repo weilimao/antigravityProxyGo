@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -204,26 +203,7 @@ func PatchAsar(asarPath, caCertPath string, logCallback func(string)) error {
         env['http_proxy']  = 'http://127.0.0.1:18443';
         env['https_proxy'] = 'http://127.0.0.1:18443';
         env['NO_PROXY']    = 'localhost,127.0.0.1';
-        env['no_proxy']    = 'localhost,127.0.0.1';
-        try {
-            const os = require('os');
-            const path = require('path');
-            const fs = require('fs');
-            const defaultUserData = process.platform === 'win32'
-                ? path.join(os.homedir(), 'AppData', 'Roaming', 'antigravity-proxy-desktop')
-                : path.join(os.homedir(), 'Library', 'Application Support', 'antigravity-proxy-desktop');
-            let caPath = '%s';
-            try {
-                const configPath = path.join(defaultUserData, 'config.json');
-                if (fs.existsSync(configPath)) {
-                    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-                    if (config.dataDirectory) {
-                        caPath = path.join(config.dataDirectory, 'certs', 'certs', 'ca.pem');
-                    }
-                }
-            } catch (err) {}
-            env['SSL_CERT_FILE'] = caPath;
-        } catch (e) {}`, wrapperCall, filepath.ToSlash(caCertPath))
+        env['no_proxy']    = 'localhost,127.0.0.1';`, wrapperCall)
 
 	newJs := originalJs[:stmtStart] + injectStr + originalJs[stmtEnd:]
 	newJsBytes := []byte(newJs)

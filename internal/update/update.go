@@ -263,10 +263,7 @@ func (m *Manager) InstallUpdate(filePath string) error {
 		return err
 	}
 
-	// Exit host application
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		os.Exit(0)
-	}()
+	// We do NOT exit the host application here. 
+	// Instead, we let the installer kill the process (taskkill) when the user approves UAC and installation starts.
 	return nil
 }

@@ -170,6 +170,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var logged bool
 	var allocatedAccount string
 	var currentAttemptIndex int
+	var sentBytes []byte
+	var headersSent bool
 
 	logRequestToTracker := func(statusCode int, errDetail string) {
 		if logged {
@@ -371,43 +373,91 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var errRead error
 		isStreaming := strings.Contains(targetPath, "streamGenerateContent")
 
+		var skippedBytes int = 0
 		if isStreaming && resp.StatusCode == 200 {
-			// Copy headers to writer
-			for k, values := range resp.Header {
-				for _, v := range values {
-					w.Header().Add(k, v)
+			if !headersSent {
+				// Copy headers to writer
+				for k, values := range resp.Header {
+					for _, v := range values {
+						w.Header().Add(k, v)
+					}
 				}
+				w.Header().Del("Content-Length")
+				w.WriteHeader(resp.StatusCode)
+				headersSent = true
 			}
-			w.Header().Del("Content-Length")
-			w.WriteHeader(resp.StatusCode)
 
-			var accumulatedBytes bytes.Buffer
 			flusher, hasFlusher := w.(http.Flusher)
 			if hasFlusher {
 				flusher.Flush()
 			}
 
 			buf := make([]byte, 4096)
+			var clientDisconnected bool = false
+			var streamErr error = nil
+			var mismatchHappened bool = false
+
 			for {
 				n, errR := resp.Body.Read(buf)
 				if n > 0 {
-					_, writeErr := w.Write(buf[:n])
-					if writeErr != nil {
-						break
+					chunk := buf[:n]
+					// 若此前尝试已发送过数据，则在此次尝试中跳过相同的前缀
+					if len(sentBytes) > 0 && skippedBytes < len(sentBytes) && !mismatchHappened {
+						bytesToCompare := len(sentBytes) - skippedBytes
+						if bytesToCompare > len(chunk) {
+							bytesToCompare = len(chunk)
+						}
+
+						// 验证前缀是否完全匹配
+						mismatch := false
+						for i := 0; i < bytesToCompare; i++ {
+							if chunk[i] != sentBytes[skippedBytes+i] {
+								mismatch = true
+								break
+							}
+						}
+
+						if !mismatch {
+							// 匹配成功，安全跳过
+							skippedBytes += bytesToCompare
+							chunk = chunk[bytesToCompare:]
+						} else {
+							// 发生不一致，为安全起见降级为直接传输
+							h.logFn(fmt.Sprintf("%s ⚠️ 重试流数据不匹配，将直接追加后续传输", logPrefix))
+							mismatchHappened = true
+						}
 					}
-					accumulatedBytes.Write(buf[:n])
-					if hasFlusher {
-						flusher.Flush()
+
+					if len(chunk) > 0 {
+						_, writeErr := w.Write(chunk)
+						if writeErr != nil {
+							clientDisconnected = true
+							break
+						}
+						sentBytes = append(sentBytes, chunk...)
+						if hasFlusher {
+							flusher.Flush()
+						}
 					}
 				}
 				if errR != nil {
 					if errR != io.EOF {
 						h.logFn(fmt.Sprintf("%s ⚠️ Read error during streaming: %v", logPrefix, errR))
+						streamErr = errR
 					}
 					break
 				}
 			}
-			respBodyBytes = accumulatedBytes.Bytes()
+
+			if clientDisconnected {
+				// 客户端主动断开，直接返回不重试
+				return resp.StatusCode, resp.Header, sentBytes, true, nil
+			}
+			if streamErr != nil {
+				// 上游异常中断，触发重试
+				return resp.StatusCode, resp.Header, sentBytes, true, errors.New("STREAM_INTERRUPTED")
+			}
+			respBodyBytes = sentBytes
 		} else {
 			respBodyBytes, errRead = io.ReadAll(resp.Body)
 		}
@@ -593,7 +643,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			errAttempt.Error() == "QUOTA_EXHAUSTED" ||
 			errAttempt.Error() == "TOKEN_EXPIRED" ||
 			errAttempt.Error() == "CREDITS_EXHAUSTED" ||
-			errAttempt.Error() == "SERVER_ERROR"
+			errAttempt.Error() == "SERVER_ERROR" ||
+			errAttempt.Error() == "STREAM_INTERRUPTED"
 
 		if lastUsedAccount != nil {
 			accId := lastUsedAccount.ID
@@ -670,6 +721,16 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			if errAttempt.Error() == "STREAM_INTERRUPTED" {
+				lastAccountFailCount++
+				if lastAccountFailCount >= 3 {
+					h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 连续遇到流式中断达到 %d 次。标记临时冷静期 (60s) 并切换账号重试...", email, lastAccountFailCount))
+					h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+60*1000, currentModel)
+				} else {
+					h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 遇到流式中断（第 %d/3 次）。不标记冷静期，将继续用当前账号尝试...", email, lastAccountFailCount))
+				}
+			}
+
 			if errAttempt.Error() == "CAPACITY_EXHAUSTED" || errAttempt.Error() == "QUOTA_EXHAUSTED" {
 				h.accountMgr.RecordAccountError(accId, status, currentModel, h.logFn)
 			}
@@ -716,17 +777,19 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.logFn(fmt.Sprintf("%s ❌ [负载均衡] 尝试失败: %v", logPrefix, errAttempt))
 			logRequestToTracker(429, errAttempt.Error())
 
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(429)
-			errResp := map[string]interface{}{
-				"error": map[string]interface{}{
-					"code":    429,
-					"message": "Active accounts quota exhausted",
-					"status":  "RESOURCE_EXHAUSTED",
-				},
+			if !headersSent {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(429)
+				errResp := map[string]interface{}{
+					"error": map[string]interface{}{
+						"code":    429,
+						"message": "Active accounts quota exhausted",
+						"status":  "RESOURCE_EXHAUSTED",
+					},
+				}
+				b, _ := json.Marshal(errResp)
+				w.Write(b)
 			}
-			b, _ := json.Marshal(errResp)
-			w.Write(b)
 			return
 		}
 	}

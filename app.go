@@ -448,7 +448,11 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			wailsRuntime.EventsEmit(a.ctx, "log", log)
 		}
 		a.logBufferMu.Unlock()
-		wailsRuntime.EventsEmit(a.ctx, "cert-status-res", cert.CheckCertStatus())
+		{
+			activeDir := a.settingsMgr.GetActiveDataDirectory()
+			caPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
+			wailsRuntime.EventsEmit(a.ctx, "cert-status-res", cert.CheckCertStatus(caPath))
+		}
 
 	case "settings:set-system-log-enabled":
 		_ = a.settingsMgr.SetEnableSystemLog(getBoolArg(0))
@@ -460,7 +464,9 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 		_ = a.settingsMgr.SetSilentStart(getBoolArg(0))
 
 	case "cert-status":
-		wailsRuntime.EventsEmit(a.ctx, "cert-status-res", cert.CheckCertStatus())
+		activeDir := a.settingsMgr.GetActiveDataDirectory()
+		caPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
+		wailsRuntime.EventsEmit(a.ctx, "cert-status-res", cert.CheckCertStatus(caPath))
 
 	case "cert-install":
 		activeDir := a.settingsMgr.GetActiveDataDirectory()

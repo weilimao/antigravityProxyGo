@@ -9,12 +9,24 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
+
+	"antigravity-proxy/internal/singleinstance"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
+	if shouldCheckSingleInstance() {
+		// Acquire single instance lock
+		lock, err := singleinstance.TryLock("antigravity-proxy-desktop")
+		if err != nil {
+			singleinstance.ShowAlreadyRunningMessage()
+			os.Exit(0)
+		}
+		defer lock.Unlock()
+	}
+
 	// Set WebView2 environment variable to disable unused features (audio, video capture and crashpad) and restrict V8 heap size to save memory
 	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--mute-audio --disable-audio --disable-features=AudioServiceSandbox,VideoCaptureService --disable-breakpad --js-flags=\"--max-old-space-size=128\" --disable-gpu-program-caches --disable-gpu-shader-disk-cache --prune-gpu-command-buffer")
 

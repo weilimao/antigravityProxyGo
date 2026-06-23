@@ -114,6 +114,7 @@ Section
       IfErrors 0 install_start
         # Try to silently kill old running process
         nsExec::Exec 'taskkill /F /IM "${PRODUCT_EXECUTABLE}"'
+        nsExec::Exec 'taskkill /F /IM "antigravity-proxy-desktop-go.exe"'
         Sleep 500
         # Re-check if file lock is released
         ClearErrors
