@@ -30,6 +30,7 @@ type Account struct {
 	Credits        *float64         `json:"credits"`
 	Cooldowns      map[string]int64 `json:"cooldowns"`     // category -> untilTimeMs
 	CooldownUntil  int64            `json:"cooldownUntil"` // max(cooldowns)
+	TwoFASecret    string           `json:"twofa_secret,omitempty"`
 }
 
 // GetAccessToken safely reads the access token under read lock.
@@ -326,6 +327,7 @@ func (m *Manager) GetAccounts() []*Account {
 			Credits:        creditsCopy,
 			Cooldowns:      cooldownsCopy,
 			CooldownUntil:  a.CooldownUntil,
+			TwoFASecret:    a.TwoFASecret,
 		})
 	}
 	return list
@@ -451,6 +453,25 @@ func (m *Manager) UpdateAccountEnabled(id string, enabled bool) {
 		if !enabled && m.OnAccountDisabled != nil {
 			m.OnAccountDisabled(id)
 		}
+	}
+}
+
+func (m *Manager) UpdateAccount2FASecret(id string, secret string) {
+	m.Lock()
+	changed := false
+	for _, a := range m.accounts {
+		if a.ID == id {
+			if a.TwoFASecret != secret {
+				a.TwoFASecret = secret
+				changed = true
+			}
+			break
+		}
+	}
+	m.Unlock()
+
+	if changed {
+		_ = m.SaveAccounts(false)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 )
 
 // UpdateSettings updates jetski.cloudCodeUrl in IDE and Agent settings files
@@ -100,8 +101,13 @@ func PatchAgentAsar(enable bool, homeDir, tempDir, caPath string, logCallback fu
 	return nil
 }
 
+var patchMu sync.Mutex
+
 // PatchAll applies all patches to integrate proxy into system environment
 func PatchAll(enable bool, appData, homeDir, caPath string, logCallback func(string)) error {
+	patchMu.Lock()
+	defer patchMu.Unlock()
+
 	// appData is passed as our app's specific defaultUserData (.../Roaming/antigravity-proxy-desktop)
 	// We get its parent directory to obtain the system global AppData/Application Support directory.
 	systemAppData := filepath.Dir(appData)

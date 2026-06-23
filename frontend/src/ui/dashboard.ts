@@ -6,6 +6,7 @@ import * as usageDetails from './usageDetails';
 import * as pricingController from './pricingController';
 import { refreshDataDir } from './migrationController';
 import { initAppVersion } from './updaterController';
+import { startOtpTimer, stopOtpTimer } from './otpController';
 
 // DOM Elements
 let html: HTMLElement;
@@ -412,16 +413,19 @@ export function switchView(viewName: string) {
     const viewAccounts = document.getElementById('view-accounts');
     const viewSettings = document.getElementById('view-settings');
     const viewPackets = document.getElementById('view-packets');
+    const viewOtp = document.getElementById('view-otp');
     
     const navDashboard = document.getElementById('nav-dashboard');
     const navAccounts = document.getElementById('nav-accounts');
     const navPackets = document.getElementById('nav-packets');
     const navSettings = document.getElementById('nav-settings');
+    const navOtp = document.getElementById('nav-otp');
 
     if (viewDashboard) viewDashboard.classList.toggle('hidden', viewName !== 'dashboard');
     if (viewAccounts) viewAccounts.classList.toggle('hidden', viewName !== 'accounts');
     if (viewSettings) viewSettings.classList.toggle('hidden', viewName !== 'settings');
     if (viewPackets) viewPackets.classList.toggle('hidden', viewName !== 'packets');
+    if (viewOtp) viewOtp.classList.toggle('hidden', viewName !== 'otp');
 
     const activeNavClass = 'text-primary dark:text-primary-fixed-dim border-b-2 border-primary pb-0.5 flex flex-col items-center';
     const inactiveNavClass = 'text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center';
@@ -430,6 +434,14 @@ export function switchView(viewName: string) {
     if (navAccounts) navAccounts.className = viewName === 'accounts' ? activeNavClass : inactiveNavClass;
     if (navPackets) navPackets.className = viewName === 'packets' ? activeNavClass : inactiveNavClass;
     if (navSettings) navSettings.className = viewName === 'settings' ? activeNavClass : inactiveNavClass;
+    if (navOtp) navOtp.className = viewName === 'otp' ? activeNavClass : inactiveNavClass;
+
+    // Manage OTP timer loop
+    if (viewName === 'otp') {
+        startOtpTimer();
+    } else {
+        stopOtpTimer();
+    }
 
     if (viewName === 'settings') {
         refreshDataDir();

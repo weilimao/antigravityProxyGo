@@ -26,6 +26,8 @@ import (
 	"antigravity-proxy/internal/stats"
 	"antigravity-proxy/internal/tray"
 	"antigravity-proxy/internal/update"
+	"antigravity-proxy/internal/totp"
+	"encoding/base32"
 )
 
 type App struct {
@@ -181,9 +183,11 @@ func (a *App) startup(ctx context.Context) {
 		a.AddLog(fmt.Sprintf("❌ Failed to start Proxy Engine: %v", err))
 	}
 
-	// Apply system environment integrations
-	caCertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
-	_ = patch.PatchAll(true, defaultUserData, homeDir, caCertPath, a.AddLog)
+	// Apply system environment integrations in background
+	go func() {
+		caCertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
+		_ = patch.PatchAll(true, defaultUserData, homeDir, caCertPath, a.AddLog)
+	}()
 
 	// Start Memory Monitor
 	monitorCtx, cancel := context.WithCancel(ctx)
@@ -836,6 +840,88 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 			return marshalResponse(map[string]interface{}{"error": err.Error()})
 		}
 		return marshalResponse(markdown)
+
+	case "accounts:update-2fa":
+		id := getStringArg(0)
+		secret := getStringArg(1)
+
+		if secret != "" {
+			cleanSecret := strings.ReplaceAll(secret, " ", "")
+			cleanSecret = strings.ToUpper(cleanSecret)
+			if len(cleanSecret)%8 != 0 {
+				cleanSecret += strings.Repeat("=", 8-(len(cleanSecret)%8))
+			}
+			_, err := base32.StdEncoding.DecodeString(cleanSecret)
+			if err != nil {
+				return marshalResponse(map[string]interface{}{"success": false, "error": "无效的 Base32 格式，请检查密钥是否正确（支持包含空格）"})
+			}
+		}
+
+		a.accountMgr.UpdateAccount2FASecret(id, secret)
+		return marshalResponse(map[string]interface{}{"success": true})
+
+	case "totp:get-codes":
+		type OTPInfo struct {
+			AccountID string `json:"accountId"`
+			Email     string `json:"email"`
+			HasSecret bool   `json:"hasSecret"`
+			Code      string `json:"code"`
+			Remaining int    `json:"remaining"`
+			Error     string `json:"error,omitempty"`
+		}
+
+		accs := a.accountMgr.GetAccounts()
+		results := make([]OTPInfo, 0, len(accs))
+
+		for _, acc := range accs {
+			info := OTPInfo{
+				AccountID: acc.ID,
+				Email:     acc.Email,
+				HasSecret: acc.TwoFASecret != "",
+			}
+
+			if acc.TwoFASecret != "" {
+				code, remaining, err := totp.GenerateTOTP(acc.TwoFASecret)
+				if err != nil {
+					info.Error = err.Error()
+				} else {
+					info.Code = code
+					info.Remaining = remaining
+				}
+			}
+
+			results = append(results, info)
+		}
+		return marshalResponse(results)
+
+	case "totp:add-account":
+		email := getStringArg(0)
+		secret := getStringArg(1)
+
+		if email == "" {
+			return marshalResponse(map[string]interface{}{"success": false, "error": "邮箱/账号名称不能为空"})
+		}
+
+		if secret != "" {
+			cleanSecret := strings.ReplaceAll(secret, " ", "")
+			cleanSecret = strings.ToUpper(cleanSecret)
+			if len(cleanSecret)%8 != 0 {
+				cleanSecret += strings.Repeat("=", 8-(len(cleanSecret)%8))
+			}
+			_, err := base32.StdEncoding.DecodeString(cleanSecret)
+			if err != nil {
+				return marshalResponse(map[string]interface{}{"success": false, "error": "无效的 Base32 格式，请检查密钥是否正确（支持包含空格）"})
+			}
+		}
+
+		a.accountMgr.AddAccount(&account.Account{
+			Email:       email,
+			Provider:    "antigravity",
+			TwoFASecret: secret,
+			Enabled:     true,
+		})
+
+		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "packet:download":
 		markdown := getStringArg(0)

@@ -52,6 +52,10 @@
                 <span class="nav-link-en text-[10px] font-bold tracking-wider">ACCOUNTS</span>
                 <span class="nav-link-zh text-[13px] font-medium">账号池</span>
             </a>
+            <a id="nav-otp" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center" href="#" onclick="switchView('otp')">
+                <span class="nav-link-en text-[10px] font-bold tracking-wider">2FA AUTH</span>
+                <span class="nav-link-zh text-[13px] font-medium">2FA验证码</span>
+            </a>
             <a id="nav-packets" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center" href="#" onclick="switchView('packets')">
                 <span class="nav-link-en text-[10px] font-bold tracking-wider">PACKETS</span>
                 <span class="nav-link-zh text-[13px] font-medium">抓包分析</span>
@@ -674,6 +678,54 @@
         </div>
     </div>
     <!-- End view-accounts -->
+
+    <!-- 2FA 验证码管理视图 -->
+    <div id="view-otp" class="hidden flex-col gap-6 w-full">
+        <div class="flex justify-between items-end">
+            <div>
+                <h1 class="text-2xl font-bold text-on-surface dark:text-white">2FA 验证码管理</h1>
+                <p class="text-xs text-outline dark:text-outline-variant">为账号配置谷歌两步验证 (2FA/TOTP) 密钥，实时生成并自动刷新动态验证码</p>
+            </div>
+            <div class="flex items-center gap-4">
+                <button id="btnAddNewOtp" class="flex items-center gap-1.5 px-4 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-md text-[13px] font-bold transition-colors shadow-sm cursor-pointer">
+                    <span class="material-symbols-outlined text-[16px]">add_circle</span>
+                    新增 2FA 账号
+                </button>
+                <div class="flex items-center gap-3 bg-slate-50/50 dark:bg-white/5 px-3.5 py-1.5 rounded-lg border border-outline-variant/30 text-[13px] text-on-surface dark:text-white">
+                    <span class="material-symbols-outlined text-[16px] text-primary dark:text-primary-fixed-dim animate-spin hidden" id="otpRefreshSpinner">sync</span>
+                    <span class="font-medium">验证码更新倒计时:</span>
+                    <span class="font-bold text-primary dark:text-primary-fixed-dim w-6 text-center" id="otpCountdown">-</span>秒
+                </div>
+            </div>
+        </div>
+
+        <div class="glass-card rounded-xl flex flex-col flex-1 min-h-[300px]">
+            <div class="p-4 border-b border-outline-variant/30 flex justify-between items-center bg-slate-50/50 dark:bg-white/5 rounded-t-xl">
+                <span class="text-[13px] font-bold text-outline dark:text-outline-variant">账号 2FA 列表</span>
+                <span class="text-[12px] font-medium text-primary dark:text-primary-fixed-dim bg-primary/10 px-2 py-0.5 rounded-md" id="otpCountBadge">共 0 个账号</span>
+            </div>
+
+            <div class="flex-grow overflow-y-auto">
+                <table class="w-full text-left border-collapse text-[13px]" id="otpTable">
+                    <thead>
+                        <tr class="border-b border-outline-variant/50 bg-slate-50/50 dark:bg-white/5 text-outline select-none">
+                            <th class="p-4 w-1/3 text-[11px] font-bold uppercase tracking-wider">账号邮箱</th>
+                            <th class="p-4 w-1/4 text-[11px] font-bold uppercase tracking-wider">2FA 状态 / 密钥</th>
+                            <th class="p-4 w-1/5 text-[11px] font-bold uppercase tracking-wider text-center">动态验证码</th>
+                            <th class="p-4 w-1/5 text-[11px] font-bold uppercase tracking-wider text-right">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="otpTableBody" class="text-on-surface dark:text-white divide-y divide-outline-variant/20">
+                        <!-- 动态生成 2FA 行 -->
+                    </tbody>
+                </table>
+                <div id="otpEmptyState" class="hidden flex-col items-center justify-center py-12 text-outline/50">
+                    <span class="material-symbols-outlined text-[48px] mb-2">vpn_key_off</span>
+                    <span class="text-[13px]">暂无账号数据</span>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- 系统设置视图 -->
     <div id="view-settings" class="hidden flex-col gap-6 w-full">
