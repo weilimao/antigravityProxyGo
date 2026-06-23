@@ -174,14 +174,16 @@ func (m *Manager) MigrateData(
 	patchAll func(string) error,
 	redirectPaths func(string),
 ) error {
-	m.Lock()
-	defer m.Unlock()
+	m.RLock()
+	currentDir := m.activeDataDirectory
+	defaultDir := m.defaultUserDataPath
+	m.RUnlock()
 
 	resolvedTarget, err := filepath.Abs(targetPath)
 	if err != nil {
 		return err
 	}
-	resolvedCurrent, err := filepath.Abs(m.activeDataDirectory)
+	resolvedCurrent, err := filepath.Abs(currentDir)
 	if err != nil {
 		return err
 	}
@@ -259,20 +261,23 @@ func (m *Manager) MigrateData(
 	}
 
 	// 5. 更新内存状态与持久化
-	isTargetDefault := resolvedTarget == filepath.Clean(m.defaultUserDataPath)
+	isTargetDefault := resolvedTarget == filepath.Clean(defaultDir)
 	var newCustomPath string
 	if !isTargetDefault {
 		newCustomPath = resolvedTarget
 	}
 
+	m.Lock()
 	m.config.DataDirectory = newCustomPath
 	err = m.SaveConfig()
 	if err != nil {
+		m.Unlock()
 		rollback()
 		return fmt.Errorf("无法保存配置文件: %v", err)
 	}
 
 	m.activeDataDirectory = resolvedTarget
+	m.Unlock()
 
 	progressCallback("update-paths", "正在重定向数据服务工作路径...")
 	if redirectPaths != nil {

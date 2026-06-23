@@ -3,5 +3,5 @@
 package main
 
 func shouldCheckSingleInstance() bool {
-	return true
+	return false
 }

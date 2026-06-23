@@ -731,7 +731,7 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 			},
 			a.proxyEngine.Stop,
 			func() {
-				_ = a.proxyEngine.Start(a.settingsMgr.GetActiveDataDirectory())
+				_ = a.proxyEngine.Start(targetDir)
 			},
 			func(caPemPath string) error {
 				homeDir, _ := os.UserHomeDir()
