@@ -84,8 +84,8 @@ func HijackCli(enable bool, appData, homeDir, caPath string, logCallback func(st
 				batContent := fmt.Sprintf("@echo off\r\n"+
 					"set HTTP_PROXY=%s\r\n"+
 					"set HTTPS_PROXY=%s\r\n"+
-					"set NO_PROXY=localhost,127.0.0.1,www.googleapis.com,accounts.google.com,oauth2.googleapis.com\r\n"+
-					"set NODE_EXTRA_CA_CERTS=%s\r\n"+
+					"set NO_PROXY=localhost,127.0.0.1\r\n"+
+					"set SSL_CERT_FILE=%s\r\n"+
 					"\"%%~dp0%s\" %%*\r\n", proxyUrl, proxyUrl, caPath, realExeName)
 
 				_ = os.WriteFile(batWrapperPath, []byte(batContent), 0644)
@@ -94,8 +94,8 @@ func HijackCli(enable bool, appData, homeDir, caPath string, logCallback func(st
 				shContent := fmt.Sprintf("#!/bin/bash\n"+
 					"export HTTP_PROXY=%s\n"+
 					"export HTTPS_PROXY=%s\n"+
-					"export NO_PROXY=localhost,127.0.0.1,www.googleapis.com,accounts.google.com,oauth2.googleapis.com\n"+
-					"export NODE_EXTRA_CA_CERTS=%s\n"+
+					"export NO_PROXY=localhost,127.0.0.1\n"+
+					"export SSL_CERT_FILE=\"%s\"\n"+
 					"exec \"$(dirname \"$0\")/%s\" \"$@\"\n", proxyUrl, proxyUrl, caPath, realExeName)
 
 				_ = os.WriteFile(shWrapperPath, []byte(shContent), 0755)
@@ -174,8 +174,8 @@ func UpdateAgentapiBat(enable bool, appData, homeDir, caPath string) bool {
 			if strings.Contains(content, batMarker) {
 				return true
 			}
-			inject := fmt.Sprintf("%s\r\nset HTTP_PROXY=%s\r\nset HTTPS_PROXY=%s\r\nset NO_PROXY=localhost,127.0.0.1\r\n",
-				batMarker, proxyUrl, proxyUrl)
+			inject := fmt.Sprintf("%s\r\nset HTTP_PROXY=%s\r\nset HTTPS_PROXY=%s\r\nset NO_PROXY=localhost,127.0.0.1\r\nset SSL_CERT_FILE=%s\r\n",
+				batMarker, proxyUrl, proxyUrl, caPath)
 
 			re := regexp.MustCompile(`(?i)^(@echo off\s*[\r\n]+)`)
 			if re.MatchString(content) {
@@ -209,8 +209,8 @@ func UpdateAgentapiBat(enable bool, appData, homeDir, caPath string) bool {
 			if strings.Contains(content, shMarker) {
 				return true
 			}
-			inject := fmt.Sprintf("%s\nexport HTTP_PROXY=%s\nexport HTTPS_PROXY=%s\nexport NO_PROXY=localhost,127.0.0.1\n",
-				shMarker, proxyUrl, proxyUrl)
+			inject := fmt.Sprintf("%s\nexport HTTP_PROXY=%s\nexport HTTPS_PROXY=%s\nexport NO_PROXY=localhost,127.0.0.1\nexport SSL_CERT_FILE=\"%s\"\n",
+				shMarker, proxyUrl, proxyUrl, caPath)
 
 			re := regexp.MustCompile(`^(#![^\n]+\n)`)
 			if re.MatchString(content) {

@@ -615,6 +615,10 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 
 		return marshalResponse(map[string]interface{}{"success": true, "email": res["email"]})
 
+	case "auth:cancel-login":
+		a.authMgr.CancelLogin()
+		return marshalResponse(map[string]interface{}{"success": true})
+
 	case "auth:get-manual-oauth-url":
 		res := a.authMgr.GenerateManualOAuthURL()
 		return marshalResponse(res)

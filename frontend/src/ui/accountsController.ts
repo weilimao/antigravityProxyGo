@@ -157,7 +157,26 @@ export async function startLogin(provider: any) {
     if (btnAddAccount) {
         const origText = btnAddAccount.innerHTML;
         btnAddAccount.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span> 登录中...';
-        btnAddAccount.classList.add('opacity-70', 'cursor-not-allowed');
+        btnAddAccount.classList.add('opacity-70');
+
+        const handleMouseEnter = () => {
+            if (state.isLoadingAuth && btnAddAccount) {
+                btnAddAccount.innerHTML = '<span class="material-symbols-outlined text-[16px]">cancel</span> 取消登录';
+                btnAddAccount.classList.remove('bg-primary', 'hover:bg-primary/90');
+                btnAddAccount.classList.add('bg-red-500', 'hover:bg-red-600');
+            }
+        };
+
+        const handleMouseLeave = () => {
+            if (state.isLoadingAuth && btnAddAccount) {
+                btnAddAccount.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span> 登录中...';
+                btnAddAccount.classList.remove('bg-red-500', 'hover:bg-red-600');
+                btnAddAccount.classList.add('bg-primary', 'hover:bg-primary/90');
+            }
+        };
+
+        btnAddAccount.addEventListener('mouseenter', handleMouseEnter);
+        btnAddAccount.addEventListener('mouseleave', handleMouseLeave);
 
         try {
             const authRequest = typeof provider === 'object' && provider !== null
@@ -171,8 +190,13 @@ export async function startLogin(provider: any) {
             alert('登录出错: ' + err.message);
         } finally {
             state.isLoadingAuth = false;
-            btnAddAccount.innerHTML = origText;
-            btnAddAccount.classList.remove('opacity-70', 'cursor-not-allowed');
+            if (btnAddAccount) {
+                btnAddAccount.removeEventListener('mouseenter', handleMouseEnter);
+                btnAddAccount.removeEventListener('mouseleave', handleMouseLeave);
+                btnAddAccount.innerHTML = origText;
+                btnAddAccount.classList.remove('opacity-70', 'bg-red-500', 'hover:bg-red-600');
+                btnAddAccount.classList.add('bg-primary', 'hover:bg-primary/90');
+            }
         }
     }
 }
@@ -258,8 +282,15 @@ export function initAccountsEvents() {
     }
 
     if (btnAddAccount && addAccountDropdown) {
-        btnAddAccount.addEventListener('click', () => {
-            if (state.isLoadingAuth) return;
+        btnAddAccount.addEventListener('click', async () => {
+            if (state.isLoadingAuth) {
+                try {
+                    await ipcRenderer.invoke('auth:cancel-login');
+                } catch (err) {
+                    console.error('Failed to cancel login:', err);
+                }
+                return;
+            }
             if (addAccountDropdown) addAccountDropdown.classList.toggle('hidden');
         });
 

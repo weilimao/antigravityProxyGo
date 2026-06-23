@@ -33,10 +33,15 @@ type UserInfo struct {
 	Email string `json:"email"`
 }
 
+type activeLogin struct {
+	cancel context.CancelFunc
+}
+
 type AuthManager struct {
 	sync.Mutex
 	refreshPromises map[string]*refreshPromise // accountId -> active refresh
 	accountMgr      *account.Manager
+	activeLogin     *activeLogin
 }
 
 type refreshPromise struct {
@@ -278,7 +283,23 @@ func (am *AuthManager) ExchangeCodeForTokenManual(code, verifier string) (*Token
 
 func (am *AuthManager) StartLogin(provider string, openBrowser func(string)) (map[string]interface{}, error) {
 	am.Lock()
-	defer am.Unlock()
+	if am.activeLogin != nil {
+		am.activeLogin.cancel()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	currentActive := &activeLogin{cancel: cancel}
+	am.activeLogin = currentActive
+	am.Unlock()
+
+	defer func() {
+		am.Lock()
+		if am.activeLogin == currentActive {
+			am.activeLogin = nil
+		}
+		am.Unlock()
+		cancel()
+	}()
 
 	var port = 0
 	if provider == "antigravity" {
@@ -323,9 +344,8 @@ func (am *AuthManager) StartLogin(provider string, openBrowser func(string)) (ma
 	}
 
 	resultChan := make(chan loginResult, 1)
-	server := &http.Server{}
-
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
 		if code == "" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -388,20 +408,26 @@ func (am *AuthManager) StartLogin(provider string, openBrowser func(string)) (ma
 		}
 	})
 
+	server := &http.Server{
+		Handler: mux,
+	}
+
 	go server.Serve(listener)
 
-	// Wait with a 5 minutes timeout
+	// Wait with a 5 minutes timeout or context cancellation
 	var loginRes loginResult
 	select {
 	case loginRes = <-resultChan:
+	case <-ctx.Done():
+		loginRes = loginResult{err: errors.New("登录已取消")}
 	case <-time.After(5 * time.Minute):
 		loginRes = loginResult{err: errors.New("登录超时（5分钟）")}
 	}
 
 	// Clean up server
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	server.Shutdown(ctx)
+	ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelShutdown()
+	server.Shutdown(ctxShutdown)
 	listener.Close()
 
 	if loginRes.err != nil {
@@ -414,4 +440,13 @@ func (am *AuthManager) StartLogin(provider string, openBrowser func(string)) (ma
 		"refresh_token": loginRes.refreshToken,
 		"provider":      provider,
 	}, nil
+}
+
+func (am *AuthManager) CancelLogin() {
+	am.Lock()
+	defer am.Unlock()
+	if am.activeLogin != nil {
+		am.activeLogin.cancel()
+		am.activeLogin = nil
+	}
 }
