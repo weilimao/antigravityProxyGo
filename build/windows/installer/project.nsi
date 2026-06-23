@@ -104,6 +104,12 @@ FunctionEnd
 Section
     !insertmacro wails.setShellContext
 
+    # Try to silently kill old running processes unconditionally
+    nsExec::Exec 'taskkill /F /IM "${PRODUCT_EXECUTABLE}"'
+    nsExec::Exec 'taskkill /F /IM "antigravity-proxy-desktop-go.exe"'
+    nsExec::Exec 'taskkill /F /IM "antigravity-proxy.exe"'
+    Sleep 500
+
     # Check if file exists, if yes, check if running
     IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" check_running install_start
 
@@ -112,18 +118,9 @@ Section
       FileOpen $0 "$INSTDIR\${PRODUCT_EXECUTABLE}" "a"
       FileClose $0
       IfErrors 0 install_start
-        # Try to silently kill old running process
-        nsExec::Exec 'taskkill /F /IM "${PRODUCT_EXECUTABLE}"'
-        nsExec::Exec 'taskkill /F /IM "antigravity-proxy-desktop-go.exe"'
-        Sleep 500
-        # Re-check if file lock is released
-        ClearErrors
-        FileOpen $0 "$INSTDIR\${PRODUCT_EXECUTABLE}" "a"
-        FileClose $0
-        IfErrors 0 install_start
-          # Still locked, show warning message box
-          MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Antigravity Proxy is currently running in the background. Please close the application from the system tray (right-click the icon and choose Exit) or close it via Task Manager, then click Retry to continue, or Cancel to exit." IDRETRY check_running
-          Abort
+        # Still locked, show warning message box
+        MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Antigravity Proxy is currently running in the background. Please close the application from the system tray (right-click the icon and choose Exit) or close it via Task Manager, then click Retry to continue, or Cancel to exit." IDRETRY check_running
+        Abort
 
     install_start:
     !insertmacro wails.webview2runtime

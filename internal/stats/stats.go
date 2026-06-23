@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -518,48 +517,16 @@ func (t *Tracker) seedEmptyTrends() {
 		hourLabel := fmt.Sprintf("%02d:00", targetTime.Hour())
 		dateLabel := fmt.Sprintf("%02d/%02d", targetTime.Month(), targetTime.Day())
 
-		hour := targetTime.Hour()
-		dayOfWeek := targetTime.Weekday()
-
-		// Sine wave + random factor for realistic diurnal variations
-		timeFactor := math.Sin(float64(hour-6)/24.0*2.0*math.Pi)*0.4 + 0.6
-		dayFactor := 1.0
-		if dayOfWeek == time.Sunday || dayOfWeek == time.Saturday {
-			dayFactor = 0.5
-		}
-
-		randGen := rand.New(rand.NewSource(targetTime.UnixNano()))
-		base := (randGen.Float64()*0.4 + 0.8) * timeFactor * dayFactor
-
-		input := int(math.Round(base * 300000))
-		output := int(math.Round(base * 150000))
-		cached := 0
-		if randGen.Float64() > 0.4 {
-			cached = int(math.Round(float64(input) * (randGen.Float64()*0.6 + 0.2)))
-		}
-		cacheCreated := int(math.Round(float64(input) * (randGen.Float64()*0.3 + 0.1)))
-
-		nonCachedIn := input - cached
-		if nonCachedIn < 0 {
-			nonCachedIn = 0
-		}
-
-		// Calculate precise cost based on Gemini 1.5 Flash rates: In: $1.50/1M, Out: $9.00/1M, Cached: $0.375/1M
-		inputCost := math.Round((float64(nonCachedIn)*1.50/1000000.0)*1000000.0) / 1000000.0
-		outputCost := math.Round((float64(output)*9.00/1000000.0)*1000000.0) / 1000000.0
-		cachedCost := math.Round((float64(cached)*0.375/1000000.0)*1000000.0) / 1000000.0
-		cost := math.Round((inputCost+outputCost+cachedCost)*1000000.0) / 1000000.0
-
 		t.trends = append(t.trends, &HourlyTrend{
 			Time:         dateLabel + " " + hourLabel,
-			Input:        input,
-			Output:       output,
-			Cached:       cached,
-			CacheCreated: cacheCreated,
-			Cost:         cost,
-			InputCost:    inputCost,
-			OutputCost:   outputCost,
-			CachedCost:   cachedCost,
+			Input:        0,
+			Output:       0,
+			Cached:       0,
+			CacheCreated: 0,
+			Cost:         0.0,
+			InputCost:    0.0,
+			OutputCost:   0.0,
+			CachedCost:   0.0,
 		})
 	}
 }
