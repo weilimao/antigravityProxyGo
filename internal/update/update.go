@@ -126,7 +126,10 @@ func (m *Manager) findPlatformAsset(assets []ReleaseAsset) *ReleaseAsset {
 	if runtime.GOOS == "windows" {
 		for _, asset := range assets {
 			nameLower := strings.ToLower(asset.Name)
-			if strings.HasSuffix(nameLower, ".exe") && (strings.Contains(nameLower, "installer") || strings.Contains(nameLower, "setup")) {
+			isInstaller := strings.Contains(nameLower, "installer") ||
+				strings.Contains(nameLower, "setup") ||
+				(strings.Contains(nameLower, "windows") && (strings.Contains(nameLower, "amd64") || strings.Contains(nameLower, "arm64")))
+			if strings.HasSuffix(nameLower, ".exe") && isInstaller {
 				return &asset
 			}
 		}
