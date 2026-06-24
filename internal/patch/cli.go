@@ -9,6 +9,61 @@ import (
 	"strings"
 )
 
+
+// getCombinedCaPath 自动合并代理 CA 与本机的公网 CA，以避免覆盖 SSL_CERT_FILE 导致直连公网证书校验失败
+func getCombinedCaPath(caPath string) string {
+	caBytes, err := os.ReadFile(caPath)
+	if err != nil {
+		return caPath
+	}
+
+	var publicCaBytes []byte
+	sslCertFile := os.Getenv("SSL_CERT_FILE")
+
+	// 优先读取当前环境变量设置的公网证书包（排除指向自身以防循环）
+	if sslCertFile != "" && !strings.Contains(sslCertFile, "ca_combined.pem") && sslCertFile != caPath {
+		if bytes, err := os.ReadFile(sslCertFile); err == nil {
+			publicCaBytes = bytes
+		}
+	}
+
+	// 如果未捕获到，尝试读取 Anaconda/Conda 等常见的 Windows 证书包位置，以及代理安装根目录下自带的 cacert.pem
+	if len(publicCaBytes) == 0 {
+		// 计算代理安装根目录（caPath 为 D:\antigravityProxy\data\certs\certs\ca.pem，往上推 4 级为安装根目录）
+		installDir := caPath
+		for i := 0; i < 4; i++ {
+			installDir = filepath.Dir(installDir)
+		}
+		commonPaths := []string{
+			filepath.Join(installDir, "cacert.pem"),
+			"E:\\Conda\\Library\\ssl\\cacert.pem",
+			"C:\\ProgramData\\Anaconda3\\Library\\ssl\\cacert.pem",
+			"C:\\Miniconda3\\Library\\ssl\\cacert.pem",
+		}
+		for _, p := range commonPaths {
+			if bytes, err := os.ReadFile(p); err == nil {
+				publicCaBytes = bytes
+				break
+			}
+		}
+	}
+
+	if len(publicCaBytes) == 0 {
+		return caPath
+	}
+
+	combinedPath := filepath.Join(filepath.Dir(caPath), "ca_combined.pem")
+	var combinedContent []byte
+	combinedContent = append(combinedContent, caBytes...)
+	combinedContent = append(combinedContent, []byte("\n")...)
+	combinedContent = append(combinedContent, publicCaBytes...)
+
+	if err := os.WriteFile(combinedPath, combinedContent, 0644); err == nil {
+		return combinedPath
+	}
+	return caPath
+}
+
 func getCliCandidates(appData, homeDir string) []string {
 	var candidates []string
 
@@ -80,23 +135,23 @@ func HijackCli(enable bool, appData, homeDir, caPath string, logCallback func(st
 			}
 
 			if realExeExists {
+				combinedCaPath := getCombinedCaPath(caPath)
 				// 1. Write Windows Batch Wrapper
 				batContent := fmt.Sprintf("@echo off\r\n"+
 					"set HTTP_PROXY=%s\r\n"+
 					"set HTTPS_PROXY=%s\r\n"+
 					"set NO_PROXY=localhost,127.0.0.1\r\n"+
 					"set SSL_CERT_FILE=%s\r\n"+
-					"\"%%~dp0%s\" %%*\r\n", proxyUrl, proxyUrl, caPath, realExeName)
+					"\"%%~dp0%s\" %%*\r\n", proxyUrl, proxyUrl, combinedCaPath, realExeName)
 
 				_ = os.WriteFile(batWrapperPath, []byte(batContent), 0644)
 
-				// 2. Write Unix Shell Wrapper
+				// 2. Write Unix Shell Wrapper (无需注入 SSL_CERT_FILE，回退由系统 Keychain 信任)
 				shContent := fmt.Sprintf("#!/bin/bash\n"+
 					"export HTTP_PROXY=%s\n"+
 					"export HTTPS_PROXY=%s\n"+
 					"export NO_PROXY=localhost,127.0.0.1\n"+
-					"export SSL_CERT_FILE=\"%s\"\n"+
-					"exec \"$(dirname \"$0\")/%s\" \"$@\"\n", proxyUrl, proxyUrl, caPath, realExeName)
+					"exec \"$(dirname \"$0\")/%s\" \"$@\"\n", proxyUrl, proxyUrl, realExeName)
 
 				_ = os.WriteFile(shWrapperPath, []byte(shContent), 0755)
 
@@ -174,8 +229,9 @@ func UpdateAgentapiBat(enable bool, appData, homeDir, caPath string) bool {
 			if strings.Contains(content, batMarker) {
 				return true
 			}
+			combinedCaPath := getCombinedCaPath(caPath)
 			inject := fmt.Sprintf("%s\r\nset HTTP_PROXY=%s\r\nset HTTPS_PROXY=%s\r\nset NO_PROXY=localhost,127.0.0.1\r\nset SSL_CERT_FILE=%s\r\n",
-				batMarker, proxyUrl, proxyUrl, caPath)
+				batMarker, proxyUrl, proxyUrl, combinedCaPath)
 
 			re := regexp.MustCompile(`(?i)^(@echo off\s*[\r\n]+)`)
 			if re.MatchString(content) {
@@ -209,8 +265,8 @@ func UpdateAgentapiBat(enable bool, appData, homeDir, caPath string) bool {
 			if strings.Contains(content, shMarker) {
 				return true
 			}
-			inject := fmt.Sprintf("%s\nexport HTTP_PROXY=%s\nexport HTTPS_PROXY=%s\nexport NO_PROXY=localhost,127.0.0.1\nexport SSL_CERT_FILE=\"%s\"\n",
-				shMarker, proxyUrl, proxyUrl, caPath)
+			inject := fmt.Sprintf("%s\nexport HTTP_PROXY=%s\nexport HTTPS_PROXY=%s\nexport NO_PROXY=localhost,127.0.0.1\n",
+				shMarker, proxyUrl, proxyUrl)
 
 			re := regexp.MustCompile(`^(#![^\n]+\n)`)
 			if re.MatchString(content) {
