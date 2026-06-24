@@ -9,8 +9,12 @@ export function IPCSend(arg1:string,arg2:string):Promise<void>;
 
 export function IsQuitting():Promise<boolean>;
 
+export function IsWindowVisibleAndActive():Promise<boolean>;
+
 export function OpenPath(arg1:string):Promise<void>;
 
 export function SetQuitting(arg1:boolean):Promise<void>;
+
+export function SetWindowVisible(arg1:boolean):Promise<void>;
 
 export function ShowItemInFolder(arg1:string):Promise<void>;

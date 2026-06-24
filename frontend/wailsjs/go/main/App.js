@@ -18,12 +18,20 @@ export function IsQuitting() {
   return window['go']['main']['App']['IsQuitting']();
 }
 
+export function IsWindowVisibleAndActive() {
+  return window['go']['main']['App']['IsWindowVisibleAndActive']();
+}
+
 export function OpenPath(arg1) {
   return window['go']['main']['App']['OpenPath'](arg1);
 }
 
 export function SetQuitting(arg1) {
   return window['go']['main']['App']['SetQuitting'](arg1);
+}
+
+export function SetWindowVisible(arg1) {
+  return window['go']['main']['App']['SetWindowVisible'](arg1);
 }
 
 export function ShowItemInFolder(arg1) {

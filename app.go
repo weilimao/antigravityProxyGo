@@ -49,6 +49,8 @@ type App struct {
 	quotaSvc      *quota.QuotaService
 	isQuitting    bool
 	isQuittingMu  sync.RWMutex
+	isWindowVisible   bool
+	isWindowVisibleMu sync.RWMutex
 }
 
 func NewApp() *App {
@@ -144,13 +146,17 @@ func (a *App) startup(ctx context.Context) {
 	)
 	a.packetCap.Init(activeDir)
 
-	// Bind UI update callbacks
+		// Bind UI update callbacks
 	a.statsTracker.SetOnPayloadUpdate(func() {
-		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayloadSimplified(a.usageTracker.GetPayload()))
+		if a.IsWindowVisibleAndActive() {
+			wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayloadSimplified(a.usageTracker.GetPayload()))
+		}
 	})
 
 	a.usageTracker.SetOnPayloadUpdate(func() {
-		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayloadSimplified(a.usageTracker.GetPayload()))
+		if a.IsWindowVisibleAndActive() {
+			wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayloadSimplified(a.usageTracker.GetPayload()))
+		}
 	})
 
 	// 6. Initialize Proxy Engine
@@ -235,7 +241,9 @@ func (a *App) AddLog(msg string) {
 	}
 	a.logBufferMu.Unlock()
 
-	wailsRuntime.EventsEmit(a.ctx, "log", formatted)
+	if a.IsWindowVisibleAndActive() {
+		wailsRuntime.EventsEmit(a.ctx, "log", formatted)
+	}
 }
 
 // OpenPath opens system browser or path
@@ -293,6 +301,7 @@ func (a *App) domReady(ctx context.Context) {
 
 	if !(isAutostart && a.settingsMgr.GetSilentStart()) {
 		wailsRuntime.WindowShow(ctx)
+		a.SetWindowVisible(true)
 	}
 }
 
@@ -550,6 +559,10 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 	var args []interface{}
 	_ = json.Unmarshal([]byte(argsJSON), &args)
+
+	if res, handled, err := a.handleSessionIPC(channel, args); handled {
+		return res, err
+	}
 
 	getStringArg := func(idx int) string {
 		if idx < len(args) {
@@ -976,12 +989,16 @@ func (a *App) startMemoryMonitor(ctx context.Context) {
 		case <-ticker.C:
 			runtime.GC()
 			debug.FreeOSMemory()
-			a.emitMemoryStats()
+			if a.IsWindowVisibleAndActive() {
+				a.emitMemoryStats()
+			}
 
 			trendCounter++
 			if trendCounter >= 6 { // 6 * 10s = 60s
 				trendCounter = 0
-				wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayload(a.usageTracker.GetPayload()))
+				if a.IsWindowVisibleAndActive() {
+					wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayload(a.usageTracker.GetPayload()))
+				}
 			}
 		}
 	}
@@ -1003,4 +1020,24 @@ func (a *App) emitMemoryStats() {
 		"heapAlloc":    ms.HeapAlloc,
 		"cpuUsage":     cpuPercent,
 	})
+}
+
+// SetWindowVisible 线程安全地设置窗口可见状态
+func (a *App) SetWindowVisible(v bool) {
+	a.isWindowVisibleMu.Lock()
+	a.isWindowVisible = v
+	a.isWindowVisibleMu.Unlock()
+}
+
+// IsWindowVisibleAndActive 检查窗口是否在前台且可见（非最小化且未隐藏）
+func (a *App) IsWindowVisibleAndActive() bool {
+	if a.ctx == nil {
+		return false
+	}
+	if wailsRuntime.WindowIsMinimised(a.ctx) {
+		return false
+	}
+	a.isWindowVisibleMu.RLock()
+	defer a.isWindowVisibleMu.RUnlock()
+	return a.isWindowVisible
 }

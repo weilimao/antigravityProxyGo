@@ -739,6 +739,13 @@ export function initDashboardEvents() {
         }
         updateCertUI(isInstalled);
     });
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            console.log('[Dashboard] Window visible, syncing state and logs from backend...');
+            ipcRenderer.send('get-state');
+        }
+    });
 }
 
 export function renderModelsTable(stats: any) {

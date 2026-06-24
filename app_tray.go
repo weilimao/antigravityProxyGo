@@ -27,6 +27,7 @@ func (a *App) initTray() {
 		func() {
 			// 点击“显示控制面板”：显示窗口并使其获取焦点
 			wailsRuntime.WindowShow(a.ctx)
+			a.SetWindowVisible(true)
 		},
 		func() {
 			// 点击“退出代理引擎”：设置退出标志并调用退出
@@ -41,6 +42,7 @@ func (a *App) initTray() {
 func (a *App) onBeforeClose(ctx context.Context) bool {
 	if !a.IsQuitting() {
 		wailsRuntime.WindowHide(ctx)
+		a.SetWindowVisible(false)
 		return true
 	}
 	return false

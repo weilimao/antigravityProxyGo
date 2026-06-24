@@ -372,3 +372,40 @@ func (r *Router) StopGC() {
 		r.gcStop = nil
 	}
 }
+
+// SessionBindingInfo 统一返回的绑定数据结构
+type SessionBindingInfo struct {
+	SessionKey string `json:"sessionKey"`
+	AccountID  string `json:"accountId"`
+	LastActive int64  `json:"lastActive"`
+}
+
+// GetBindings 获取当前所有的会话绑定快照
+func (r *Router) GetBindings() []SessionBindingInfo {
+	r.RLock()
+	defer r.RUnlock()
+	res := make([]SessionBindingInfo, 0, len(r.sessionMap))
+	for k, v := range r.sessionMap {
+		res = append(res, SessionBindingInfo{
+			SessionKey: k,
+			AccountID:  v.AccountID,
+			LastActive: v.LastActive,
+		})
+	}
+	return res
+}
+
+// UnbindSession 解绑单个指定会话
+func (r *Router) UnbindSession(sessionKey string) bool {
+	r.Lock()
+	_, found := r.sessionMap[sessionKey]
+	if found {
+		delete(r.sessionMap, sessionKey)
+	}
+	r.Unlock()
+	if found {
+		r.SaveToDisk()
+	}
+	return found
+}
+

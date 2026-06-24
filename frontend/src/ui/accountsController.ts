@@ -24,6 +24,14 @@ let btnChannelProject: HTMLButtonElement | null;
 let btnExportAccounts: HTMLButtonElement | null;
 let btnImportAccounts: HTMLButtonElement | null;
 
+let btnShowSessionBindings: HTMLButtonElement | null;
+let sessionBindingsModal: HTMLDivElement | null;
+let sessionBindingsModalCloseBtn: HTMLButtonElement | null;
+let sessionBindingsModalCloseBtnSecondary: HTMLButtonElement | null;
+let sessionBindingsTableBody: HTMLTableSectionElement | null;
+let sessionBindingsModalClearAllBtn: HTMLButtonElement | null;
+let sessionBindingsCount: HTMLSpanElement | null;
+
 export function updatePoolModeUI() {
     if (!poolModeToggle) return;
     const isPool = poolModeToggle.checked;
@@ -247,6 +255,34 @@ export function initAccountsEvents() {
     btnExportAccounts = document.getElementById('btnExportAccounts') as HTMLButtonElement | null;
     btnImportAccounts = document.getElementById('btnImportAccounts') as HTMLButtonElement | null;
 
+    btnShowSessionBindings = document.getElementById('btnShowSessionBindings') as HTMLButtonElement | null;
+    sessionBindingsModal = document.getElementById('sessionBindingsModal') as HTMLDivElement | null;
+    sessionBindingsModalCloseBtn = document.getElementById('sessionBindingsModalCloseBtn') as HTMLButtonElement | null;
+    sessionBindingsModalCloseBtnSecondary = document.getElementById('sessionBindingsModalCloseBtnSecondary') as HTMLButtonElement | null;
+    sessionBindingsTableBody = document.getElementById('sessionBindingsTableBody') as HTMLTableSectionElement | null;
+    sessionBindingsModalClearAllBtn = document.getElementById('sessionBindingsModalClearAllBtn') as HTMLButtonElement | null;
+    sessionBindingsCount = document.getElementById('sessionBindingsCount') as HTMLSpanElement | null;
+
+    if (btnShowSessionBindings) {
+        btnShowSessionBindings.addEventListener('click', showSessionBindings);
+    }
+    if (sessionBindingsModalCloseBtn) {
+        sessionBindingsModalCloseBtn.addEventListener('click', hideSessionBindings);
+    }
+    if (sessionBindingsModalCloseBtnSecondary) {
+        sessionBindingsModalCloseBtnSecondary.addEventListener('click', hideSessionBindings);
+    }
+    if (sessionBindingsModalClearAllBtn) {
+        sessionBindingsModalClearAllBtn.addEventListener('click', clearAllSessionBindings);
+    }
+    if (sessionBindingsModal) {
+        sessionBindingsModal.addEventListener('click', (e: MouseEvent) => {
+            if (e.target === sessionBindingsModal) {
+                hideSessionBindings();
+            }
+        });
+    }
+
     if (btnRefreshAllQuota) {
         btnRefreshAllQuota.addEventListener('click', refreshAllQuotas);
     }
@@ -391,6 +427,176 @@ export function initAccountsEvents() {
 
     // 主动触发一次账号数据同步，确保在前端初始化完毕后拉取到最新数据
     ipcRenderer.send('accounts:get');
+}
+
+async function loadSessionBindings() {
+    const tableBody = sessionBindingsTableBody;
+    if (!tableBody) return;
+    tableBody.innerHTML = `
+        <tr>
+            <td colspan="4" class="p-8 text-center text-outline dark:text-outline-variant italic">
+                <span class="inline-block animate-spin mr-2">⏳</span>正在加载会话绑定数据...
+            </td>
+        </tr>
+    `;
+    
+    try {
+        const list = await ipcRenderer.invoke('sessions:get') as Array<{
+            sessionKey: string;
+            accountId: string;
+            accountEmail: string;
+            lastActive: number;
+        }>;
+        
+        if (sessionBindingsCount) {
+            sessionBindingsCount.textContent = `共 ${list.length} 条记录`;
+        }
+        
+        if (list.length === 0) {
+            tableBody.innerHTML = `
+                <tr>
+                    <td colspan="4" class="p-8 text-center text-outline dark:text-outline-variant italic">
+                        📭 当前暂无会话路由绑定关系
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+        
+        // 按照最后活跃时间降序排序
+        list.sort((a, b) => b.lastActive - a.lastActive);
+        
+        tableBody.innerHTML = '';
+        list.forEach(item => {
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors border-b border-outline-variant/10';
+            
+            // 格式化活跃时间
+            const timeStr = new Date(item.lastActive).toLocaleString('zh-CN', {
+                hour12: false,
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            
+            // 为了美观，给 SessionKey 不同的类型不同的徽章
+            let keyBadge = '';
+            let keyText = item.sessionKey;
+            if (item.sessionKey.startsWith('auth:')) {
+                keyBadge = '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary dark:text-primary-fixed-dim text-[10px] font-bold mr-1.5">Bearer</span>';
+                keyText = item.sessionKey.substring(5); // 去掉 'auth:'
+            } else if (item.sessionKey.startsWith('sock:')) {
+                keyBadge = '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[10px] font-bold mr-1.5">Socket</span>';
+                keyText = item.sessionKey.substring(5); // 去掉 'sock:'
+            }
+            
+            tr.innerHTML = `
+                <td class="p-3 font-data-mono break-all max-w-[280px]">
+                    <div class="flex items-center flex-wrap gap-1">
+                        ${keyBadge}
+                        <span class="text-on-surface dark:text-white font-medium">${keyText}</span>
+                    </div>
+                </td>
+                <td class="p-3 text-outline dark:text-outline-variant font-medium break-all max-w-[200px]">${item.accountEmail}</td>
+                <td class="p-3 text-outline/80 dark:text-outline-variant/80 font-data-mono">${timeStr}</td>
+                <td class="p-3 text-center">
+                    <button class="unbind-btn text-red-500 hover:text-white hover:bg-red-500 active:bg-red-600 px-2 py-1 rounded transition-all text-[11px] font-bold border border-red-500/20" data-key="${item.sessionKey}">
+                        解绑
+                    </button>
+                </td>
+            `;
+            
+            // 绑定解绑事件
+            const unbindBtn = tr.querySelector('.unbind-btn');
+            if (unbindBtn) {
+                unbindBtn.addEventListener('click', async (e) => {
+                    const key = (e.currentTarget as HTMLButtonElement).getAttribute('data-key');
+                    if (!key) return;
+                    
+                    (e.currentTarget as HTMLButtonElement).disabled = true;
+                    (e.currentTarget as HTMLButtonElement).textContent = '处理中...';
+                    
+                    try {
+                        const res = await ipcRenderer.invoke('sessions:unbind', key);
+                        if (res && res.success) {
+                            loadSessionBindings();
+                        } else {
+                            alert('解绑失败，请重试');
+                            (e.currentTarget as HTMLButtonElement).disabled = false;
+                            (e.currentTarget as HTMLButtonElement).textContent = '解绑';
+                        }
+                    } catch (err) {
+                        console.error('Failed to unbind session:', err);
+                        alert('解绑请求失败');
+                        (e.currentTarget as HTMLButtonElement).disabled = false;
+                        (e.currentTarget as HTMLButtonElement).textContent = '解绑';
+                    }
+                });
+            }
+            
+            tableBody.appendChild(tr);
+        });
+        
+    } catch (err) {
+        console.error('Failed to load session bindings:', err);
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="4" class="p-8 text-center text-red-500 italic">
+                    ❌ 获取绑定关系失败：${(err as Error).message}
+                </td>
+            </tr>
+        `;
+    }
+}
+
+function showSessionBindings() {
+    if (!sessionBindingsModal) return;
+    sessionBindingsModal.classList.remove('pointer-events-none', 'opacity-0');
+    sessionBindingsModal.classList.add('opacity-100');
+    const container = sessionBindingsModal.querySelector('#sessionBindingsModalContainer');
+    if (container) {
+        container.classList.remove('scale-95');
+        container.classList.add('scale-100');
+    }
+    loadSessionBindings();
+}
+
+function hideSessionBindings() {
+    if (!sessionBindingsModal) return;
+    sessionBindingsModal.classList.add('opacity-0', 'pointer-events-none');
+    sessionBindingsModal.classList.remove('opacity-100');
+    const container = sessionBindingsModal.querySelector('#sessionBindingsModalContainer');
+    if (container) {
+        container.classList.add('scale-95');
+        container.classList.remove('scale-100');
+    }
+}
+
+async function clearAllSessionBindings() {
+    if (!confirm('您确定要清空所有的会话路由绑定关系吗？这将会使后续客户端的请求重新在可用账号池中进行轮询或一致性哈希分配。')) {
+        return;
+    }
+    if (sessionBindingsModalClearAllBtn) {
+        sessionBindingsModalClearAllBtn.disabled = true;
+        const span = sessionBindingsModalClearAllBtn.querySelector('span:last-child');
+        if (span) span.textContent = '清空中...';
+    }
+    try {
+        const res = await ipcRenderer.invoke('pool:clear-sessions');
+        if (res && res.success) {
+            loadSessionBindings();
+        }
+    } catch (err) {
+        console.error('Failed to clear sessions:', err);
+    } finally {
+        if (sessionBindingsModalClearAllBtn) {
+            sessionBindingsModalClearAllBtn.disabled = false;
+            const span = sessionBindingsModalClearAllBtn.querySelector('span:last-child');
+            if (span) span.textContent = '清空所有绑定';
+        }
+    }
 }
 
 
