@@ -63,21 +63,23 @@ type QuotaResult struct {
 }
 
 type AccountsData struct {
-	Accounts        []*Account `json:"accounts"`
-	PoolMode        bool       `json:"poolMode"`
-	ProjectPoolMode bool       `json:"projectPoolMode"`
-	ActiveChannel   string     `json:"activeChannel"`
+	Accounts          []*Account `json:"accounts"`
+	PoolMode          bool       `json:"poolMode"`
+	ProjectPoolMode   bool       `json:"projectPoolMode"`
+	GeminiCliPoolMode bool       `json:"geminiCliPoolMode"`
+	ActiveChannel     string     `json:"activeChannel"`
 }
 
 type Manager struct {
 	sync.RWMutex
-	userDataPath     string
-	accountsFilePath string
-	accounts         []*Account
-	poolMode         bool
-	projectPoolMode  bool
-	activeChannel    string
-	currentIndex     int
+	userDataPath      string
+	accountsFilePath  string
+	accounts          []*Account
+	poolMode          bool
+	projectPoolMode   bool
+	geminiCliPoolMode bool
+	activeChannel     string
+	currentIndex      int
 	errorCounts      map[string]int // accountId -> error count
 	cooldownTicker   *time.Ticker
 	cooldownStop     chan struct{}
@@ -144,6 +146,7 @@ func (m *Manager) LoadAccounts() {
 
 	m.poolMode = parsed.PoolMode
 	m.projectPoolMode = parsed.ProjectPoolMode
+	m.geminiCliPoolMode = parsed.GeminiCliPoolMode
 	m.activeChannel = parsed.ActiveChannel
 	m.accounts = parsed.Accounts
 
@@ -162,6 +165,8 @@ func (m *Manager) LoadAccounts() {
 		if acc.ScopeType == "" {
 			if acc.Provider == "antigravity" {
 				acc.ScopeType = "account"
+			} else if acc.Provider == "gemini-cli" {
+				acc.ScopeType = "account"
 			} else {
 				acc.ScopeType = "project"
 			}
@@ -177,10 +182,11 @@ func (m *Manager) LoadAccounts() {
 func (m *Manager) SaveAccounts(silent bool) error {
 	m.RLock()
 	data := AccountsData{
-		Accounts:        m.accounts,
-		PoolMode:        m.poolMode,
-		ProjectPoolMode: m.projectPoolMode,
-		ActiveChannel:   m.activeChannel,
+		Accounts:          m.accounts,
+		PoolMode:          m.poolMode,
+		ProjectPoolMode:   m.projectPoolMode,
+		GeminiCliPoolMode: m.geminiCliPoolMode,
+		ActiveChannel:     m.activeChannel,
 	}
 	m.RUnlock()
 
@@ -214,6 +220,9 @@ func (m *Manager) AddAccount(acc *Account) {
 	if acc.Cooldowns == nil {
 		acc.Cooldowns = make(map[string]int64)
 	}
+	if acc.AddedAt == "" {
+		acc.AddedAt = time.Now().Format(time.RFC3339)
+	}
 
 	// 排重：删除相同 Email、Provider 和 ProjectID 的账号
 	var newAccounts []*Account
@@ -226,23 +235,6 @@ func (m *Manager) AddAccount(acc *Account) {
 	newAccounts = append(newAccounts, acc)
 	m.accounts = newAccounts
 
-	// 如果开启的是单账号模式，自动禁用同类型的其他账号
-	if acc.Enabled {
-		isAntigravity := acc.Provider == "antigravity"
-		if isAntigravity && !m.poolMode {
-			for _, a := range m.accounts {
-				if a.Provider == "antigravity" && a.ID != acc.ID {
-					a.Enabled = false
-				}
-			}
-		} else if !isAntigravity && !m.projectPoolMode {
-			for _, a := range m.accounts {
-				if a.Provider != "antigravity" && a.ID != acc.ID {
-					a.Enabled = false
-				}
-			}
-		}
-	}
 	m.Unlock()
 
 	_ = m.SaveAccounts(false)
@@ -420,24 +412,6 @@ func (m *Manager) UpdateAccountEnabled(id string, enabled bool) {
 			if a.Enabled != enabled {
 				a.Enabled = enabled
 				changed = true
-
-				// 限制单账号启用规则
-				if enabled {
-					isAntigravity := a.Provider == "antigravity"
-					if isAntigravity && !m.poolMode {
-						for _, other := range m.accounts {
-							if other.Provider == "antigravity" && other.ID != id {
-								other.Enabled = false
-							}
-						}
-					} else if !isAntigravity && !m.projectPoolMode {
-						for _, other := range m.accounts {
-							if other.Provider != "antigravity" && other.ID != id {
-								other.Enabled = false
-							}
-						}
-					}
-				}
 			}
 			break
 		}
@@ -502,6 +476,7 @@ func (m *Manager) SetPoolMode(enabled bool) {
 	m.poolMode = enabled
 	if enabled {
 		m.projectPoolMode = false
+		m.geminiCliPoolMode = false
 		m.activeChannel = "antigravity"
 	}
 	m.Unlock()
@@ -519,6 +494,7 @@ func (m *Manager) SetProjectPoolMode(enabled bool) {
 	m.projectPoolMode = enabled
 	if enabled {
 		m.poolMode = false
+		m.geminiCliPoolMode = false
 		m.activeChannel = "project"
 	}
 	m.Unlock()
@@ -531,9 +507,41 @@ func (m *Manager) GetProjectPoolMode() bool {
 	return m.projectPoolMode
 }
 
+func (m *Manager) SetGeminiCliPoolMode(enabled bool) {
+	m.Lock()
+	m.geminiCliPoolMode = enabled
+	if enabled {
+		m.poolMode = false
+		m.projectPoolMode = false
+		m.activeChannel = "gemini-cli"
+	}
+	m.Unlock()
+	_ = m.SaveAccounts(false)
+}
+
+func (m *Manager) GetGeminiCliPoolMode() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.geminiCliPoolMode
+}
+
+func (m *Manager) IsPoolModeForActiveChannel() bool {
+	m.RLock()
+	defer m.RUnlock()
+	switch m.activeChannel {
+	case "antigravity":
+		return m.poolMode
+	case "project":
+		return m.projectPoolMode
+	case "gemini-cli":
+		return m.geminiCliPoolMode
+	}
+	return false
+}
+
 func (m *Manager) SetActiveChannel(channel string) {
 	m.Lock()
-	if channel == "antigravity" || channel == "project" {
+	if channel == "antigravity" || channel == "project" || channel == "gemini-cli" {
 		if channel == "project" && m.poolMode {
 			m.Unlock()
 			return
@@ -574,15 +582,14 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 	isPool := m.poolMode
 	if currentChannel == "project" {
 		isPool = m.projectPoolMode
+	} else if currentChannel == "gemini-cli" {
+		isPool = m.geminiCliPoolMode
 	}
 
 	// 筛选出当前通道所有启用的账号
 	var activeAccounts []*Account
 	for _, a := range m.accounts {
-		accountChannel := "antigravity"
-		if a.Provider != "antigravity" {
-			accountChannel = "project"
-		}
+		accountChannel := a.Provider
 		if accountChannel == currentChannel && a.Enabled {
 			activeAccounts = append(activeAccounts, a)
 		}
@@ -714,10 +721,7 @@ func (m *Manager) GetAvailableAccounts(modelName string) []*Account {
 
 	var list []*Account
 	for _, a := range m.accounts {
-		accountChannel := "antigravity"
-		if a.Provider != "antigravity" {
-			accountChannel = "project"
-		}
+		accountChannel := a.Provider
 		if accountChannel != currentChannel || !a.Enabled {
 			continue
 		}

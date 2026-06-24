@@ -595,6 +595,9 @@
             <button id="btnChannelProject" type="button" class="px-4 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200">
                 谷歌云项目 API
             </button>
+            <button id="btnChannelGeminiCli" type="button" class="px-4 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200">
+                Gemini CLI号池
+            </button>
         </div>
 
         <div class="flex justify-between items-end">
@@ -633,11 +636,11 @@
                                 <div class="text-[10px] text-outline">使用官方插件凭证授权</div>
                             </div>
                         </button>
-                        <button id="btnGeminiCliLogin" class="w-full text-left px-4 py-2 text-[13px] text-on-surface/40 dark:text-white/45 cursor-not-allowed flex items-center gap-2 border-t border-outline-variant/10 mt-1 pt-3" disabled title="已暂时禁用 Gemini CLI 登录">
-                            <span class="material-symbols-outlined text-outline/40 text-[16px]">terminal</span>
+                        <button id="btnGeminiCliLogin" class="w-full text-left px-4 py-2 text-[13px] text-on-surface dark:text-white hover:bg-slate-50 dark:hover:bg-white/5 transition-colors flex items-center gap-2 border-t border-outline-variant/10 mt-1 pt-3" onclick="startLogin('gemini-cli')">
+                            <span class="material-symbols-outlined text-primary text-[16px]">terminal</span>
                             <div>
-                                <div class="font-bold">Gemini CLI (已禁用)</div>
-                                <div class="text-[10px] text-outline/40">使用终端 CLI 凭证授权</div>
+                                <div class="font-bold">Gemini CLI</div>
+                                <div class="text-[10px] text-outline">使用终端 CLI 凭证授权</div>
                             </div>
                         </button>
                     </div>

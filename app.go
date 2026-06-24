@@ -102,10 +102,11 @@ func (a *App) startup(ctx context.Context) {
 	// Setup Callbacks
 	a.accountMgr.OnAccountsUpdated = func(accs []*account.Account) {
 		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":        a.accountMgr.GetAccounts(),
-			"poolMode":        a.accountMgr.GetPoolMode(),
-			"projectPoolMode": a.accountMgr.GetProjectPoolMode(),
-			"activeChannel":   a.accountMgr.GetActiveChannel(),
+			"accounts":          a.accountMgr.GetAccounts(),
+			"poolMode":          a.accountMgr.GetPoolMode(),
+			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
+			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
+			"activeChannel":     a.accountMgr.GetActiveChannel(),
 		})
 	}
 
@@ -333,10 +334,11 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 		accs := a.accountMgr.GetAccounts()
 		a.AddLog(fmt.Sprintf("🔄 [账号同步] 收到前端获取请求，当前后端已加载账号数: %d", len(accs)))
 		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":        accs,
-			"poolMode":        a.accountMgr.GetPoolMode(),
-			"projectPoolMode": a.accountMgr.GetProjectPoolMode(),
-			"activeChannel":   a.accountMgr.GetActiveChannel(),
+			"accounts":          accs,
+			"poolMode":          a.accountMgr.GetPoolMode(),
+			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
+			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
+			"activeChannel":     a.accountMgr.GetActiveChannel(),
 		})
 
 	case "accounts:remove":
@@ -432,13 +434,22 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			a.AddLog("🔄 Project API Load Balancing disabled. Using a single active project account.")
 		}
 
+	case "pool:toggle-gemini-cli":
+		a.accountMgr.SetGeminiCliPoolMode(getBoolArg(0))
+		if getBoolArg(0) {
+			a.AddLog("🔄 Gemini CLI Load Balancing enabled. Distributing requests across Gemini CLI accounts.")
+		} else {
+			a.AddLog("🔄 Gemini CLI Load Balancing disabled. Using a single active Gemini CLI account.")
+		}
+
 	case "channel:switch":
 		a.accountMgr.SetActiveChannel(getStringArg(0))
 		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":        a.accountMgr.GetAccounts(),
-			"poolMode":        a.accountMgr.GetPoolMode(),
-			"projectPoolMode": a.accountMgr.GetProjectPoolMode(),
-			"activeChannel":   a.accountMgr.GetActiveChannel(),
+			"accounts":          a.accountMgr.GetAccounts(),
+			"poolMode":          a.accountMgr.GetPoolMode(),
+			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
+			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
+			"activeChannel":     a.accountMgr.GetActiveChannel(),
 		})
 		a.AddLog("🔄 Switched active routing channel to: " + getStringArg(0))
 

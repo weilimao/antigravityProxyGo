@@ -77,6 +77,12 @@ func isIgnoredTelemetry(path string) bool {
 	return strings.Contains(path, "v1internal") && !strings.Contains(path, "retrieveUserQuota")
 }
 
+func isRealModelRequest(path string) bool {
+	p := strings.ToLower(path)
+	return strings.Contains(p, "generatecontent") || strings.Contains(p, "predict")
+}
+
+
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	if r.Method == http.MethodConnect {
@@ -164,6 +170,103 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	originalModel := currentModel
+	// 如果是 gemini-cli 通道，映射客户端模型名字为个人支持的真实可用模型
+	if h.accountMgr.GetActiveChannel() == "gemini-cli" {
+		mappings := map[string]string{
+			"gemini-3-flash-agent":       "gemini-3-pro-preview",
+			"gemini-3.5-flash-low":       "gemini-3-flash-preview",
+			"gemini-3.5-flash-extra-low": "gemini-3.1-flash-lite",
+			"gemini-pro-agent":           "gemini-3.1-pro-preview",
+			"gemini-3.1-pro-low":         "gemini-3.1-pro-preview",
+		}
+		if mapped, found := mappings[currentModel]; found {
+			currentModel = mapped
+		}
+
+		// 拦截并 Mock 非模型请求，防止因缺少 cloudcode-pa 项目权限报错
+		if strings.Contains(targetPath, "retrieveUserQuota") {
+			h.logFn("⚖️ [gemini-cli 拦截] 拦截并 Mock 配额请求 (retrieveUserQuota)")
+			mockQuotaResponse := map[string]interface{}{
+				"quotaSummaries": []interface{}{
+					map[string]interface{}{"model": "Gemini Weekly Quota", "usedFraction": 0.0},
+					map[string]interface{}{"model": "Gemini 5-Hour Quota", "usedFraction": 0.0},
+					map[string]interface{}{"model": "Claude Weekly Quota", "usedFraction": 0.0},
+					map[string]interface{}{"model": "Claude 5-Hour Quota", "usedFraction": 0.0},
+				},
+				"groups": []interface{}{
+					map[string]interface{}{
+						"displayName": "Gemini Models",
+						"buckets": []interface{}{
+							map[string]interface{}{"displayName": "Weekly Limit", "remainingFraction": 1.0},
+							map[string]interface{}{"displayName": "Five Hour Limit", "remainingFraction": 1.0},
+						},
+					},
+					map[string]interface{}{
+						"displayName": "Claude and GPT models",
+						"buckets": []interface{}{
+							map[string]interface{}{"displayName": "Weekly Limit", "remainingFraction": 1.0},
+							map[string]interface{}{"displayName": "Five Hour Limit", "remainingFraction": 1.0},
+						},
+					},
+				},
+			}
+			mockBytes, _ := json.Marshal(mockQuotaResponse)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", strconv.Itoa(len(mockBytes)))
+			w.WriteHeader(200)
+			w.Write(mockBytes)
+			return
+		}
+
+		if strings.Contains(targetPath, "v1internal") && !isRealModelRequest(targetPath) {
+			h.logFn("⚖️ [gemini-cli 拦截] 拦截并 Mock 遥测请求 (" + targetPath + ")")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			w.Write([]byte("{}"))
+			return
+		}
+
+		// 如果是模型请求，则将 Host 和 Path 重写为个人通道公有接口
+		if currentModel != "unknown" {
+			targetHost = "generativelanguage.googleapis.com"
+
+			// 解析动作 (如 generateContent 或 streamGenerateContent)
+			action := "generateContent"
+			if strings.Contains(targetPath, "streamGenerateContent") {
+				action = "streamGenerateContent"
+			} else if strings.Contains(targetPath, "predict") {
+				action = "generateContent"
+			} else {
+				// 兜底提取动作
+				parts := strings.Split(targetPath, ":")
+				if len(parts) > 1 {
+					rawAction := strings.Split(parts[len(parts)-1], "?")[0]
+					if rawAction != "" {
+						action = rawAction
+					}
+				}
+			}
+
+			isStreaming := action == "streamGenerateContent" || strings.Contains(targetPath, "alt=sse")
+			if isStreaming && !strings.Contains(action, "streamGenerateContent") {
+				action = "streamGenerateContent"
+			}
+
+			queryStr := ""
+			if isStreaming {
+				queryStr = "?alt=sse"
+			} else {
+				if r.URL.RawQuery != "" {
+					queryStr = "?" + r.URL.RawQuery
+				}
+			}
+
+			targetPath = fmt.Sprintf("/v1beta/models/%s:%s%s", currentModel, action, queryStr)
+			h.logFn(fmt.Sprintf("🔄 [gemini-cli 重写] TargetHost -> %s, TargetPath -> %s", targetHost, targetPath))
+		}
+	}
+
 	sessionKey := h.sessionRouter.ExtractSessionKey(r, bodyBytes)
 
 	var inTokens, outTokens, cachedTokens int
@@ -180,13 +283,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logged = true
 
 		cacheStatus := "NONE"
-		if statusCode == 200 && strings.Contains(targetPath, "GenerateContent") {
+		if statusCode == 200 && strings.Contains(strings.ToLower(targetPath), "generatecontent") {
 			if cachedTokens > 0 {
 				cacheStatus = "HIT"
 			} else {
 				cacheStatus = "MISS"
 			}
-		} else if strings.Contains(targetPath, "GenerateContent") {
+		} else if strings.Contains(strings.ToLower(targetPath), "generatecontent") {
 			cacheStatus = "MISS"
 		}
 
@@ -254,7 +357,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		customHeaders.Set("Host", targetHost)
 
 		var poolAccount *account.Account
-		if h.accountMgr.GetPoolMode() || h.accountMgr.GetProjectPoolMode() {
+		if h.accountMgr.IsPoolModeForActiveChannel() {
 			available := h.accountMgr.GetAvailableAccounts(currentModel)
 			poolAccount = h.sessionRouter.GetOrAssignAccount(sessionKey, available, h.logFn)
 			if poolAccount == nil {
@@ -263,6 +366,43 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var finalReqBody = bodyBytes
+		if poolAccount != nil && poolAccount.Provider == "gemini-cli" {
+			bodyStr := string(finalReqBody)
+			bodyChanged := false
+
+			// 1. 替换模型名字
+			if originalModel != currentModel && originalModel != "unknown" {
+				if strings.Contains(bodyStr, originalModel) {
+					bodyStr = strings.ReplaceAll(bodyStr, originalModel, currentModel)
+					bodyChanged = true
+					h.logFn(fmt.Sprintf("🔄 [gemini-cli 报文重写] Model 替换: %s -> %s", originalModel, currentModel))
+				}
+			}
+
+			// 2. 规范化 projects/.../locations/.../models/ 私有前缀为 models/
+			rePrivateModelPrefix := regexp.MustCompile(`projects/[^/]+/locations/[^/]+/models/`)
+			if rePrivateModelPrefix.MatchString(bodyStr) {
+				bodyStr = rePrivateModelPrefix.ReplaceAllString(bodyStr, "models/")
+				bodyChanged = true
+				h.logFn("🔄 [gemini-cli 报文重写] 规范化私有模型路径前缀为 models/")
+			}
+
+			if bodyChanged {
+				finalReqBody = []byte(bodyStr)
+				customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
+			}
+
+			// 由于在进入 attemptRequest 前已经在 ServeHTTP 里对 targetPath 重写过了，这里不需要重复重写 URL，
+			// 但以防万一做个兜底 URL 替换
+			if originalModel != currentModel && originalModel != "unknown" {
+				originalPath := targetPath
+				if strings.Contains(targetPath, originalModel) {
+					targetPath = strings.ReplaceAll(targetPath, originalModel, currentModel)
+					h.logFn(fmt.Sprintf("🔄 [模型映射] URL 重写: %s -> %s", originalPath, targetPath))
+				}
+			}
+		}
+
 		if poolAccount != nil {
 			customHeaders.Set("Authorization", "Bearer "+poolAccount.GetAccessToken())
 			allocatedAccount = poolAccount.Email
@@ -293,7 +433,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				var bodyMap map[string]interface{}
 				if json.Unmarshal(bodyBytes, &bodyMap) == nil {
 					targetProject := ""
-					if poolAccount.Provider != "antigravity" {
+					if poolAccount.Provider == "project" {
 						targetProject = poolAccount.ProjectID
 					} else {
 						// For antigravity, try to get stored custom project ID first
@@ -545,7 +685,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Analyze normal token counts from response body (if success)
-		if resp.StatusCode == 200 && strings.Contains(targetPath, "GenerateContent") {
+		if resp.StatusCode == 200 && strings.Contains(strings.ToLower(targetPath), "generatecontent") {
 			bodyStr := string(respBodyBytes)
 			pm := rePromptTokens.FindAllStringSubmatch(bodyStr, -1)
 			cm := reCandidateTokens.FindAllStringSubmatch(bodyStr, -1)
@@ -604,7 +744,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Fetch current active account mapping reference
-		if h.accountMgr.GetPoolMode() || h.accountMgr.GetProjectPoolMode() {
+		if h.accountMgr.IsPoolModeForActiveChannel() {
 			available := h.accountMgr.GetAvailableAccounts(currentModel)
 			lastUsedAccount = h.sessionRouter.GetOrAssignAccount(sessionKey, available, nil)
 		}

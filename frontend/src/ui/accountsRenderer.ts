@@ -70,7 +70,7 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
     // 针对 Project 渠道（API 级别/按量付费项目）进行特殊展示，不显示假周限额进度条
     const accountId = containerEl.id ? containerEl.id.replace('quotaBars-', '') : '';
     const acc = state.currentAccountsList?.find(a => a.id === accountId);
-    if (acc && acc.provider !== 'antigravity') {
+    if (acc && acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli') {
         containerEl.innerHTML = `
             <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
                 <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -258,7 +258,7 @@ export function renderAccounts(accounts: any[]) {
     if (!accountsList) return;
     
     const filteredAccounts = accounts.filter(acc => {
-        const accountChannel = acc.provider === 'antigravity' ? 'antigravity' : 'project';
+        const accountChannel = acc.provider;
         return accountChannel === state.currentViewTab;
     });
 
@@ -356,7 +356,7 @@ export function renderAccounts(accounts: any[]) {
                     ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Gemini CLI</span>'
                     : '');
 
-            const projectBadge = (acc.provider !== 'antigravity' && acc.projectId)
+            const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.projectId)
                 ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center">Project</span>'
                 : '';
 
@@ -688,7 +688,7 @@ export function updateAggregateQuotaUI() {
     };
 
     const enabledAccounts = state.currentAccountsList.filter(a => {
-        const accountChannel = a.provider === 'antigravity' ? 'antigravity' : 'project';
+        const accountChannel = a.provider;
         return accountChannel === state.currentActiveChannel && a.enabled !== false;
     });
 

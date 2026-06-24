@@ -21,6 +21,7 @@ let poolModeContainer: HTMLDivElement | null;
 let lblPoolMode: HTMLElement | null;
 let btnChannelAntigravity: HTMLButtonElement | null;
 let btnChannelProject: HTMLButtonElement | null;
+let btnChannelGeminiCli: HTMLButtonElement | null;
 let btnExportAccounts: HTMLButtonElement | null;
 let btnImportAccounts: HTMLButtonElement | null;
 
@@ -48,19 +49,34 @@ export function updatePoolModeUI() {
 }
 
 export function updateViewTabUI() {
-    if (btnChannelAntigravity && btnChannelProject) {
+    if (btnChannelAntigravity && btnChannelProject && btnChannelGeminiCli) {
+        const activeClass = 'px-4 py-1.5 rounded-md font-bold cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm';
+        const inactiveClass = 'px-4 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200';
+
         if (state.currentViewTab === 'antigravity') {
-            btnChannelAntigravity.className = 'px-4 py-1.5 rounded-md font-bold cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm';
-            btnChannelProject.className = 'px-4 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200';
+            btnChannelAntigravity.className = activeClass;
+            btnChannelProject.className = inactiveClass;
+            btnChannelGeminiCli.className = inactiveClass;
             
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (lblPoolMode) lblPoolMode.innerText = '账号负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.poolMode;
             }
+        } else if (state.currentViewTab === 'gemini-cli') {
+            btnChannelGeminiCli.className = activeClass;
+            btnChannelAntigravity.className = inactiveClass;
+            btnChannelProject.className = inactiveClass;
+            
+            if (poolModeContainer) poolModeContainer.classList.remove('hidden');
+            if (lblPoolMode) lblPoolMode.innerText = 'CLI号池负载均衡';
+            if (poolModeToggle && state.lastBackendData) {
+                poolModeToggle.checked = state.lastBackendData.geminiCliPoolMode;
+            }
         } else {
-            btnChannelProject.className = 'px-4 py-1.5 rounded-md font-bold cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm';
-            btnChannelAntigravity.className = 'px-4 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200';
+            btnChannelProject.className = activeClass;
+            btnChannelAntigravity.className = inactiveClass;
+            btnChannelGeminiCli.className = inactiveClass;
             
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (lblPoolMode) lblPoolMode.innerText = '项目负载均衡';
@@ -77,6 +93,10 @@ export function updateViewTabUI() {
     
     if (state.currentViewTab === 'antigravity') {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.remove('hidden');
+        if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
+        if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
+    } else if (state.currentViewTab === 'gemini-cli') {
+        if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.remove('hidden');
         if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
     } else {
@@ -252,6 +272,7 @@ export function initAccountsEvents() {
     lblPoolMode = document.getElementById('lblPoolMode');
     btnChannelAntigravity = document.getElementById('btnChannelAntigravity') as HTMLButtonElement | null;
     btnChannelProject = document.getElementById('btnChannelProject') as HTMLButtonElement | null;
+    btnChannelGeminiCli = document.getElementById('btnChannelGeminiCli') as HTMLButtonElement | null;
     btnExportAccounts = document.getElementById('btnExportAccounts') as HTMLButtonElement | null;
     btnImportAccounts = document.getElementById('btnImportAccounts') as HTMLButtonElement | null;
 
@@ -362,6 +383,8 @@ export function initAccountsEvents() {
         poolModeToggle.addEventListener('change', (e: any) => {
             if (state.currentViewTab === 'project') {
                 ipcRenderer.send('pool:toggle-project', e.target.checked);
+            } else if (state.currentViewTab === 'gemini-cli') {
+                ipcRenderer.send('pool:toggle-gemini-cli', e.target.checked);
             } else {
                 ipcRenderer.send('pool:toggle', e.target.checked);
             }
@@ -397,6 +420,17 @@ export function initAccountsEvents() {
         btnChannelProject.addEventListener('click', () => {
             state.currentViewTab = 'project';
             ipcRenderer.send('channel:switch', 'project');
+            updateViewTabUI();
+            if (state.currentAccountsList) {
+                renderAccounts(state.currentAccountsList);
+            }
+            updateAggregateQuotaUI();
+        });
+    }
+    if (btnChannelGeminiCli) {
+        btnChannelGeminiCli.addEventListener('click', () => {
+            state.currentViewTab = 'gemini-cli';
+            ipcRenderer.send('channel:switch', 'gemini-cli');
             updateViewTabUI();
             if (state.currentAccountsList) {
                 renderAccounts(state.currentAccountsList);
