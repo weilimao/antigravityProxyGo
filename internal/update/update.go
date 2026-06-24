@@ -126,6 +126,12 @@ func (m *Manager) findPlatformAsset(assets []ReleaseAsset) *ReleaseAsset {
 	if runtime.GOOS == "windows" {
 		for _, asset := range assets {
 			nameLower := strings.ToLower(asset.Name)
+			if strings.HasSuffix(nameLower, ".exe") && (strings.Contains(nameLower, "installer") || strings.Contains(nameLower, "setup")) {
+				return &asset
+			}
+		}
+		for _, asset := range assets {
+			nameLower := strings.ToLower(asset.Name)
 			if strings.HasSuffix(nameLower, ".exe") && !strings.HasSuffix(nameLower, ".blockmap") {
 				return &asset
 			}
