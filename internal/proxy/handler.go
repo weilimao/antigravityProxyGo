@@ -303,24 +303,28 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		usePool := false
 		var poolChannel string
 
-		isModelReq := isRealModelRequest(localTargetPath) || localTargetHost == "aiplatform.googleapis.com"
+		isPoolReq := isRealModelRequest(localTargetPath) || isAgentRequest(localTargetPath) || localTargetHost == "aiplatform.googleapis.com"
 
-		if isModelReq && h.accountMgr.GetProjectPoolMode() {
-			// 推理模型请求 + 项目负载均衡开启 → 路由到项目池
+		if isPoolReq {
 			usePool = true
-			poolChannel = "project"
-		} else if !h.accountMgr.GetProjectPoolMode() {
-			// 项目负载均衡未开启时，才遵循普通通道的 poolMode 设置
-			// 若 projectPoolMode=true，非模型请求（fetchAvailableModels 等 Cloud Code API）
-			// 直接透传原始 credentials，不注入项目池账号（项目账号无 Cloud Code API 权限）
-			if h.accountMgr.IsPoolModeForActiveChannel() {
-				usePool = true
-				poolChannel = h.accountMgr.GetActiveChannel()
-			}
+			poolChannel = h.accountMgr.GetActiveChannel()
 		}
 
 		if usePool {
 			available := h.accountMgr.GetAvailableAccountsForChannel(poolChannel, currentModel)
+
+			// 如果通道未开启负载均衡（池模式关闭），限制 available 仅包含第一个激活账号
+			// 确保所有会话和请求均使用同一个单账号
+			isPoolEnabled := false
+			if poolChannel == "project" {
+				isPoolEnabled = h.accountMgr.GetProjectPoolMode()
+			} else {
+				isPoolEnabled = h.accountMgr.GetPoolMode()
+			}
+			if !isPoolEnabled && len(available) > 0 {
+				available = []*account.Account{available[0]}
+			}
+
 			poolAccount = h.sessionRouter.GetOrAssignAccount(sessionKey, available, h.logFn)
 			if poolAccount == nil {
 				return 0, nil, nil, false, errors.New("QUOTA_EXHAUSTED")
@@ -467,18 +471,17 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					if attemptIndex == 0 {
 						h.logFn(fmt.Sprintf("🔄 [GCP Project 路由] 重写 API 地址: %s -> https://%s%s", r.URL.Path, localTargetHost, localTargetPath))
 					}
-				} else if localTargetHost == "aiplatform.googleapis.com" {
-					// Vertex AI API 请求：重写 URL 路径中的项目 ID
-					if strings.HasPrefix(localTargetPath, "/v1/projects/") {
-						parts := strings.Split(localTargetPath, "/")
-						if len(parts) > 3 && parts[1] == "v1" && parts[2] == "projects" {
-							origProject := parts[3]
-							if targetProject != "" && origProject != targetProject {
-								parts[3] = targetProject
-								localTargetPath = strings.Join(parts, "/")
-								if attemptIndex == 0 {
-									h.logFn(fmt.Sprintf("🔄 [Vertex AI 路由] 重写项目 ID: %s -> %s", origProject, targetProject))
-								}
+				} else {
+					// 非模型推理请求（如 Agent 请求）或直接请求 Vertex AI/Cloud AI Companion 请求：
+					// 仅重写 URL 路径中的项目 ID，支持 v1, v1beta, v1alpha 等 API 版本
+					parts := strings.Split(localTargetPath, "/")
+					if len(parts) > 3 && (parts[1] == "v1" || strings.HasPrefix(parts[1], "v1beta") || strings.HasPrefix(parts[1], "v1alpha")) && parts[2] == "projects" {
+						origProject := parts[3]
+						if targetProject != "" && origProject != targetProject {
+							parts[3] = targetProject
+							localTargetPath = strings.Join(parts, "/")
+							if attemptIndex == 0 {
+								h.logFn(fmt.Sprintf("🔄 [项目路由] 重写 URL 路径中的项目 ID: %s -> %s", origProject, targetProject))
 							}
 						}
 					}
@@ -758,20 +761,28 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Fetch current active account mapping reference
 		usePoolForRetry := false
 		var retryChannel string
-		if targetHost == "aiplatform.googleapis.com" {
-			if h.accountMgr.GetProjectPoolMode() {
-				usePoolForRetry = true
-				retryChannel = "project"
-			}
-		} else {
-			if h.accountMgr.IsPoolModeForActiveChannel() {
-				usePoolForRetry = true
-				retryChannel = h.accountMgr.GetActiveChannel()
-			}
+		
+		isPoolReq := isRealModelRequest(targetPath) || isAgentRequest(targetPath) || targetHost == "aiplatform.googleapis.com"
+		if isPoolReq {
+			usePoolForRetry = true
+			retryChannel = h.accountMgr.GetActiveChannel()
 		}
 
 		if usePoolForRetry {
 			available := h.accountMgr.GetAvailableAccountsForChannel(retryChannel, currentModel)
+
+			// 如果通道未开启负载均衡（池模式关闭），限制 available 仅包含第一个激活账号
+			// 确保所有会话和请求均使用同一个单账号
+			isPoolEnabled := false
+			if retryChannel == "project" {
+				isPoolEnabled = h.accountMgr.GetProjectPoolMode()
+			} else {
+				isPoolEnabled = h.accountMgr.GetPoolMode()
+			}
+			if !isPoolEnabled && len(available) > 0 {
+				available = []*account.Account{available[0]}
+			}
+
 			lastUsedAccount = h.sessionRouter.GetOrAssignAccount(sessionKey, available, nil)
 		}
 
@@ -804,9 +815,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 如果未开启号池负载均衡（直连模式），或项目负载均衡开启但本次请求是直接透传（非模型请求），
+		// 如果未开启号池负载均衡（直连模式），或项目负载均衡开启但本次请求是直接透传（非模型或 Agent 请求），
 		// 失败时直接退出，不执行切换账号重试
-		isDirectPassthrough := h.accountMgr.GetProjectPoolMode() && !isRealModelRequest(targetPath) && targetHost != "aiplatform.googleapis.com"
+		isDirectPassthrough := h.accountMgr.GetProjectPoolMode() && !isRealModelRequest(targetPath) && !isAgentRequest(targetPath) && targetHost != "aiplatform.googleapis.com"
 		if !h.accountMgr.IsPoolModeForActiveChannel() || isDirectPassthrough {
 			h.logFn(fmt.Sprintf("%s ❌ [直连模式] 尝试失败: %v", logPrefix, errAttempt))
 			logRequestToTracker(status, errAttempt.Error())

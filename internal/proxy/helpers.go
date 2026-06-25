@@ -23,8 +23,8 @@ var (
 )
 
 func isIgnoredTelemetry(path string) bool {
-	// 如果是真实的模型请求（如包含 generateContent），即使包含 v1internal 也不应被忽略
-	if isRealModelRequest(path) {
+	// 如果是真实的模型请求或 Agent 请求，即使包含 v1internal 也不应被忽略
+	if isRealModelRequest(path) || isAgentRequest(path) {
 		return false
 	}
 	return strings.Contains(path, "v1internal") && !strings.Contains(path, "retrieveUserQuota")
@@ -33,6 +33,11 @@ func isIgnoredTelemetry(path string) bool {
 func isRealModelRequest(path string) bool {
 	p := strings.ToLower(path)
 	return strings.Contains(p, "generatecontent") || strings.Contains(p, "predict")
+}
+
+func isAgentRequest(path string) bool {
+	p := strings.ToLower(path)
+	return strings.Contains(p, "agent")
 }
 
 func mapModelForProject(modelName string) string {
@@ -106,7 +111,7 @@ func (h *ProxyHandler) handleProjectIntercept(w http.ResponseWriter, targetPath 
 		return false
 	}
 
-	if strings.Contains(targetPath, "v1internal") && !isRealModelRequest(targetPath) {
+	if strings.Contains(targetPath, "v1internal") && !isRealModelRequest(targetPath) && !isAgentRequest(targetPath) {
 		h.logFn("⚖️ [project 拦截] 拦截并 Mock 遥测请求 (" + targetPath + ")")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
