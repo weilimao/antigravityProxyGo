@@ -434,13 +434,13 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			a.AddLog("🔄 Project API Load Balancing disabled. Using a single active project account.")
 		}
 
-	case "pool:toggle-gemini-cli":
+	/* case "pool:toggle-gemini-cli":
 		a.accountMgr.SetGeminiCliPoolMode(getBoolArg(0))
 		if getBoolArg(0) {
 			a.AddLog("🔄 Gemini CLI Load Balancing enabled. Distributing requests across Gemini CLI accounts.")
 		} else {
 			a.AddLog("🔄 Gemini CLI Load Balancing disabled. Using a single active Gemini CLI account.")
-		}
+		} */
 
 	case "channel:switch":
 		a.accountMgr.SetActiveChannel(getStringArg(0))
@@ -878,7 +878,11 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 
 	case "packet:analyze":
 		accId := getStringArg(0)
-		markdown, err := a.packetCap.AnalyzePackets(accId)
+		sourceType := getStringArg(1)
+		if sourceType == "" {
+			sourceType = "ALL"
+		}
+		markdown, err := a.packetCap.AnalyzePackets(accId, sourceType)
 		if err != nil {
 			return marshalResponse(map[string]interface{}{"error": err.Error()})
 		}
@@ -913,7 +917,7 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 			Error     string `json:"error,omitempty"`
 		}
 
-		accs := a.accountMgr.GetAccounts()
+		accs := a.accountMgr.GetTwoFAAccounts()
 		results := make([]OTPInfo, 0, len(accs))
 
 		for _, acc := range accs {
@@ -957,12 +961,7 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 			}
 		}
 
-		a.accountMgr.AddAccount(&account.Account{
-			Email:       email,
-			Provider:    "antigravity",
-			TwoFASecret: secret,
-			Enabled:     true,
-		})
+		a.accountMgr.AddTwoFAAccount(email, secret)
 
 		return marshalResponse(map[string]interface{}{"success": true})
 
@@ -971,6 +970,23 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		filePath, _ := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
 			Title:           "保存 API 接口文档说明",
 			DefaultFilename: "api_documentation.md",
+			Filters: []wailsRuntime.FileFilter{
+				{DisplayName: "Markdown Files", Pattern: "*.md"},
+			},
+		})
+		if filePath == "" {
+			return marshalResponse(false)
+		}
+		_ = os.WriteFile(filePath, []byte(markdown), 0644)
+		return marshalResponse(true)
+
+	case "packet:export-log":
+		markdown := getStringArg(0)
+		exportType := getStringArg(1)
+		defaultName := fmt.Sprintf("api_packets_log_%s.md", strings.ToLower(exportType))
+		filePath, _ := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
+			Title:           "保存接口抓包日志",
+			DefaultFilename: defaultName,
 			Filters: []wailsRuntime.FileFilter{
 				{DisplayName: "Markdown Files", Pattern: "*.md"},
 			},

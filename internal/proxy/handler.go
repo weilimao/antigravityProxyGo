@@ -9,7 +9,6 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -20,28 +19,19 @@ import (
 	"antigravity-proxy/internal/stats"
 )
 
-// 包级正则变量：避免每次请求重复编译，消除 GC 压力
-var (
-	reModelInPath     = regexp.MustCompile(`/models/([^:]+)`)
-	reModelInBody     = regexp.MustCompile(`(?:models/)?(.+)`)
-	rePromptTokens    = regexp.MustCompile(`"promptTokenCount"\s*:\s*(\d+)`)
-	reCandidateTokens = regexp.MustCompile(`"candidatesTokenCount"\s*:\s*(\d+)`)
-	reCachedTokens    = regexp.MustCompile(`"cachedContentTokenCount"\s*:\s*(\d+)`)
-)
-
 type ProxyHandler struct {
-	accountMgr   *account.Manager
-	sessionRouter *session.Router
-	statsTracker  *stats.Tracker
-	usageTracker  *stats.UsageTracker
-	errLogger    *stats.RetryErrorLogger
-	packetCap    *stats.PacketCapturer
-	logFn        func(string)
-	quotaFetch   func(*account.Account) (*account.QuotaResult, error)
-	tokenRefresh func(*account.Account) (string, error)
+	accountMgr         *account.Manager
+	sessionRouter      *session.Router
+	statsTracker       *stats.Tracker
+	usageTracker       *stats.UsageTracker
+	errLogger          *stats.RetryErrorLogger
+	packetCap          *stats.PacketCapturer
+	logFn              func(string)
+	quotaFetch         func(*account.Account) (*account.QuotaResult, error)
+	tokenRefresh       func(*account.Account) (string, error)
 	setCapturedProject func(string, string)
-	getStoredProject func(string) string
-	client       *http.Client
+	getStoredProject   func(string) string
+	client             *http.Client
 }
 
 func NewProxyHandler(
@@ -58,30 +48,20 @@ func NewProxyHandler(
 	getStoredProject func(string) string,
 ) *ProxyHandler {
 	return &ProxyHandler{
-		accountMgr:    accountMgr,
-		sessionRouter: sessionRouter,
-		statsTracker:  statsTracker,
-		usageTracker:  usageTracker,
-		errLogger:     errLogger,
-		packetCap:     packetCap,
-		logFn:         logFn,
-		quotaFetch:    quotaFetch,
-		tokenRefresh:  tokenRefresh,
+		accountMgr:         accountMgr,
+		sessionRouter:      sessionRouter,
+		statsTracker:       statsTracker,
+		usageTracker:       usageTracker,
+		errLogger:          errLogger,
+		packetCap:          packetCap,
+		logFn:              logFn,
+		quotaFetch:         quotaFetch,
+		tokenRefresh:       tokenRefresh,
 		setCapturedProject: setCapturedProject,
-		getStoredProject: getStoredProject,
-		client:        netutil.NewClient(5 * time.Minute),
+		getStoredProject:   getStoredProject,
+		client:             netutil.NewClient(5 * time.Minute),
 	}
 }
-
-func isIgnoredTelemetry(path string) bool {
-	return strings.Contains(path, "v1internal") && !strings.Contains(path, "retrieveUserQuota")
-}
-
-func isRealModelRequest(path string) bool {
-	p := strings.ToLower(path)
-	return strings.Contains(p, "generatecontent") || strings.Contains(p, "predict")
-}
-
 
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
@@ -170,101 +150,107 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	originalModel := currentModel
+	// originalModel := currentModel
 	// 如果是 gemini-cli 通道，映射客户端模型名字为个人支持的真实可用模型
-	if h.accountMgr.GetActiveChannel() == "gemini-cli" {
-		mappings := map[string]string{
-			"gemini-3-flash-agent":       "gemini-3-pro-preview",
-			"gemini-3.5-flash-low":       "gemini-3-flash-preview",
-			"gemini-3.5-flash-extra-low": "gemini-3.1-flash-lite",
-			"gemini-pro-agent":           "gemini-3.1-pro-preview",
-			"gemini-3.1-pro-low":         "gemini-3.1-pro-preview",
-		}
-		if mapped, found := mappings[currentModel]; found {
-			currentModel = mapped
-		}
-
-		// 拦截并 Mock 非模型请求，防止因缺少 cloudcode-pa 项目权限报错
-		if strings.Contains(targetPath, "retrieveUserQuota") {
-			h.logFn("⚖️ [gemini-cli 拦截] 拦截并 Mock 配额请求 (retrieveUserQuota)")
-			mockQuotaResponse := map[string]interface{}{
-				"quotaSummaries": []interface{}{
-					map[string]interface{}{"model": "Gemini Weekly Quota", "usedFraction": 0.0},
-					map[string]interface{}{"model": "Gemini 5-Hour Quota", "usedFraction": 0.0},
-					map[string]interface{}{"model": "Claude Weekly Quota", "usedFraction": 0.0},
-					map[string]interface{}{"model": "Claude 5-Hour Quota", "usedFraction": 0.0},
-				},
-				"groups": []interface{}{
-					map[string]interface{}{
-						"displayName": "Gemini Models",
-						"buckets": []interface{}{
-							map[string]interface{}{"displayName": "Weekly Limit", "remainingFraction": 1.0},
-							map[string]interface{}{"displayName": "Five Hour Limit", "remainingFraction": 1.0},
-						},
-					},
-					map[string]interface{}{
-						"displayName": "Claude and GPT models",
-						"buckets": []interface{}{
-							map[string]interface{}{"displayName": "Weekly Limit", "remainingFraction": 1.0},
-							map[string]interface{}{"displayName": "Five Hour Limit", "remainingFraction": 1.0},
-						},
-					},
-				},
+	/*
+		if h.accountMgr.GetActiveChannel() == "gemini-cli" {
+			mappings := map[string]string{
+				"gemini-3-flash-agent":       "gemini-3-pro-preview",
+				"gemini-3.5-flash-low":       "gemini-3-flash-preview",
+				"gemini-3.5-flash-extra-low": "gemini-3.1-flash-lite",
+				"gemini-pro-agent":           "gemini-3.1-pro-preview",
+				"gemini-3.1-pro-low":         "gemini-3.1-pro-preview",
 			}
-			mockBytes, _ := json.Marshal(mockQuotaResponse)
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Content-Length", strconv.Itoa(len(mockBytes)))
-			w.WriteHeader(200)
-			w.Write(mockBytes)
-			return
-		}
+			if mapped, found := mappings[currentModel]; found {
+				currentModel = mapped
+			}
 
-		if strings.Contains(targetPath, "v1internal") && !isRealModelRequest(targetPath) {
-			h.logFn("⚖️ [gemini-cli 拦截] 拦截并 Mock 遥测请求 (" + targetPath + ")")
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(200)
-			w.Write([]byte("{}"))
-			return
-		}
+			// 拦截并 Mock 非模型请求，防止因缺少 cloudcode-pa 项目权限报错
+			if strings.Contains(targetPath, "retrieveUserQuota") {
+				h.logFn("⚖️ [gemini-cli 拦截] 拦截并 Mock 配额请求 (retrieveUserQuota)")
+				mockQuotaResponse := map[string]interface{}{
+					"quotaSummaries": []interface{}{
+						map[string]interface{}{"model": "Gemini Weekly Quota", "usedFraction": 0.0},
+						map[string]interface{}{"model": "Gemini 5-Hour Quota", "usedFraction": 0.0},
+						map[string]interface{}{"model": "Claude Weekly Quota", "usedFraction": 0.0},
+						map[string]interface{}{"model": "Claude 5-Hour Quota", "usedFraction": 0.0},
+					},
+					"groups": []interface{}{
+						map[string]interface{}{
+							"displayName": "Gemini Models",
+							"buckets": []interface{}{
+								map[string]interface{}{"displayName": "Weekly Limit", "remainingFraction": 1.0},
+								map[string]interface{}{"displayName": "Five Hour Limit", "remainingFraction": 1.0},
+							},
+						},
+						map[string]interface{}{
+							"displayName": "Claude and GPT models",
+							"buckets": []interface{}{
+								map[string]interface{}{"displayName": "Weekly Limit", "remainingFraction": 1.0},
+								map[string]interface{}{"displayName": "Five Hour Limit", "remainingFraction": 1.0},
+							},
+						},
+					},
+				}
+				mockBytes, _ := json.Marshal(mockQuotaResponse)
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Content-Length", strconv.Itoa(len(mockBytes)))
+				w.WriteHeader(200)
+				w.Write(mockBytes)
+				return
+			}
 
-		// 如果是模型请求，则将 Host 和 Path 重写为个人通道公有接口
-		if currentModel != "unknown" {
-			targetHost = "generativelanguage.googleapis.com"
+			if strings.Contains(targetPath, "v1internal") && !isRealModelRequest(targetPath) {
+				h.logFn("⚖️ [gemini-cli 拦截] 拦截并 Mock 遥测请求 (" + targetPath + ")")
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(200)
+				w.Write([]byte("{}"))
+				return
+			}
 
-			// 解析动作 (如 generateContent 或 streamGenerateContent)
-			action := "generateContent"
-			if strings.Contains(targetPath, "streamGenerateContent") {
-				action = "streamGenerateContent"
-			} else if strings.Contains(targetPath, "predict") {
-				action = "generateContent"
-			} else {
-				// 兜底提取动作
-				parts := strings.Split(targetPath, ":")
-				if len(parts) > 1 {
-					rawAction := strings.Split(parts[len(parts)-1], "?")[0]
-					if rawAction != "" {
-						action = rawAction
+			// 如果是模型请求，则将 Host 和 Path 重写为个人通道公有接口
+			if currentModel != "unknown" {
+				targetHost = "generativelanguage.googleapis.com"
+
+				// 解析动作 (如 generateContent 或 streamGenerateContent)
+				action := "generateContent"
+				if strings.Contains(targetPath, "streamGenerateContent") {
+					action = "streamGenerateContent"
+				} else if strings.Contains(targetPath, "predict") {
+					action = "generateContent"
+				} else {
+					// 兜底提取动作
+					parts := strings.Split(targetPath, ":")
+					if len(parts) > 1 {
+						rawAction := strings.Split(parts[len(parts)-1], "?")[0]
+						if rawAction != "" {
+							action = rawAction
+						}
 					}
 				}
-			}
 
-			isStreaming := action == "streamGenerateContent" || strings.Contains(targetPath, "alt=sse")
-			if isStreaming && !strings.Contains(action, "streamGenerateContent") {
-				action = "streamGenerateContent"
-			}
-
-			queryStr := ""
-			if isStreaming {
-				queryStr = "?alt=sse"
-			} else {
-				if r.URL.RawQuery != "" {
-					queryStr = "?" + r.URL.RawQuery
+				isStreaming := action == "streamGenerateContent" || strings.Contains(targetPath, "alt=sse")
+				if isStreaming && !strings.Contains(action, "streamGenerateContent") {
+					action = "streamGenerateContent"
 				}
-			}
 
-			targetPath = fmt.Sprintf("/v1beta/models/%s:%s%s", currentModel, action, queryStr)
-			h.logFn(fmt.Sprintf("🔄 [gemini-cli 重写] TargetHost -> %s, TargetPath -> %s", targetHost, targetPath))
+				queryStr := ""
+				if isStreaming {
+					queryStr = "?alt=sse"
+				} else {
+					if r.URL.RawQuery != "" {
+						queryStr = "?" + r.URL.RawQuery
+					}
+				}
+
+				targetPath = fmt.Sprintf("/v1beta/models/%s:%s%s", currentModel, action, queryStr)
+				h.logFn(fmt.Sprintf("🔄 [gemini-cli 重写] TargetHost -> %s, TargetPath -> %s", targetHost, targetPath))
+			}
 		}
+	*/
+
+	if h.handleProjectIntercept(w, targetPath) {
+		return
 	}
 
 	sessionKey := h.sessionRouter.ExtractSessionKey(r, bodyBytes)
@@ -277,76 +263,33 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var headersSent bool
 
 	logRequestToTracker := func(statusCode int, errDetail string) {
-		if logged {
-			return
+		if allocatedAccount == "" {
+			allocatedAccount = "直连"
 		}
-		logged = true
-
-		cacheStatus := "NONE"
-		if statusCode == 200 && strings.Contains(strings.ToLower(targetPath), "generatecontent") {
-			if cachedTokens > 0 {
-				cacheStatus = "HIT"
-			} else {
-				cacheStatus = "MISS"
-			}
-		} else if strings.Contains(strings.ToLower(targetPath), "generatecontent") {
-			cacheStatus = "MISS"
-		}
-
-		var reqBody interface{}
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, &reqBody); err != nil {
-				reqBody = string(bodyBytes)
-			}
-		}
-
-		if statusCode >= 400 && !isIgnoredTelemetry(targetPath) {
-			h.statsTracker.TrackError(1)
-			errReason := errDetail
-			if errReason == "" {
-				switch statusCode {
-				case 429:
-					errReason = "QUOTA_EXHAUSTED / RATE_LIMIT"
-				case 503:
-					errReason = "CAPACITY_EXHAUSTED / SERVICE_UNAVAILABLE"
-				case 401:
-					errReason = "TOKEN_EXPIRED / UNAUTHORIZED"
-				default:
-					errReason = fmt.Sprintf("HTTP Status %d", statusCode)
-				}
-			}
-			h.errLogger.Log("ERROR", targetPath, currentModel, allocatedAccount, currentAttemptIndex+1, errReason)
-		}
-
-		headersMap := make(map[string]interface{})
-		for k, v := range r.Header {
-			if len(v) > 0 {
-				headersMap[k] = v[0]
-			}
-		}
-
-		h.statsTracker.AddRequestLog(&stats.RequestLog{
-			ID:             fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
-			Timestamp:      time.Now().Format("01/02 15:04:05"),
-			Method:         r.Method,
-			Host:           targetHost,
-			Path:           targetPath,
-			Model:          currentModel,
-			Account:        allocatedAccount,
-			InTokens:       inTokens,
-			OutTokens:      outTokens,
-			CachedTokens:   cachedTokens,
-			CacheStatus:    cacheStatus,
-			StatusCode:     statusCode,
-			RequestBody:    reqBody,
-			RequestHeaders: headersMap,
-			SessionID:      sessionKey,
-			DurationMs:     time.Since(startTime).Milliseconds(),
-		})
+		h.logRequestToTracker(
+			&logged,
+			statusCode,
+			errDetail,
+			targetPath,
+			cachedTokens,
+			bodyBytes,
+			currentModel,
+			allocatedAccount,
+			currentAttemptIndex,
+			r,
+			inTokens,
+			outTokens,
+			sessionKey,
+			startTime,
+			targetHost,
+		)
 	}
 
 	attemptRequest := func(attemptIndex int) (int, map[string][]string, []byte, bool, error) {
-		if attemptIndex > 0 && !isIgnoredTelemetry(targetPath) {
+		localTargetHost := targetHost
+		localTargetPath := targetPath
+
+		if attemptIndex > 0 && !isIgnoredTelemetry(localTargetPath) {
 			h.statsTracker.TrackRetry(1)
 		}
 
@@ -354,11 +297,30 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for k, values := range r.Header {
 			customHeaders[k] = values
 		}
-		customHeaders.Set("Host", targetHost)
+		customHeaders.Set("Host", localTargetHost)
 
 		var poolAccount *account.Account
-		if h.accountMgr.IsPoolModeForActiveChannel() {
-			available := h.accountMgr.GetAvailableAccounts(currentModel)
+		usePool := false
+		var poolChannel string
+
+		isModelReq := isRealModelRequest(localTargetPath) || localTargetHost == "aiplatform.googleapis.com"
+
+		if isModelReq && h.accountMgr.GetProjectPoolMode() {
+			// 推理模型请求 + 项目负载均衡开启 → 路由到项目池
+			usePool = true
+			poolChannel = "project"
+		} else if !h.accountMgr.GetProjectPoolMode() {
+			// 项目负载均衡未开启时，才遵循普通通道的 poolMode 设置
+			// 若 projectPoolMode=true，非模型请求（fetchAvailableModels 等 Cloud Code API）
+			// 直接透传原始 credentials，不注入项目池账号（项目账号无 Cloud Code API 权限）
+			if h.accountMgr.IsPoolModeForActiveChannel() {
+				usePool = true
+				poolChannel = h.accountMgr.GetActiveChannel()
+			}
+		}
+
+		if usePool {
+			available := h.accountMgr.GetAvailableAccountsForChannel(poolChannel, currentModel)
 			poolAccount = h.sessionRouter.GetOrAssignAccount(sessionKey, available, h.logFn)
 			if poolAccount == nil {
 				return 0, nil, nil, false, errors.New("QUOTA_EXHAUSTED")
@@ -366,42 +328,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var finalReqBody = bodyBytes
-		if poolAccount != nil && poolAccount.Provider == "gemini-cli" {
-			bodyStr := string(finalReqBody)
-			bodyChanged := false
-
-			// 1. 替换模型名字
-			if originalModel != currentModel && originalModel != "unknown" {
-				if strings.Contains(bodyStr, originalModel) {
-					bodyStr = strings.ReplaceAll(bodyStr, originalModel, currentModel)
-					bodyChanged = true
-					h.logFn(fmt.Sprintf("🔄 [gemini-cli 报文重写] Model 替换: %s -> %s", originalModel, currentModel))
-				}
-			}
-
-			// 2. 规范化 projects/.../locations/.../models/ 私有前缀为 models/
-			rePrivateModelPrefix := regexp.MustCompile(`projects/[^/]+/locations/[^/]+/models/`)
-			if rePrivateModelPrefix.MatchString(bodyStr) {
-				bodyStr = rePrivateModelPrefix.ReplaceAllString(bodyStr, "models/")
-				bodyChanged = true
-				h.logFn("🔄 [gemini-cli 报文重写] 规范化私有模型路径前缀为 models/")
-			}
-
-			if bodyChanged {
-				finalReqBody = []byte(bodyStr)
-				customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
-			}
-
-			// 由于在进入 attemptRequest 前已经在 ServeHTTP 里对 targetPath 重写过了，这里不需要重复重写 URL，
-			// 但以防万一做个兜底 URL 替换
-			if originalModel != currentModel && originalModel != "unknown" {
-				originalPath := targetPath
-				if strings.Contains(targetPath, originalModel) {
-					targetPath = strings.ReplaceAll(targetPath, originalModel, currentModel)
-					h.logFn(fmt.Sprintf("🔄 [模型映射] URL 重写: %s -> %s", originalPath, targetPath))
-				}
-			}
-		}
 
 		if poolAccount != nil {
 			customHeaders.Set("Authorization", "Bearer "+poolAccount.GetAccessToken())
@@ -413,62 +339,54 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				h.logFn(fmt.Sprintf("⚖️ [负载均衡] 请求重试，重新分配账号: %s (%s) | 目标模型: %s", poolAccount.Email, poolAccount.Provider, currentModel))
 			}
 
-			// Let quotaService capture project ID using the authenticated pool account email
+			targetProject := ""
+			targetModel := ""
+
+			var bodyJson struct {
+				Project string `json:"project"`
+			}
+			bodyParsed := false
 			if len(bodyBytes) > 0 {
-				var bodyJson struct {
-					Project string `json:"project"`
+				bodyParsed = json.Unmarshal(bodyBytes, &bodyJson) == nil
+			}
+
+			if poolAccount.Provider == "project" {
+				targetProject = poolAccount.ProjectID
+				customHeaders.Set("x-goog-user-project", poolAccount.ProjectID)
+				// 对于直发 Vertex AI（aiplatform.googleapis.com）的请求，模型名已经是正确的 Vertex AI
+				// 原生格式（如 gemini-3.5-flash），不需要经过 mapModelForProject 做老版本降级映射；
+				// 只有从 CloudCode 通道（cloudcode-pa）转发过来的请求才需要映射。
+				if localTargetHost == "aiplatform.googleapis.com" {
+					targetModel = currentModel
+				} else {
+					targetModel = mapModelForProject(currentModel)
 				}
-				if json.Unmarshal(bodyBytes, &bodyJson) == nil && bodyJson.Project != "" {
-					isDefault := bodyJson.Project == "expanded-palisade-stpfc" || strings.HasPrefix(bodyJson.Project, "expanded-palisade-")
-					if !isDefault {
-						if h.setCapturedProject != nil {
-							h.setCapturedProject(poolAccount.Email, bodyJson.Project)
-						}
+			} else {
+				// 对于普通账号通道，我们强行将其改写规范为默认账号请求模式：
+				// 1. 强行将项目 ID 覆写为共享账号的默认项目，避免账号因无权限访问自定义项目而报 403
+				targetProject = "expanded-palisade-stpfc"
+				// 2. 保持底层模型为原本传入的 currentModel，不进行 mapModelForProject 重新映射
+				targetModel = ""
+			}
+
+			// Let quotaService capture project ID using the authenticated pool account email
+			if bodyParsed && bodyJson.Project != "" {
+				isDefault := bodyJson.Project == "expanded-palisade-stpfc" || strings.HasPrefix(bodyJson.Project, "expanded-palisade-")
+				if !isDefault {
+					if h.setCapturedProject != nil {
+						h.setCapturedProject(poolAccount.Email, bodyJson.Project)
 					}
 				}
 			}
 
-			// Rewrite project field in JSON payload
+			// Rewrite project and model fields in JSON payload
 			if len(bodyBytes) > 0 && strings.Contains(customHeaders.Get("Content-Type"), "json") {
 				var bodyMap map[string]interface{}
 				if json.Unmarshal(bodyBytes, &bodyMap) == nil {
-					targetProject := ""
-					if poolAccount.Provider == "project" {
-						targetProject = poolAccount.ProjectID
-					} else {
-						// For antigravity, try to get stored custom project ID first
-						customProj := poolAccount.ProjectID
-						if customProj == "" && h.getStoredProject != nil {
-							customProj = h.getStoredProject(poolAccount.Email)
-						}
-
-						if customProj != "" && customProj != "expanded-palisade-stpfc" && !strings.HasPrefix(customProj, "expanded-palisade-") {
-							// If we have a custom project, use it!
-							targetProject = customProj
-						} else {
-							// Check if this is a premium account (Pro/Ultra/Enterprise)
-							isPremium := poolAccount.Tier == "Pro" || poolAccount.Tier == "Ultra" || poolAccount.Tier == "Enterprise"
-
-							// Otherwise, strip default project ID to avoid 429
-							if origProj, exists := bodyMap["project"].(string); exists {
-								if origProj == "expanded-palisade-stpfc" || strings.HasPrefix(origProj, "expanded-palisade-") {
-									if isPremium {
-										// For premium accounts without a custom project ID, keep the default project ID to allow Pro limits
-										targetProject = origProj
-									} else {
-										// For free accounts, strip it to avoid shared default project quota 429
-										targetProject = ""
-									}
-								} else {
-									targetProject = origProj
-								}
-							}
-						}
-					}
-
 					bodyChanged := false
+
 					if targetProject != "" {
-						if _, exists := bodyMap["project"]; exists && bodyMap["project"] != targetProject {
+						if origProjVal, exists := bodyMap["project"]; exists && origProjVal != targetProject {
 							bodyMap["project"] = targetProject
 							bodyChanged = true
 						}
@@ -479,16 +397,97 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 
+					// 写入模型名 (只限于 project 账号且 targetModel 有效)
+					if poolAccount.Provider == "project" && targetModel != "" && targetModel != currentModel {
+						if modelVal, exists := bodyMap["model"].(string); exists {
+							if strings.HasPrefix(modelVal, "models/") {
+								bodyMap["model"] = "models/" + targetModel
+							} else {
+								bodyMap["model"] = targetModel
+							}
+							bodyChanged = true
+						}
+					}
+
 					if bodyChanged {
 						newBodyBytes, errMarshal := json.Marshal(bodyMap)
 						if errMarshal == nil {
 							finalReqBody = newBodyBytes
 							customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
-							if attemptIndex == 0 && targetProject != "" {
-								h.logFn(fmt.Sprintf("🛡️ Injected project ID '%s' into payload.", targetProject))
-							} else if attemptIndex == 0 {
-								h.logFn("🛡️ Stripped 'project' ID from payload to avoid default project quota 429.")
+							if attemptIndex == 0 {
+								if poolAccount.Provider == "project" {
+									h.logFn(fmt.Sprintf("🛡️ Injected project ID '%s' and model '%s' into payload.", targetProject, targetModel))
+								} else if targetProject != "" {
+									h.logFn(fmt.Sprintf("🛡️ Injected project ID '%s' into payload.", targetProject))
+								} else {
+									h.logFn("🛡️ Stripped 'project' ID from payload to avoid default project quota 429.")
+								}
 							}
+						}
+					}
+				}
+			}
+
+			// 重写 Host 和 Path
+			if poolAccount.Provider == "project" {
+				if (localTargetHost == "cloudcode-pa.googleapis.com" || localTargetHost == "daily-cloudcode-pa.googleapis.com") && isRealModelRequest(localTargetPath) {
+					localTargetHost = "aiplatform.googleapis.com"
+					customHeaders.Set("Host", localTargetHost)
+
+					action := "generateContent"
+					if strings.Contains(localTargetPath, "streamGenerateContent") {
+						action = "streamGenerateContent"
+					} else if strings.Contains(localTargetPath, "predict") {
+						action = "generateContent"
+					} else {
+						parts := strings.Split(localTargetPath, ":")
+						if len(parts) > 1 {
+							rawAction := strings.Split(parts[len(parts)-1], "?")[0]
+							if rawAction != "" {
+								action = rawAction
+							}
+						}
+					}
+
+					isStreaming := action == "streamGenerateContent" || strings.Contains(localTargetPath, "alt=sse")
+					if isStreaming && !strings.Contains(action, "streamGenerateContent") {
+						action = "streamGenerateContent"
+					}
+
+					queryStr := ""
+					if isStreaming {
+						queryStr = "?alt=sse"
+					} else {
+						if r.URL.RawQuery != "" {
+							queryStr = "?" + r.URL.RawQuery
+						}
+					}
+
+					localTargetPath = fmt.Sprintf("/v1/projects/%s/locations/global/publishers/google/models/%s:%s%s", poolAccount.ProjectID, targetModel, action, queryStr)
+					if attemptIndex == 0 {
+						h.logFn(fmt.Sprintf("🔄 [GCP Project 路由] 重写 API 地址: %s -> https://%s%s", r.URL.Path, localTargetHost, localTargetPath))
+					}
+				} else if localTargetHost == "aiplatform.googleapis.com" {
+					// Vertex AI API 请求：重写 URL 路径中的项目 ID
+					if strings.HasPrefix(localTargetPath, "/v1/projects/") {
+						parts := strings.Split(localTargetPath, "/")
+						if len(parts) > 3 && parts[1] == "v1" && parts[2] == "projects" {
+							origProject := parts[3]
+							if targetProject != "" && origProject != targetProject {
+								parts[3] = targetProject
+								localTargetPath = strings.Join(parts, "/")
+								if attemptIndex == 0 {
+									h.logFn(fmt.Sprintf("🔄 [Vertex AI 路由] 重写项目 ID: %s -> %s", origProject, targetProject))
+								}
+							}
+						}
+					}
+					// 重写 URL 路径中的模型 ID
+					if targetModel != "" {
+						oldPath := localTargetPath
+						localTargetPath = reModelInPath.ReplaceAllString(localTargetPath, "/models/"+targetModel)
+						if attemptIndex == 0 && oldPath != localTargetPath {
+							h.logFn(fmt.Sprintf("🔄 [Vertex AI 路由] 重写模型 ID: %s -> %s", currentModel, targetModel))
 						}
 					}
 				}
@@ -496,8 +495,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Forward request
-		targetUrl := "https://" + targetHost + targetPath
-		proxyReq, errReq := http.NewRequest(r.Method, targetUrl, bytes.NewReader(finalReqBody))
+		targetUrl := "https://" + localTargetHost + localTargetPath
+		proxyReq, errReq := http.NewRequestWithContext(r.Context(), r.Method, targetUrl, bytes.NewReader(finalReqBody))
 		if errReq != nil {
 			return 0, nil, nil, false, errReq
 		}
@@ -511,7 +510,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		var respBodyBytes []byte
 		var errRead error
-		isStreaming := strings.Contains(targetPath, "streamGenerateContent")
+		isStreaming := strings.Contains(localTargetPath, "streamGenerateContent")
 
 		var skippedBytes int = 0
 		if isStreaming && resp.StatusCode == 200 {
@@ -606,12 +605,25 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return resp.StatusCode, nil, nil, false, errRead
 		}
 
+		// Capture packet logging (Save to PacketCapturer) before any error short-circuit return
+		h.packetCap.SavePacket(r.Method, localTargetHost, localTargetPath, r.Header, bodyBytes, resp.Header, respBodyBytes, resp.StatusCode)
+
+		if resp.StatusCode >= 400 {
+			if !(resp.StatusCode == 429 && strings.Contains(localTargetPath, "retrieveUserQuota")) {
+				bodySnippet := string(respBodyBytes)
+				if len(bodySnippet) > 1000 {
+					bodySnippet = bodySnippet[:1000] + "... (truncated)"
+				}
+				h.logFn(fmt.Sprintf("%s ⚠️ 上游 HTTP %d 错误响应: %s", logPrefix, resp.StatusCode, bodySnippet))
+			}
+		}
+
 		if resp.StatusCode == 401 {
 			return 401, resp.Header, respBodyBytes, false, errors.New("TOKEN_EXPIRED")
 		}
 
 		// Handle Google Quota 429 Interception to prevent IDE infinite loop
-		if resp.StatusCode == 429 && strings.Contains(targetPath, "retrieveUserQuota") {
+		if resp.StatusCode == 429 && strings.Contains(localTargetPath, "retrieveUserQuota") {
 			h.logFn("⚠️ Intercepted 429 from Google Quota API. Mocking 200 OK to prevent IDE infinite loop.")
 			mockQuotaResponse := map[string]interface{}{
 				"quotaSummaries": []interface{}{
@@ -648,10 +660,10 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 429 Quota Error
-		if (resp.StatusCode == 429 || resp.StatusCode == 403 || resp.StatusCode == 402) && !strings.Contains(targetPath, "retrieveUserQuota") {
+		if (resp.StatusCode == 429 || resp.StatusCode == 403 || resp.StatusCode == 402) && !strings.Contains(localTargetPath, "retrieveUserQuota") {
 			bodyStr := string(respBodyBytes)
 			bodyStrLower := strings.ToLower(bodyStr)
-			isCreditExempt := strings.Contains(bodyStrLower, "credit") || strings.Contains(bodyStrLower, "balance") || strings.Contains(bodyStrLower, "overage") || strings.Contains(bodyStrLower, "insufficient")
+			isCreditExempt := strings.Contains(bodyStrLower, "credit") || strings.Contains(bodyStrLower, "balance") || strings.Contains(bodyStrLower, "overage") || strings.Contains(bodyStrLower, "insufficient credits") || strings.Contains(bodyStrLower, "insufficient balance") || strings.Contains(bodyStrLower, "insufficient funds") || strings.Contains(bodyStrLower, "billing")
 
 			if isCreditExempt {
 				return resp.StatusCode, resp.Header, respBodyBytes, false, errors.New("CREDITS_EXHAUSTED")
@@ -677,15 +689,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return resp.StatusCode, resp.Header, respBodyBytes, false, errors.New("SERVER_ERROR")
 		}
 
-		// Capture packet logging (Save to PacketCapturer)
-		if resp.StatusCode == 200 && !isIgnoredTelemetry(targetPath) {
-			if !h.packetCap.IsCaptured(r.Method, targetHost, targetPath) {
-				h.packetCap.SavePacket(r.Method, targetHost, targetPath, r.Header, bodyBytes, resp.Header, respBodyBytes, resp.StatusCode)
-			}
-		}
-
 		// Analyze normal token counts from response body (if success)
-		if resp.StatusCode == 200 && strings.Contains(strings.ToLower(targetPath), "generatecontent") {
+		if resp.StatusCode == 200 && strings.Contains(strings.ToLower(localTargetPath), "generatecontent") {
 			bodyStr := string(respBodyBytes)
 			pm := rePromptTokens.FindAllStringSubmatch(bodyStr, -1)
 			cm := reCandidateTokens.FindAllStringSubmatch(bodyStr, -1)
@@ -738,14 +743,35 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var lastAccountFailCount int
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		select {
+		case <-r.Context().Done():
+			h.logFn(fmt.Sprintf("%s ⏹️ 客户端已取消连接，终止负载均衡重试。", logPrefix))
+			return
+		default:
+		}
+
 		currentAttemptIndex = attempt
 		if attempt > 0 {
 			h.logFn(fmt.Sprintf("%s ⚖️ 正在进行负载均衡第 %d/%d 次尝试...", logPrefix, attempt+1, maxRetries+1))
 		}
 
 		// Fetch current active account mapping reference
-		if h.accountMgr.IsPoolModeForActiveChannel() {
-			available := h.accountMgr.GetAvailableAccounts(currentModel)
+		usePoolForRetry := false
+		var retryChannel string
+		if targetHost == "aiplatform.googleapis.com" {
+			if h.accountMgr.GetProjectPoolMode() {
+				usePoolForRetry = true
+				retryChannel = "project"
+			}
+		} else {
+			if h.accountMgr.IsPoolModeForActiveChannel() {
+				usePoolForRetry = true
+				retryChannel = h.accountMgr.GetActiveChannel()
+			}
+		}
+
+		if usePoolForRetry {
+			available := h.accountMgr.GetAvailableAccountsForChannel(retryChannel, currentModel)
 			lastUsedAccount = h.sessionRouter.GetOrAssignAccount(sessionKey, available, nil)
 		}
 
@@ -767,6 +793,25 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			if !isStreamed {
 				// Write response back to client
+				for k, values := range headers {
+					for _, v := range values {
+						w.Header().Add(k, v)
+					}
+				}
+				w.WriteHeader(status)
+				w.Write(body)
+			}
+			return
+		}
+
+		// 如果未开启号池负载均衡（直连模式），或项目负载均衡开启但本次请求是直接透传（非模型请求），
+		// 失败时直接退出，不执行切换账号重试
+		isDirectPassthrough := h.accountMgr.GetProjectPoolMode() && !isRealModelRequest(targetPath) && targetHost != "aiplatform.googleapis.com"
+		if !h.accountMgr.IsPoolModeForActiveChannel() || isDirectPassthrough {
+			h.logFn(fmt.Sprintf("%s ❌ [直连模式] 尝试失败: %v", logPrefix, errAttempt))
+			logRequestToTracker(status, errAttempt.Error())
+
+			if !headersSent {
 				for k, values := range headers {
 					for _, v := range values {
 						w.Header().Add(k, v)
@@ -878,10 +923,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		shouldRetry := isRetryable && attempt < maxRetries
 		if errAttempt.Error() == "QUOTA_EXHAUSTED" {
-			// If all active accounts are cooled down, do not retry further
+			// If all active accounts of the target channel are cooled down, do not retry further
+			targetChan := h.accountMgr.GetActiveChannel()
+			if targetHost == "aiplatform.googleapis.com" {
+				targetChan = "project"
+			}
 			hasAvail := false
 			for _, a := range h.accountMgr.GetRawAccounts() {
-				if !a.Enabled {
+				if a.Provider != targetChan || !a.Enabled {
 					continue
 				}
 				cat := h.accountMgr.GetModelCategory(currentModel)

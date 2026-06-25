@@ -64,6 +64,7 @@ type QuotaResult struct {
 
 type AccountsData struct {
 	Accounts          []*Account `json:"accounts"`
+	TwoFAAccounts     []*Account `json:"twofa_accounts,omitempty"`
 	PoolMode          bool       `json:"poolMode"`
 	ProjectPoolMode   bool       `json:"projectPoolMode"`
 	GeminiCliPoolMode bool       `json:"geminiCliPoolMode"`
@@ -75,6 +76,7 @@ type Manager struct {
 	userDataPath      string
 	accountsFilePath  string
 	accounts          []*Account
+	twofaAccounts     []*Account
 	poolMode          bool
 	projectPoolMode   bool
 	geminiCliPoolMode bool
@@ -95,6 +97,7 @@ type Manager struct {
 func NewManager() *Manager {
 	return &Manager{
 		accounts:      make([]*Account, 0),
+		twofaAccounts: make([]*Account, 0),
 		activeChannel: "antigravity",
 		errorCounts:   make(map[string]int),
 	}
@@ -129,6 +132,7 @@ func (m *Manager) LoadAccounts() {
 
 	if _, err := os.Stat(m.accountsFilePath); os.IsNotExist(err) {
 		m.accounts = make([]*Account, 0)
+		m.twofaAccounts = make([]*Account, 0)
 		return
 	}
 
@@ -148,41 +152,77 @@ func (m *Manager) LoadAccounts() {
 	m.projectPoolMode = parsed.ProjectPoolMode
 	m.geminiCliPoolMode = parsed.GeminiCliPoolMode
 	m.activeChannel = parsed.ActiveChannel
+	if m.activeChannel == "gemini-cli" {
+		m.activeChannel = "antigravity"
+	}
 	m.accounts = parsed.Accounts
+	m.twofaAccounts = parsed.TwoFAAccounts
+	if m.twofaAccounts == nil {
+		m.twofaAccounts = make([]*Account, 0)
+	}
 
-	// 补全和规范化字段
-	for _, acc := range m.accounts {
+	// 补全独立 2FA 列表的字段
+	for _, acc := range m.twofaAccounts {
 		if acc.ID == "" {
 			acc.ID = m.generateAccountID()
 		}
-		if acc.Provider == "" {
-			if acc.ProjectID != "" {
-				acc.Provider = "project"
-			} else {
-				acc.Provider = "antigravity"
-			}
-		}
-		if acc.ScopeType == "" {
-			if acc.Provider == "antigravity" {
-				acc.ScopeType = "account"
-			} else if acc.Provider == "gemini-cli" {
-				acc.ScopeType = "account"
-			} else {
-				acc.ScopeType = "project"
-			}
-		}
-		if acc.Cooldowns == nil {
-			acc.Cooldowns = make(map[string]int64)
-		}
-		// 恢复时，如果包含启用属性，保留之，否则默认为启用
-		// 在 JSON 中如果不存在，默认是 false 的话这里补充
+		acc.Provider = "2fa"
+		acc.ScopeType = "2fa"
 	}
+
+	// 核心迁移逻辑：自动将原有 accounts 列表中没有 Token 的 2FA 账号分离出来
+	var activePoolAccounts []*Account
+	for _, acc := range m.accounts {
+		isTwoFAOnly := acc.TwoFASecret != "" && acc.AccessToken == "" && acc.RefreshToken == "" && acc.Provider == "antigravity"
+		if isTwoFAOnly {
+			// 自动迁移入独立的 2FA 列表中
+			acc.Provider = "2fa"
+			acc.ScopeType = "2fa"
+			acc.Enabled = false
+
+			alreadyExists := false
+			for _, t := range m.twofaAccounts {
+				if t.Email == acc.Email {
+					t.TwoFASecret = acc.TwoFASecret
+					alreadyExists = true
+					break
+				}
+			}
+			if !alreadyExists {
+				m.twofaAccounts = append(m.twofaAccounts, acc)
+			}
+		} else {
+			if acc.ID == "" {
+				acc.ID = m.generateAccountID()
+			}
+			if acc.Provider == "" {
+				if acc.ProjectID != "" {
+					acc.Provider = "project"
+				} else {
+					acc.Provider = "antigravity"
+				}
+			}
+			if acc.ScopeType == "" {
+				if acc.Provider == "antigravity" || acc.Provider == "gemini-cli" {
+					acc.ScopeType = "account"
+				} else {
+					acc.ScopeType = "project"
+				}
+			}
+			if acc.Cooldowns == nil {
+				acc.Cooldowns = make(map[string]int64)
+			}
+			activePoolAccounts = append(activePoolAccounts, acc)
+		}
+	}
+	m.accounts = activePoolAccounts
 }
 
 func (m *Manager) SaveAccounts(silent bool) error {
 	m.RLock()
 	data := AccountsData{
 		Accounts:          m.accounts,
+		TwoFAAccounts:     m.twofaAccounts,
 		PoolMode:          m.poolMode,
 		ProjectPoolMode:   m.projectPoolMode,
 		GeminiCliPoolMode: m.geminiCliPoolMode,
@@ -430,16 +470,102 @@ func (m *Manager) UpdateAccountEnabled(id string, enabled bool) {
 	}
 }
 
+func (m *Manager) AddTwoFAAccount(email, secret string) {
+	m.Lock()
+	if email == "" {
+		m.Unlock()
+		return
+	}
+
+	foundInPool := false
+	for _, a := range m.accounts {
+		if a.Email == email {
+			a.TwoFASecret = secret
+			foundInPool = true
+		}
+	}
+
+	if !foundInPool {
+		foundIn2FA := false
+		for _, a := range m.twofaAccounts {
+			if a.Email == email {
+				a.TwoFASecret = secret
+				foundIn2FA = true
+				break
+			}
+		}
+		if !foundIn2FA {
+			m.twofaAccounts = append(m.twofaAccounts, &Account{
+				ID:          m.generateAccountID(),
+				Email:       email,
+				TwoFASecret: secret,
+				Provider:    "2fa",
+				ScopeType:   "2fa",
+				Enabled:     false,
+				AddedAt:     time.Now().Format(time.RFC3339),
+			})
+		}
+	}
+	m.Unlock()
+
+	_ = m.SaveAccounts(false)
+}
+
+func (m *Manager) GetTwoFAAccounts() []*Account {
+	m.RLock()
+	defer m.RUnlock()
+
+	var list []*Account
+	for _, a := range m.accounts {
+		if a.TwoFASecret != "" {
+			list = append(list, a)
+		}
+	}
+	for _, a := range m.twofaAccounts {
+		list = append(list, a)
+	}
+	return list
+}
+
 func (m *Manager) UpdateAccount2FASecret(id string, secret string) {
 	m.Lock()
 	changed := false
+	found := false
+
+	// 1. 先在主账号池中查找
 	for _, a := range m.accounts {
 		if a.ID == id {
 			if a.TwoFASecret != secret {
 				a.TwoFASecret = secret
 				changed = true
 			}
+			found = true
 			break
+		}
+	}
+
+	// 2. 如果主账号池中没找到，在独立的 2FA 账号列表中查找
+	if !found {
+		var new2FAAccounts []*Account
+		for _, a := range m.twofaAccounts {
+			if a.ID == id {
+				if secret != "" {
+					if a.TwoFASecret != secret {
+						a.TwoFASecret = secret
+						changed = true
+					}
+					new2FAAccounts = append(new2FAAccounts, a)
+				} else {
+					// 密钥被清空且是 2FA-only 账号，直接将其从独立列表中删除
+					changed = true
+				}
+				found = true
+			} else {
+				new2FAAccounts = append(new2FAAccounts, a)
+			}
+		}
+		if changed {
+			m.twofaAccounts = new2FAAccounts
 		}
 	}
 	m.Unlock()
@@ -508,6 +634,8 @@ func (m *Manager) GetProjectPoolMode() bool {
 }
 
 func (m *Manager) SetGeminiCliPoolMode(enabled bool) {
+	// Gemini CLI 服务已停用，不执行任何操作
+	/*
 	m.Lock()
 	m.geminiCliPoolMode = enabled
 	if enabled {
@@ -517,12 +645,12 @@ func (m *Manager) SetGeminiCliPoolMode(enabled bool) {
 	}
 	m.Unlock()
 	_ = m.SaveAccounts(false)
+	*/
 }
 
 func (m *Manager) GetGeminiCliPoolMode() bool {
-	m.RLock()
-	defer m.RUnlock()
-	return m.geminiCliPoolMode
+	// Gemini CLI 服务已停用，始终返回 false
+	return false
 }
 
 func (m *Manager) IsPoolModeForActiveChannel() bool {
@@ -533,15 +661,15 @@ func (m *Manager) IsPoolModeForActiveChannel() bool {
 		return m.poolMode
 	case "project":
 		return m.projectPoolMode
-	case "gemini-cli":
-		return m.geminiCliPoolMode
+	/* case "gemini-cli":
+		return m.geminiCliPoolMode */
 	}
 	return false
 }
 
 func (m *Manager) SetActiveChannel(channel string) {
 	m.Lock()
-	if channel == "antigravity" || channel == "project" || channel == "gemini-cli" {
+	if channel == "antigravity" || channel == "project" /* || channel == "gemini-cli" */ {
 		if channel == "project" && m.poolMode {
 			m.Unlock()
 			return
@@ -582,16 +710,18 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 	isPool := m.poolMode
 	if currentChannel == "project" {
 		isPool = m.projectPoolMode
-	} else if currentChannel == "gemini-cli" {
+	} /* else if currentChannel == "gemini-cli" {
 		isPool = m.geminiCliPoolMode
-	}
+	} */
 
-	// 筛选出当前通道所有启用的账号
+	// 筛选出当前通道所有启用的账号 (且已授权登录)
 	var activeAccounts []*Account
 	for _, a := range m.accounts {
 		accountChannel := a.Provider
 		if accountChannel == currentChannel && a.Enabled {
-			activeAccounts = append(activeAccounts, a)
+			if a.AccessToken != "" || a.RefreshToken != "" {
+				activeAccounts = append(activeAccounts, a)
+			}
 		}
 	}
 
@@ -707,7 +837,7 @@ func (m *Manager) SetAccountCooldown(id string, untilTimeMs int64, modelName str
 	}
 }
 
-func (m *Manager) GetAvailableAccounts(modelName string) []*Account {
+func (m *Manager) GetAvailableAccountsForChannel(channel string, modelName string) []*Account {
 	m.RLock()
 	defer m.RUnlock()
 
@@ -715,14 +845,16 @@ func (m *Manager) GetAvailableAccounts(modelName string) []*Account {
 		return nil
 	}
 
-	currentChannel := m.activeChannel
 	category := m.GetModelCategory(modelName)
 	now := time.Now().UnixNano() / int64(time.Millisecond)
 
 	var list []*Account
 	for _, a := range m.accounts {
 		accountChannel := a.Provider
-		if accountChannel != currentChannel || !a.Enabled {
+		if accountChannel != channel || !a.Enabled {
+			continue
+		}
+		if a.AccessToken == "" && a.RefreshToken == "" {
 			continue
 		}
 
@@ -738,6 +870,13 @@ func (m *Manager) GetAvailableAccounts(modelName string) []*Account {
 		}
 	}
 	return list
+}
+
+func (m *Manager) GetAvailableAccounts(modelName string) []*Account {
+	m.RLock()
+	channel := m.activeChannel
+	m.RUnlock()
+	return m.GetAvailableAccountsForChannel(channel, modelName)
 }
 
 func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucket) bool {

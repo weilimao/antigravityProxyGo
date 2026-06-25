@@ -595,9 +595,11 @@
             <button id="btnChannelProject" type="button" class="px-4 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200">
                 谷歌云项目 API
             </button>
+            <!--
             <button id="btnChannelGeminiCli" type="button" class="px-4 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200">
                 Gemini CLI号池
             </button>
+            -->
         </div>
 
         <div class="flex justify-between items-end">
@@ -636,6 +638,7 @@
                                 <div class="text-[10px] text-outline">使用官方插件凭证授权</div>
                             </div>
                         </button>
+                        <!--
                         <button id="btnGeminiCliLogin" class="w-full text-left px-4 py-2 text-[13px] text-on-surface dark:text-white hover:bg-slate-50 dark:hover:bg-white/5 transition-colors flex items-center gap-2 border-t border-outline-variant/10 mt-1 pt-3" onclick="startLogin('gemini-cli')">
                             <span class="material-symbols-outlined text-primary text-[16px]">terminal</span>
                             <div>
@@ -643,6 +646,7 @@
                                 <div class="text-[10px] text-outline">使用终端 CLI 凭证授权</div>
                             </div>
                         </button>
+                        -->
                     </div>
                 </div>
             </div>
@@ -932,6 +936,10 @@
                     <span class="material-symbols-outlined text-[16px]">download</span>
                     下载接口文档
                 </button>
+                <button id="btnExportPacketLog" class="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 text-white hover:bg-blue-700 border border-blue-600 rounded-md text-[13px] font-medium transition-colors shadow-sm">
+                    <span class="material-symbols-outlined text-[16px]">description</span>
+                    导出接口日志
+                </button>
                 <button id="btnClearPackets" class="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-red-200 dark:border-red-950/30 rounded-md text-[13px] font-medium text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors">
                     <span class="material-symbols-outlined text-[16px]">delete_sweep</span>
                     清空列表
@@ -946,6 +954,14 @@
                 <div class="flex justify-between items-center pb-2 border-b border-outline-variant/30">
                     <span class="text-[12px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider">接口列表</span>
                     <span id="packetCountBadge" class="bg-primary/10 text-primary dark:text-primary-fixed-dim text-[11px] font-bold px-2 py-0.5 rounded-full">0 个接口</span>
+                </div>
+                <!-- 接口筛选过滤 -->
+                <div class="flex flex-wrap gap-1 pb-1 border-b border-outline-variant/10 text-[10px]">
+                    <button id="btnFilterPacketAll" class="px-2 py-0.5 font-bold rounded bg-primary text-white transition-colors cursor-pointer" onclick="window.setPacketFilter('ALL')">全部</button>
+                    <button id="btnFilterPacketCli" class="px-2 py-0.5 font-bold rounded bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer" onclick="window.setPacketFilter('CLI')">CLI</button>
+                    <button id="btnFilterPacketIde" class="px-2 py-0.5 font-bold rounded bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer" onclick="window.setPacketFilter('IDE')">IDE</button>
+                    <button id="btnFilterPacketAgent" class="px-2 py-0.5 font-bold rounded bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer" onclick="window.setPacketFilter('Agent')">Agent</button>
+                    <button id="btnFilterPacketUnknown" class="px-2 py-0.5 font-bold rounded bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer" onclick="window.setPacketFilter('UNKNOWN')">未知</button>
                 </div>
                 <!-- 接口列表容器 -->
                 <div id="packetListContainer" class="flex-grow overflow-y-auto max-h-[750px] flex flex-col gap-2 pr-1">
@@ -1381,6 +1397,47 @@
                     <span>清空所有绑定</span>
                 </button>
                 <button id="sessionBindingsModalCloseBtnSecondary" class="px-4 py-1.5 text-[12px] font-bold bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40 cursor-pointer">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导出接口日志 Modal 弹窗 -->
+    <div id="exportPacketsModal" class="fixed inset-0 bg-slate-950/75 z-50 flex items-center justify-center opacity-0 pointer-events-none transition-opacity duration-200">
+        <div class="bg-white dark:bg-[#1e2538] w-[420px] max-w-[90vw] rounded-2xl border border-outline-variant/60 shadow-2xl flex flex-col transform scale-95 transition-transform duration-200" id="exportPacketsModalContainer">
+            <!-- Modal 头部 -->
+            <div class="px-6 py-4 border-b border-outline-variant/30 flex justify-between items-center bg-slate-50/50 dark:bg-white/5 rounded-t-2xl">
+                <span class="text-sm font-bold text-on-surface dark:text-white flex items-center gap-1.5">
+                    <span class="material-symbols-outlined text-[18px] text-primary">description</span>
+                    <span>导出接口日志</span>
+                </span>
+                <button id="exportPacketsModalCloseBtn" class="text-outline hover:text-primary transition-colors flex items-center justify-center p-1 rounded-full hover:bg-slate-100 dark:hover:bg-white/5">
+                    <span class="material-symbols-outlined text-[18px]">close</span>
+                </button>
+            </div>
+            
+            <!-- Modal 主体内容 -->
+            <div class="p-6 flex flex-col gap-4">
+                <div class="text-[12px] text-outline leading-relaxed">
+                    请选择需要导出的接口数据包分类。我们将为您生成一份包含请求和响应细节（包含 Method、Host、Path、Headers 以及 Request/Response Body）的完整 Markdown 文档。
+                </div>
+                
+                <!-- 类型选择 -->
+                <div class="flex flex-col gap-2">
+                    <label for="exportPacketsTypeSelect" class="text-[13px] font-medium text-slate-700 dark:text-slate-200">选择接口分类:</label>
+                    <select id="exportPacketsTypeSelect" class="bg-white dark:bg-[#1a1f30] border border-outline-variant/50 rounded-md px-3 py-1.5 text-[13px] font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:border-primary w-full">
+                        <option value="ALL">全部 (ALL)</option>
+                        <option value="CLI">CLI</option>
+                        <option value="IDE">IDE</option>
+                        <option value="Agent">Agent</option>
+                        <option value="UNKNOWN">未知 (UNKNOWN)</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Modal 底部 -->
+            <div class="px-6 py-4 border-t border-outline-variant/30 bg-slate-50/50 dark:bg-white/5 flex justify-end gap-3 rounded-b-2xl">
+                <button id="btnExportPacketsCancel" class="px-4 py-2 text-[12px] font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40 cursor-pointer">取消</button>
+                <button id="btnExportPacketsConfirm" class="px-4 py-2 text-[12px] font-bold bg-primary text-white hover:bg-primary/90 rounded-lg transition-colors shadow-sm cursor-pointer">确认导出</button>
             </div>
         </div>
     </div>

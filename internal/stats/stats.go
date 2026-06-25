@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -225,8 +226,15 @@ func (t *Tracker) updateTrends(inTokens, outTokens, cachedTokens int, cost, inpu
 }
 
 func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
-	if reqLog.Model == "" || reqLog.Model == "unknown" {
+	// 只保留真正的模型对话/发送请求（即包含 generatecontent 或 predict 的 API 调用）
+	p := strings.ToLower(reqLog.Path)
+	isRealModel := strings.Contains(p, "generatecontent") || strings.Contains(p, "predict")
+	if !isRealModel {
 		return
+	}
+
+	if reqLog.Model == "" {
+		reqLog.Model = "unknown"
 	}
 
 	t.Lock()

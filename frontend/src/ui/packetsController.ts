@@ -4,6 +4,7 @@ import state from './dashboardState';
 let packetsList: any[] = [];
 let selectedPacket: any = null;
 let generatedDocContent = '';
+let currentFilter = 'ALL';
 
 // DOM Elements
 let packetListContainer: HTMLElement | null;
@@ -11,6 +12,12 @@ let packetCountBadge: HTMLElement | null;
 let packetDetailsPlaceholder: HTMLElement | null;
 let packetDetailsContainer: HTMLElement | null;
 let btnClearPackets: HTMLButtonElement | null;
+let btnExportPacketLog: HTMLButtonElement | null;
+let exportPacketsModal: HTMLElement | null;
+let exportPacketsModalCloseBtn: HTMLButtonElement | null;
+let btnExportPacketsCancel: HTMLButtonElement | null;
+let btnExportPacketsConfirm: HTMLButtonElement | null;
+let exportPacketsTypeSelect: HTMLSelectElement | null;
 
 let selectedPacketMethod: HTMLElement | null;
 let selectedPacketStatusCode: HTMLElement | null;
@@ -77,17 +84,62 @@ export async function refreshPacketsList() {
     
     try {
         packetsList = await ipcRenderer.invoke('packet:get-all');
+        // Sort packets by timestamp descending (newest first)
+        packetsList.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
     } catch (e) {
         console.error('Failed to get packets:', e);
         packetsList = [];
     }
 
-    if (packetCountBadge) {
-        packetCountBadge.textContent = `${packetsList.length} 个接口`;
+    // Resolve sources for all packets (with fallback for historical packets)
+    packetsList.forEach(p => {
+        let source = p.source;
+        if (!source) {
+            let ua = '';
+            if (p.reqHeaders) {
+                for (const key of Object.keys(p.reqHeaders)) {
+                    if (key.toLowerCase() === 'user-agent') {
+                        ua = p.reqHeaders[key];
+                        break;
+                    }
+                }
+            }
+            const uaLower = ua.toLowerCase();
+            if (uaLower.includes('antigravity/cli') || uaLower.includes('aidev_client')) {
+                source = 'CLI';
+            } else if (uaLower.includes('antigravity/ide') || uaLower.includes('cloudaicompanion') || uaLower.includes('google-api-nodejs-client') || uaLower.includes('go-http-client')) {
+                source = 'IDE';
+            } else if (uaLower.includes('antigravity/hub') || uaLower.includes('antigravityproxy-')) {
+                source = 'Agent';
+            } else {
+                source = '未知';
+            }
+        }
+        // Normalise previous "客户端" string to "Agent" just in case
+        if (source === '客户端') {
+            source = 'Agent';
+        }
+        p._resolvedSource = source;
+    });
+
+    // Apply current classification filter
+    let filteredList = packetsList;
+    if (currentFilter !== 'ALL') {
+        filteredList = packetsList.filter(p => {
+            if (currentFilter === 'CLI') return p._resolvedSource === 'CLI';
+            if (currentFilter === 'IDE') return p._resolvedSource === 'IDE';
+            if (currentFilter === 'Agent') return p._resolvedSource === 'Agent';
+            if (currentFilter === 'UNKNOWN') return p._resolvedSource === '未知';
+            return true;
+        });
     }
 
-    if (packetsList.length === 0) {
-        packetListContainer.innerHTML = `<div class="text-center py-12 text-outline text-[13px]">暂无已抓取的接口包</div>`;
+    if (packetCountBadge) {
+        packetCountBadge.textContent = `${filteredList.length} 个接口`;
+    }
+
+    if (filteredList.length === 0) {
+        packetListContainer.innerHTML = `<div class="text-center py-12 text-outline text-[13px]">暂无符合过滤条件的接口包</div>`;
         if (packetDetailsPlaceholder) packetDetailsPlaceholder.classList.remove('hidden');
         if (packetDetailsContainer) packetDetailsContainer.classList.add('hidden');
         selectedPacket = null;
@@ -95,15 +147,31 @@ export async function refreshPacketsList() {
     }
 
     // Render list items
-    packetListContainer.innerHTML = packetsList.map(p => {
+    packetListContainer.innerHTML = filteredList.map(p => {
         const isSelected = selectedPacket && selectedPacket.id === p.id;
         const methodColor = p.method === 'POST' ? 'text-primary' : 'text-emerald-600';
         const selectedClass = isSelected ? 'bg-primary/10 border-primary/50 dark:bg-primary/20 dark:border-primary' : 'border-outline-variant/20 hover:bg-slate-50 dark:hover:bg-white/5';
         
+        // Client source badge
+        let sourceBadge = '';
+        const source = p._resolvedSource || '未知';
+        if (source === 'CLI') {
+            sourceBadge = `<span class="px-1 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:bg-blue-400/10 dark:text-blue-400 text-[9px] font-bold border border-blue-500/20">CLI</span>`;
+        } else if (source === 'IDE') {
+            sourceBadge = `<span class="px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:bg-emerald-400/10 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20">IDE</span>`;
+        } else if (source === 'Agent') {
+            sourceBadge = `<span class="px-1 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:bg-purple-400/10 dark:text-purple-400 text-[9px] font-bold border border-purple-500/20">Agent</span>`;
+        } else {
+            sourceBadge = `<span class="px-1 py-0.5 rounded bg-slate-500/10 text-slate-600 dark:bg-slate-400/10 dark:text-slate-400 text-[9px] font-bold border border-slate-500/20">${source}</span>`;
+        }
+
         return `
             <div class="p-3 border rounded-lg cursor-pointer transition-all flex flex-col gap-1.5 ${selectedClass}" onclick="window.selectPacketItem('${p.id}')">
                 <div class="flex justify-between items-center">
-                    <span class="font-data-mono font-bold text-[12px] ${methodColor}">${p.method}</span>
+                    <div class="flex items-center gap-1.5">
+                        <span class="font-data-mono font-bold text-[12px] ${methodColor}">${p.method}</span>
+                        ${sourceBadge}
+                    </div>
                     <span class="text-[10px] text-outline font-medium">${p.timestamp}</span>
                 </div>
                 <div class="text-[12px] font-semibold text-slate-700 dark:text-slate-200 truncate break-all" title="${p.host}${p.path}">
@@ -232,8 +300,55 @@ export function initPacketsEvents() {
 
     if (btnStartPacketAnalyze) {
         btnStartPacketAnalyze.addEventListener('click', async () => {
-            if (packetsList.length === 0) {
-                alert('当前没有已抓取的接口包！请先让 IDE 发起请求拦截。');
+            // Filter packets matching currentFilter
+            let filteredList = packetsList;
+            if (currentFilter !== 'ALL') {
+                filteredList = packetsList.filter(p => {
+                    let source = p._resolvedSource || p.source;
+                    if (!source) {
+                        let ua = '';
+                        if (p.reqHeaders) {
+                            for (const key of Object.keys(p.reqHeaders)) {
+                                if (key.toLowerCase() === 'user-agent') {
+                                    ua = p.reqHeaders[key];
+                                    break;
+                                }
+                            }
+                        }
+                        const uaLower = ua.toLowerCase();
+                        if (uaLower.includes('antigravity/cli') || uaLower.includes('aidev_client')) {
+                            source = 'CLI';
+                        } else if (uaLower.includes('antigravity/ide') || uaLower.includes('cloudaicompanion') || uaLower.includes('google-api-nodejs-client') || uaLower.includes('go-http-client')) {
+                            source = 'IDE';
+                        } else if (uaLower.includes('antigravity/hub') || uaLower.includes('antigravityproxy-')) {
+                            source = 'Agent';
+                        } else {
+                            source = '未知';
+                        }
+                    }
+                    if (source === '客户端') {
+                        source = 'Agent';
+                    }
+                    p._resolvedSource = source;
+
+                    if (currentFilter === 'CLI') return p._resolvedSource === 'CLI';
+                    if (currentFilter === 'IDE') return p._resolvedSource === 'IDE';
+                    if (currentFilter === 'Agent') return p._resolvedSource === 'Agent';
+                    if (currentFilter === 'UNKNOWN') return p._resolvedSource === '未知';
+                    return true;
+                });
+            }
+
+            if (filteredList.length === 0) {
+                const filterNames: Record<string, string> = {
+                    'ALL': '全部',
+                    'CLI': 'CLI',
+                    'IDE': 'IDE',
+                    'Agent': 'Agent',
+                    'UNKNOWN': '未知'
+                };
+                const filterLabel = filterNames[currentFilter] || currentFilter;
+                alert(`当前筛选的 [${filterLabel}] 分类下没有已抓取的接口包！`);
                 return;
             }
 
@@ -250,7 +365,7 @@ export function initPacketsEvents() {
             try {
                 if (packetAnalyzeProgressMsg) packetAnalyzeProgressMsg.textContent = '正在组织报文并调用 Gemini-2.5-Flash-Lite...';
                 
-                const markdown = await ipcRenderer.invoke('packet:analyze', accId);
+                const markdown = await ipcRenderer.invoke('packet:analyze', accId, currentFilter);
                 generatedDocContent = markdown;
 
                 if (packetDocPreviewText) {
@@ -289,6 +404,207 @@ export function initPacketsEvents() {
             }
         });
     }
+
+    // Bind Export Packet Log elements
+    btnExportPacketLog = document.getElementById('btnExportPacketLog') as HTMLButtonElement | null;
+    exportPacketsModal = document.getElementById('exportPacketsModal');
+    exportPacketsModalCloseBtn = document.getElementById('exportPacketsModalCloseBtn') as HTMLButtonElement | null;
+    btnExportPacketsCancel = document.getElementById('btnExportPacketsCancel') as HTMLButtonElement | null;
+    btnExportPacketsConfirm = document.getElementById('btnExportPacketsConfirm') as HTMLButtonElement | null;
+    exportPacketsTypeSelect = document.getElementById('exportPacketsTypeSelect') as HTMLSelectElement | null;
+
+    const showExportPacketsModal = () => {
+        if (!exportPacketsModal) return;
+        exportPacketsModal.classList.remove('pointer-events-none', 'opacity-0');
+        exportPacketsModal.classList.add('opacity-100');
+        const container = exportPacketsModal.querySelector('#exportPacketsModalContainer');
+        if (container) {
+            container.classList.remove('scale-95');
+            container.classList.add('scale-100');
+        }
+        // Set type select default value matching current filter
+        if (exportPacketsTypeSelect) {
+            exportPacketsTypeSelect.value = currentFilter;
+        }
+    };
+
+    const hideExportPacketsModal = () => {
+        if (!exportPacketsModal) return;
+        exportPacketsModal.classList.add('opacity-0', 'pointer-events-none');
+        exportPacketsModal.classList.remove('opacity-100');
+        const container = exportPacketsModal.querySelector('#exportPacketsModalContainer');
+        if (container) {
+            container.classList.add('scale-95');
+            container.classList.remove('scale-100');
+        }
+    };
+
+    if (btnExportPacketLog) {
+        btnExportPacketLog.addEventListener('click', () => {
+            if (packetsList.length === 0) {
+                alert('当前没有已抓取的接口包，无法导出！');
+                return;
+            }
+            showExportPacketsModal();
+        });
+    }
+
+    if (exportPacketsModalCloseBtn) {
+        exportPacketsModalCloseBtn.addEventListener('click', hideExportPacketsModal);
+    }
+    if (btnExportPacketsCancel) {
+        btnExportPacketsCancel.addEventListener('click', hideExportPacketsModal);
+    }
+
+    if (exportPacketsModal) {
+        exportPacketsModal.addEventListener('click', (e: MouseEvent) => {
+            if (e.target === exportPacketsModal) {
+                hideExportPacketsModal();
+            }
+        });
+    }
+
+    if (btnExportPacketsConfirm) {
+        btnExportPacketsConfirm.addEventListener('click', async () => {
+            if (!exportPacketsTypeSelect) return;
+            const exportType = exportPacketsTypeSelect.value;
+            
+            // Re-resolve and filter packet list
+            packetsList.forEach(p => {
+                let source = p.source;
+                if (!source) {
+                    let ua = '';
+                    if (p.reqHeaders) {
+                        for (const key of Object.keys(p.reqHeaders)) {
+                            if (key.toLowerCase() === 'user-agent') {
+                                ua = p.reqHeaders[key];
+                                break;
+                            }
+                        }
+                    }
+                    const uaLower = ua.toLowerCase();
+                    if (uaLower.includes('antigravity/cli') || uaLower.includes('aidev_client')) {
+                        source = 'CLI';
+                    } else if (uaLower.includes('antigravity/ide') || uaLower.includes('cloudaicompanion') || uaLower.includes('google-api-nodejs-client') || uaLower.includes('go-http-client')) {
+                        source = 'IDE';
+                    } else if (uaLower.includes('antigravity/hub') || uaLower.includes('antigravityproxy-')) {
+                        source = 'Agent';
+                    } else {
+                        source = '未知';
+                    }
+                }
+                if (source === '客户端') {
+                    source = 'Agent';
+                }
+                p._resolvedSource = source;
+            });
+
+            let filtered = packetsList;
+            if (exportType !== 'ALL') {
+                filtered = packetsList.filter(p => {
+                    if (exportType === 'CLI') return p._resolvedSource === 'CLI';
+                    if (exportType === 'IDE') return p._resolvedSource === 'IDE';
+                    if (exportType === 'Agent') return p._resolvedSource === 'Agent';
+                    if (exportType === 'UNKNOWN') return p._resolvedSource === '未知';
+                    return true;
+                });
+            }
+
+            if (filtered.length === 0) {
+                const typeNames: Record<string, string> = {
+                    'ALL': '全部',
+                    'CLI': 'CLI',
+                    'IDE': 'IDE',
+                    'Agent': 'Agent',
+                    'UNKNOWN': '未知'
+                };
+                alert(`当前选择的 [${typeNames[exportType] || exportType}] 分类下暂无抓取的接口包！`);
+                return;
+            }
+
+            // Generate Markdown document
+            let md = `# Antigravity Proxy 接口抓包日志 (${exportType})\n\n`;
+            md += `> **导出时间**: ${new Date().toLocaleString()}\n`;
+            md += `> **数据包总数**: ${filtered.length} 个\n\n`;
+            
+            md += `## 接口列表概览\n\n`;
+            md += `| 序号 | 来源 | 方法 | 状态码 | 主机 | 路径 | 捕获时间 |\n`;
+            md += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+            filtered.forEach((p, idx) => {
+                md += `| ${idx + 1} | \`${p._resolvedSource}\` | **${p.method}** | ${p.statusCode} | \`${p.host}\` | \`${p.path}\` | *${p.timestamp}* |\n`;
+            });
+            md += `\n---\n\n`;
+            
+            md += `## 详细报文日志\n\n`;
+            filtered.forEach((p, idx) => {
+                md += `### [接口 #${idx + 1}] ${p.method} ${p.path}\n\n`;
+                md += `- **URL**: ${p.url}\n`;
+                md += `- **主机 (Host)**: \`${p.host}\`\n`;
+                md += `- **来源 (Source)**: \`${p._resolvedSource}\`\n`;
+                md += `- **状态码 (Status)**: \`${p.statusCode}\`\n`;
+                md += `- **捕获时间**: *${p.timestamp}*\n\n`;
+                
+                md += `#### 请求 Headers\n`;
+                md += `\`\`\`json\n${JSON.stringify(p.reqHeaders, null, 2)}\n\`\`\`\n\n`;
+                
+                md += `#### 请求 Body\n`;
+                if (p.reqBody) {
+                    md += `\`\`\`json\n${formatJsonText(p.reqBody)}\n\`\`\`\n\n`;
+                } else {
+                    md += `*无请求 Body*\n\n`;
+                }
+                
+                md += `#### 响应 Headers\n`;
+                md += `\`\`\`json\n${JSON.stringify(p.resHeaders, null, 2)}\n\`\`\`\n\n`;
+                
+                md += `#### 响应 Body\n`;
+                if (p.resBody) {
+                    md += `\`\`\`json\n${formatJsonText(p.resBody)}\n\`\`\`\n\n`;
+                } else {
+                    md += `*无响应 Body*\n\n`;
+                }
+                md += `\n---\n\n`;
+            });
+
+            try {
+                // Invoke backend download log
+                const success = await ipcRenderer.invoke('packet:export-log', md, exportType);
+                if (success) {
+                    alert('接口日志成功导出并保存！');
+                    hideExportPacketsModal();
+                }
+            } catch (err: any) {
+                alert(`导出失败: ${err.message}`);
+            }
+        });
+    }
+}
+
+export function setPacketFilter(filter: string) {
+    currentFilter = filter;
+    
+    // Update active filter button styles
+    const filters = ['ALL', 'CLI', 'IDE', 'Agent', 'UNKNOWN'];
+    const ids = {
+        'ALL': 'btnFilterPacketAll',
+        'CLI': 'btnFilterPacketCli',
+        'IDE': 'btnFilterPacketIde',
+        'Agent': 'btnFilterPacketAgent',
+        'UNKNOWN': 'btnFilterPacketUnknown'
+    };
+    
+    for (const f of filters) {
+        const el = document.getElementById(ids[f as keyof typeof ids]);
+        if (el) {
+            if (f === filter) {
+                el.className = 'px-2 py-0.5 font-bold rounded bg-primary text-white transition-colors cursor-pointer';
+            } else {
+                el.className = 'px-2 py-0.5 font-bold rounded bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer';
+            }
+        }
+    }
+    
+    refreshPacketsList();
 }
 
 // Register global hooks
@@ -296,6 +612,7 @@ export function initPacketsEvents() {
 (window as any).refreshPacketsList = refreshPacketsList;
 (window as any).selectPacketItem = selectPacketItem;
 (window as any).updateAnalyzeAccountSelect = updateAnalyzeAccountSelect;
+(window as any).setPacketFilter = setPacketFilter;
 
 // Register shared callbacks
 state.callbacks.refreshPacketsList = refreshPacketsList;

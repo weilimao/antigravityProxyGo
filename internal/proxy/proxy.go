@@ -233,12 +233,10 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 	hostParts := strings.Split(hostAndPort, ":")
 	host := hostParts[0]
 
-	ua := strings.ToLower(r.Header.Get("User-Agent"))
-	isGoClient := strings.Contains(ua, "go-http-client") || strings.Contains(ua, "antigravity") || strings.Contains(ua, "cloudcode")
-	isTargetHost := strings.Contains(host, "generativelanguage.googleapis.com") || strings.Contains(host, "cloudcode-pa.googleapis.com")
+	isTargetHost := strings.Contains(host, "generativelanguage.googleapis.com") || strings.Contains(host, "cloudcode-pa.googleapis.com") || strings.Contains(host, "cloudaicompanion.googleapis.com") || strings.Contains(host, "aiplatform.googleapis.com")
 
 	pe.Lock()
-	shouldDecrypt := pe.isInterceptMode && isTargetHost && isGoClient
+	shouldDecrypt := pe.isInterceptMode && isTargetHost
 	pe.Unlock()
 
 	pe.logFn(fmt.Sprintf("🔍 Host: %s | Decrypt: %v | UA: %s", host, shouldDecrypt, r.Header.Get("User-Agent")))

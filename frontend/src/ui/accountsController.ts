@@ -49,22 +49,22 @@ export function updatePoolModeUI() {
 }
 
 export function updateViewTabUI() {
-    if (btnChannelAntigravity && btnChannelProject && btnChannelGeminiCli) {
+    if (btnChannelAntigravity && btnChannelProject) {
         const activeClass = 'px-4 py-1.5 rounded-md font-bold cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm';
         const inactiveClass = 'px-4 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200';
 
         if (state.currentViewTab === 'antigravity') {
             btnChannelAntigravity.className = activeClass;
             btnChannelProject.className = inactiveClass;
-            btnChannelGeminiCli.className = inactiveClass;
+            if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
             
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (lblPoolMode) lblPoolMode.innerText = '账号负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.poolMode;
             }
-        } else if (state.currentViewTab === 'gemini-cli') {
-            btnChannelGeminiCli.className = activeClass;
+        /* } else if (state.currentViewTab === 'gemini-cli') {
+            if (btnChannelGeminiCli) btnChannelGeminiCli.className = activeClass;
             btnChannelAntigravity.className = inactiveClass;
             btnChannelProject.className = inactiveClass;
             
@@ -72,11 +72,11 @@ export function updateViewTabUI() {
             if (lblPoolMode) lblPoolMode.innerText = 'CLI号池负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.geminiCliPoolMode;
-            }
+            } */
         } else {
             btnChannelProject.className = activeClass;
             btnChannelAntigravity.className = inactiveClass;
-            btnChannelGeminiCli.className = inactiveClass;
+            if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
             
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (lblPoolMode) lblPoolMode.innerText = '项目负载均衡';
@@ -95,10 +95,10 @@ export function updateViewTabUI() {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.remove('hidden');
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
         if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
-    } else if (state.currentViewTab === 'gemini-cli') {
+    /* } else if (state.currentViewTab === 'gemini-cli') {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.remove('hidden');
-        if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
+        if (btnProjectLogin) btnProjectLogin.classList.add('hidden'); */
     } else {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
@@ -383,8 +383,8 @@ export function initAccountsEvents() {
         poolModeToggle.addEventListener('change', (e: any) => {
             if (state.currentViewTab === 'project') {
                 ipcRenderer.send('pool:toggle-project', e.target.checked);
-            } else if (state.currentViewTab === 'gemini-cli') {
-                ipcRenderer.send('pool:toggle-gemini-cli', e.target.checked);
+            /* } else if (state.currentViewTab === 'gemini-cli') {
+                ipcRenderer.send('pool:toggle-gemini-cli', e.target.checked); */
             } else {
                 ipcRenderer.send('pool:toggle', e.target.checked);
             }
@@ -427,7 +427,7 @@ export function initAccountsEvents() {
             updateAggregateQuotaUI();
         });
     }
-    if (btnChannelGeminiCli) {
+    /* if (btnChannelGeminiCli) {
         btnChannelGeminiCli.addEventListener('click', () => {
             state.currentViewTab = 'gemini-cli';
             ipcRenderer.send('channel:switch', 'gemini-cli');
@@ -437,7 +437,7 @@ export function initAccountsEvents() {
             }
             updateAggregateQuotaUI();
         });
-    }
+    } */
 
     // Register accounts data update channel listener
     ipcRenderer.on('accounts-res', (event: any, data: any) => {

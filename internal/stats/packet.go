@@ -31,6 +31,7 @@ type CapturedPacket struct {
 	ResHeaders interface{} `json:"resHeaders"`
 	ResBody    interface{} `json:"resBody"`
 	StatusCode int         `json:"statusCode"`
+	Source     string      `json:"source"`
 }
 
 type PacketCapturer struct {
@@ -210,6 +211,24 @@ func (pc *PacketCapturer) SavePacket(method, host, urlPath string, reqHeaders ma
 		return res
 	}
 
+	ua := ""
+	for k, values := range reqHeaders {
+		if strings.ToLower(k) == "user-agent" && len(values) > 0 {
+			ua = values[0]
+			break
+		}
+	}
+
+	source := "未知"
+	uaLower := strings.ToLower(ua)
+	if strings.Contains(uaLower, "antigravity/cli") || strings.Contains(uaLower, "aidev_client") {
+		source = "CLI"
+	} else if strings.Contains(uaLower, "antigravity/ide") || strings.Contains(uaLower, "cloudaicompanion") || strings.Contains(uaLower, "google-api-nodejs-client") || strings.Contains(uaLower, "go-http-client") {
+		source = "IDE"
+	} else if strings.Contains(uaLower, "antigravity/hub") || strings.Contains(uaLower, "antigravityproxy-") {
+		source = "Agent"
+	}
+
 	now := time.Now()
 	timestamp := fmt.Sprintf("%02d/%02d %02d:%02d:%02d", now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second())
 
@@ -225,6 +244,7 @@ func (pc *PacketCapturer) SavePacket(method, host, urlPath string, reqHeaders ma
 		ResHeaders: cleanHeaders(resHeaders),
 		ResBody:    parsedResBody,
 		StatusCode: statusCode,
+		Source:     source,
 	}
 
 	existingIdx := -1
@@ -236,10 +256,9 @@ func (pc *PacketCapturer) SavePacket(method, host, urlPath string, reqHeaders ma
 	}
 
 	if existingIdx > -1 {
-		pc.packets[existingIdx] = packet
-	} else {
-		pc.packets = append([]*CapturedPacket{packet}, pc.packets...)
+		pc.packets = append(pc.packets[:existingIdx], pc.packets[existingIdx+1:]...)
 	}
+	pc.packets = append([]*CapturedPacket{packet}, pc.packets...)
 
 	// Trigger async disk save
 	go pc.SaveToDisk()
@@ -381,13 +400,73 @@ func smartTruncateJson(val interface{}, maxStrLen int) interface{} {
 	}
 }
 
-func (pc *PacketCapturer) AnalyzePackets(accountId string) (string, error) {
+func (pc *PacketCapturer) AnalyzePackets(accountId string, sourceType string) (string, error) {
 	pc.RLock()
 	if len(pc.packets) == 0 {
 		pc.RUnlock()
 		return "", errors.New("当前抓包日志为空，请先发起一些 API 请求！")
 	}
+
+	var targets []*CapturedPacket
+	for _, p := range pc.packets {
+		source := p.Source
+		if source == "" {
+			ua := ""
+			if reqHeadersMap, ok := p.ReqHeaders.(map[string]interface{}); ok {
+				for k, v := range reqHeadersMap {
+					if strings.ToLower(k) == "user-agent" {
+						if valStr, ok := v.(string); ok {
+							ua = valStr
+						}
+						break
+					}
+				}
+			} else if reqHeadersMapString, ok := p.ReqHeaders.(map[string]string); ok {
+				for k, v := range reqHeadersMapString {
+					if strings.ToLower(k) == "user-agent" {
+						ua = v
+						break
+					}
+				}
+			}
+			uaLower := strings.ToLower(ua)
+			if strings.Contains(uaLower, "antigravity/cli") || strings.Contains(uaLower, "aidev_client") {
+				source = "CLI"
+			} else if strings.Contains(uaLower, "antigravity/ide") || strings.Contains(uaLower, "cloudaicompanion") || strings.Contains(uaLower, "google-api-nodejs-client") || strings.Contains(uaLower, "go-http-client") {
+				source = "IDE"
+			} else if strings.Contains(uaLower, "antigravity/hub") || strings.Contains(uaLower, "antigravityproxy-") {
+				source = "Agent"
+			} else {
+				source = "未知"
+			}
+		}
+
+		if source == "客户端" {
+			source = "Agent"
+		}
+
+		match := false
+		if sourceType == "ALL" || sourceType == "" {
+			match = true
+		} else if sourceType == "CLI" && source == "CLI" {
+			match = true
+		} else if sourceType == "IDE" && source == "IDE" {
+			match = true
+		} else if sourceType == "Agent" && source == "Agent" {
+			match = true
+		} else if sourceType == "UNKNOWN" && (source == "未知" || source == "") {
+			match = true
+		}
+
+		if match {
+			targets = append(targets, p)
+		}
+	}
 	pc.RUnlock()
+
+	if len(targets) == 0 {
+		return "", fmt.Errorf("当前筛选的 [%s] 类型接口抓包日志为空，请先发起一些 API 请求！", sourceType)
+	}
 
 	if pc.getAccountTokens == nil {
 		return "", errors.New("账号管理器未就绪")
@@ -403,7 +482,7 @@ func (pc *PacketCapturer) AnalyzePackets(accountId string) (string, error) {
 	}
 
 	executeRequest := func(token string) (int, []byte, error) {
-		prompt := pc.generatePrompt()
+		prompt := pc.generatePrompt(targets)
 		if projectId == "" {
 			projectId = "expanded-palisade-stpfc"
 		}
@@ -571,14 +650,11 @@ func (pc *PacketCapturer) AnalyzePackets(accountId string) (string, error) {
 	return "", fmt.Errorf("解析 Gemini 响应数据失败，原始响应前300字符: %s", string(bodyBytes[:300]))
 }
 
-func (pc *PacketCapturer) generatePrompt() string {
-	pc.RLock()
-	defer pc.RUnlock()
-
+func (pc *PacketCapturer) generatePrompt(targets []*CapturedPacket) string {
 	var prompt strings.Builder
 	prompt.WriteString(`你是一个最顶级的 API 架构师和技术文档工程师。
 下面是我在本地抓包拦截到的通过我们代理的真实 API 请求 and 响应日志。
-请你以最严谨、详实、清晰的专业态度，分析这些抓包数据，提取并归纳出所有不同的 API 接口，并输出一份完整、美观的 Markdown 格式的接口文档说明。
+请你以最严谨、详实、清晰的专业态度，分析这些抓包数据，提取并归纳出所有不同的 API 接口，并输出一份完整、美观的 Markdown 格式 of 接口文档说明。
 
 > [!IMPORTANT]
 > **请务必严格遵守以下“全面、明明白白”的文档编写要求，绝对不能漏掉任何字段，不能含糊带过：**
@@ -600,10 +676,10 @@ func (pc *PacketCapturer) generatePrompt() string {
    - **请求与响应示例**：必须完整输出该接口的请求 JSON 与响应 JSON 代码块。你必须直接使用我们在下方提供的已经过智能压缩的 '请求Body 示例' 与 '响应Body 示例' 填充，严禁缩减、省略或用“略”字代替，确保代码块包含在生成的 Markdown 中！
 
 下面是抓包得到的真实接口日志（共 `)
-	prompt.WriteString(fmt.Sprintf("%d", len(pc.packets)))
+	prompt.WriteString(fmt.Sprintf("%d", len(targets)))
 	prompt.WriteString(" 个）：\n\n")
 
-	for idx, p := range pc.packets {
+	for idx, p := range targets {
 		truncatedReq := smartTruncateJson(p.ReqBody, 120)
 		truncatedRes := smartTruncateJson(p.ResBody, 120)
 
