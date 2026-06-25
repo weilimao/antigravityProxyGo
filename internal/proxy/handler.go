@@ -253,7 +253,33 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionKey := h.sessionRouter.ExtractSessionKey(r, bodyBytes)
+	rawSessionKey := h.sessionRouter.ExtractSessionKey(r, bodyBytes)
+
+	// 根据负载均衡通道类型，将项目负载均衡会话与账号负载均衡会话区分开，防止因账号池不同而交替覆盖会话绑定
+	isPoolReq := isRealModelRequest(targetPath) || isAgentRequest(targetPath) || targetHost == "aiplatform.googleapis.com"
+	poolChannel := "antigravity"
+	if isPoolReq {
+		poolChannel = h.accountMgr.GetActiveChannel()
+	}
+
+	sessionKey := rawSessionKey
+	if poolChannel == "project" {
+		if strings.HasPrefix(rawSessionKey, "auth:") {
+			sessionKey = "auth:prj:" + strings.TrimPrefix(rawSessionKey, "auth:")
+		} else if strings.HasPrefix(rawSessionKey, "sock:") {
+			sessionKey = "sock:prj:" + strings.TrimPrefix(rawSessionKey, "sock:")
+		} else {
+			sessionKey = "prj:" + rawSessionKey
+		}
+	} else {
+		if strings.HasPrefix(rawSessionKey, "auth:") {
+			sessionKey = "auth:acc:" + strings.TrimPrefix(rawSessionKey, "auth:")
+		} else if strings.HasPrefix(rawSessionKey, "sock:") {
+			sessionKey = "sock:acc:" + strings.TrimPrefix(rawSessionKey, "sock:")
+		} else {
+			sessionKey = "acc:" + rawSessionKey
+		}
+	}
 
 	var inTokens, outTokens, cachedTokens int
 	var logged bool

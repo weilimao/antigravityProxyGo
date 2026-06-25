@@ -517,19 +517,37 @@ async function loadSessionBindings() {
             
             // 为了美观，给 SessionKey 不同的类型不同的徽章
             let keyBadge = '';
+            let channelBadge = '';
             let keyText = item.sessionKey;
-            if (item.sessionKey.startsWith('auth:')) {
+            if (item.sessionKey.startsWith('auth:prj:')) {
                 keyBadge = '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary dark:text-primary-fixed-dim text-[10px] font-bold mr-1.5">Bearer</span>';
-                keyText = item.sessionKey.substring(5); // 去掉 'auth:'
+                channelBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[10px] font-bold mr-1.5">项目负载均衡</span>';
+                keyText = item.sessionKey.substring(9);
+            } else if (item.sessionKey.startsWith('auth:acc:')) {
+                keyBadge = '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary dark:text-primary-fixed-dim text-[10px] font-bold mr-1.5">Bearer</span>';
+                channelBadge = '<span class="px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300 text-[10px] font-bold mr-1.5">账号负载均衡</span>';
+                keyText = item.sessionKey.substring(9);
+            } else if (item.sessionKey.startsWith('sock:prj:')) {
+                keyBadge = '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[10px] font-bold mr-1.5">Socket</span>';
+                channelBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[10px] font-bold mr-1.5">项目负载均衡</span>';
+                keyText = item.sessionKey.substring(9);
+            } else if (item.sessionKey.startsWith('sock:acc:')) {
+                keyBadge = '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[10px] font-bold mr-1.5">Socket</span>';
+                channelBadge = '<span class="px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300 text-[10px] font-bold mr-1.5">账号负载均衡</span>';
+                keyText = item.sessionKey.substring(9);
+            } else if (item.sessionKey.startsWith('auth:')) {
+                keyBadge = '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary dark:text-primary-fixed-dim text-[10px] font-bold mr-1.5">Bearer</span>';
+                keyText = item.sessionKey.substring(5);
             } else if (item.sessionKey.startsWith('sock:')) {
                 keyBadge = '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[10px] font-bold mr-1.5">Socket</span>';
-                keyText = item.sessionKey.substring(5); // 去掉 'sock:'
+                keyText = item.sessionKey.substring(5);
             }
             
             tr.innerHTML = `
                 <td class="p-3 font-data-mono break-all max-w-[280px]">
                     <div class="flex items-center flex-wrap gap-1">
                         ${keyBadge}
+                        ${channelBadge}
                         <span class="text-on-surface dark:text-white font-medium">${keyText}</span>
                     </div>
                 </td>

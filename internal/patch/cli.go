@@ -135,14 +135,12 @@ func HijackCli(enable bool, appData, homeDir, caPath string, logCallback func(st
 			}
 
 			if realExeExists {
-				combinedCaPath := getCombinedCaPath(caPath)
 				// 1. Write Windows Batch Wrapper
 				batContent := fmt.Sprintf("@echo off\r\n"+
 					"set HTTP_PROXY=%s\r\n"+
 					"set HTTPS_PROXY=%s\r\n"+
 					"set NO_PROXY=localhost,127.0.0.1\r\n"+
-					"set SSL_CERT_FILE=%s\r\n"+
-					"\"%%~dp0%s\" %%*\r\n", proxyUrl, proxyUrl, combinedCaPath, realExeName)
+					"\"%%~dp0%s\" %%*\r\n", proxyUrl, proxyUrl, realExeName)
 
 				_ = os.WriteFile(batWrapperPath, []byte(batContent), 0644)
 
@@ -229,9 +227,8 @@ func UpdateAgentapiBat(enable bool, appData, homeDir, caPath string) bool {
 			if strings.Contains(content, batMarker) {
 				return true
 			}
-			combinedCaPath := getCombinedCaPath(caPath)
-			inject := fmt.Sprintf("%s\r\nset HTTP_PROXY=%s\r\nset HTTPS_PROXY=%s\r\nset NO_PROXY=localhost,127.0.0.1\r\nset SSL_CERT_FILE=%s\r\n",
-				batMarker, proxyUrl, proxyUrl, combinedCaPath)
+			inject := fmt.Sprintf("%s\r\nset HTTP_PROXY=%s\r\nset HTTPS_PROXY=%s\r\nset NO_PROXY=localhost,127.0.0.1\r\n",
+				batMarker, proxyUrl, proxyUrl)
 
 			re := regexp.MustCompile(`(?i)^(@echo off\s*[\r\n]+)`)
 			if re.MatchString(content) {
