@@ -83,32 +83,94 @@ func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 		baseKey = "sock:" + remoteAddr
 	}
 
-	// 从请求体中提取 requestId 会话 UUID 以支持会话级精细分流
+	// 从请求体中提取稳定的会话级/周期级特征，作为 sessionKey 的后缀进行更精细的分流
 	if len(reqBody) > 0 {
 		bodyStr := string(reqBody)
-		// 正则匹配: "requestId":"agent/81a44cce-9a94-451a-8764-0ad306a6b978/..."
-		re := regexp.MustCompile(`"requestId"\s*:\s*"\w+\/([a-fA-F0-9-]+)`)
-		match := re.FindStringSubmatch(bodyStr)
-		if len(match) > 1 {
-			uuid := match[1]
-			if len(uuid) >= 8 {
-				return baseKey + ":" + uuid[:8]
+
+		// 1. 优先提取显式会话 sessionId (支持带或不带双引号的 UUID 或大整数 ID)
+		reSession := regexp.MustCompile(`"sessionId"\s*:\s*"?(a-fA-F0-9-]+|-?\d+)"?`)
+		matchSession := reSession.FindStringSubmatch(bodyStr)
+		if len(matchSession) > 1 {
+			val := strings.ReplaceAll(matchSession[1], "-", "")
+			if len(val) >= 8 {
+				return baseKey + ":" + val[:8]
 			}
-			return baseKey + ":" + uuid
+			return baseKey + ":" + val
 		}
 
-		// 后备 JSON 解析
-		var temp struct {
-			RequestID string `json:"requestId"`
+		// 2. 次优先提取 conversationId 会话 ID
+		reConv := regexp.MustCompile(`"conversationId"\s*:\s*"([a-fA-F0-9-]+)"`)
+		matchConv := reConv.FindStringSubmatch(bodyStr)
+		if len(matchConv) > 1 {
+			val := strings.ReplaceAll(matchConv[1], "-", "")
+			if len(val) >= 8 {
+				return baseKey + ":" + val[:8]
+			}
+			return baseKey + ":" + val
 		}
-		if err := json.Unmarshal(reqBody, &temp); err == nil && temp.RequestID != "" {
-			parts := strings.Split(temp.RequestID, "/")
-			if len(parts) > 1 {
-				uuid := parts[1]
-				if len(uuid) >= 8 {
-					return baseKey + ":" + uuid[:8]
+
+		// 3. 仅在含有特定前缀 (agent/ 或 trajectory/ 或 flow/) 时，才提取轨迹级稳定的 requestId
+		reAgentReq := regexp.MustCompile(`"requestId"\s*:\s*"(?:agent|trajectory|flow)\/([a-fA-F0-9-]+)`)
+		matchAgent := reAgentReq.FindStringSubmatch(bodyStr)
+		if len(matchAgent) > 1 {
+			val := strings.ReplaceAll(matchAgent[1], "-", "")
+			if len(val) >= 8 {
+				return baseKey + ":" + val[:8]
+			}
+			return baseKey + ":" + val
+		}
+
+		// 4. 后备 JSON 反序列化解析双保险机制 (仅对稳定会话特征作提取，安全丢弃单次随机的临时 requestId)
+		var temp struct {
+			SessionID      interface{} `json:"sessionId"`
+			ConversationID string      `json:"conversationId"`
+			RequestID      string      `json:"requestId"`
+		}
+		if err := json.Unmarshal(reqBody, &temp); err == nil {
+			// (a) 解析并转换 sessionId
+			if temp.SessionID != nil {
+				var valStr string
+				switch v := temp.SessionID.(type) {
+				case string:
+					valStr = v
+				case float64:
+					valStr = fmt.Sprintf("%.0f", v)
+				case int64:
+					valStr = fmt.Sprintf("%d", v)
 				}
-				return baseKey + ":" + uuid
+				if valStr != "" {
+					val := strings.ReplaceAll(valStr, "-", "")
+					if len(val) >= 8 {
+						return baseKey + ":" + val[:8]
+					}
+					return baseKey + ":" + val
+				}
+			}
+
+			// (b) 解析 conversationId
+			if temp.ConversationID != "" {
+				val := strings.ReplaceAll(temp.ConversationID, "-", "")
+				if len(val) >= 8 {
+					return baseKey + ":" + val[:8]
+				}
+				return baseKey + ":" + val
+			}
+
+			// (c) 解析并过滤带有前缀的轨迹级 requestId
+			if temp.RequestID != "" {
+				for _, prefix := range []string{"agent/", "trajectory/", "flow/"} {
+					if strings.HasPrefix(temp.RequestID, prefix) {
+						subParts := strings.Split(temp.RequestID, "/")
+						if len(subParts) > 1 {
+							uuid := subParts[1]
+							val := strings.ReplaceAll(uuid, "-", "")
+							if len(val) >= 8 {
+								return baseKey + ":" + val[:8]
+							}
+							return baseKey + ":" + val
+						}
+					}
+				}
 			}
 		}
 	}
