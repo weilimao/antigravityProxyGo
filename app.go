@@ -158,13 +158,13 @@ func (a *App) startup(ctx context.Context) {
 		// Bind UI update callbacks
 	a.statsTracker.SetOnPayloadUpdate(func() {
 		if a.IsWindowVisibleAndActive() {
-			wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayloadSimplified(a.usageTracker.GetPayload()))
+			wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(true))
 		}
 	})
 
 	a.usageTracker.SetOnPayloadUpdate(func() {
 		if a.IsWindowVisibleAndActive() {
-			wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayloadSimplified(a.usageTracker.GetPayload()))
+			wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(true))
 		}
 	})
 
@@ -537,7 +537,7 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 
 	case "get-state":
 		wailsRuntime.EventsEmit(a.ctx, "state", a.proxyEngine.IsInterceptMode())
-		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayload(a.usageTracker.GetPayload()))
+		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 		a.emitMemoryStats()
 		a.logBufferMu.Lock()
 		for _, log := range a.logBuffer {
@@ -604,7 +604,7 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			}
 			_ = a.pricingMgr.UpdateModelPricing(modelKey, rate)
 			wailsRuntime.EventsEmit(a.ctx, "get-pricing-res", a.pricingMgr.GetAllPricing())
-			wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayload(a.usageTracker.GetPayload()))
+			wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 			a.AddLog(fmt.Sprintf("💰 Model pricing updated for \"%s\": In: $%f/1M, Out: $%f/1M, Cache: $%f/1M", modelKey, rate.Input, rate.Output, rate.Cached))
 		}
 
@@ -612,13 +612,13 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 		modelKey := getStringArg(0)
 		a.pricingMgr.DeleteModelPricing(modelKey)
 		wailsRuntime.EventsEmit(a.ctx, "get-pricing-res", a.pricingMgr.GetAllPricing())
-		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayload(a.usageTracker.GetPayload()))
+		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 		a.AddLog("🗑️ Model pricing deleted for \"" + modelKey + "\"")
 
 	case "reset-pricing":
 		_ = a.pricingMgr.ResetPricingToDefault()
 		wailsRuntime.EventsEmit(a.ctx, "get-pricing-res", a.pricingMgr.GetAllPricing())
-		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayload(a.usageTracker.GetPayload()))
+		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 		a.AddLog("🔄 Model pricing reset to defaults")
 
 	case "packet:clear":
@@ -920,7 +920,7 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		logType := getStringArg(0)
 		a.errLogger.ClearLogs(logType)
 		a.statsTracker.ClearRetriesOrErrors(logType)
-		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayload(a.usageTracker.GetPayload()))
+		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 		return marshalResponse(true)
 
 	case "retry-error-logs:export":
@@ -1108,7 +1108,7 @@ func (a *App) startMemoryMonitor(ctx context.Context) {
 			if trendCounter >= 6 { // 6 * 10s = 60s
 				trendCounter = 0
 				if a.IsWindowVisibleAndActive() {
-					wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.statsTracker.GetPayload(a.usageTracker.GetPayload()))
+					wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 				}
 			}
 		}
@@ -1151,4 +1151,69 @@ func (a *App) IsWindowVisibleAndActive() bool {
 	a.isWindowVisibleMu.RLock()
 	defer a.isWindowVisibleMu.RUnlock()
 	return a.isWindowVisible
+}
+
+// getStatsPayload 获取隔离或原生的统计载荷快照
+func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
+	usagePayload := a.usageTracker.GetPayload()
+	if a.remoteRelay != nil && a.remoteRelay.GetConfig().Connected {
+		if remoteStats, err := a.remoteRelay.FetchRemoteStats(); err == nil && remoteStats != nil {
+			// 完全使用远端数据构建一套纯净的 GlobalStats
+			statsObj := stats.GlobalStats{
+				Models: make(map[string]*stats.ModelStats),
+			}
+			if tr, _ := remoteStats["totalRequests"].(float64); tr > 0 {
+				statsObj.TotalRequests = int(tr)
+			}
+			if ti, _ := remoteStats["totalInputTokens"].(float64); ti > 0 {
+				statsObj.TotalInputTokens = int(ti)
+			}
+			if to, _ := remoteStats["totalOutputTokens"].(float64); to > 0 {
+				statsObj.TotalOutputTokens = int(to)
+			}
+			if tc, _ := remoteStats["totalCachedTokens"].(float64); tc > 0 {
+				statsObj.TotalCachedTokens = int(tc)
+			}
+			if cost, _ := remoteStats["totalCost"].(float64); cost > 0 {
+				statsObj.TotalCost = cost
+			}
+
+			if rmObj, ok := remoteStats["models"].(map[string]interface{}); ok {
+				for k, vObj := range rmObj {
+					if mObj, mok := vObj.(map[string]interface{}); mok {
+						mStats := &stats.ModelStats{}
+						if reqs, _ := mObj["requestCount"].(float64); reqs > 0 {
+							mStats.Reqs = int(reqs)
+						}
+						if inT, _ := mObj["inputTokens"].(float64); inT > 0 {
+							mStats.InTokens = int(inT)
+						}
+						if outT, _ := mObj["outputTokens"].(float64); outT > 0 {
+							mStats.OutTokens = int(outT)
+						}
+						if cacheT, _ := mObj["cachedTokens"].(float64); cacheT > 0 {
+							mStats.CachedTokens = int(cacheT)
+						}
+						if mc, _ := mObj["totalCost"].(float64); mc > 0 {
+							mStats.Cost = mc
+						}
+						statsObj.Models[k] = mStats
+					}
+				}
+			}
+			// 远程模式下返回隔离的远端快照，以及常规的 trends/requests 空列表
+			return map[string]interface{}{
+				"stats":    statsObj,
+				"trends":   []*stats.HourlyTrend{},
+				"requests": []*stats.RequestLog{},
+				"usage":    usagePayload,
+			}
+		}
+	}
+
+	// 本地模式或者远端获取失败时，保持完全的原生本地快照
+	if simplified {
+		return a.statsTracker.GetPayloadSimplified(usagePayload)
+	}
+	return a.statsTracker.GetPayload(usagePayload)
 }

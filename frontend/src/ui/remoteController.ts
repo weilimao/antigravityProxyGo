@@ -205,10 +205,11 @@ function updateRemoteStatusUI(status: any) {
         // Active remote mode
         if (badge) {
             badge.classList.remove('hidden');
-            badge.className = "flex items-center gap-1.5 text-[12px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-100 dark:border-emerald-900/30";
+            badge.className = "flex items-center gap-1.5 text-[12px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-100 dark:border-emerald-900/30 whitespace-nowrap flex-shrink-0";
+            badge.setAttribute('title', `远程主机: ${state.remoteHost}:${state.remotePort}\n用户Key: ${state.remoteUserKey}`);
         }
         if (statusText) {
-            statusText.textContent = `远程中: ${state.remoteHost}:${state.remotePort} (${state.remoteUserKey})`;
+            statusText.innerHTML = `<span class="hidden xl:inline">远程中: ${state.remoteHost}:${state.remotePort} (${state.remoteUserKey})</span><span class="hidden lg:inline xl:hidden">远程中: ${state.remoteHost}</span><span class="inline lg:hidden">远程中</span>`;
         }
         if (btnConnect) btnConnect.classList.add('hidden');
         
@@ -219,7 +220,8 @@ function updateRemoteStatusUI(status: any) {
         // Disabled remote mode (local mode active)
         if (badge) {
             badge.classList.remove('hidden');
-            badge.className = "flex items-center gap-1.5 text-[12px] font-medium text-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400 px-2.5 py-0.5 rounded-full border border-amber-100 dark:border-amber-900/30";
+            badge.className = "flex items-center gap-1.5 text-[12px] font-medium text-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400 px-2.5 py-0.5 rounded-full border border-amber-100 dark:border-amber-900/30 whitespace-nowrap flex-shrink-0";
+            badge.setAttribute('title', `已保存配置:\n主机: ${state.remoteHost}:${state.remotePort}\n用户Key: ${state.remoteUserKey}`);
         }
         if (statusText) {
             statusText.textContent = `远程已停用`;

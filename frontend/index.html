@@ -22,70 +22,69 @@
 </head>
 <body class="antialiased min-h-screen flex flex-col font-sans">
     <!-- 顶部导航栏 -->
-    <header class="bg-white/80 dark:bg-[#1a1f30]/80 backdrop-blur-md border-b border-outline-variant/30 flex justify-between items-center w-full px-container-padding z-50 py-3">
+    <header class="bg-white/80 dark:bg-[#1a1f30]/80 backdrop-blur-md border-b border-outline-variant/30 flex justify-between items-center w-full px-4 lg:px-6 z-50 py-3">
         <!-- Logo 和证书管理 -->
-        <div class="flex items-center gap-4">
-            <div class="text-[18px] font-bold text-primary dark:text-primary-fixed-dim flex items-center gap-2">
+        <div class="flex items-center gap-2 md:gap-4 flex-shrink-0">
+            <div class="text-[16px] md:text-[18px] font-bold text-primary dark:text-primary-fixed-dim flex items-center gap-1.5 whitespace-nowrap">
                 <span class="material-symbols-outlined fill-1" style="font-variation-settings: 'FILL' 1;">hexagon</span>
-                Antigravity Proxy
+                Antigravity <span class="hidden sm:inline">Proxy</span>
             </div>
             <!-- CA 证书状态 -->
-            <div class="ml-4 pl-4 border-l border-outline-variant/30 flex items-center gap-3">
-                <div id="certStatusBadge" class="flex items-center gap-1.5 text-[12px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-100 dark:border-emerald-900/30">
+            <div class="ml-2 pl-2 md:ml-4 md:pl-4 border-l border-outline-variant/30 flex items-center gap-2 md:gap-3">
+                <div id="certStatusBadge" class="flex items-center gap-1.5 text-[12px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-100 dark:border-emerald-900/30 flex-shrink-0">
                     <span class="material-symbols-outlined text-[15px]">verified</span>
-                    <span data-i18n="certChecking">CA证书: 检查中...</span>
+                    <span data-i18n="certChecking">检查中...</span>
                 </div>
-                <div class="flex gap-2 text-[12px]">
-                    <button id="btnInstallCert" class="font-medium text-primary dark:text-primary-fixed-dim hover:underline disabled:opacity-40 disabled:no-underline" disabled data-i18n="installCert">安装证书</button>
-                    <span class="text-outline-variant/50">|</span>
-                    <button id="btnUninstallCert" class="font-medium text-outline hover:text-red-500 hover:underline disabled:opacity-40 disabled:no-underline" disabled data-i18n="uninstallCert">卸载证书</button>
+                <div class="flex gap-2 text-[12px] items-center">
+                    <button id="btnInstallCert" class="font-medium text-primary dark:text-primary-fixed-dim hover:underline disabled:hidden whitespace-nowrap text-[12px]" disabled data-i18n="installCert">安装证书</button>
+                    <button id="btnUninstallCert" class="font-medium text-outline hover:text-red-500 hover:underline disabled:hidden whitespace-nowrap text-[12px]" disabled data-i18n="uninstallCert">卸载证书</button>
                 </div>
             </div>
         </div>
 
         <!-- 顶部导航链接 (仅视觉占位) -->
-        <nav class="flex items-center gap-8">
-            <a id="nav-dashboard" class="text-primary dark:text-primary-fixed-dim border-b-2 border-primary pb-0.5 flex flex-col items-center" href="#" onclick="switchView('dashboard')">
-                <span class="nav-link-en text-[10px] font-bold tracking-wider">DASHBOARD</span>
+        <nav class="flex items-center gap-3 md:gap-6 lg:gap-8">
+            <a id="nav-dashboard" class="text-primary dark:text-primary-fixed-dim border-b-2 border-primary pb-0.5 flex flex-col items-center whitespace-nowrap" href="#" onclick="switchView('dashboard')">
+                <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">DASHBOARD</span>
                 <span class="nav-link-zh text-[13px] font-medium" data-i18n="title">控制台</span>
             </a>
-            <a id="nav-accounts" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center" href="#" onclick="switchView('accounts')">
-                <span class="nav-link-en text-[10px] font-bold tracking-wider">ACCOUNTS</span>
+            <a id="nav-accounts" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap" href="#" onclick="switchView('accounts')">
+                <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">ACCOUNTS</span>
                 <span class="nav-link-zh text-[13px] font-medium">账号池</span>
             </a>
-            <a id="nav-otp" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center" href="#" onclick="switchView('otp')">
-                <span class="nav-link-en text-[10px] font-bold tracking-wider">2FA AUTH</span>
+            <a id="nav-otp" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap" href="#" onclick="switchView('otp')">
+                <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">2FA AUTH</span>
                 <span class="nav-link-zh text-[13px] font-medium">2FA验证码</span>
             </a>
-            <a id="nav-packets" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center" href="#" onclick="switchView('packets')">
-                <span class="nav-link-en text-[10px] font-bold tracking-wider">PACKETS</span>
+            <a id="nav-packets" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap" href="#" onclick="switchView('packets')">
+                <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">PACKETS</span>
                 <span class="nav-link-zh text-[13px] font-medium">抓包分析</span>
             </a>
-            <a id="nav-settings" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center" href="#" onclick="switchView('settings')">
-                <span class="nav-link-en text-[10px] font-bold tracking-wider">SETTINGS</span>
+            <a id="nav-settings" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap" href="#" onclick="switchView('settings')">
+                <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">SETTINGS</span>
                 <span class="nav-link-zh text-[13px] font-medium" data-i18n="navSettings">设置</span>
             </a>
         </nav>
 
         <!-- 顶部右侧控制按钮 -->
-        <div class="flex items-center gap-6">
+        <div class="flex items-center gap-2 md:gap-4 lg:gap-6 flex-shrink-0">
             <!-- 远程连接 -->
-            <div class="flex items-center gap-2 border-r border-outline-variant/30 pr-4 mr-2">
-                <div id="remoteStatusBadge" class="hidden flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full border">
+            <div class="flex items-center gap-1.5 md:gap-2 border-r border-outline-variant/30 pr-2 mr-1 md:pr-4 md:mr-2 flex-shrink-0">
+                <div id="remoteStatusBadge" class="hidden flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full border whitespace-nowrap flex-shrink-0">
                     <span class="material-symbols-outlined text-[15px]">cloud</span>
                     <span id="remoteStatusText">远程连接中</span>
                     <button id="btnRemoteEnable" class="hidden ml-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 text-[11px] font-bold" data-i18n="remoteEnable">启用</button>
                     <button id="btnRemoteDisable" class="hidden ml-1 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-[11px] font-bold" data-i18n="remoteDisable">停用</button>
                     <button id="btnRemoteDisconnect" class="ml-1 text-red-400 hover:text-red-600 text-[11px] font-bold" data-i18n="remoteDisconnect">退出</button>
                 </div>
-                <button id="btnRemoteConnect" class="flex items-center gap-1 text-[12px] font-medium text-outline hover:text-primary dark:hover:text-primary-fixed-dim transition-colors px-2 py-1 rounded-md hover:bg-primary/5">
+                <button id="btnRemoteConnect" class="flex items-center gap-1 text-[12px] font-medium text-outline hover:text-primary dark:hover:text-primary-fixed-dim transition-colors px-2 py-1 rounded-md hover:bg-primary/5 whitespace-nowrap flex-shrink-0">
                     <span class="material-symbols-outlined text-[16px]">link</span>
                     <span data-i18n="remoteConnect">远程连接</span>
                 </button>
             </div>
             <!-- 拦截开关 -->
-            <div class="flex items-center gap-2">
-                <span class="text-[13px] font-medium text-on-surface dark:text-white" data-i18n="interceptMode">拦截模式</span>
+            <div class="flex items-center gap-2 flex-shrink-0">
+                <span class="hidden sm:inline text-[12px] md:text-[13px] font-medium text-on-surface dark:text-white" data-i18n="interceptMode">拦截模式</span>
                 <div class="relative inline-block w-10 mr-1 align-middle select-none transition duration-200 ease-in">
                     <input class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out" id="proxyToggle" name="toggle" type="checkbox"/>
                     <label id="proxyToggleLabel" class="toggle-label block overflow-hidden h-5 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer" for="proxyToggle"></label>
@@ -93,7 +92,7 @@
                 <span id="statusText" class="text-[13px] font-bold text-outline">OFF</span>
             </div>
             <!-- 多语言及主题 -->
-            <div class="flex items-center gap-3 border-l border-outline-variant/30 pl-4">
+            <div class="flex items-center gap-2 md:gap-3 border-l border-outline-variant/30 pl-2 md:pl-4 flex-shrink-0">
                 <div class="flex items-center bg-outline-variant/20 dark:bg-white/5 rounded-full p-0.5">
                     <button id="toggleEN" class="px-2 py-0.5 text-[11px] font-medium text-outline rounded-full transition-all">EN</button>
                     <button id="toggleZH" class="px-2 py-0.5 text-[11px] font-medium bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-full shadow-sm">中</button>
@@ -143,7 +142,7 @@
         </div>
 
         <!-- 指标卡片行 -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <!-- 指标 1: 总请求次数 -->
             <div class="glass-card rounded-xl p-5 flex flex-col gap-2 relative overflow-hidden">
                 <div class="flex justify-between items-center">
@@ -290,44 +289,44 @@
             </div>
 
             <!-- 趋势图成本汇总统计 -->
-            <div class="flex flex-wrap gap-x-6 gap-y-2 text-[12px] text-slate-500 dark:text-slate-400 pb-2 mb-2" id="trendCostSummary">
-                <span class="flex items-center gap-1.5">
+            <div class="flex flex-wrap gap-2 pb-2 mb-2" id="trendCostSummary">
+                <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
                     <span id="labelSummaryTotal" class="font-medium">近24小时总成本:</span>
                     <span id="valSummaryTotal" class="font-data-mono font-bold text-red-600 dark:text-red-400">$0.0000</span>
                 </span>
-                <span class="flex items-center gap-1.5">
+                <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
                     <span class="font-medium" data-i18n="summaryInputCost">输入总成本:</span>
                     <span id="valSummaryInput" class="font-data-mono font-bold text-blue-500 dark:text-blue-400">$0.0000</span>
                 </span>
-                <span class="flex items-center gap-1.5">
+                <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
                     <span class="font-medium" data-i18n="summaryOutputCost">输出总成本:</span>
                     <span id="valSummaryOutput" class="font-data-mono font-bold text-emerald-600 dark:text-emerald-400">$0.0000</span>
                 </span>
-                <span class="flex items-center gap-1.5">
+                <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
                     <span class="font-medium" data-i18n="summaryCachedCost">缓存命中成本:</span>
                     <span id="valSummaryCached" class="font-data-mono font-bold text-purple-600 dark:text-purple-400">$0.0000</span>
                 </span>
             </div>
 
             <!-- 趋势图统计概览 -->
-            <div class="flex flex-wrap gap-x-6 gap-y-2 text-[12px] text-slate-500 dark:text-slate-400 pb-3 border-b border-outline-variant/10 mb-3" id="trendTokenSummary">
-                <span class="flex items-center gap-1.5">
+            <div class="flex flex-wrap gap-2 pb-3 border-b border-outline-variant/10 mb-3" id="trendTokenSummary">
+                <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
                     <span id="labelSummaryTotalRequests" class="font-medium">今日总请求数:</span>
                     <span id="valSummaryTotalRequests" class="font-data-mono font-bold text-orange-500">0</span>
                 </span>
-                <span class="flex items-center gap-1.5">
+                <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
                     <span id="labelSummaryTotalTokens" class="font-medium">近24小时总 Token:</span>
                     <span id="valSummaryTotalTokens" class="font-data-mono font-bold text-slate-700 dark:text-slate-300">0</span>
                 </span>
-                <span class="flex items-center gap-1.5">
+                <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
                     <span class="font-medium" data-i18n="summaryInputTokens">输入总 Token:</span>
                     <span id="valSummaryInputTokens" class="font-data-mono font-bold text-blue-500 dark:text-blue-400">0</span>
                 </span>
-                <span class="flex items-center gap-1.5">
+                <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
                     <span class="font-medium" data-i18n="summaryOutputTokens">输出总 Token:</span>
                     <span id="valSummaryOutputTokens" class="font-data-mono font-bold text-emerald-600 dark:text-emerald-400">0</span>
                 </span>
-                <span class="flex items-center gap-1.5">
+                <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
                     <span class="font-medium" data-i18n="summaryCachedTokens">缓存命中 Token:</span>
                     <span id="valSummaryCachedTokens" class="font-data-mono font-bold text-purple-600 dark:text-purple-400">0</span>
                 </span>
@@ -617,29 +616,29 @@
             -->
         </div>
 
-        <div class="flex justify-between items-end">
+        <div class="flex flex-col lg:flex-row lg:justify-between lg:items-end gap-4">
             <div>
                 <h1 class="text-2xl font-bold text-on-surface dark:text-white">账号池管理</h1>
                 <p class="text-xs text-outline dark:text-outline-variant">统一管理多个 Google OAuth 账号，开启负载均衡可自动进行请求分发</p>
             </div>
-            <div class="flex items-center gap-4">
-                <div id="poolModeContainer" class="flex items-center gap-2 bg-slate-50/50 dark:bg-white/5 px-3 py-1.5 rounded-lg border border-outline-variant/30">
+            <div class="flex flex-wrap items-center gap-2 md:gap-4 w-full lg:w-auto">
+                <div id="poolModeContainer" class="flex items-center gap-2 bg-slate-50/50 dark:bg-white/5 px-3 py-1.5 rounded-lg border border-outline-variant/30 flex-shrink-0">
                     <span class="text-[13px] font-medium text-on-surface dark:text-white" id="lblPoolMode">账号负载均衡</span>
                     <div class="relative inline-block w-10 mr-1 align-middle select-none transition duration-200 ease-in">
                         <input class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out" id="poolModeToggle" type="checkbox"/>
                         <label class="toggle-label block overflow-hidden h-5 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer" for="poolModeToggle"></label>
                     </div>
                 </div>
-                <button id="btnExportAccounts" class="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/50 rounded-md text-[13px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors shadow-sm cursor-pointer">
+                <button id="btnExportAccounts" class="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/50 rounded-md text-[13px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors shadow-sm cursor-pointer whitespace-nowrap flex-shrink-0">
                     <span class="material-symbols-outlined text-[16px]">download</span>
                     <span>导出账号</span>
                 </button>
-                <button id="btnImportAccounts" class="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/50 rounded-md text-[13px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors shadow-sm cursor-pointer">
+                <button id="btnImportAccounts" class="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/50 rounded-md text-[13px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors shadow-sm cursor-pointer whitespace-nowrap flex-shrink-0">
                     <span class="material-symbols-outlined text-[16px]">upload</span>
                     <span>导入账号</span>
                 </button>
-                <div class="relative">
-                    <button id="btnAddAccount" class="flex items-center gap-1.5 px-4 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-md text-[13px] font-bold transition-colors shadow-sm">
+                <div class="relative flex-shrink-0">
+                    <button id="btnAddAccount" class="flex items-center gap-1.5 px-4 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-md text-[13px] font-bold transition-colors shadow-sm whitespace-nowrap">
                         <span class="material-symbols-outlined text-[16px]">add_circle</span>
                         添加账号
                         <span class="material-symbols-outlined text-[16px]">arrow_drop_down</span>
@@ -695,7 +694,7 @@
             </div>
 
             <div class="flex-grow overflow-y-auto p-4">
-                <div id="accountsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div id="accountsList" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                     <!-- 动态生成的账号卡片 -->
                 </div>
                 <div id="accountsEmptyState" class="hidden flex-col items-center justify-center py-12 text-outline/50">
@@ -709,17 +708,17 @@
 
     <!-- 2FA 验证码管理视图 -->
     <div id="view-otp" class="hidden flex-col gap-6 w-full">
-        <div class="flex justify-between items-end">
+        <div class="flex flex-col lg:flex-row lg:justify-between lg:items-end gap-4">
             <div>
                 <h1 class="text-2xl font-bold text-on-surface dark:text-white">2FA 验证码管理</h1>
                 <p class="text-xs text-outline dark:text-outline-variant">为账号配置谷歌两步验证 (2FA/TOTP) 密钥，实时生成并自动刷新动态验证码</p>
             </div>
-            <div class="flex items-center gap-4">
-                <button id="btnAddNewOtp" class="flex items-center gap-1.5 px-4 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-md text-[13px] font-bold transition-colors shadow-sm cursor-pointer">
+            <div class="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+                <button id="btnAddNewOtp" class="flex items-center gap-1.5 px-4 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-md text-[13px] font-bold transition-colors shadow-sm cursor-pointer whitespace-nowrap flex-shrink-0">
                     <span class="material-symbols-outlined text-[16px]">add_circle</span>
                     新增 2FA 账号
                 </button>
-                <div class="flex items-center gap-3 bg-slate-50/50 dark:bg-white/5 px-3.5 py-1.5 rounded-lg border border-outline-variant/30 text-[13px] text-on-surface dark:text-white">
+                <div class="flex items-center gap-3 bg-slate-50/50 dark:bg-white/5 px-3.5 py-1.5 rounded-lg border border-outline-variant/30 text-[13px] text-on-surface dark:text-white whitespace-nowrap flex-shrink-0">
                     <span class="material-symbols-outlined text-[16px] text-primary dark:text-primary-fixed-dim animate-spin hidden" id="otpRefreshSpinner">sync</span>
                     <span class="font-medium">验证码更新倒计时:</span>
                     <span class="font-bold text-primary dark:text-primary-fixed-dim w-6 text-center" id="otpCountdown">-</span>秒
@@ -1192,7 +1191,7 @@
             <!-- Modal 主体内容 -->
             <div class="px-6 py-5 overflow-y-auto flex flex-col gap-4">
                 <!-- 基本信息卡片 -->
-                <div class="grid grid-cols-2 gap-4 text-[12px] p-4 bg-slate-50 dark:bg-slate-900/30 rounded-xl border border-outline-variant/20">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-[12px] p-4 bg-slate-50 dark:bg-slate-900/30 rounded-xl border border-outline-variant/20">
                     <div class="flex flex-col gap-1">
                         <span class="text-outline">请求时间</span>
                         <span id="modalTime" class="font-data-mono text-on-surface dark:text-white font-semibold">-</span>
@@ -1232,7 +1231,7 @@
                 </div>
                 
                 <!-- JSON 双栏区：左=请求头 右=请求体 -->
-                <div class="grid grid-cols-2 gap-3 flex-1 min-h-0">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 flex-1 min-h-0">
                     <!-- 请求头 -->
                     <div class="flex flex-col gap-1.5 min-h-0">
                         <div class="flex justify-between items-center">

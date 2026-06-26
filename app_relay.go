@@ -350,6 +350,7 @@ func (a *App) connectRemote(host, port, key, password string) error {
 	// Emit remote state to frontend
 	config := a.remoteRelay.GetConfig()
 	wailsRuntime.EventsEmit(a.ctx, "remote-state", config)
+	wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 	return nil
 }
 
@@ -381,5 +382,6 @@ func (a *App) disconnectRemote() {
 		// Emit updated state
 		config := a.remoteRelay.GetConfig()
 		wailsRuntime.EventsEmit(a.ctx, "remote-state", config)
+		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 	}
 }
