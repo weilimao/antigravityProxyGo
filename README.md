@@ -62,6 +62,18 @@ wails build
    安装程序将生成并输出至：
    `build/bin/antigravity-proxy-amd64-installer.exe`
 
+### 3.5 Windows 开发者特别说明（中文用户名兼容）
+如果您在 Windows 下的系统用户名包含中文、空格或非 ASCII 字符（例如 `C:\Users\张三`），直接执行 `wails dev` 或 `wails build` 可能会因为 Wails 官方 CLI 工具在写临时文件时的编码缺陷，抛出如下致命错误：
+* `Error: open C:\Users\...\Temp\wails.json: The system cannot find the file specified`
+* `FATAL remove ...res.syso: The system cannot find the file specified`
+
+**解决方案**：
+本项目已内置了解决该 Bug 的局部重定向脚本。请使用以下命令代替原生 Wails 命令进行开发与构建：
+* **本地开发调试**：执行根目录下的 `dev.bat` 代替 `wails dev`。
+* **生产编译与打包**：执行根目录下的 `build.bat` 代替 `wails build`（支持传入参数，如 `build.bat -nsis`）。
+
+*注意：这些脚本会自动在项目根目录下生成一个 `.wails_temp` 临时目录作为构建缓存，且该目录已被列入 `.gitignore`，不会被提交。*
+
 ---
 
 ## 4. 使用与运行说明
