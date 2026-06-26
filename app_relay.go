@@ -155,6 +155,7 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		_ = a.settingsMgr.SetRemoteEnabled(true)
 
 		a.AddLog(fmt.Sprintf("🌐 Remote connected to %s:%s as %s", host, port, key))
+		a.emitRemoteState()
 
 		return marshalResponse(map[string]interface{}{"success": true})
 
@@ -165,11 +166,13 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		_ = a.settingsMgr.SetRemoteKey("")
 		_ = a.settingsMgr.SetRemotePassword("")
 		_ = a.settingsMgr.SetRemoteEnabled(false)
+		a.emitRemoteState()
 		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "remote:disable":
 		a.disconnectRemote()
 		_ = a.settingsMgr.SetRemoteEnabled(false)
+		a.emitRemoteState()
 		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "remote:enable":
@@ -185,27 +188,11 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		}
 		_ = a.settingsMgr.SetRemoteEnabled(true)
 		a.AddLog(fmt.Sprintf("🌐 Remote re-connected to %s:%s as %s", host, port, key))
+		a.emitRemoteState()
 		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "remote:get-status":
-		hasSaved := a.settingsMgr.GetRemoteHost() != "" && a.settingsMgr.GetRemoteKey() != ""
-		connected := false
-		var remoteConfig proxy.RemoteConfig
-		if a.remoteRelay != nil {
-			remoteConfig = a.remoteRelay.GetConfig()
-			connected = remoteConfig.Connected
-		}
-		return marshalResponse(map[string]interface{}{
-			"connected":           connected,
-			"hasSavedCredentials": hasSaved,
-			"savedHost":           a.settingsMgr.GetRemoteHost(),
-			"savedPort":           a.settingsMgr.GetRemotePort(),
-			"savedKey":            a.settingsMgr.GetRemoteKey(),
-			"remoteEnabled":       a.settingsMgr.GetRemoteEnabled(),
-			"host":                remoteConfig.Host,
-			"port":                remoteConfig.Port,
-			"userKey":             remoteConfig.UserKey,
-		})
+		return marshalResponse(a.getRemoteStatusPayload())
 
 	case "remote:test":
 		host := getStringArg(0)
@@ -347,9 +334,6 @@ func (a *App) connectRemote(host, port, key, password string) error {
 		}
 	}
 
-	// Emit remote state to frontend
-	config := a.remoteRelay.GetConfig()
-	wailsRuntime.EventsEmit(a.ctx, "remote-state", config)
 	wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 	return nil
 }
@@ -379,9 +363,33 @@ func (a *App) disconnectRemote() {
 			}
 		}()
 
-		// Emit updated state
-		config := a.remoteRelay.GetConfig()
-		wailsRuntime.EventsEmit(a.ctx, "remote-state", config)
 		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 	}
+}
+
+// getRemoteStatusPayload returns the current remote config and status dictionary
+func (a *App) getRemoteStatusPayload() map[string]interface{} {
+	hasSaved := a.settingsMgr.GetRemoteHost() != "" && a.settingsMgr.GetRemoteKey() != ""
+	connected := false
+	var remoteConfig proxy.RemoteConfig
+	if a.remoteRelay != nil {
+		remoteConfig = a.remoteRelay.GetConfig()
+		connected = remoteConfig.Connected
+	}
+	return map[string]interface{}{
+		"connected":           connected,
+		"hasSavedCredentials": hasSaved,
+		"savedHost":           a.settingsMgr.GetRemoteHost(),
+		"savedPort":           a.settingsMgr.GetRemotePort(),
+		"savedKey":            a.settingsMgr.GetRemoteKey(),
+		"remoteEnabled":       a.settingsMgr.GetRemoteEnabled(),
+		"host":                remoteConfig.Host,
+		"port":                remoteConfig.Port,
+		"userKey":             remoteConfig.UserKey,
+	}
+}
+
+// emitRemoteState broadcasts the complete remote state to the frontend
+func (a *App) emitRemoteState() {
+	wailsRuntime.EventsEmit(a.ctx, "remote-state", a.getRemoteStatusPayload())
 }

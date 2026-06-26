@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"antigravity-proxy/internal/db"
 )
 
 // RemoteConfig holds the configuration for connecting to a remote relay server
@@ -224,6 +226,58 @@ func (rr *RemoteRelay) FetchRemoteStats() (map[string]interface{}, error) {
 		return nil, fmt.Errorf("failed to parse stats response: %w", err)
 	}
 	return data, nil
+}
+
+// FetchAndSyncRemoteLogs retrieves new logs from the remote relay and syncs them to local SQLite
+func (rr *RemoteRelay) FetchAndSyncRemoteLogs(userKey string) error {
+	rr.RLock()
+	host := rr.config.Host
+	port := rr.config.Port
+	token := rr.config.Token
+	rr.RUnlock()
+
+	maxID := db.GetMaxServerLogID(userKey, "remote")
+	syncURL := fmt.Sprintf("http://%s:%s/api/logs/sync?last_id=%d&limit=200", host, port, maxID)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, syncURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create log sync request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("log sync request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read log sync response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("log sync failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var data struct {
+		Logs []*db.RequestLog `json:"logs"`
+	}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return fmt.Errorf("failed to parse log sync response: %w", err)
+	}
+
+	for _, item := range data.Logs {
+		item.ServerLogID = item.ID // Save remote ID to ServerLogID
+		item.ID = 0                // Reset local ID for auto increment
+		item.UserID = userKey
+		item.Mode = "remote"
+		_ = db.InsertRequestLog(item)
+	}
+
+	return nil
 }
 
 // TestConnection verifies connectivity to the remote relay server's health endpoint

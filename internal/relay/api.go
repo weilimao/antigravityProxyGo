@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+
+	"antigravity-proxy/internal/db"
 )
 
 type APIHandler struct {
@@ -36,6 +39,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleLogout(w, r)
 	case path == "/api/stats" && r.Method == http.MethodGet:
 		h.handleStats(w, r)
+	case path == "/api/logs/sync" && r.Method == http.MethodGet:
+		h.handleLogsSync(w, r)
 	case path == "/api/cert" && r.Method == http.MethodGet:
 		h.handleCert(w, r)
 	default:
@@ -179,4 +184,47 @@ func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 func readJSON(r *http.Request, v interface{}) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+func (h *APIHandler) handleLogsSync(w http.ResponseWriter, r *http.Request) {
+	token := extractBearerToken(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing token"})
+		return
+	}
+
+	session, err := h.authMgr.ValidateToken(token)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	lastIDStr := r.URL.Query().Get("last_id")
+	limitStr := r.URL.Query().Get("limit")
+	
+	var lastID int64 = 0
+	if lastIDStr != "" {
+		lastID, _ = strconv.ParseInt(lastIDStr, 10, 64)
+	}
+	
+	limit := 100
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
+			limit = l
+		}
+	}
+
+	logs, err := db.GetRequestLogsSince(session.UserID, "remote", lastID, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to query logs: " + err.Error()})
+		return
+	}
+
+	if logs == nil {
+		logs = []*db.RequestLog{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"logs": logs,
+	})
 }

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/pricing"
 )
 
@@ -110,6 +111,14 @@ func (s *StatsTracker) RecordUsage(sample RelaySample) {
 
 	// Calculate cost
 	cost := s.pricingMgr.CalculateCost(sample.ModelName, inTokens, outTokens, cachedTokens)
+	rate := s.pricingMgr.GetPricingForModel(sample.ModelName)
+	nonCachedIn := inTokens - cachedTokens
+	if nonCachedIn < 0 {
+		nonCachedIn = 0
+	}
+	inputCost := math.Round((float64(nonCachedIn)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+	outputCost := math.Round((float64(outTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
+	cachedCost := math.Round((float64(cachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
 	timestamp := time.Now().Format(time.RFC3339)
 
 	// Update model bucket
@@ -127,6 +136,30 @@ func (s *StatsTracker) RecordUsage(sample RelaySample) {
 	userBucket.TotalCachedTokens += cachedTokens
 	userBucket.TotalCost = math.Round((userBucket.TotalCost+cost)*1000000.0) / 1000000.0
 	userBucket.LastActiveAt = timestamp
+
+	// Create and insert request log into SQLite
+	reqLog := &db.RequestLog{
+		ReqID:        fmt.Sprintf("rl_%d", time.Now().UnixNano()),
+		Timestamp:    timestamp,
+		Mode:         "remote",
+		UserID:       sample.UserID,
+		ModelName:    sample.ModelName,
+		InTokens:     inTokens,
+		OutTokens:    outTokens,
+		CachedTokens: cachedTokens,
+		Cost:         cost,
+		InputCost:    inputCost,
+		OutputCost:   outputCost,
+		CachedCost:   cachedCost,
+		DurationMs:   0,
+		StatusCode:   200,
+	}
+
+	go func() {
+		if err := db.InsertRequestLog(reqLog); err != nil {
+			fmt.Printf("[RelayStats] DB Insert Error: %v\n", err)
+		}
+	}()
 
 	s.scheduleSave()
 }

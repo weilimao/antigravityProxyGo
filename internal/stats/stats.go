@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/pricing"
 )
 
@@ -247,6 +248,36 @@ func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 		t.requests = t.requests[:50]
 	}
 	t.Unlock()
+
+	go func(rl *RequestLog, prMgr *pricing.Manager) {
+		timestamp := time.Now().Format(time.RFC3339)
+		rate := prMgr.GetPricingForModel(rl.Model)
+		nonCachedIn := rl.InTokens - rl.CachedTokens
+		if nonCachedIn < 0 {
+			nonCachedIn = 0
+		}
+		inputCost := math.Round((float64(nonCachedIn)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+		outputCost := math.Round((float64(rl.OutTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
+		cachedCost := math.Round((float64(rl.CachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
+
+		dbItem := &db.RequestLog{
+			ReqID:        rl.ID,
+			Timestamp:    timestamp,
+			Mode:         "local",
+			UserID:       rl.Account,
+			ModelName:    rl.Model,
+			InTokens:     rl.InTokens,
+			OutTokens:    rl.OutTokens,
+			CachedTokens: rl.CachedTokens,
+			Cost:         rl.Cost,
+			InputCost:    inputCost,
+			OutputCost:   outputCost,
+			CachedCost:   cachedCost,
+			DurationMs:   rl.DurationMs,
+			StatusCode:   rl.StatusCode,
+		}
+		_ = db.InsertRequestLog(dbItem)
+	}(reqLog, t.pricingMgr)
 
 	t.scheduleSave()
 }

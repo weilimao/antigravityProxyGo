@@ -17,6 +17,7 @@ import (
 
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/cert"
+	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/patch"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/proxy"
@@ -94,6 +95,9 @@ func (a *App) startup(ctx context.Context) {
 	a.pricingMgr.Init(activeDir)
 
 	// 3. Initialize Stats & Usage Logger
+	if err := db.InitDB(activeDir); err != nil {
+		fmt.Printf("⚠️ SQLite Database initialization failed: %v\n", err)
+	}
 	a.statsTracker = stats.NewTracker(a.pricingMgr)
 	a.statsTracker.Init(activeDir)
 
@@ -236,6 +240,7 @@ func (a *App) startup(ctx context.Context) {
 				} else {
 					a.AddLog("🌐 远程中继自动连接成功")
 				}
+				a.emitRemoteState()
 			}()
 		}
 	}
@@ -1157,6 +1162,9 @@ func (a *App) IsWindowVisibleAndActive() bool {
 func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 	usagePayload := a.usageTracker.GetPayload()
 	if a.remoteRelay != nil && a.remoteRelay.GetConfig().Connected {
+		cfg := a.remoteRelay.GetConfig()
+		_ = a.remoteRelay.FetchAndSyncRemoteLogs(cfg.UserKey)
+
 		if remoteStats, err := a.remoteRelay.FetchRemoteStats(); err == nil && remoteStats != nil {
 			// 完全使用远端数据构建一套纯净的 GlobalStats
 			statsObj := stats.GlobalStats{
@@ -1201,11 +1209,52 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 					}
 				}
 			}
-			// 远程模式下返回隔离的远端快照，以及常规的 trends/requests 空列表
+
+			// 从 SQLite 聚合出 trends 和 requests 实时列表
+			dbTrends := db.QueryHourlyTrends(cfg.UserKey, "remote")
+			dbRequests := db.QueryRecentRequests(cfg.UserKey, "remote", 50)
+
+			var trends []*stats.HourlyTrend
+			for _, dt := range dbTrends {
+				trends = append(trends, &stats.HourlyTrend{
+					Time:       dt.Time,
+					Input:      dt.Input,
+					Output:     dt.Output,
+					Cached:     dt.Cached,
+					Requests:   dt.Requests,
+					Cost:       dt.Cost,
+					InputCost:  dt.InputCost,
+					OutputCost: dt.OutputCost,
+					CachedCost: dt.CachedCost,
+				})
+			}
+			if trends == nil {
+				trends = []*stats.HourlyTrend{}
+			}
+
+			var requests []*stats.RequestLog
+			for _, dr := range dbRequests {
+				requests = append(requests, &stats.RequestLog{
+					ID:           dr.ReqID,
+					Timestamp:    dr.Timestamp,
+					Model:        dr.ModelName,
+					InTokens:     dr.InTokens,
+					OutTokens:    dr.OutTokens,
+					CachedTokens: dr.CachedTokens,
+					Cost:         dr.Cost,
+					Account:      dr.UserID,
+					DurationMs:   dr.DurationMs,
+					StatusCode:   dr.StatusCode,
+				})
+			}
+			if requests == nil {
+				requests = []*stats.RequestLog{}
+			}
+
 			return map[string]interface{}{
 				"stats":    statsObj,
-				"trends":   []*stats.HourlyTrend{},
-				"requests": []*stats.RequestLog{},
+				"trends":   trends,
+				"requests": requests,
 				"usage":    usagePayload,
 			}
 		}
@@ -1217,3 +1266,4 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 	}
 	return a.statsTracker.GetPayload(usagePayload)
 }
+
