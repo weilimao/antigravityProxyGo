@@ -234,8 +234,8 @@ func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 		return
 	}
 
-	if reqLog.Model == "" {
-		reqLog.Model = "unknown"
+	if reqLog.Model == "" || reqLog.Model == "unknown" {
+		return
 	}
 
 	t.Lock()

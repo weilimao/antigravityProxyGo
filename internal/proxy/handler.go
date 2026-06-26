@@ -31,6 +31,7 @@ type ProxyHandler struct {
 	tokenRefresh       func(*account.Account) (string, error)
 	setCapturedProject func(string, string)
 	getStoredProject   func(string) string
+	getMaxRetries      func() int
 	client             *http.Client
 }
 
@@ -46,6 +47,7 @@ func NewProxyHandler(
 	tokenRefresh func(*account.Account) (string, error),
 	setCapturedProject func(string, string),
 	getStoredProject func(string) string,
+	getMaxRetries func() int,
 ) *ProxyHandler {
 	return &ProxyHandler{
 		accountMgr:         accountMgr,
@@ -59,6 +61,7 @@ func NewProxyHandler(
 		tokenRefresh:       tokenRefresh,
 		setCapturedProject: setCapturedProject,
 		getStoredProject:   getStoredProject,
+		getMaxRetries:      getMaxRetries,
 		client:             netutil.NewClient(5 * time.Minute),
 	}
 }
@@ -135,7 +138,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	modelMatch := reModelInPath.FindStringSubmatch(targetPath)
 	if len(modelMatch) > 1 {
 		currentModel = modelMatch[1]
-	} else if strings.Contains(targetPath, "streamGenerateContent") {
+	} else if strings.Contains(strings.ToLower(targetPath), "generatecontent") {
 		currentModel = "antigravity-core"
 		if len(bodyBytes) > 0 {
 			var bodyJson struct {
@@ -766,7 +769,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return resp.StatusCode, resp.Header, respBodyBytes, isStreaming && resp.StatusCode == 200, nil
 	}
 
-	maxRetries := 20
+	maxRetries := h.getMaxRetries()
 	var lastUsedAccount *account.Account
 	var lastAccountID string
 	var lastAccountFailCount int
@@ -898,29 +901,29 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if errAttempt.Error() == "CAPACITY_EXHAUSTED" {
-				h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 模型容量耗尽 (CAPACITY_EXHAUSTED，服务超载或限频)。标记临时冷静期并获取真实配额...", email))
+				h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 模型容量耗尽 (CAPACITY_EXHAUSTED，服务超载或限频)。标记临时冷静期并同步获取真实配额...", email))
 				h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+5*60*1000, currentModel)
 
-				go func(a *account.Account) {
-					res, qErr := h.quotaFetch(a)
-					if qErr == nil && len(res.Buckets) > 0 {
-						h.accountMgr.UpdateAccountCooldownFromQuota(a.ID, res.Buckets)
-						// 重新检查当前冷静期状态，确认是否清零
-						refreshedAcc := h.accountMgr.GetAccountByID(a.ID)
-						if refreshedAcc != nil {
-							cat := h.accountMgr.GetModelCategory(currentModel)
-							cooldown := refreshedAcc.CooldownUntil
-							if refreshedAcc.Cooldowns != nil {
-								if c, ok := refreshedAcc.Cooldowns[cat]; ok {
-									cooldown = c
-								}
-							}
-							if cooldown == 0 {
-								h.logFn(fmt.Sprintf("✅ [负载均衡] 账号 %s 额度充足，已自动解除冷静期，恢复可用状态。", email))
+				res, qErr := h.quotaFetch(lastUsedAccount)
+				if qErr == nil && len(res.Buckets) > 0 {
+					h.accountMgr.UpdateAccountCooldownFromQuota(lastUsedAccount.ID, res.Buckets)
+					// 重新检查当前冷静期状态，确认是否清零
+					refreshedAcc := h.accountMgr.GetAccountByID(lastUsedAccount.ID)
+					if refreshedAcc != nil {
+						cat := h.accountMgr.GetModelCategory(currentModel)
+						cooldown := refreshedAcc.CooldownUntil
+						if refreshedAcc.Cooldowns != nil {
+							if c, ok := refreshedAcc.Cooldowns[cat]; ok {
+								cooldown = c
 							}
 						}
+						if cooldown == 0 {
+							h.logFn(fmt.Sprintf("✅ [负载均衡] 账号 %s 额度充足，已同步解除冷静期，恢复可用状态。", email))
+						}
 					}
-				}(lastUsedAccount)
+				} else if qErr != nil {
+					h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 同步刷新配额失败: %v", email, qErr))
+				}
 			} else if errAttempt.Error() == "QUOTA_EXHAUSTED" {
 				h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 配额已耗尽 (QUOTA_EXHAUSTED)。标记冷静期并获取真实配额...", email))
 				h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+5*60*1000, currentModel)

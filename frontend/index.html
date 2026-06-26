@@ -12,6 +12,7 @@
             "settings:get-dir-sync": { activeDir: "", defaultDir: "" },
             "settings:get-system-log-enabled": false,
             "settings:get-startup-options": { autoStart: false, silentStart: false },
+            "settings:get-max-retries": 20,
             "get-userdata-path": ""
         };
     </script>
@@ -807,6 +808,27 @@
                     <input type="checkbox" id="chkEnableSystemLog" class="sr-only peer">
                     <div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
                 </label>
+            </div>
+        </div>
+
+        <!-- 代理参数设置卡片 -->
+        <div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+            <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+                <span class="material-symbols-outlined text-primary text-[20px]">refresh</span>
+                <span data-i18n="proxySettingTitle">代理重试设置</span>
+            </h2>
+            <p class="text-xs text-outline leading-relaxed" data-i18n="proxySettingTip">
+                配置代理在遭遇服务器临时算力不足等错误时的最大重试次数。
+            </p>
+            
+            <div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+                <div class="flex flex-col gap-0.5">
+                    <span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="maxRetriesLabel">最大重试次数</span>
+                    <span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="maxRetriesDesc">请求失败时的重试上限（默认 20 次）。</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <input type="number" id="numMaxRetries" min="1" max="100" class="w-20 px-3 py-1 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-bold text-center" />
+                </div>
             </div>
         </div>
 

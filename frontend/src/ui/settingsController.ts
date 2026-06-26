@@ -7,6 +7,7 @@ export function initSettings() {
         const systemConsole = document.getElementById('systemConsole');
         const chkEnableAutoStart = document.getElementById('chkEnableAutoStart') as HTMLInputElement | null;
         const chkEnableSilentStart = document.getElementById('chkEnableSilentStart') as HTMLInputElement | null;
+        const numMaxRetries = document.getElementById('numMaxRetries') as HTMLInputElement | null;
 
         // Tab switching
         const btnSettingsTabGeneral = document.getElementById('btnSettingsTabGeneral');
@@ -102,6 +103,19 @@ export function initSettings() {
             });
         }
 
+        if (numMaxRetries) {
+            numMaxRetries.addEventListener('change', (e: any) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val) && val > 0) {
+                    try {
+                        ipcRenderer.send('settings:set-max-retries', val);
+                    } catch (err) {
+                        console.error('[SettingsController] Failed to save max retries:', err);
+                    }
+                }
+            });
+        }
+
         function updateConsoleVisibility(enabled: boolean) {
             if (systemConsole) {
                 if (enabled) {
@@ -126,6 +140,7 @@ export function refreshSettingsUI() {
         const systemConsole = document.getElementById('systemConsole');
         const chkEnableAutoStart = document.getElementById('chkEnableAutoStart') as HTMLInputElement | null;
         const chkEnableSilentStart = document.getElementById('chkEnableSilentStart') as HTMLInputElement | null;
+        const numMaxRetries = document.getElementById('numMaxRetries') as HTMLInputElement | null;
 
         if (chkEnableSystemLog) {
             const enabled = ipcRenderer.sendSync('settings:get-system-log-enabled');
@@ -142,6 +157,15 @@ export function refreshSettingsUI() {
             if (startupOptions) {
                 chkEnableAutoStart.checked = !!startupOptions.autoStart;
                 chkEnableSilentStart.checked = !!startupOptions.silentStart;
+            }
+        }
+
+        if (numMaxRetries) {
+            const retries = ipcRenderer.sendSync('settings:get-max-retries');
+            if (retries !== null && retries !== undefined) {
+                numMaxRetries.value = String(retries);
+            } else {
+                numMaxRetries.value = '20';
             }
         }
     } catch (err) {

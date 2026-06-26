@@ -173,6 +173,7 @@ func (a *App) startup(ctx context.Context) {
 		a.authMgr.RefreshToken,
 		a.quotaSvc.SetCapturedProject,
 		a.quotaSvc.GetStoredProject,
+		a.settingsMgr.GetMaxRetries,
 	)
 
 	a.proxyEngine = proxy.NewProxyEngine(proxyHandler, a.AddLog, func(isRunning bool) {
@@ -283,7 +284,8 @@ func (a *App) domReady(ctx context.Context) {
 			"autoStart":   a.settingsMgr.GetAutoStart(),
 			"silentStart": a.settingsMgr.GetSilentStart(),
 		},
-		"get-userdata-path": defaultDir,
+		"settings:get-max-retries": a.settingsMgr.GetMaxRetries(),
+		"get-userdata-path":        defaultDir,
 	}
 
 	bytesCache, _ := json.Marshal(cache)
@@ -327,6 +329,18 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			}
 		}
 		return false
+	}
+
+	getIntArg := func(idx int) int {
+		if idx < len(args) {
+			if f, ok := args[idx].(float64); ok {
+				return int(f)
+			}
+			if i, ok := args[idx].(int); ok {
+				return i
+			}
+		}
+		return 0
 	}
 
 	switch channel {
@@ -486,6 +500,9 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 
 	case "settings:set-silent-start":
 		_ = a.settingsMgr.SetSilentStart(getBoolArg(0))
+
+	case "settings:set-max-retries":
+		_ = a.settingsMgr.SetMaxRetries(getIntArg(0))
 
 	case "cert-status":
 		activeDir := a.settingsMgr.GetActiveDataDirectory()

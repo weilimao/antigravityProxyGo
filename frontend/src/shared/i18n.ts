@@ -155,6 +155,10 @@ const translations: Translations = {
         enableAutoStartDesc: "在系统启动时自动运行 Antigravity Proxy。",
         enableSilentStartLabel: "静默启动",
         enableSilentStartDesc: "自启动时保持在后台运行，只在托盘显示，不打开主界面。",
+        proxySettingTitle: "代理重试设置",
+        proxySettingTip: "配置代理在遭遇服务器临时算力不足等错误时的最大重试次数。",
+        maxRetriesLabel: "最大重试次数",
+        maxRetriesDesc: "请求失败时的重试上限（默认 20 次）。",
     },
     en: {
         title: "Console",
@@ -298,6 +302,10 @@ const translations: Translations = {
         enableAutoStartDesc: "Automatically run Antigravity Proxy when the system starts.",
         enableSilentStartLabel: "Silent Start",
         enableSilentStartDesc: "Run in the background (tray only) without showing the main window on startup.",
+        proxySettingTitle: "Proxy Retry Settings",
+        proxySettingTip: "Configure the maximum retry limit when the proxy encounters temporary server capacity issues.",
+        maxRetriesLabel: "Maximum Retry Count",
+        maxRetriesDesc: "The upper limit of retries when a request fails (default is 20 times).",
     }
 };
 

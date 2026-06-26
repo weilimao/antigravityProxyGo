@@ -29,6 +29,7 @@ type Config struct {
 	IsInterceptMode bool   `json:"isInterceptMode"`
 	AutoStart       bool   `json:"autoStart"`
 	SilentStart     bool   `json:"silentStart"`
+	MaxRetries      int    `json:"maxRetries"`
 }
 
 type Manager struct {
@@ -54,6 +55,7 @@ func (m *Manager) Init(defaultPath string) {
 		IsInterceptMode: false,
 		AutoStart:       false,
 		SilentStart:     false,
+		MaxRetries:      20,
 	}
 
 	m.loadConfig()
@@ -73,6 +75,10 @@ func (m *Manager) loadConfig() {
 	var parsed Config
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return
+	}
+
+	if parsed.MaxRetries <= 0 {
+		parsed.MaxRetries = 20
 	}
 
 	m.config = parsed
@@ -400,6 +406,25 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 	}
 	return configPath, nil
 }
+func (m *Manager) GetMaxRetries() int {
+	m.RLock()
+	defer m.RUnlock()
+	if m.config.MaxRetries <= 0 {
+		return 20
+	}
+	return m.config.MaxRetries
+}
+
+func (m *Manager) SetMaxRetries(retries int) error {
+	m.Lock()
+	defer m.Unlock()
+	if retries <= 0 {
+		retries = 20
+	}
+	m.config.MaxRetries = retries
+	return m.SaveConfig()
+}
+
 type ManagerInterface interface {
 	Init(defaultPath string)
 	GetActiveDataDirectory() string
@@ -412,6 +437,8 @@ type ManagerInterface interface {
 	SetAutoStart(enabled bool) error
 	GetSilentStart() bool
 	SetSilentStart(enabled bool) error
+	GetMaxRetries() int
+	SetMaxRetries(retries int) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,
