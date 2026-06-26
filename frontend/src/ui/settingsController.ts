@@ -12,27 +12,30 @@ export function initSettings() {
         // Tab switching
         const btnSettingsTabGeneral = document.getElementById('btnSettingsTabGeneral');
         const btnSettingsTabAbout = document.getElementById('btnSettingsTabAbout');
+        const btnSettingsTabRelay = document.getElementById('btnSettingsTabRelay');
         const settingsPanelGeneral = document.getElementById('settings-panel-general');
         const settingsPanelAbout = document.getElementById('settings-panel-about');
+        const settingsPanelRelay = document.getElementById('settings-panel-relay');
+
+        const activeTabClass = 'px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200';
+        const inactiveTabClass = 'px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200';
+
+        function switchSettingsTab(activePanel: string) {
+            if (settingsPanelGeneral) settingsPanelGeneral.style.setProperty('display', activePanel === 'general' ? 'flex' : 'none', 'important');
+            if (settingsPanelAbout) settingsPanelAbout.style.setProperty('display', activePanel === 'about' ? 'flex' : 'none', 'important');
+            if (settingsPanelRelay) settingsPanelRelay.style.setProperty('display', activePanel === 'relay' ? 'flex' : 'none', 'important');
+
+            if (btnSettingsTabGeneral) btnSettingsTabGeneral.className = activePanel === 'general' ? activeTabClass : inactiveTabClass;
+            if (btnSettingsTabAbout) btnSettingsTabAbout.className = activePanel === 'about' ? activeTabClass : inactiveTabClass;
+            if (btnSettingsTabRelay) btnSettingsTabRelay.className = activePanel === 'relay' ? activeTabClass : inactiveTabClass;
+        }
 
         if (btnSettingsTabGeneral && btnSettingsTabAbout && settingsPanelGeneral && settingsPanelAbout) {
-            btnSettingsTabGeneral.addEventListener('click', () => {
-                settingsPanelGeneral.style.setProperty('display', 'flex', 'important');
-                settingsPanelAbout.style.setProperty('display', 'none', 'important');
-
-                // Active tab styling
-                btnSettingsTabGeneral.className = 'px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200';
-                btnSettingsTabAbout.className = 'px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200';
-            });
-
-            btnSettingsTabAbout.addEventListener('click', () => {
-                settingsPanelGeneral.style.setProperty('display', 'none', 'important');
-                settingsPanelAbout.style.setProperty('display', 'flex', 'important');
-
-                // Active tab styling
-                btnSettingsTabAbout.className = 'px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200';
-                btnSettingsTabGeneral.className = 'px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200';
-            });
+            btnSettingsTabGeneral.addEventListener('click', () => switchSettingsTab('general'));
+            btnSettingsTabAbout.addEventListener('click', () => switchSettingsTab('about'));
+            if (btnSettingsTabRelay) {
+                btnSettingsTabRelay.addEventListener('click', () => switchSettingsTab('relay'));
+            }
         } else {
             console.error('[SettingsController] Tab elements not found:', {
                 btnSettingsTabGeneral: !!btnSettingsTabGeneral,

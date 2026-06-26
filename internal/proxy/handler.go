@@ -32,6 +32,7 @@ type ProxyHandler struct {
 	setCapturedProject func(string, string)
 	getStoredProject   func(string) string
 	getMaxRetries      func() int
+	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int)
 	client             *http.Client
 }
 
@@ -48,6 +49,7 @@ func NewProxyHandler(
 	setCapturedProject func(string, string),
 	getStoredProject func(string) string,
 	getMaxRetries func() int,
+	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int),
 ) *ProxyHandler {
 	return &ProxyHandler{
 		accountMgr:         accountMgr,
@@ -62,12 +64,15 @@ func NewProxyHandler(
 		setCapturedProject: setCapturedProject,
 		getStoredProject:   getStoredProject,
 		getMaxRetries:      getMaxRetries,
+		relayStatsCallback: relayStatsCallback,
 		client:             netutil.NewClient(5 * time.Minute),
 	}
 }
 
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
+	relayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
+	_ = relayUserID // used later for relay stats callback
 	if r.Method == http.MethodConnect {
 		http.Error(w, "CONNECT not supported inside Decrypted Server", http.StatusBadRequest)
 		return
@@ -740,6 +745,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			if inTokens > 0 || outTokens > 0 {
 				h.statsTracker.TrackRequest(currentModel, inTokens, outTokens, cachedTokens)
+				if relayUserID != "" && h.relayStatsCallback != nil {
+					h.relayStatsCallback(relayUserID, "", currentModel, inTokens, outTokens, cachedTokens)
+				}
 				var accMeta *stats.AccountMeta
 				if poolAccount != nil {
 					accMeta = &stats.AccountMeta{
@@ -911,12 +919,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					refreshedAcc := h.accountMgr.GetAccountByID(lastUsedAccount.ID)
 					if refreshedAcc != nil {
 						cat := h.accountMgr.GetModelCategory(currentModel)
-						cooldown := refreshedAcc.CooldownUntil
-						if refreshedAcc.Cooldowns != nil {
-							if c, ok := refreshedAcc.Cooldowns[cat]; ok {
-								cooldown = c
+							cooldown := int64(0)
+							if refreshedAcc.Cooldowns != nil {
+								if c, ok := refreshedAcc.Cooldowns[cat]; ok {
+									cooldown = c
+								}
+							} else {
+								cooldown = refreshedAcc.CooldownUntil
 							}
-						}
 						if cooldown == 0 {
 							h.logFn(fmt.Sprintf("✅ [负载均衡] 账号 %s 额度充足，已同步解除冷静期，恢复可用状态。", email))
 						}
@@ -974,11 +984,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				cat := h.accountMgr.GetModelCategory(currentModel)
-				cooldown := a.CooldownUntil
+				cooldown := int64(0)
 				if a.Cooldowns != nil {
 					if c, ok := a.Cooldowns[cat]; ok {
 						cooldown = c
 					}
+				} else {
+					cooldown = a.CooldownUntil
 				}
 				if cooldown == 0 || time.Now().UnixNano()/1e6 >= cooldown {
 					hasAvail = true

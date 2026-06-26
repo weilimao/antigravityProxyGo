@@ -13,6 +13,8 @@ import { initMigrationEvents } from './ui/migrationController';
 import { initUpdaterEvents } from './ui/updaterController';
 import { initRetryErrorLogsEvents } from './ui/retryErrorLogsController';
 import { initOtpEvents } from './ui/otpController';
+import { initRelayEvents } from './ui/relayController';
+import { initRemoteEvents } from './ui/remoteController';
 
 // Mount global interaction functions requested by DOM inline click events
 (window as any).switchView = switchView;
@@ -32,6 +34,8 @@ function initApp() {
         initUpdaterEvents();
         initRetryErrorLogsEvents();
         initOtpEvents();
+        initRelayEvents();
+        initRemoteEvents();
 
         // Set default language
         setLanguage('zh');

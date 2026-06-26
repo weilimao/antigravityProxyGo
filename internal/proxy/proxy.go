@@ -15,6 +15,24 @@ import (
 	"antigravity-proxy/internal/netutil"
 )
 
+// ContextKey is the type for context keys used in the proxy package
+type ContextKey string
+
+// RelayUserCtxKey is the context key for relay user ID
+const RelayUserCtxKey ContextKey = "relayUserID"
+
+// MetadataConn wraps a net.Conn with additional metadata for relay user tracking
+type MetadataConn struct {
+	net.Conn
+	RelayUserID string
+}
+
+// RemoteRelayInterface defines the interface for remote proxy relay
+type RemoteRelayInterface interface {
+	IsConnected() bool
+	DialThroughRemote(targetHostPort string) (net.Conn, error)
+}
+
 type MitmListener struct {
 	conns     chan net.Conn
 	closed    chan struct{}
@@ -61,6 +79,7 @@ type ProxyEngine struct {
 	isInterceptMode bool
 	logFn           func(string)
 	stateCallback   func(bool)
+	remoteRelay     RemoteRelayInterface // 远程代理中继 (客户端模式)
 }
 
 func NewProxyEngine(handler *ProxyHandler, logFn func(string), stateCallback func(bool)) *ProxyEngine {
@@ -96,6 +115,12 @@ func (pe *ProxyEngine) SetMode(mode bool) {
 	pe.activeTunnelsMu.Unlock()
 }
 
+func (pe *ProxyEngine) SetRemoteRelay(relay RemoteRelayInterface) {
+	pe.Lock()
+	defer pe.Unlock()
+	pe.remoteRelay = relay
+}
+
 func (pe *ProxyEngine) IsInterceptMode() bool {
 	pe.Lock()
 	defer pe.Unlock()
@@ -122,6 +147,12 @@ func (pe *ProxyEngine) Start(dataDir string) error {
 	pe.mitmListener = NewMitmListener()
 	pe.mitmServer = &http.Server{
 		Handler: pe.handler,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			if mc, ok := c.(*MetadataConn); ok && mc.RelayUserID != "" {
+				return context.WithValue(ctx, RelayUserCtxKey, mc.RelayUserID)
+			}
+			return ctx
+		},
 	}
 	go func() {
 		_ = pe.mitmServer.Serve(pe.mitmListener)
@@ -233,6 +264,20 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 	hostParts := strings.Split(hostAndPort, ":")
 	host := hostParts[0]
 
+	// 远程模式优先级最高：所有请求通过远程代理中继
+	if pe.remoteRelay != nil && pe.remoteRelay.IsConnected() {
+		remoteConn, errDial := pe.remoteRelay.DialThroughRemote(hostAndPort)
+		if errDial != nil {
+			pe.logFn(fmt.Sprintf("❌ Remote relay failed for %s: %v", hostAndPort, errDial))
+			_, _ = clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+			_ = clientConn.Close()
+			return
+		}
+		_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		pe.setupBidirectionalTunnel(clientConn, remoteConn)
+		return
+	}
+
 	isTargetHost := strings.Contains(host, "generativelanguage.googleapis.com") || strings.Contains(host, "cloudcode-pa.googleapis.com") || strings.Contains(host, "cloudaicompanion.googleapis.com") || strings.Contains(host, "aiplatform.googleapis.com")
 
 	pe.Lock()
@@ -252,28 +297,7 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 
 		_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-
-		pe.activeTunnelsMu.Lock()
-		pe.activeTunnels[clientConn] = remoteConn
-		pe.activeTunnelsMu.Unlock()
-
-		cleanup := func() {
-			pe.activeTunnelsMu.Lock()
-			delete(pe.activeTunnels, clientConn)
-			pe.activeTunnelsMu.Unlock()
-			_ = clientConn.Close()
-			_ = remoteConn.Close()
-		}
-
-		// Pipe bi-directionally
-		go func() {
-			defer cleanup()
-			_, _ = io.Copy(remoteConn, clientConn)
-		}()
-		go func() {
-			defer cleanup()
-			_, _ = io.Copy(clientConn, remoteConn)
-		}()
+		pe.setupBidirectionalTunnel(clientConn, remoteConn)
 		return
 	}
 
@@ -299,11 +323,43 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 从 RelayServer 注入的 context 中提取中继用户ID
+	relayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
+
+	var connToEnqueue net.Conn = tlsClientConn
+	if relayUserID != "" {
+		connToEnqueue = &MetadataConn{Conn: tlsClientConn, RelayUserID: relayUserID}
+	}
+
 	// Enqueue to decrypted HTTP Server
 	select {
-	case pe.mitmListener.conns <- tlsClientConn:
+	case pe.mitmListener.conns <- connToEnqueue:
 	case <-time.After(3 * time.Second): // 允许排队等待最长 3 秒，避免高并发下瞬间溢出丢弃
 		// Timeout, close connection
 		tlsClientConn.Close()
 	}
+}
+
+// setupBidirectionalTunnel establishes a bidirectional data tunnel between two connections
+func (pe *ProxyEngine) setupBidirectionalTunnel(clientConn, remoteConn net.Conn) {
+	pe.activeTunnelsMu.Lock()
+	pe.activeTunnels[clientConn] = remoteConn
+	pe.activeTunnelsMu.Unlock()
+
+	cleanup := func() {
+		pe.activeTunnelsMu.Lock()
+		delete(pe.activeTunnels, clientConn)
+		pe.activeTunnelsMu.Unlock()
+		_ = clientConn.Close()
+		_ = remoteConn.Close()
+	}
+
+	go func() {
+		defer cleanup()
+		_, _ = io.Copy(remoteConn, clientConn)
+	}()
+	go func() {
+		defer cleanup()
+		_, _ = io.Copy(clientConn, remoteConn)
+	}()
 }

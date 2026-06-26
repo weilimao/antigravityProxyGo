@@ -69,6 +69,20 @@
 
         <!-- 顶部右侧控制按钮 -->
         <div class="flex items-center gap-6">
+            <!-- 远程连接 -->
+            <div class="flex items-center gap-2 border-r border-outline-variant/30 pr-4 mr-2">
+                <div id="remoteStatusBadge" class="hidden flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full border">
+                    <span class="material-symbols-outlined text-[15px]">cloud</span>
+                    <span id="remoteStatusText">远程连接中</span>
+                    <button id="btnRemoteEnable" class="hidden ml-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 text-[11px] font-bold" data-i18n="remoteEnable">启用</button>
+                    <button id="btnRemoteDisable" class="hidden ml-1 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-[11px] font-bold" data-i18n="remoteDisable">停用</button>
+                    <button id="btnRemoteDisconnect" class="ml-1 text-red-400 hover:text-red-600 text-[11px] font-bold" data-i18n="remoteDisconnect">退出</button>
+                </div>
+                <button id="btnRemoteConnect" class="flex items-center gap-1 text-[12px] font-medium text-outline hover:text-primary dark:hover:text-primary-fixed-dim transition-colors px-2 py-1 rounded-md hover:bg-primary/5">
+                    <span class="material-symbols-outlined text-[16px]">link</span>
+                    <span data-i18n="remoteConnect">远程连接</span>
+                </button>
+            </div>
             <!-- 拦截开关 -->
             <div class="flex items-center gap-2">
                 <span class="text-[13px] font-medium text-on-surface dark:text-white" data-i18n="interceptMode">拦截模式</span>
@@ -751,6 +765,7 @@
             <!-- Sub Tab Menu -->
             <div class="flex gap-1 bg-slate-100 dark:bg-white/5 p-1 rounded-lg text-[12px]">
                 <button id="btnSettingsTabGeneral" class="px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200">参数配置</button>
+                <button id="btnSettingsTabRelay" class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" data-i18n="settingsTabRelay">中继服务器</button>
                 <button id="btnSettingsTabAbout" class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200">关于</button>
             </div>
         </div>
@@ -929,6 +944,47 @@
 
             </div>
         </div>
+    </div>
+
+                <!-- 中继服务器管理面板 -->
+                <div id="settings-panel-relay" style="display: none !important;" class="flex flex-col gap-6 w-full">
+                    <!-- 启用中继服务器 -->
+                    <div class="bg-white dark:bg-[#1e2538] rounded-xl border border-outline-variant/20 p-5">
+                        <h3 class="text-[14px] font-bold text-on-surface dark:text-white mb-4 flex items-center gap-2">
+                            <span class="material-symbols-outlined text-[18px] text-primary">dns</span>
+                            <span data-i18n="relayServerTitle">中继服务器</span>
+                        </h3>
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <div class="text-[13px] font-medium text-on-surface dark:text-white" data-i18n="relayEnableLabel">启用中继服务器</div>
+                                <div class="text-[11px] text-outline/60" data-i18n="relayEnableDesc">开放端口供其他客户端远程连接使用</div>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <input id="relayPortInput" type="text" placeholder="18444" value="18444" class="w-20 px-2 py-1 text-[12px] rounded-md border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white text-center" />
+                                <label class="relative inline-block w-10 h-5 cursor-pointer">
+                                    <input type="checkbox" id="chkRelayEnabled" class="sr-only peer" />
+                                    <div class="w-10 h-5 bg-slate-300 dark:bg-slate-600 rounded-full peer-checked:bg-primary transition-colors"></div>
+                                    <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-5 shadow-sm"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 中继用户列表 -->
+                    <div class="bg-white dark:bg-[#1e2538] rounded-xl border border-outline-variant/20 p-5">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-[14px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+                                <span class="material-symbols-outlined text-[18px] text-primary">group</span>
+                                <span data-i18n="relayUsersTitle">中继用户</span>
+                            </h3>
+                            <button id="btnAddRelayUser" class="flex items-center gap-1 text-[12px] font-medium text-primary hover:text-primary/80 transition-colors">
+                                <span class="material-symbols-outlined text-[16px]">person_add</span>
+                                <span data-i18n="relayAddUser">添加用户</span>
+                            </button>
+                        </div>
+                        <div id="relayUsersList"></div>
+                    </div>
+                </div>
+
     </div>
     <!-- End view-settings -->
 
@@ -1460,6 +1516,49 @@
             <div class="px-6 py-4 border-t border-outline-variant/30 bg-slate-50/50 dark:bg-white/5 flex justify-end gap-3 rounded-b-2xl">
                 <button id="btnExportPacketsCancel" class="px-4 py-2 text-[12px] font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40 cursor-pointer">取消</button>
                 <button id="btnExportPacketsConfirm" class="px-4 py-2 text-[12px] font-bold bg-primary text-white hover:bg-primary/90 rounded-lg transition-colors shadow-sm cursor-pointer">确认导出</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 远程连接登录弹窗 -->
+    <div id="remoteModal" class="hidden fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center">
+        <div class="bg-white dark:bg-[#1e2538] rounded-xl shadow-2xl w-[440px] p-6 border border-outline-variant/20">
+            <div class="flex items-center gap-2 mb-5">
+                <span class="material-symbols-outlined text-[22px] text-primary">cloud</span>
+                <h3 class="text-[16px] font-bold text-on-surface dark:text-white" data-i18n="remoteModalTitle">远程连接</h3>
+            </div>
+            <div class="space-y-3">
+                <div class="flex gap-3">
+                    <input id="remoteHostInput" type="text" class="flex-1 px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none" data-i18n-placeholder="remoteHostPlaceholder" placeholder="IP 地址 / 域名" />
+                    <input id="remotePortInput" type="text" class="w-24 px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white text-center focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none" placeholder="18444" />
+                </div>
+                <input id="remoteKeyInput" type="text" class="w-full px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none" data-i18n-placeholder="remoteKeyPlaceholder" placeholder="Key (用户标识)" />
+                <input id="remotePasswordInput" type="password" class="w-full px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none" data-i18n-placeholder="remotePasswordPlaceholder" placeholder="密码" />
+            </div>
+            <div id="remoteLoginResult" class="hidden mt-3 text-[12px] px-3 py-2 rounded-lg"></div>
+            <div class="flex gap-2 mt-5 justify-end">
+                <button id="btnRemoteTest" class="px-4 py-2 text-[12px] font-medium text-outline hover:text-primary border border-outline-variant/30 rounded-lg transition-colors" data-i18n="remoteBtnTest">测试连接</button>
+                <button id="btnRemoteLogin" class="px-4 py-2 text-[12px] font-medium text-white bg-primary hover:bg-primary/90 rounded-lg transition-colors" data-i18n="remoteBtnLogin">登录</button>
+                <button id="btnRemoteCancel" class="px-4 py-2 text-[12px] font-medium text-outline hover:text-on-surface border border-outline-variant/30 rounded-lg transition-colors" data-i18n="remoteBtnCancel">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加中继用户弹窗 -->
+    <div id="relayUserModal" class="hidden fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center">
+        <div class="bg-white dark:bg-[#1e2538] rounded-xl shadow-2xl w-[400px] p-6 border border-outline-variant/20">
+            <div class="flex items-center gap-2 mb-5">
+                <span class="material-symbols-outlined text-[22px] text-primary">person_add</span>
+                <h3 class="text-[16px] font-bold text-on-surface dark:text-white" data-i18n="relayAddUserTitle">添加中继用户</h3>
+            </div>
+            <div class="space-y-3">
+                <input id="relayUserKeyInput" type="text" class="w-full px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none" data-i18n-placeholder="relayUserKeyPlaceholder" placeholder="用户 Key" />
+                <input id="relayUserPasswordInput" type="password" class="w-full px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none" data-i18n-placeholder="relayUserPasswordPlaceholder" placeholder="密码" />
+                <input id="relayUserRemarkInput" type="text" class="w-full px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none" data-i18n-placeholder="relayUserRemarkPlaceholder" placeholder="备注 (可选)" />
+            </div>
+            <div class="flex gap-2 mt-5 justify-end">
+                <button id="btnRelayUserConfirm" class="px-4 py-2 text-[12px] font-medium text-white bg-primary hover:bg-primary/90 rounded-lg transition-colors" data-i18n="relayBtnConfirm">添加</button>
+                <button id="btnRelayUserCancel" class="px-4 py-2 text-[12px] font-medium text-outline hover:text-on-surface border border-outline-variant/30 rounded-lg transition-colors" data-i18n="relayBtnCancel">取消</button>
             </div>
         </div>
     </div>

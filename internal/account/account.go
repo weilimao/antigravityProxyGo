@@ -749,11 +749,13 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 	now := time.Now().UnixNano() / int64(time.Millisecond)
 
 	isAvailable := func(acc *Account) bool {
-		cooldownUntil := acc.CooldownUntil
+		cooldownUntil := int64(0)
 		if acc.Cooldowns != nil {
 			if v, ok := acc.Cooldowns[category]; ok {
 				cooldownUntil = v
 			}
+		} else {
+			cooldownUntil = acc.CooldownUntil
 		}
 		hasOverages := acc.EnableOverages && acc.Credits != nil && *acc.Credits > 0
 		return cooldownUntil == 0 || now >= cooldownUntil || hasOverages
@@ -764,11 +766,13 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 		acc := activeAccounts[0]
 		if isAvailable(acc) {
 			// 清除已过期的冷静期
-			cooldownUntil := acc.CooldownUntil
+			cooldownUntil := int64(0)
 			if acc.Cooldowns != nil {
 				if v, ok := acc.Cooldowns[category]; ok {
 					cooldownUntil = v
 				}
+			} else {
+				cooldownUntil = acc.CooldownUntil
 			}
 			if cooldownUntil > 0 && now >= cooldownUntil {
 				delete(acc.Cooldowns, category)
@@ -793,11 +797,13 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 		m.currentIndex = (m.currentIndex + 1) % len(activeAccounts)
 
 		if isAvailable(acc) {
-			cooldownUntil := acc.CooldownUntil
+			cooldownUntil := int64(0)
 			if acc.Cooldowns != nil {
 				if v, ok := acc.Cooldowns[category]; ok {
 					cooldownUntil = v
 				}
+			} else {
+				cooldownUntil = acc.CooldownUntil
 			}
 			if cooldownUntil > 0 && now >= cooldownUntil {
 				delete(acc.Cooldowns, category)
@@ -874,11 +880,13 @@ func (m *Manager) GetAvailableAccountsForChannel(channel string, modelName strin
 			continue
 		}
 
-		cooldownUntil := a.CooldownUntil
+		cooldownUntil := int64(0)
 		if a.Cooldowns != nil {
 			if v, ok := a.Cooldowns[category]; ok {
 				cooldownUntil = v
 			}
+		} else {
+			cooldownUntil = a.CooldownUntil
 		}
 		hasOverages := a.EnableOverages && a.Credits != nil && *a.Credits > 0
 		if cooldownUntil == 0 || now >= cooldownUntil || hasOverages {
@@ -1133,11 +1141,13 @@ func (m *Manager) RecordAccountError(id string, statusCode int, modelName string
 		return
 	}
 
-	cooldownUntil := acc.CooldownUntil
+	cooldownUntil := int64(0)
 	if acc.Cooldowns != nil {
 		if v, ok := acc.Cooldowns[category]; ok {
 			cooldownUntil = v
 		}
+	} else {
+		cooldownUntil = acc.CooldownUntil
 	}
 	hasQuota := cooldownUntil == 0 || now >= cooldownUntil
 

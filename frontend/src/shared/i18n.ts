@@ -159,6 +159,33 @@ const translations: Translations = {
         proxySettingTip: "配置代理在遭遇服务器临时算力不足等错误时的最大重试次数。",
         maxRetriesLabel: "最大重试次数",
         maxRetriesDesc: "请求失败时的重试上限（默认 20 次）。",
+
+        // Remote Connection
+        remoteConnect: "远程连接",
+        remoteDisconnect: "退出",
+        remoteEnable: "启用",
+        remoteDisable: "停用",
+        remoteModalTitle: "远程连接",
+        remoteHostPlaceholder: "IP 地址 / 域名",
+        remoteKeyPlaceholder: "Key (用户标识)",
+        remotePasswordPlaceholder: "密码",
+        remoteBtnTest: "测试连接",
+        remoteBtnLogin: "登录",
+        remoteBtnCancel: "取消",
+
+        // Relay Server
+        settingsTabRelay: "中继服务器",
+        relayServerTitle: "中继服务器",
+        relayEnableLabel: "启用中继服务器",
+        relayEnableDesc: "开放端口供其他客户端远程连接使用",
+        relayUsersTitle: "中继用户",
+        relayAddUser: "添加用户",
+        relayAddUserTitle: "添加中继用户",
+        relayUserKeyPlaceholder: "用户 Key",
+        relayUserPasswordPlaceholder: "密码",
+        relayUserRemarkPlaceholder: "备注 (可选)",
+        relayBtnConfirm: "添加",
+        relayBtnCancel: "取消",
     },
     en: {
         title: "Console",
@@ -306,6 +333,33 @@ const translations: Translations = {
         proxySettingTip: "Configure the maximum retry limit when the proxy encounters temporary server capacity issues.",
         maxRetriesLabel: "Maximum Retry Count",
         maxRetriesDesc: "The upper limit of retries when a request fails (default is 20 times).",
+
+        // Remote Connection
+        remoteConnect: "Remote",
+        remoteDisconnect: "Exit",
+        remoteEnable: "Enable",
+        remoteDisable: "Disable",
+        remoteModalTitle: "Remote Connection",
+        remoteHostPlaceholder: "IP / Domain",
+        remoteKeyPlaceholder: "Key (User ID)",
+        remotePasswordPlaceholder: "Password",
+        remoteBtnTest: "Test",
+        remoteBtnLogin: "Login",
+        remoteBtnCancel: "Cancel",
+
+        // Relay Server
+        settingsTabRelay: "Relay Server",
+        relayServerTitle: "Relay Server",
+        relayEnableLabel: "Enable Relay Server",
+        relayEnableDesc: "Open port for remote client connections",
+        relayUsersTitle: "Relay Users",
+        relayAddUser: "Add User",
+        relayAddUserTitle: "Add Relay User",
+        relayUserKeyPlaceholder: "User Key",
+        relayUserPasswordPlaceholder: "Password",
+        relayUserRemarkPlaceholder: "Remark (optional)",
+        relayBtnConfirm: "Add",
+        relayBtnCancel: "Cancel",
     }
 };
 

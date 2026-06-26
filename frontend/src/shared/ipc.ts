@@ -90,6 +90,13 @@ export const shell = {
             console.error('[IPC] Failed to run refreshDataDir:', err);
         }
     }
+    if ((window as any).refreshRelayUsers) {
+        try {
+            (window as any).refreshRelayUsers();
+        } catch (err) {
+            console.error('[IPC] Failed to run refreshRelayUsers:', err);
+        }
+    }
 
     // Request initial state, accounts, and certificate status once channels are established
     ipcRenderer.send('get-state');

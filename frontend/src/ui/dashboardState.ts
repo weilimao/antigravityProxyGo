@@ -36,6 +36,13 @@ export interface DashboardState {
     isRefreshingAll: boolean;
     isRefreshingAggregate: boolean;
 
+    // Remote Mode State
+    isRemoteMode: boolean;
+    remoteHost: string;
+    remotePort: string;
+    remoteUserKey: string;
+    remoteStats: any | null;
+
     // Shared Callbacks for Cross-Module Communication
     callbacks: {
         renderLogsTable: () => void;
@@ -83,6 +90,13 @@ const state: DashboardState = {
     isLoadingAuth: false,
     isRefreshingAll: false,
     isRefreshingAggregate: false,
+
+    // Remote Mode State
+    isRemoteMode: false,
+    remoteHost: '',
+    remotePort: '',
+    remoteUserKey: '',
+    remoteStats: null,
 
     // Shared Callbacks for Cross-Module Communication
     callbacks: {

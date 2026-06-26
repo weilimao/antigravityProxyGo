@@ -259,46 +259,124 @@ func (u *UsageTracker) GetPayload() interface{} {
 	u.RLock()
 	defer u.RUnlock()
 
-	// deep copy to avoid race conditions
-	accountsCopy := make(map[string]*AccountUsage)
-	for k, acc := range u.state.Accounts {
-		modelsCopy := make(map[string]*ModelUsage)
-		for mk, mu := range acc.Models {
-			modelsCopy[mk] = &ModelUsage{
-				Model: mu.Model,
-				TokenStats: TokenStats{
-					RequestCount:     mu.RequestCount,
-					InputTokens:      mu.InputTokens,
-					OutputTokens:     mu.OutputTokens,
-					CachedTokens:     mu.CachedTokens,
-					CacheHitRequests: mu.CacheHitRequests,
-					InputCost:        mu.InputCost,
-					OutputCost:       mu.OutputCost,
-					CachedCost:       mu.CachedCost,
-					TotalCost:        mu.TotalCost,
-				},
-				LastUsedAt: mu.LastUsedAt,
-			}
+	mergeTokenStats := func(dest *TokenStats, src TokenStats) {
+		dest.RequestCount += src.RequestCount
+		dest.InputTokens += src.InputTokens
+		dest.OutputTokens += src.OutputTokens
+		dest.CachedTokens += src.CachedTokens
+		dest.CacheHitRequests += src.CacheHitRequests
+		dest.InputCost = math.Round((dest.InputCost+src.InputCost)*1000000.0) / 1000000.0
+		dest.OutputCost = math.Round((dest.OutputCost+src.OutputCost)*1000000.0) / 1000000.0
+		dest.CachedCost = math.Round((dest.CachedCost+src.CachedCost)*1000000.0) / 1000000.0
+		dest.TotalCost = math.Round((dest.TotalCost+src.TotalCost)*1000000.0) / 1000000.0
+	}
+
+	getNewerTime := func(t1, t2 string) string {
+		if t1 == "" {
+			return t2
 		}
-		accountsCopy[k] = &AccountUsage{
-			AccountID: acc.AccountID,
-			Email:     acc.Email,
-			Provider:  acc.Provider,
-			ProjectID: acc.ProjectID,
-			ScopeType: acc.ScopeType,
-			TokenStats: TokenStats{
-				RequestCount:     acc.RequestCount,
-				InputTokens:      acc.InputTokens,
-				OutputTokens:     acc.OutputTokens,
-				CachedTokens:     acc.CachedTokens,
-				CacheHitRequests: acc.CacheHitRequests,
-				InputCost:        acc.InputCost,
-				OutputCost:       acc.OutputCost,
-				CachedCost:       acc.CachedCost,
-				TotalCost:        acc.TotalCost,
-			},
-			LastUsedAt: acc.LastUsedAt,
-			Models:     modelsCopy,
+		if t2 == "" {
+			return t1
+		}
+		p1, err1 := time.Parse(time.RFC3339, t1)
+		p2, err2 := time.Parse(time.RFC3339, t2)
+		if err1 == nil && err2 == nil {
+			if p1.After(p2) {
+				return t1
+			}
+			return t2
+		}
+		if t1 > t2 {
+			return t1
+		}
+		return t2
+	}
+
+	// deep copy and dynamically merge duplicate accounts by Email + Provider
+	accountsCopy := make(map[string]*AccountUsage)
+	for _, acc := range u.state.Accounts {
+		email := strings.TrimSpace(acc.Email)
+		provider := strings.TrimSpace(acc.Provider)
+		if provider == "" {
+			provider = "direct"
+		}
+
+		var mergeKey string
+		if email != "" {
+			mergeKey = strings.ToLower(email) + ":" + strings.ToLower(provider)
+		} else {
+			mergeKey = strings.ToLower(acc.AccountID) + ":" + strings.ToLower(provider)
+		}
+
+		existing, exists := accountsCopy[mergeKey]
+		if !exists {
+			modelsCopy := make(map[string]*ModelUsage)
+			for mk, mu := range acc.Models {
+				modelsCopy[mk] = &ModelUsage{
+					Model: mu.Model,
+					TokenStats: TokenStats{
+						RequestCount:     mu.RequestCount,
+						InputTokens:      mu.InputTokens,
+						OutputTokens:     mu.OutputTokens,
+						CachedTokens:     mu.CachedTokens,
+						CacheHitRequests: mu.CacheHitRequests,
+						InputCost:        mu.InputCost,
+						OutputCost:       mu.OutputCost,
+						CachedCost:       mu.CachedCost,
+						TotalCost:        mu.TotalCost,
+					},
+					LastUsedAt: mu.LastUsedAt,
+				}
+			}
+			accountsCopy[mergeKey] = &AccountUsage{
+				AccountID: acc.AccountID,
+				Email:     acc.Email,
+				Provider:  acc.Provider,
+				ProjectID: acc.ProjectID,
+				ScopeType: acc.ScopeType,
+				TokenStats: TokenStats{
+					RequestCount:     acc.RequestCount,
+					InputTokens:      acc.InputTokens,
+					OutputTokens:     acc.OutputTokens,
+					CachedTokens:     acc.CachedTokens,
+					CacheHitRequests: acc.CacheHitRequests,
+					InputCost:        acc.InputCost,
+					OutputCost:       acc.OutputCost,
+					CachedCost:       acc.CachedCost,
+					TotalCost:        acc.TotalCost,
+				},
+				LastUsedAt: acc.LastUsedAt,
+				Models:     modelsCopy,
+			}
+		} else {
+			// Merge token stats
+			mergeTokenStats(&existing.TokenStats, acc.TokenStats)
+			existing.LastUsedAt = getNewerTime(existing.LastUsedAt, acc.LastUsedAt)
+
+			// Merge models stats
+			for mk, mu := range acc.Models {
+				existingModel, modelExists := existing.Models[mk]
+				if !modelExists {
+					existing.Models[mk] = &ModelUsage{
+						Model: mu.Model,
+						TokenStats: TokenStats{
+							RequestCount:     mu.RequestCount,
+							InputTokens:      mu.InputTokens,
+							OutputTokens:     mu.OutputTokens,
+							CachedTokens:     mu.CachedTokens,
+							CacheHitRequests: mu.CacheHitRequests,
+							InputCost:        mu.InputCost,
+							OutputCost:       mu.OutputCost,
+							CachedCost:       mu.CachedCost,
+							TotalCost:        mu.TotalCost,
+						},
+						LastUsedAt: mu.LastUsedAt,
+					}
+				} else {
+					mergeTokenStats(&existingModel.TokenStats, mu.TokenStats)
+					existingModel.LastUsedAt = getNewerTime(existingModel.LastUsedAt, mu.LastUsedAt)
+				}
+			}
 		}
 	}
 

@@ -30,6 +30,13 @@ type Config struct {
 	AutoStart       bool   `json:"autoStart"`
 	SilentStart     bool   `json:"silentStart"`
 	MaxRetries      int    `json:"maxRetries"`
+	RelayEnabled    bool   `json:"relayEnabled"`
+	RelayPort       string `json:"relayPort"`
+	RemoteHost      string `json:"remoteHost"`
+	RemotePort      string `json:"remotePort"`
+	RemoteKey       string `json:"remoteKey"`
+	RemotePassword  string `json:"remotePassword"`
+	RemoteEnabled   bool   `json:"remoteEnabled"`
 }
 
 type Manager struct {
@@ -168,6 +175,97 @@ func (m *Manager) SetSilentStart(enabled bool) error {
 	m.Lock()
 	defer m.Unlock()
 	m.config.SilentStart = enabled
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRelayEnabled() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.RelayEnabled
+}
+
+func (m *Manager) SetRelayEnabled(enabled bool) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RelayEnabled = enabled
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRelayPort() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.RelayPort
+}
+
+func (m *Manager) SetRelayPort(port string) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RelayPort = port
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRemoteHost() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.RemoteHost
+}
+
+func (m *Manager) SetRemoteHost(host string) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RemoteHost = host
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRemotePort() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.RemotePort
+}
+
+func (m *Manager) SetRemotePort(port string) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RemotePort = port
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRemoteKey() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.RemoteKey
+}
+
+func (m *Manager) SetRemoteKey(key string) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RemoteKey = key
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRemotePassword() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.RemotePassword
+}
+
+func (m *Manager) SetRemotePassword(pwd string) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RemotePassword = pwd
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRemoteEnabled() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.RemoteEnabled
+}
+
+func (m *Manager) SetRemoteEnabled(enabled bool) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RemoteEnabled = enabled
 	return m.SaveConfig()
 }
 
@@ -394,6 +492,13 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			IsInterceptMode: false,
 			AutoStart:       false,
 			SilentStart:     false,
+			RelayEnabled:    false,
+			RelayPort:       "18444",
+			RemoteHost:      "",
+			RemotePort:      "",
+			RemoteKey:       "",
+			RemotePassword:  "",
+			RemoteEnabled:   false,
 		}
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")
 		if err != nil {
@@ -439,6 +544,20 @@ type ManagerInterface interface {
 	SetSilentStart(enabled bool) error
 	GetMaxRetries() int
 	SetMaxRetries(retries int) error
+	GetRelayEnabled() bool
+	SetRelayEnabled(enabled bool) error
+	GetRelayPort() string
+	SetRelayPort(port string) error
+	GetRemoteHost() string
+	SetRemoteHost(host string) error
+	GetRemotePort() string
+	SetRemotePort(port string) error
+	GetRemoteKey() string
+	SetRemoteKey(key string) error
+	GetRemotePassword() string
+	SetRemotePassword(pwd string) error
+	GetRemoteEnabled() bool
+	SetRemoteEnabled(enabled bool) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,

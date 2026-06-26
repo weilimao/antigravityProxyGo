@@ -21,6 +21,7 @@ import (
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/proxy"
 	"antigravity-proxy/internal/quota"
+	"antigravity-proxy/internal/relay"
 	"antigravity-proxy/internal/session"
 	"antigravity-proxy/internal/settings"
 	"antigravity-proxy/internal/stats"
@@ -51,6 +52,13 @@ type App struct {
 	isQuittingMu  sync.RWMutex
 	isWindowVisible   bool
 	isWindowVisibleMu sync.RWMutex
+	// Relay server components
+	relayUserMgr  *relay.UserManager
+	relayAuthMgr  *relay.AuthManager
+	relayStatsMgr *relay.StatsTracker
+	relayAPIMgr   *relay.APIHandler
+	relayServer   *relay.RelayServer
+	remoteRelay   *proxy.RemoteRelay
 }
 
 func NewApp() *App {
@@ -174,6 +182,18 @@ func (a *App) startup(ctx context.Context) {
 		a.quotaSvc.SetCapturedProject,
 		a.quotaSvc.GetStoredProject,
 		a.settingsMgr.GetMaxRetries,
+		func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int) {
+			if a.relayStatsMgr != nil {
+				a.relayStatsMgr.RecordUsage(relay.RelaySample{
+					UserID:       userID,
+					UserKey:      userKey,
+					ModelName:    modelName,
+					InTokens:     inTokens,
+					OutTokens:    outTokens,
+					CachedTokens: cachedTokens,
+				})
+			}
+		},
 	)
 
 	a.proxyEngine = proxy.NewProxyEngine(proxyHandler, a.AddLog, func(isRunning bool) {
@@ -187,6 +207,39 @@ func (a *App) startup(ctx context.Context) {
 	// Apply patches and start proxy
 	a.AddLog("🖥️ Antigravity Proxy UI Started")
 	a.proxyEngine.SetMode(a.settingsMgr.GetIsInterceptMode())
+	// 7a. Initialize Relay components
+	a.ensureRelayInitialized()
+	if a.settingsMgr.GetRelayEnabled() {
+		relayPort := a.settingsMgr.GetRelayPort()
+		if relayPort == "" {
+			relayPort = "18444"
+		}
+		if err := a.startRelayServer(relayPort); err != nil {
+			a.AddLog(fmt.Sprintf("❌ Failed to auto-start relay server: %v", err))
+		}
+	}
+
+	// 7b. Initialize RemoteRelay (client mode)
+	a.remoteRelay = proxy.NewRemoteRelay(a.AddLog)
+
+	// Auto-connect to remote relay if enabled
+	if a.settingsMgr.GetRemoteEnabled() {
+		host := a.settingsMgr.GetRemoteHost()
+		port := a.settingsMgr.GetRemotePort()
+		key := a.settingsMgr.GetRemoteKey()
+		pwd := a.settingsMgr.GetRemotePassword()
+		if host != "" && key != "" {
+			a.AddLog(fmt.Sprintf("🔄 正在自动连接远程中继 %s:%s...", host, port))
+			go func() {
+				if err := a.connectRemote(host, port, key, pwd); err != nil {
+					a.AddLog(fmt.Sprintf("❌ 自动连接远程中继失败: %v", err))
+				} else {
+					a.AddLog("🌐 远程中继自动连接成功")
+				}
+			}()
+		}
+	}
+
 	if err := a.proxyEngine.Start(activeDir); err != nil {
 		a.AddLog(fmt.Sprintf("❌ Failed to start Proxy Engine: %v", err))
 	}
@@ -210,6 +263,7 @@ func (a *App) shutdown() {
 		a.monitorCancel()
 	}
 
+	a.stopRelayServer()
 	if a.proxyEngine != nil {
 		a.proxyEngine.Stop()
 	}
@@ -286,6 +340,10 @@ func (a *App) domReady(ctx context.Context) {
 		},
 		"settings:get-max-retries": a.settingsMgr.GetMaxRetries(),
 		"get-userdata-path":        defaultDir,
+		"relay:get-config": map[string]interface{}{
+			"enabled": a.settingsMgr.GetRelayEnabled(),
+			"port":    a.settingsMgr.GetRelayPort(),
+		},
 	}
 
 	bytesCache, _ := json.Marshal(cache)
@@ -591,6 +649,9 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 	if res, handled, err := a.handleSessionIPC(channel, args); handled {
 		return res, err
 	}
+	if res, handled, err := a.handleRelayIPC(channel, args); handled {
+		return res, err
+	}
 
 	getStringArg := func(idx int) string {
 		if idx < len(args) {
@@ -787,6 +848,12 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 				a.packetCap.UpdatePath(newDir)
 				a.sessionRouter.UpdatePath(newDir)
 				a.quotaSvc.UpdatePath(newDir)
+				if a.relayUserMgr != nil {
+					a.relayUserMgr.UpdatePath(newDir)
+				}
+				if a.relayStatsMgr != nil {
+					a.relayStatsMgr.UpdatePath(newDir)
+				}
 			},
 		)
 
