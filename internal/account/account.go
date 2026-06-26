@@ -278,6 +278,22 @@ func (m *Manager) AddAccount(acc *Account) {
 	m.Unlock()
 
 	_ = m.SaveAccounts(false)
+
+	// 自动为新添加的账号拉取配额和级别信息，以完成初始数据的填充
+	if m.FetchQuota != nil {
+		go func() {
+			res, err := m.FetchQuota(acc)
+			if err == nil && res != nil {
+				m.UpdateAccountCooldownFromQuota(acc.ID, res.Buckets)
+				if res.Tier != "" {
+					m.UpdateAccountTier(acc.ID, res.Tier)
+				}
+				if res.Credits != nil {
+					m.UpdateAccountCredits(acc.ID, *res.Credits)
+				}
+			}
+		}()
+	}
 }
 
 func (m *Manager) ImportAccountsList(accountsList []*Account) int {

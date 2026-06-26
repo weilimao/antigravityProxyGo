@@ -90,7 +90,7 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     const inputPath = document.getElementById('chartPathInput');
     const outputPath = document.getElementById('chartPathOutput');
     const cachedPath = document.getElementById('chartPathCached');
-    const cacheCreatedPath = document.getElementById('chartPathCacheCreated');
+    const requestsPath = document.getElementById('chartPathRequests');
     const inputArea = document.getElementById('chartAreaInput');
     const cachedArea = document.getElementById('chartAreaCached');
     const gridLinesGroup = document.getElementById('chartGridLines');
@@ -100,7 +100,7 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     const rightAxis = document.getElementById('chartRightAxis');
     const xAxis = document.getElementById('chartXAxis');
 
-    if (!trendSvg || !trends || trends.length === 0 || !costPath || !inputPath || !outputPath || !cachedPath || !cacheCreatedPath || !inputArea || !cachedArea || !gridLinesGroup || !sensorRect || !leftAxis || !rightAxis || !xAxis) return;
+    if (!trendSvg || !trends || trends.length === 0 || !costPath || !inputPath || !outputPath || !cachedPath || !requestsPath || !inputArea || !cachedArea || !gridLinesGroup || !sensorRect || !leftAxis || !rightAxis || !xAxis) return;
 
     // Calculate total summary stats for the filtered trends
     let totalCostVal = 0;
@@ -111,7 +111,7 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     let totalInputTokensVal = 0;
     let totalOutputTokensVal = 0;
     let totalCachedTokensVal = 0;
-    let totalCacheCreatedTokensVal = 0;
+    let totalRequestsVal = 0;
 
     trends.forEach(bin => {
         const binCost = bin.cost || 0;
@@ -150,7 +150,7 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
         totalInputTokensVal += bin.input || 0;
         totalOutputTokensVal += bin.output || 0;
         totalCachedTokensVal += bin.cached || 0;
-        totalCacheCreatedTokensVal += bin.cacheCreated || 0;
+        totalRequestsVal += bin.requests || 0;
     });
 
     const totalTokensVal = totalInputTokensVal + totalOutputTokensVal;
@@ -161,12 +161,13 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     const valSummaryOutput = document.getElementById('valSummaryOutput');
     const valSummaryCached = document.getElementById('valSummaryCached');
 
+    const labelSummaryTotalRequests = document.getElementById('labelSummaryTotalRequests');
+    const valSummaryTotalRequests = document.getElementById('valSummaryTotalRequests');
     const labelSummaryTotalTokens = document.getElementById('labelSummaryTotalTokens');
     const valSummaryTotalTokens = document.getElementById('valSummaryTotalTokens');
     const valSummaryInputTokens = document.getElementById('valSummaryInputTokens');
     const valSummaryOutputTokens = document.getElementById('valSummaryOutputTokens');
     const valSummaryCachedTokens = document.getElementById('valSummaryCachedTokens');
-    const valSummaryCacheCreatedTokens = document.getElementById('valSummaryCacheCreatedTokens');
 
     const dict = i18n[state.currentLanguage] || {};
 
@@ -185,6 +186,17 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     if (valSummaryOutput) valSummaryOutput.textContent = `$${totalOutputCostVal.toFixed(4)}`;
     if (valSummaryCached) valSummaryCached.textContent = `$${totalCachedCostVal.toFixed(4)}`;
 
+    if (labelSummaryTotalRequests) {
+        let labelKey = 'summaryTotalRequestsCustom';
+        if (range === 'today') labelKey = 'summaryTotalRequestsToday';
+        else if (range === '24h') labelKey = 'summaryTotalRequests24h';
+        else if (range === '3d') labelKey = 'summaryTotalRequests3d';
+        else if (range === '7d') labelKey = 'summaryTotalRequests7d';
+        else if (range === '30d') labelKey = 'summaryTotalRequests30d';
+        labelSummaryTotalRequests.textContent = dict[labelKey] || '总请求数:';
+    }
+    if (valSummaryTotalRequests) valSummaryTotalRequests.textContent = totalRequestsVal.toLocaleString();
+
     if (labelSummaryTotalTokens) {
         let labelKey = 'summaryTotalTokensCustom';
         if (range === 'today') labelKey = 'summaryTotalTokensToday';
@@ -199,7 +211,6 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     if (valSummaryInputTokens) valSummaryInputTokens.textContent = totalInputTokensVal.toLocaleString();
     if (valSummaryOutputTokens) valSummaryOutputTokens.textContent = totalOutputTokensVal.toLocaleString();
     if (valSummaryCachedTokens) valSummaryCachedTokens.textContent = totalCachedTokensVal.toLocaleString();
-    if (valSummaryCacheCreatedTokens) valSummaryCacheCreatedTokens.textContent = totalCacheCreatedTokensVal.toLocaleString();
 
     const N = trends.length;
     const xMin = 0, xMax = 1000;
@@ -208,15 +219,18 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     // Calculate maximum values
     let maxTokens = 1000;
     let maxCost = 0.01;
+    let maxRequests = 10;
     trends.forEach(d => {
-        const tokenMax = Math.max(d.input || 0, d.output || 0, d.cached || 0, d.cacheCreated || 0);
+        const tokenMax = Math.max(d.input || 0, d.output || 0, d.cached || 0);
         if (tokenMax > maxTokens) maxTokens = tokenMax;
         if ((d.cost || 0) > maxCost) maxCost = d.cost;
+        if ((d.requests || 0) > maxRequests) maxRequests = d.requests;
     });
 
     // Padding values
     maxTokens = Math.ceil(maxTokens * 1.15);
     maxCost = maxCost * 1.15;
+    maxRequests = Math.ceil(maxRequests * 1.15);
 
     // Reset Axis Containers only if counts are incorrect to avoid complete DOM destruction
     if (gridLinesGroup.children.length !== 5) {
@@ -350,25 +364,26 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     const getX = (idx: number) => xMin + (idx / Math.max(1, N - 1)) * (xMax - xMin);
     const getYToken = (val: number) => yMax - ((val || 0) / maxTokens) * (yMax - yMin);
     const getYCost = (val: number) => yMax - ((val || 0) / maxCost) * (yMax - yMin);
+    const getYRequests = (val: number) => yMax - ((val || 0) / maxRequests) * (yMax - yMin);
 
     const costPoints = trends.map((d, idx) => ({ x: getX(idx), y: getYCost(d.cost) }));
     const inputPoints = trends.map((d, idx) => ({ x: getX(idx), y: getYToken(d.input) }));
     const outputPoints = trends.map((d, idx) => ({ x: getX(idx), y: getYToken(d.output) }));
     const cachedPoints = trends.map((d, idx) => ({ x: getX(idx), y: getYToken(d.cached) }));
-    const cacheCreatedPoints = trends.map((d, idx) => ({ x: getX(idx), y: getYToken(d.cacheCreated) }));
+    const requestsPoints = trends.map((d, idx) => ({ x: getX(idx), y: getYRequests(d.requests) }));
 
     // 4. Generate & apply smooth paths
     const costD = getBezierPath(costPoints);
     const inputD = getBezierPath(inputPoints);
     const outputD = getBezierPath(outputPoints);
     const cachedD = getBezierPath(cachedPoints);
-    const cacheCreatedD = getBezierPath(cacheCreatedPoints);
+    const requestsD = getBezierPath(requestsPoints);
 
     costPath.setAttribute('d', costD);
     inputPath.setAttribute('d', inputD);
     outputPath.setAttribute('d', outputD);
     cachedPath.setAttribute('d', cachedD);
-    cacheCreatedPath.setAttribute('d', cacheCreatedD);
+    requestsPath.setAttribute('d', requestsD);
 
     // 5. Generate & apply areas
     if (N > 0) {
@@ -385,12 +400,12 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
     const tooltip = document.getElementById('chartTooltip');
 
     const ptCost = document.getElementById('hoverPointCost');
-    const ptCacheCreated = document.getElementById('hoverPointCacheCreated');
+    const ptRequests = document.getElementById('hoverPointRequests');
     const ptCached = document.getElementById('hoverPointCached');
     const ptInput = document.getElementById('hoverPointInput');
     const ptOutput = document.getElementById('hoverPointOutput');
 
-    if (!hoverLine || !hoverPointsGroup || !tooltip || !ptCost || !ptCacheCreated || !ptCached || !ptInput || !ptOutput) return;
+    if (!hoverLine || !hoverPointsGroup || !tooltip || !ptCost || !ptRequests || !ptCached || !ptInput || !ptOutput) return;
 
     const showHover = (idx: number) => {
         if (idx < 0 || idx >= N) return;
@@ -398,7 +413,7 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
         const x = getX(idx);
 
         const yCost = getYCost(d.cost);
-        const yCacheCreated = getYToken(d.cacheCreated);
+        const yRequests = getYRequests(d.requests);
         const yCached = getYToken(d.cached);
         const yInput = getYToken(d.input);
         const yOutput = getYToken(d.output);
@@ -411,7 +426,7 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
         // Position focus circles using CSS percentages
         const px = `${(x / 10).toFixed(2)}%`;
         ptCost.style.left = px; ptCost.style.top = `${(yCost / 3).toFixed(2)}%`;
-        ptCacheCreated.style.left = px; ptCacheCreated.style.top = `${(yCacheCreated / 3).toFixed(2)}%`;
+        ptRequests.style.left = px; ptRequests.style.top = `${(yRequests / 3).toFixed(2)}%`;
         ptCached.style.left = px; ptCached.style.top = `${(yCached / 3).toFixed(2)}%`;
         ptInput.style.left = px; ptInput.style.top = `${(yInput / 3).toFixed(2)}%`;
         ptOutput.style.left = px; ptOutput.style.top = `${(yOutput / 3).toFixed(2)}%`;
@@ -421,14 +436,14 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
         const tDate = document.getElementById('tooltipDate');
         const tInput = document.getElementById('tooltipInput');
         const tOutput = document.getElementById('tooltipOutput');
-        const tCacheCreated = document.getElementById('tooltipCacheCreated');
+        const tRequests = document.getElementById('tooltipRequests');
         const tCached = document.getElementById('tooltipCached');
         const tCost = document.getElementById('tooltipCost');
 
         if (tDate) tDate.textContent = d.time || '';
         if (tInput) tInput.textContent = (d.input || 0).toLocaleString();
         if (tOutput) tOutput.textContent = (d.output || 0).toLocaleString();
-        if (tCacheCreated) tCacheCreated.textContent = (d.cacheCreated || 0).toLocaleString();
+        if (tRequests) tRequests.textContent = (d.requests || 0).toLocaleString();
         if (tCached) tCached.textContent = (d.cached || 0).toLocaleString();
         if (tCost) tCost.textContent = `$${(d.cost || 0).toFixed(6)}`;
 
@@ -565,7 +580,7 @@ export function getFilteredTrends(trends: any[], range: string): any[] {
                 input: 0,
                 output: 0,
                 cached: 0,
-                cacheCreated: 0,
+                requests: 0,
                 cost: 0
             };
         }

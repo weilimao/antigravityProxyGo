@@ -348,7 +348,7 @@ export function renderAccounts(accounts: any[]) {
             header.className = 'flex justify-between items-start';
 
             const info = document.createElement('div');
-            info.className = 'flex flex-col flex-1 min-w-0 mr-2';
+            info.className = 'acc-info-header flex flex-col flex-1 min-w-0 mr-2';
 
             const providerBadge = acc.provider === 'antigravity'
                 ? '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 ml-2 mt-0.5 self-center">Antigravity</span>'
@@ -577,6 +577,53 @@ export function renderAccounts(accounts: any[]) {
         } else {
             // Card exists, selectively patch attributes only to avoid DOM recreation
             
+            // 0. Update account header (email, badges, tier)
+            const infoHeader = card.querySelector('.acc-info-header') as HTMLElement;
+            if (infoHeader) {
+                const providerBadge = acc.provider === 'antigravity'
+                    ? '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 ml-2 mt-0.5 self-center">Antigravity</span>'
+                    : (acc.provider === 'gemini-cli'
+                        ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Gemini CLI</span>'
+                        : '');
+
+                const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.projectId)
+                    ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center">Project</span>'
+                    : '';
+
+                let tierBadge = '';
+                if (acc.tier) {
+                    const tierStr = acc.tier.toUpperCase();
+                    if (tierStr === 'PRO') {
+                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 dark:text-rose-400 text-[9px] font-bold border border-rose-500/20 ml-2 mt-0.5 self-center">Pro</span>';
+                    } else if (tierStr === 'ULTRA') {
+                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center font-extrabold tracking-wide">Ultra</span>';
+                    } else if (tierStr === 'ENTERPRISE') {
+                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[9px] font-bold border border-blue-500/20 ml-2 mt-0.5 self-center">Enterprise</span>';
+                    } else if (tierStr === 'STANDARD') {
+                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[9px] font-bold border border-sky-500/20 ml-2 mt-0.5 self-center">Standard</span>';
+                    } else if (tierStr === 'FREE') {
+                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Free</span>';
+                    } else {
+                        tierBadge = `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">${acc.tier}</span>`;
+                    }
+                }
+
+                let projectInfoStr = '';
+                if (acc.provider === 'antigravity' && acc.projectId) {
+                    projectInfoStr = ` | 绑定项目: ${acc.projectId}`;
+                }
+
+                infoHeader.innerHTML = `
+                    <div class="flex items-center">
+                        <span class="text-[13px] font-bold text-on-surface dark:text-white truncate" title="${acc.email}">${acc.email}</span>
+                        ${providerBadge}
+                        ${projectBadge}
+                        ${tierBadge}
+                    </div>
+                    <span class="text-[11px] text-outline mt-0.5 truncate">添加于: ${new Date(acc.addedAt).toLocaleString()}${projectInfoStr}</span>
+                `;
+            }
+
             // 1. Update cooldown status
             const statusBadge = card.querySelector('.acc-status-badge') as HTMLElement;
             if (statusBadge) {

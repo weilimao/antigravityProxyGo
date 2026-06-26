@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"os"
+	"path/filepath"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -17,6 +18,11 @@ import (
 var assets embed.FS
 
 func main() {
+	// 将工作目录切换为可执行文件实际目录，确保自启动时工作目录正确，防止托盘初始化失败
+	if exePath, err := os.Executable(); err == nil {
+		_ = os.Chdir(filepath.Dir(exePath))
+	}
+
 	if shouldCheckSingleInstance() {
 		// Acquire single instance lock
 		lock, err := singleinstance.TryLock("antigravity-proxy-desktop")

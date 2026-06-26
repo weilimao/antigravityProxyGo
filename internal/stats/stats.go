@@ -33,15 +33,15 @@ type GlobalStats struct {
 }
 
 type HourlyTrend struct {
-	Time         string  `json:"time"` // "MM/DD HH:00"
-	Input        int     `json:"input"`
-	Output       int     `json:"output"`
-	Cached       int     `json:"cached"`
-	CacheCreated int     `json:"cacheCreated"`
-	Cost         float64 `json:"cost"`
-	InputCost    float64 `json:"inputCost"`
-	OutputCost   float64 `json:"outputCost"`
-	CachedCost   float64 `json:"cachedCost"`
+	Time       string  `json:"time"` // "MM/DD HH:00"
+	Input      int     `json:"input"`
+	Output     int     `json:"output"`
+	Cached     int     `json:"cached"`
+	Requests   int     `json:"requests"`
+	Cost       float64 `json:"cost"`
+	InputCost  float64 `json:"inputCost"`
+	OutputCost float64 `json:"outputCost"`
+	CachedCost float64 `json:"cachedCost"`
 }
 
 type RequestLog struct {
@@ -219,6 +219,7 @@ func (t *Tracker) updateTrends(inTokens, outTokens, cachedTokens int, cost, inpu
 	currentBin.Input += inTokens
 	currentBin.Output += outTokens
 	currentBin.Cached += cachedTokens
+	currentBin.Requests++
 	currentBin.Cost = math.Round((currentBin.Cost+cost)*1000000.0) / 1000000.0
 	currentBin.InputCost = math.Round((currentBin.InputCost+inputCost)*1000000.0) / 1000000.0
 	currentBin.OutputCost = math.Round((currentBin.OutputCost+outputCost)*1000000.0) / 1000000.0
@@ -293,15 +294,15 @@ func (t *Tracker) GetPayload(usagePayload interface{}) map[string]interface{} {
 	trendsCopy := make([]*HourlyTrend, len(t.trends))
 	for i, trend := range t.trends {
 		trendsCopy[i] = &HourlyTrend{
-			Time:         trend.Time,
-			Input:        trend.Input,
-			Output:       trend.Output,
-			Cached:       trend.Cached,
-			CacheCreated: trend.CacheCreated,
-			Cost:         trend.Cost,
-			InputCost:    trend.InputCost,
-			OutputCost:   trend.OutputCost,
-			CachedCost:   trend.CachedCost,
+			Time:       trend.Time,
+			Input:      trend.Input,
+			Output:     trend.Output,
+			Cached:     trend.Cached,
+			Requests:   trend.Requests,
+			Cost:       trend.Cost,
+			InputCost:  trend.InputCost,
+			OutputCost: trend.OutputCost,
+			CachedCost: trend.CachedCost,
 		}
 	}
 
@@ -526,15 +527,15 @@ func (t *Tracker) seedEmptyTrends() {
 		dateLabel := fmt.Sprintf("%02d/%02d", targetTime.Month(), targetTime.Day())
 
 		t.trends = append(t.trends, &HourlyTrend{
-			Time:         dateLabel + " " + hourLabel,
-			Input:        0,
-			Output:       0,
-			Cached:       0,
-			CacheCreated: 0,
-			Cost:         0.0,
-			InputCost:    0.0,
-			OutputCost:   0.0,
-			CachedCost:   0.0,
+			Time:       dateLabel + " " + hourLabel,
+			Input:      0,
+			Output:     0,
+			Cached:     0,
+			Requests:   0,
+			Cost:       0.0,
+			InputCost:  0.0,
+			OutputCost: 0.0,
+			CachedCost: 0.0,
 		})
 	}
 }

@@ -1,0 +1,44 @@
+2026/06/26 09:13:13 [WebView2] Environment created successfully
+2026/06/26 09:13:13 1: github.com/wailsapp/go-webview2/pkg/edge.(*Chromium).errorCallback
+	C:/Users/runneradmin/go/pkg/mod/github.com/wailsapp/go-webview2@v1.0.22/pkg/edge/chromium.go:151
+2026/06/26 09:13:13 2: github.com/wailsapp/go-webview2/pkg/edge.(*Chromium).CreateCoreWebView2ControllerCompleted
+	C:/Users/runneradmin/go/pkg/mod/github.com/wailsapp/go-webview2@v1.0.22/pkg/edge/chromium.go:332
+2026/06/26 09:13:13 3: github.com/wailsapp/go-webview2/pkg/edge._ICoreWebView2CreateCoreWebView2ControllerCompletedHandlerInvoke
+	C:/Users/runneradmin/go/pkg/mod/github.com/wailsapp/go-webview2@v1.0.22/pkg/edge/ICoreWebView2CreateCoreWebView2ControllerCompletedHandler.go:38
+2026/06/26 09:13:13 4: runtime.callbackWrap
+	C:/hostedtoolcache/windows/go/1.23.12/x64/src/runtime/syscall_windows.go:396
+2026/06/26 09:13:13 5: runtime.cgocallbackg1
+	C:/hostedtoolcache/windows/go/1.23.12/x64/src/runtime/cgocall.go:439
+2026/06/26 09:13:13 6: runtime.cgocallbackg
+	C:/hostedtoolcache/windows/go/1.23.12/x64/src/runtime/cgocall.go:350
+2026/06/26 09:13:13 7: runtime.cgocallback
+	C:/hostedtoolcache/windows/go/1.23.12/x64/src/runtime/asm_amd64.s:1084
+2026/06/26 09:13:13 8: runtime.systemstack_switch
+	C:/hostedtoolcache/windows/go/1.23.12/x64/src/runtime/asm_amd64.s:479
+2026/06/26 09:13:13 9: runtime.cgocall
+	C:/hostedtoolcache/windows/go/1.23.12/x64/src/runtime/cgocall.go:185
+2026/06/26 09:13:13 10: runtime.syscall_syscalln
+	C:/hostedtoolcache/windows/go/1.23.12/x64/src/runtime/syscall_windows.go:521
+2026/06/26 09:13:13 11: syscall.Syscall
+	C:/hostedtoolcache/windows/go/1.23.12/x64/src/runtime/syscall_windows.go:457
+2026/06/26 09:13:13 12: golang.org/x/sys/windows.(*Proc).Call
+	C:/Users/runneradmin/go/pkg/mod/golang.org/x/sys@v0.30.0/windows/dll_windows.go:170
+2026/06/26 09:13:13 13: golang.org/x/sys/windows.(*LazyProc).Call
+	C:/Users/runneradmin/go/pkg/mod/golang.org/x/sys@v0.30.0/windows/dll_windows.go:351
+2026/06/26 09:13:13 14: github.com/wailsapp/go-webview2/pkg/edge.(*Chromium).Embed
+	C:/Users/runneradmin/go/pkg/mod/github.com/wailsapp/go-webview2@v1.0.22/pkg/edge/chromium.go:209
+2026/06/26 09:13:13 15: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows.(*Frontend).setupChromium
+	C:/Users/runneradmin/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/frontend.go:549
+2026/06/26 09:13:13 16: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows.(*Frontend).Run
+	C:/Users/runneradmin/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/frontend.go:178
+2026/06/26 09:13:13 17: github.com/wailsapp/wails/v2/internal/app.(*App).Run
+	C:/Users/runneradmin/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/app/app_production.go:18
+2026/06/26 09:13:13 18: github.com/wailsapp/wails/v2/pkg/application.(*Application).Run
+	C:/Users/runneradmin/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/pkg/application/application.go:73
+2026/06/26 09:13:13 19: github.com/wailsapp/wails/v2.Run
+	C:/Users/runneradmin/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/wails.go:14
+2026/06/26 09:13:13 20: main.main
+	D:/a/antigravityProxyGo/antigravityProxyGo/main.go:37
+2026/06/26 09:13:13 21: runtime.main
+	C:/hostedtoolcache/windows/go/1.23.12/x64/src/runtime/proc.go:272
+[0626/091313.251:ERROR:ui\gfx\win\window_impl.cc:172] Failed to unregister class Chrome_WidgetWin_0. Error = 1412
