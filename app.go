@@ -28,7 +28,6 @@ import (
 	"antigravity-proxy/internal/stats"
 	"antigravity-proxy/internal/tray"
 	"antigravity-proxy/internal/update"
-	"antigravity-proxy/internal/totp"
 	"encoding/base32"
 )
 
@@ -294,6 +293,12 @@ func (a *App) startup(ctx context.Context) {
 	// Apply patches and start proxy
 	a.AddLog("🖥️ Antigravity Proxy UI Started")
 	a.proxyEngine.SetMode(a.settingsMgr.GetIsInterceptMode())
+	a.proxyEngine.UpdateSecurityRules(
+		a.settingsMgr.GetRelaySSRFBlock(),
+		a.settingsMgr.GetRelayPortBlock(),
+		a.settingsMgr.GetRelayDomainFilter(),
+		a.settingsMgr.GetRelayDomainWhitelist(),
+	)
 	// 7a. Initialize Relay components
 	a.ensureRelayInitialized()
 	if a.settingsMgr.GetRelayEnabled() {
@@ -347,6 +352,8 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown() {
+	tray.QuitTray()
+
 	if a.monitorCancel != nil {
 		a.monitorCancel()
 	}
@@ -364,8 +371,6 @@ func (a *App) shutdown() {
 	activeDir := a.settingsMgr.GetActiveDataDirectory()
 	caCertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
 	_ = patch.PatchAll(false, a.settingsMgr.GetDefaultUserDataPath(), homeDir, caCertPath, func(s string) {})
-
-	tray.QuitTray()
 }
 
 func (a *App) AddLog(msg string) {
@@ -740,6 +745,9 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 	if res, handled, err := a.handleRelayIPC(channel, args); handled {
 		return res, err
 	}
+	if res, handled, err := a.handleTotpIPC(channel, args); handled {
+		return res, err
+	}
 
 	getStringArg := func(idx int) string {
 		if idx < len(args) {
@@ -1079,63 +1087,7 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		a.accountMgr.UpdateAccount2FASecret(id, secret)
 		return marshalResponse(map[string]interface{}{"success": true})
 
-	case "totp:get-codes":
-		type OTPInfo struct {
-			AccountID string `json:"accountId"`
-			Email     string `json:"email"`
-			HasSecret bool   `json:"hasSecret"`
-			Code      string `json:"code"`
-			Remaining int    `json:"remaining"`
-			Error     string `json:"error,omitempty"`
-		}
 
-		accs := a.accountMgr.GetTwoFAAccounts()
-		results := make([]OTPInfo, 0, len(accs))
-
-		for _, acc := range accs {
-			info := OTPInfo{
-				AccountID: acc.ID,
-				Email:     acc.Email,
-				HasSecret: acc.TwoFASecret != "",
-			}
-
-			if acc.TwoFASecret != "" {
-				code, remaining, err := totp.GenerateTOTP(acc.TwoFASecret)
-				if err != nil {
-					info.Error = err.Error()
-				} else {
-					info.Code = code
-					info.Remaining = remaining
-				}
-			}
-
-			results = append(results, info)
-		}
-		return marshalResponse(results)
-
-	case "totp:add-account":
-		email := getStringArg(0)
-		secret := getStringArg(1)
-
-		if email == "" {
-			return marshalResponse(map[string]interface{}{"success": false, "error": "邮箱/账号名称不能为空"})
-		}
-
-		if secret != "" {
-			cleanSecret := strings.ReplaceAll(secret, " ", "")
-			cleanSecret = strings.ToUpper(cleanSecret)
-			if len(cleanSecret)%8 != 0 {
-				cleanSecret += strings.Repeat("=", 8-(len(cleanSecret)%8))
-			}
-			_, err := base32.StdEncoding.DecodeString(cleanSecret)
-			if err != nil {
-				return marshalResponse(map[string]interface{}{"success": false, "error": "无效的 Base32 格式，请检查密钥是否正确（支持包含空格）"})
-			}
-		}
-
-		a.accountMgr.AddTwoFAAccount(email, secret)
-
-		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "packet:download":
 		markdown := getStringArg(0)
@@ -1317,9 +1269,13 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 
 			var requests []*stats.RequestLog
 			for _, dr := range dbRequests {
+				formattedTime := dr.Timestamp
+				if t, err := time.Parse(time.RFC3339, dr.Timestamp); err == nil {
+					formattedTime = t.Local().Format("01/02 15:04:05")
+				}
 				requests = append(requests, &stats.RequestLog{
 					ID:           dr.ReqID,
-					Timestamp:    dr.Timestamp,
+					Timestamp:    formattedTime,
 					Model:        dr.ModelName,
 					InTokens:     dr.InTokens,
 					OutTokens:    dr.OutTokens,

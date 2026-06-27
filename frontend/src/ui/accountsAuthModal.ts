@@ -3,7 +3,7 @@ import { ipcRenderer, shell } from '../shared/ipc';
 export function showOneStopAuthModal(): Promise<{ success: boolean; email: string; projectId: string } | null> {
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
-        overlay.className = 'fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-[100] flex items-center justify-center transition-opacity duration-200';
+        overlay.className = 'fixed inset-0 bg-slate-950/60 z-[100] flex items-center justify-center transition-opacity duration-200';
         overlay.style.opacity = '0';
 
         const card = document.createElement('div');
@@ -11,7 +11,14 @@ export function showOneStopAuthModal(): Promise<{ success: boolean; email: strin
 
         let cachedAuthData: any = null;
 
+        const escListener = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                cleanup(null);
+            }
+        };
+
         function cleanup(result: { success: boolean; email: string; projectId: string } | null) {
+            document.removeEventListener('keydown', escListener);
             overlay.style.opacity = '0';
             card.classList.add('scale-95');
             setTimeout(() => {
@@ -56,7 +63,7 @@ export function showOneStopAuthModal(): Promise<{ success: boolean; email: strin
             const btnConfirm = card.querySelector('#flowConfirm') as HTMLButtonElement;
             const divError = card.querySelector('#flowError') as HTMLDivElement;
 
-            setTimeout(() => inputAuthCode.focus(), 50);
+            setTimeout(() => inputAuthCode.focus(), 250);
 
             ipcRenderer.invoke('auth:get-manual-oauth-url').then((authData: any) => {
                 if (authData && authData.url) {
@@ -194,7 +201,7 @@ export function showOneStopAuthModal(): Promise<{ success: boolean; email: strin
             const selectProject = card.querySelector('#flowProjectSelect') as HTMLSelectElement | null;
             const inputProject = card.querySelector('#flowProjectInput') as HTMLInputElement | null;
 
-            if (inputProject) setTimeout(() => inputProject.focus(), 50);
+            if (inputProject) setTimeout(() => inputProject.focus(), 250);
 
             btnCancel.addEventListener('click', () => cleanup(null));
             btnSubmit.addEventListener('click', handleSubmit);
@@ -262,11 +269,6 @@ export function showOneStopAuthModal(): Promise<{ success: boolean; email: strin
             if (e.target === overlay) cleanup(null);
         });
         
-        document.addEventListener('keydown', function escListener(e) {
-            if (e.key === 'Escape') {
-                document.removeEventListener('keydown', escListener);
-                cleanup(null);
-            }
-        });
+        document.addEventListener('keydown', escListener);
     });
 }

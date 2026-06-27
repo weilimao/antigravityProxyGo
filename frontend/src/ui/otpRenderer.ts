@@ -5,6 +5,12 @@ let otpEmptyState: HTMLElement | null = null;
 let otpCountBadge: HTMLElement | null = null;
 let otpCountdown: HTMLElement | null = null;
 
+let otpPaginationContainer: HTMLElement | null = null;
+let otpPaginationInfo: HTMLElement | null = null;
+let btnOtpPrevPage: HTMLButtonElement | null = null;
+let btnOtpNextPage: HTMLButtonElement | null = null;
+let otpPageIndicator: HTMLElement | null = null;
+
 let lastSignature = '';
 
 export function initRendererElements() {
@@ -13,10 +19,19 @@ export function initRendererElements() {
     otpEmptyState = document.getElementById('otpEmptyState');
     otpCountBadge = document.getElementById('otpCountBadge');
     otpCountdown = document.getElementById('otpCountdown');
+
+    otpPaginationContainer = document.getElementById('otpPaginationContainer');
+    otpPaginationInfo = document.getElementById('otpPaginationInfo');
+    btnOtpPrevPage = document.getElementById('btnOtpPrevPage') as HTMLButtonElement;
+    btnOtpNextPage = document.getElementById('btnOtpNextPage') as HTMLButtonElement;
+    otpPageIndicator = document.getElementById('otpPageIndicator');
 }
 
 export function renderOtpTable(
-    otpList: any[],
+    paginatedList: any[],
+    totalFilteredCount: number,
+    currentPage: number,
+    pageSize: number,
     onEditSecret: (accountId: string, email: string, currentSecret: string) => void,
     onClearSecret: (accountId: string, email: string) => void,
     onCopyCode: (code: string, btnEl: HTMLElement) => void
@@ -28,9 +43,31 @@ export function renderOtpTable(
 
     if (!body || !table || !empty || !badge) return;
 
-    badge.textContent = `共 ${otpList.length} 个账号`;
+    badge.textContent = `共 ${totalFilteredCount} 个账号`;
 
-    if (!otpList || otpList.length === 0) {
+    // Calculate total pages
+    const totalPages = Math.max(1, Math.ceil(totalFilteredCount / pageSize));
+
+    // Update pagination controls
+    if (otpPaginationContainer && otpPaginationInfo && btnOtpPrevPage && btnOtpNextPage && otpPageIndicator) {
+        if (totalFilteredCount === 0) {
+            otpPaginationContainer.classList.add('hidden');
+            otpPaginationInfo.textContent = '显示第 0-0 条，共 0 条';
+            btnOtpPrevPage.disabled = true;
+            btnOtpNextPage.disabled = true;
+            otpPageIndicator.textContent = '1 / 1';
+        } else {
+            otpPaginationContainer.classList.remove('hidden');
+            const startItem = (currentPage - 1) * pageSize + 1;
+            const endItem = Math.min(currentPage * pageSize, totalFilteredCount);
+            otpPaginationInfo.textContent = `显示第 ${startItem}-${endItem} 条，共 ${totalFilteredCount} 条`;
+            btnOtpPrevPage.disabled = currentPage === 1;
+            btnOtpNextPage.disabled = currentPage === totalPages;
+            otpPageIndicator.textContent = `${currentPage} / ${totalPages}`;
+        }
+    }
+
+    if (!paginatedList || paginatedList.length === 0) {
         table.classList.add('hidden');
         empty.classList.remove('hidden');
         empty.classList.add('flex');
@@ -38,11 +75,11 @@ export function renderOtpTable(
         return;
     }
 
-    const currentSignature = otpList.map(item => `${item.accountId}:${item.email}:${item.hasSecret}:${!!item.error}`).join('|');
+    const currentSignature = paginatedList.map(item => `${item.accountId}:${item.email}:${item.hasSecret}:${!!item.error}`).join('|');
 
     if (currentSignature === lastSignature) {
         // High performance update: update both dynamic code value and countdown text in place
-        otpList.forEach((item) => {
+        paginatedList.forEach((item) => {
             const tr = document.getElementById(`otp-row-${item.accountId}`);
             if (tr) {
                 const codeSpan = tr.querySelector('.otp-code-text');
@@ -72,7 +109,7 @@ export function renderOtpTable(
 
     body.innerHTML = '';
 
-    otpList.forEach((item) => {
+    paginatedList.forEach((item) => {
         const tr = document.createElement('tr');
         tr.id = `otp-row-${item.accountId}`;
         tr.className = 'hover:bg-slate-50/50 dark:hover:bg-white/[0.02] transition-colors border-b border-outline-variant/10';

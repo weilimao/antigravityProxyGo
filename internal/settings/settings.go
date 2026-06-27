@@ -35,8 +35,12 @@ type Config struct {
 	RemoteHost      string `json:"remoteHost"`
 	RemotePort      string `json:"remotePort"`
 	RemoteKey       string `json:"remoteKey"`
-	RemotePassword  string `json:"remotePassword"`
-	RemoteEnabled   bool   `json:"remoteEnabled"`
+	RemotePassword       string   `json:"remotePassword"`
+	RemoteEnabled        bool     `json:"remoteEnabled"`
+	RelaySSRFBlock       bool     `json:"relaySSRFBlock"`
+	RelayPortBlock       bool     `json:"relayPortBlock"`
+	RelayDomainFilter    bool     `json:"relayDomainFilter"`
+	RelayDomainWhitelist []string `json:"relayDomainWhitelist"`
 }
 
 type Manager struct {
@@ -57,12 +61,16 @@ func (m *Manager) Init(defaultPath string) {
 	m.defaultUserDataPath = defaultPath
 	m.activeDataDirectory = defaultPath
 	m.config = Config{
-		DataDirectory:   "",
-		EnableSystemLog: false,
-		IsInterceptMode: false,
-		AutoStart:       false,
-		SilentStart:     false,
-		MaxRetries:      20,
+		DataDirectory:        "",
+		EnableSystemLog:      false,
+		IsInterceptMode:      false,
+		AutoStart:            false,
+		SilentStart:          false,
+		MaxRetries:           20,
+		RelaySSRFBlock:       true,
+		RelayPortBlock:       true,
+		RelayDomainFilter:    false,
+		RelayDomainWhitelist: []string{"*.googleapis.com", "*.google.com", "*.anthropic.com", "*.openai.com"},
 	}
 
 	m.loadConfig()
@@ -266,6 +274,61 @@ func (m *Manager) SetRemoteEnabled(enabled bool) error {
 	m.Lock()
 	defer m.Unlock()
 	m.config.RemoteEnabled = enabled
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRelaySSRFBlock() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.RelaySSRFBlock
+}
+
+func (m *Manager) SetRelaySSRFBlock(val bool) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RelaySSRFBlock = val
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRelayPortBlock() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.RelayPortBlock
+}
+
+func (m *Manager) SetRelayPortBlock(val bool) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RelayPortBlock = val
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRelayDomainFilter() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.RelayDomainFilter
+}
+
+func (m *Manager) SetRelayDomainFilter(val bool) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RelayDomainFilter = val
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRelayDomainWhitelist() []string {
+	m.RLock()
+	defer m.RUnlock()
+	if m.config.RelayDomainWhitelist == nil {
+		return []string{}
+	}
+	return m.config.RelayDomainWhitelist
+}
+
+func (m *Manager) SetRelayDomainWhitelist(val []string) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RelayDomainWhitelist = val
 	return m.SaveConfig()
 }
 
@@ -498,7 +561,11 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			RemotePort:      "",
 			RemoteKey:       "",
 			RemotePassword:  "",
-			RemoteEnabled:   false,
+			RemoteEnabled:        false,
+			RelaySSRFBlock:       true,
+			RelayPortBlock:       true,
+			RelayDomainFilter:    false,
+			RelayDomainWhitelist: []string{"*.googleapis.com", "*.google.com", "*.anthropic.com", "*.openai.com"},
 		}
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")
 		if err != nil {
@@ -558,6 +625,14 @@ type ManagerInterface interface {
 	SetRemotePassword(pwd string) error
 	GetRemoteEnabled() bool
 	SetRemoteEnabled(enabled bool) error
+	GetRelaySSRFBlock() bool
+	SetRelaySSRFBlock(val bool) error
+	GetRelayPortBlock() bool
+	SetRelayPortBlock(val bool) error
+	GetRelayDomainFilter() bool
+	SetRelayDomainFilter(val bool) error
+	GetRelayDomainWhitelist() []string
+	SetRelayDomainWhitelist(val []string) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,

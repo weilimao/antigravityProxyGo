@@ -68,6 +68,15 @@ func (a *AuthManager) ValidateToken(token string) (*RelaySession, error) {
 		a.Unlock()
 		return nil, fmt.Errorf("token expired")
 	}
+
+	user := a.userMgr.GetUserByID(session.UserID)
+	if user == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+	if !user.Enabled {
+		return nil, fmt.Errorf("user %q is disabled", user.Key)
+	}
+
 	return session, nil
 }
 

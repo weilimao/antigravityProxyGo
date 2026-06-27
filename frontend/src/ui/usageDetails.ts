@@ -1,6 +1,11 @@
 const PANEL_ID = 'usageStatsPanel';
 const openAccounts = new Set<string>();
 
+let currentUsageData: any = null;
+let searchQuery = '';
+let currentPage = 1;
+const pageSize = 10;
+
 export function escapeHtml(value: any): string {
     return String(value == null ? '' : value)
         .replace(/&/g, '&amp;')
@@ -59,12 +64,12 @@ export function ensurePanel(): HTMLElement | null {
     let panel = document.getElementById(PANEL_ID);
     if (panel) return panel;
 
-    const host = document.getElementById('view-accounts');
+    const host = document.getElementById('view-usage-details');
     if (!host) return null;
 
     panel = document.createElement('div');
     panel.id = PANEL_ID;
-    panel.className = 'hidden';
+    panel.className = 'w-full';
     host.appendChild(panel);
     return panel;
 }
@@ -183,55 +188,218 @@ export function renderAccountBlock(account: any): string {
     `;
 }
 
-export function render(usage: any) {
+function renderPageButtons(totalPages: number, current: number): string {
+    if (totalPages <= 1) return '';
+    let html = '';
+    for (let i = 1; i <= totalPages; i++) {
+        if (i === current) {
+            html += `<button class="px-2 py-0.5 rounded bg-primary text-white text-[11px] font-bold shadow-sm">${i}</button>`;
+        } else {
+            html += `<button class="btn-usage-page-num px-2 py-0.5 rounded text-outline hover:text-primary hover:bg-primary/5 text-[11px] transition-colors" data-page="${i}">${i}</button>`;
+        }
+    }
+    return html;
+}
+
+export function render(usage?: any) {
+    if (usage !== undefined) {
+        currentUsageData = usage;
+    }
+
     const panel = ensurePanel();
     if (!panel) return;
 
-    const accounts = usage && usage.accounts ? Object.values(usage.accounts) : [];
-    if (accounts.length === 0) {
-        panel.classList.add('hidden');
-        panel.innerHTML = '';
+    const allAccounts = currentUsageData && currentUsageData.accounts ? Object.values(currentUsageData.accounts) : [];
+    if (allAccounts.length === 0) {
+        panel.classList.remove('hidden');
+        panel.innerHTML = `
+            <div class="glass-card rounded-xl p-8 flex flex-col items-center justify-center text-outline/50 border border-outline-variant/30">
+                <span class="material-symbols-outlined text-[48px] mb-2">analytics</span>
+                <span class="text-[13px]">暂无账号用量统计数据</span>
+            </div>
+        `;
         return;
     }
 
-    const totals = usage.totals || {};
-    const sortedAccounts = sortUsageItems(accounts);
+    const totals = currentUsageData.totals || {};
+    const sortedAccounts = sortUsageItems(allAccounts);
+
+    // 过滤账号列表
+    const query = searchQuery.trim().toLowerCase();
+    const filteredAccounts = sortedAccounts.filter((acc: any) => {
+        if (!query) return true;
+        const name = (acc.email || acc.accountId || '').toLowerCase();
+        return name.includes(query);
+    });
+
+    // 计算分页
+    const totalItems = filteredAccounts.length;
+    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+
+    const startIdx = (currentPage - 1) * pageSize;
+    const endIdx = Math.min(startIdx + pageSize, totalItems);
+    const pageAccounts = filteredAccounts.slice(startIdx, endIdx);
+
+    const startItem = totalItems > 0 ? startIdx + 1 : 0;
+    const endItem = endIdx;
+
     const tokenHits = totals.inputTokens > 0 ? (totals.cachedTokens / totals.inputTokens) * 100 : 0;
     const requestHits = totals.requestCount > 0 ? (totals.cacheHitRequests / totals.requestCount) * 100 : 0;
 
-    panel.classList.remove('hidden');
-    panel.innerHTML = `
-        <div class="glass-card rounded-xl p-4 flex flex-col gap-3 border border-outline-variant/30">
-            <div class="flex items-start justify-between gap-4">
-                <div class="min-w-0">
-                    <div class="text-[14px] font-bold text-on-surface dark:text-white">账号用量详情</div>
-                    <div class="text-[11px] text-outline dark:text-outline-variant mt-1">按账号与模型展开统计输入、输出、缓存 token 与成本</div>
-                </div>
-                <div class="flex items-center gap-4 text-right">
-                    ${renderSummaryChip('账号', String(sortedAccounts.length), 'primary')}
-                    ${renderSummaryChip('调用', formatNumber(totals.requestCount), 'slate')}
-                    ${renderSummaryChip('总成本', formatMoney(totals.totalCost), 'emerald')}
-                    ${renderSummaryChip('命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
-                </div>
-            </div>
-            <div class="flex flex-col gap-3">
-                ${sortedAccounts.map(renderAccountBlock).join('')}
-            </div>
-        </div>
-    `;
+    // 绘制整体结构（如果结构已存在，只需更新内容与绑定，避免重新构建整个DOM导致input失去焦点）
+    const containerExists = document.getElementById('usageContainerCard') !== null;
 
-    panel.querySelectorAll('details').forEach(el => {
-        el.addEventListener('toggle', () => {
-            const key = el.getAttribute('data-account-key');
-            if (key) {
-                if (el.open) {
-                    openAccounts.add(key);
-                } else {
-                    openAccounts.delete(key);
+    if (!containerExists) {
+        panel.classList.remove('hidden');
+        panel.innerHTML = `
+            <div id="usageContainerCard" class="glass-card rounded-xl flex flex-col flex-1 border border-outline-variant/30 min-h-[400px]">
+                <!-- 工具栏与统计汇总 -->
+                <div class="p-4 border-b border-outline-variant/30 flex flex-wrap items-center justify-between gap-4 bg-slate-50/50 dark:bg-white/5 rounded-t-xl">
+                    <div class="flex items-center gap-3">
+                        <div class="relative flex items-center">
+                            <span class="material-symbols-outlined absolute left-2.5 text-[16px] text-outline pointer-events-none">search</span>
+                            <input type="text" id="inputUsageSearch" value="${escapeHtml(searchQuery)}" placeholder="按账号名称/邮箱查询..." class="pl-8 pr-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary w-56 sm:w-64 transition-all" />
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-4 text-right" id="usageSummaryChips">
+                        ${renderSummaryChip('账号数', String(totalItems), 'primary')}
+                        ${renderSummaryChip('调用次数', formatNumber(totals.requestCount), 'slate')}
+                        ${renderSummaryChip('总成本', formatMoney(totals.totalCost), 'emerald')}
+                        ${renderSummaryChip('命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
+                    </div>
+                </div>
+                
+                <!-- 账号用量数据块列表 -->
+                <div class="p-4 flex flex-col gap-3 flex-grow overflow-y-auto" id="usageAccountsList">
+                    ${pageAccounts.length > 0 
+                        ? pageAccounts.map(renderAccountBlock).join('')
+                        : `<div class="flex flex-col items-center justify-center py-12 text-outline/50">
+                             <span class="material-symbols-outlined text-[48px] mb-2">search_off</span>
+                             <span class="text-[13px]">未找到符合条件的账号用量数据</span>
+                           </div>`
+                    }
+                </div>
+
+                <!-- 底部分页栏 -->
+                <div class="flex flex-wrap items-center justify-between px-4 py-3 border-t border-outline-variant/20 text-[12px]" id="usagePaginationFooter">
+                    <span class="text-outline text-[11px]" id="usagePaginationInfo">显示 ${startItem} - ${endItem} 条，共 ${totalItems} 条</span>
+                    <div class="flex items-center gap-1.5">
+                        <button id="btnPrevUsagePage" ${currentPage <= 1 ? 'disabled' : ''} class="px-2 py-1 rounded border border-outline-variant/30 text-outline hover:text-primary hover:bg-primary/5 disabled:opacity-40 disabled:pointer-events-none transition-colors text-[11px] flex items-center gap-0.5">
+                            <span class="material-symbols-outlined text-[14px]">chevron_left</span> 上一页
+                        </button>
+                        <div id="usagePageNumbers" class="flex items-center gap-1">
+                            ${renderPageButtons(totalPages, currentPage)}
+                        </div>
+                        <button id="btnNextUsagePage" ${currentPage >= totalPages ? 'disabled' : ''} class="px-2 py-1 rounded border border-outline-variant/30 text-outline hover:text-primary hover:bg-primary/5 disabled:opacity-40 disabled:pointer-events-none transition-colors text-[11px] flex items-center gap-0.5">
+                            下一页 <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // 首次初始化事件绑定
+        const searchInput = document.getElementById('inputUsageSearch') as HTMLInputElement;
+        if (searchInput) {
+            searchInput.addEventListener('input', (e) => {
+                searchQuery = (e.target as HTMLInputElement).value;
+                currentPage = 1;
+                render();
+            });
+        }
+    } else {
+        // 更新汇总芯片
+        const chipsEl = document.getElementById('usageSummaryChips');
+        if (chipsEl) {
+            chipsEl.innerHTML = `
+                ${renderSummaryChip('账号数', String(totalItems), 'primary')}
+                ${renderSummaryChip('调用次数', formatNumber(totals.requestCount), 'slate')}
+                ${renderSummaryChip('总成本', formatMoney(totals.totalCost), 'emerald')}
+                ${renderSummaryChip('命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
+            `;
+        }
+
+        // 更新账号列表内容
+        const listEl = document.getElementById('usageAccountsList');
+        if (listEl) {
+            listEl.innerHTML = pageAccounts.length > 0 
+                ? pageAccounts.map(renderAccountBlock).join('')
+                : `<div class="flex flex-col items-center justify-center py-12 text-outline/50">
+                     <span class="material-symbols-outlined text-[48px] mb-2">search_off</span>
+                     <span class="text-[13px]">未找到符合条件的账号用量数据</span>
+                   </div>`;
+        }
+
+        // 更新分页栏
+        const infoEl = document.getElementById('usagePaginationInfo');
+        if (infoEl) {
+            infoEl.textContent = `显示 ${startItem} - ${endItem} 条，共 ${totalItems} 条`;
+        }
+
+        const pageNumsEl = document.getElementById('usagePageNumbers');
+        if (pageNumsEl) {
+            pageNumsEl.innerHTML = renderPageButtons(totalPages, currentPage);
+        }
+
+        const prevBtn = document.getElementById('btnPrevUsagePage') as HTMLButtonElement;
+        if (prevBtn) prevBtn.disabled = currentPage <= 1;
+
+        const nextBtn = document.getElementById('btnNextUsagePage') as HTMLButtonElement;
+        if (nextBtn) nextBtn.disabled = currentPage >= totalPages;
+    }
+
+    // 重新为当前页的 details 绑定展开状态与分页按钮事件
+    const currentContainer = document.getElementById('usageContainerCard');
+    if (currentContainer) {
+        currentContainer.querySelectorAll('details').forEach(el => {
+            el.addEventListener('toggle', () => {
+                const key = el.getAttribute('data-account-key');
+                if (key) {
+                    if (el.open) {
+                        openAccounts.add(key);
+                    } else {
+                        openAccounts.delete(key);
+                    }
                 }
-            }
+            });
         });
-    });
+
+        const prevBtn = currentContainer.querySelector('#btnPrevUsagePage');
+        if (prevBtn) {
+            prevBtn.replaceWith(prevBtn.cloneNode(true));
+            const newPrev = currentContainer.querySelector('#btnPrevUsagePage');
+            if (newPrev && currentPage > 1) {
+                newPrev.addEventListener('click', () => {
+                    currentPage--;
+                    render();
+                });
+            }
+        }
+
+        const nextBtn = currentContainer.querySelector('#btnNextUsagePage');
+        if (nextBtn) {
+            nextBtn.replaceWith(nextBtn.cloneNode(true));
+            const newNext = currentContainer.querySelector('#btnNextUsagePage');
+            if (newNext && currentPage < totalPages) {
+                newNext.addEventListener('click', () => {
+                    currentPage++;
+                    render();
+                });
+            }
+        }
+
+        currentContainer.querySelectorAll('.btn-usage-page-num').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const p = Number((e.currentTarget as HTMLElement).getAttribute('data-page'));
+                if (p && p !== currentPage) {
+                    currentPage = p;
+                    render();
+                }
+            });
+        });
+    }
 }
 
 export function init() {

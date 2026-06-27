@@ -50,6 +50,41 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 
 	// ========== Relay Server Management ==========
 
+	case "relay:get-security-config":
+		return marshalResponse(map[string]interface{}{
+			"relaySSRFBlock":       a.settingsMgr.GetRelaySSRFBlock(),
+			"relayPortBlock":       a.settingsMgr.GetRelayPortBlock(),
+			"relayDomainFilter":    a.settingsMgr.GetRelayDomainFilter(),
+			"relayDomainWhitelist": a.settingsMgr.GetRelayDomainWhitelist(),
+		})
+
+	case "relay:set-security-config":
+		var config struct {
+			SSRFBlock       bool     `json:"relaySSRFBlock"`
+			PortBlock       bool     `json:"relayPortBlock"`
+			DomainFilter    bool     `json:"relayDomainFilter"`
+			DomainWhitelist []string `json:"relayDomainWhitelist"`
+		}
+		if len(args) > 0 {
+			b, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(b, &config)
+		}
+
+		_ = a.settingsMgr.SetRelaySSRFBlock(config.SSRFBlock)
+		_ = a.settingsMgr.SetRelayPortBlock(config.PortBlock)
+		_ = a.settingsMgr.SetRelayDomainFilter(config.DomainFilter)
+		_ = a.settingsMgr.SetRelayDomainWhitelist(config.DomainWhitelist)
+
+		a.proxyEngine.UpdateSecurityRules(
+			config.SSRFBlock,
+			config.PortBlock,
+			config.DomainFilter,
+			config.DomainWhitelist,
+		)
+
+		a.AddLog("🛡️ 中继服务网络安全规则已保存并热加载")
+		return marshalResponse(map[string]interface{}{"success": true})
+
 	case "relay:get-config":
 		return marshalResponse(map[string]interface{}{
 			"enabled": a.settingsMgr.GetRelayEnabled(),
@@ -85,9 +120,83 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 	case "relay:get-users":
 		a.ensureRelayInitialized()
 		if a.relayUserMgr == nil {
-			return marshalResponse([]interface{}{})
+			return marshalResponse(map[string]interface{}{
+				"users": []interface{}{},
+				"total": 0,
+				"page":  1,
+			})
 		}
-		return marshalResponse(a.relayUserMgr.GetUsers())
+
+		var req struct {
+			Page       int    `json:"page"`
+			PageSize   int    `json:"pageSize"`
+			Search     string `json:"search"`
+			PackageTag string `json:"packageTag"`
+		}
+		if len(args) > 0 {
+			b, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(b, &req)
+		}
+
+		if req.Page <= 0 {
+			req.Page = 1
+		}
+		if req.PageSize <= 0 {
+			req.PageSize = 10
+		}
+
+		allUsers := a.relayUserMgr.GetUsers()
+		var pkgs []*relay.RelayPackageTemplate
+		if a.relayPackageMgr != nil {
+			pkgs = a.relayPackageMgr.GetPackages()
+		}
+
+		var filtered []*relay.RelayUser
+		for _, u := range allUsers {
+			// 1. Search by account name (case-insensitive)
+			if req.Search != "" {
+				if !strings.Contains(strings.ToLower(u.Key), strings.ToLower(req.Search)) {
+					continue
+				}
+			}
+
+			// 2. Filter by package type
+			if req.PackageTag != "" && req.PackageTag != "all" {
+				pkgName := matchUserPackage(u.Quotas, pkgs)
+				if req.PackageTag == "custom" {
+					if pkgName != "custom" {
+						continue
+					}
+				} else if req.PackageTag == "unlimited" {
+					if pkgName != "unlimited" {
+						continue
+					}
+				} else {
+					if pkgName != req.PackageTag {
+						continue
+					}
+				}
+			}
+
+			filtered = append(filtered, u)
+		}
+
+		total := len(filtered)
+		start := (req.Page - 1) * req.PageSize
+		end := start + req.PageSize
+		if start > total {
+			start = total
+		}
+		if end > total {
+			end = total
+		}
+
+		paginatedUsers := filtered[start:end]
+		return marshalResponse(map[string]interface{}{
+			"users": paginatedUsers,
+			"total": total,
+			"page":  req.Page,
+		})
 
 	case "relay:add-user":
 		key := getStringArg(0)
@@ -533,4 +642,33 @@ func (a *App) getRemoteStatusPayload() map[string]interface{} {
 // emitRemoteState broadcasts the complete remote state to the frontend
 func (a *App) emitRemoteState() {
 	wailsRuntime.EventsEmit(a.ctx, "remote-state", a.getRemoteStatusPayload())
+}
+
+// matchUserPackage returns the package name if user quotas match a template,
+// otherwise returns "custom" or "unlimited".
+func matchUserPackage(q relay.UserQuotas, pkgs []*relay.RelayPackageTemplate) string {
+	for _, pkg := range pkgs {
+		if checkQuotaEqual(q.Gemini, pkg.Quotas.Gemini) &&
+			checkQuotaEqual(q.Claude, pkg.Quotas.Claude) &&
+			q.ValidDuration == pkg.Quotas.ValidDuration &&
+			q.ValidUnit == pkg.Quotas.ValidUnit {
+			return pkg.Name
+		}
+	}
+	if q.Gemini.EnableFixed || q.Gemini.EnableHourly || q.Gemini.EnableDaily ||
+		q.Claude.EnableFixed || q.Claude.EnableHourly || q.Claude.EnableDaily {
+		return "custom"
+	}
+	return "unlimited"
+}
+
+func checkQuotaEqual(q1, q2 relay.ModelQuota) bool {
+	return q1.EnableFixed == q2.EnableFixed &&
+		q1.FixedTokens == q2.FixedTokens &&
+		q1.EnableHourly == q2.EnableHourly &&
+		q1.HourlyHours == q2.HourlyHours &&
+		q1.HourlyTokens == q2.HourlyTokens &&
+		q1.EnableDaily == q2.EnableDaily &&
+		q1.DailyDays == q2.DailyDays &&
+		q1.DailyTokens == q2.DailyTokens
 }

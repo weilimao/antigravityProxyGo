@@ -2,6 +2,11 @@ import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 
 let relayUsers: any[] = [];
+let currentPage = 1;
+const pageSize = 10;
+let totalUsersCount = 0;
+let currentSearchQuery = '';
+let currentPackageFilter = 'all';
 
 export function initRelayEvents() {
     // Toggle relay server
@@ -41,9 +46,56 @@ export function initRelayEvents() {
         if (relayPortInput) relayPortInput.value = config?.port || '18444';
     });
 
-    // Load persisted users and packages on init
-    refreshRelayUsers();
-    refreshRelayPackages();
+    // Search input event (300ms debounce)
+    const searchInput = document.getElementById('relayUserSearchInput') as HTMLInputElement;
+    if (searchInput) {
+        let debounceTimer: any;
+        searchInput.addEventListener('input', () => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                currentSearchQuery = searchInput.value.trim();
+                currentPage = 1;
+                refreshRelayUsers();
+            }, 300);
+        });
+    }
+
+    // Package filter event
+    const packageFilter = document.getElementById('relayUserPackageFilter') as HTMLSelectElement;
+    if (packageFilter) {
+        packageFilter.addEventListener('change', () => {
+            currentPackageFilter = packageFilter.value;
+            currentPage = 1;
+            refreshRelayUsers();
+        });
+    }
+
+    // Pagination events
+    const btnPrev = document.getElementById('btnRelayUserPrevPage');
+    if (btnPrev) {
+        btnPrev.addEventListener('click', () => {
+            if (currentPage > 1) {
+                currentPage--;
+                refreshRelayUsers();
+            }
+        });
+    }
+
+    const btnNext = document.getElementById('btnRelayUserNextPage');
+    if (btnNext) {
+        btnNext.addEventListener('click', () => {
+            const totalPages = Math.ceil(totalUsersCount / pageSize) || 1;
+            if (currentPage < totalPages) {
+                currentPage++;
+                refreshRelayUsers();
+            }
+        });
+    }
+
+    // Load persisted packages then users on init
+    refreshRelayPackages().finally(() => {
+        refreshRelayUsers();
+    });
 
     // Fetch initial config state to sync UI
     ipcRenderer.invoke('relay:get-config')
@@ -52,6 +104,88 @@ export function initRelayEvents() {
             if (relayPortInput) relayPortInput.value = config?.port || '18444';
         })
         .catch((err: any) => console.error('[RelayController] Failed to get initial config:', err));
+
+    // ========== 子 Tab 切换与配置管理 ==========
+    const btnRelaySubTabUsers = document.getElementById('btnRelaySubTabUsers');
+    const btnRelaySubTabPackages = document.getElementById('btnRelaySubTabPackages');
+    const btnRelaySubTabSecurity = document.getElementById('btnRelaySubTabSecurity');
+    
+    const panelUsers = document.getElementById('relay-sub-panel-users');
+    const panelPackages = document.getElementById('relay-sub-panel-packages');
+    const panelSecurity = document.getElementById('relay-sub-panel-security');
+
+    const subTabActiveClass = 'px-4 py-1.5 text-[12px] font-bold bg-primary/10 text-primary dark:bg-primary/20 rounded-lg cursor-pointer transition-all duration-200';
+    const subTabInactiveClass = 'px-4 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg cursor-pointer transition-all duration-200';
+
+    function switchSubTab(active: 'users' | 'packages' | 'security') {
+        if (panelUsers) panelUsers.classList.toggle('hidden', active !== 'users');
+        if (panelPackages) panelPackages.classList.toggle('hidden', active !== 'packages');
+        if (panelSecurity) panelSecurity.classList.toggle('hidden', active !== 'security');
+
+        if (btnRelaySubTabUsers) btnRelaySubTabUsers.className = active === 'users' ? subTabActiveClass : subTabInactiveClass;
+        if (btnRelaySubTabPackages) btnRelaySubTabPackages.className = active === 'packages' ? subTabActiveClass : subTabInactiveClass;
+        if (btnRelaySubTabSecurity) btnRelaySubTabSecurity.className = active === 'security' ? subTabActiveClass : subTabInactiveClass;
+    }
+
+    if (btnRelaySubTabUsers) btnRelaySubTabUsers.addEventListener('click', () => switchSubTab('users'));
+    if (btnRelaySubTabPackages) btnRelaySubTabPackages.addEventListener('click', () => switchSubTab('packages'));
+    if (btnRelaySubTabSecurity) btnRelaySubTabSecurity.addEventListener('click', () => switchSubTab('security'));
+
+    // 绑定安全拦截设置元素
+    const chkSSRF = document.getElementById('chkRelaySSRFBlock') as HTMLInputElement | null;
+    const chkPort = document.getElementById('chkRelayPortBlock') as HTMLInputElement | null;
+    const chkDomain = document.getElementById('chkRelayDomainFilter') as HTMLInputElement | null;
+    const txtWhitelist = document.getElementById('txtRelayDomainWhitelist') as HTMLTextAreaElement | null;
+    const btnSaveRelaySecurity = document.getElementById('btnSaveRelaySecurity');
+
+    // 加载初始安全拦截设置
+    ipcRenderer.invoke('relay:get-security-config')
+        .then((cfg: any) => {
+            if (cfg) {
+                if (chkSSRF) chkSSRF.checked = !!cfg.relaySSRFBlock;
+                if (chkPort) chkPort.checked = !!cfg.relayPortBlock;
+                if (chkDomain) chkDomain.checked = !!cfg.relayDomainFilter;
+                if (txtWhitelist && cfg.relayDomainWhitelist) {
+                    txtWhitelist.value = cfg.relayDomainWhitelist.join('\n');
+                }
+            }
+        })
+        .catch((err: any) => console.error('[RelayController] Failed to get initial security config:', err));
+
+    const saveSecurityConfig = async () => {
+        const ssrf = !!chkSSRF?.checked;
+        const port = !!chkPort?.checked;
+        const domain = !!chkDomain?.checked;
+        const whitelist = txtWhitelist?.value.split('\n')
+            .map(line => line.trim())
+            .filter(line => line !== '') || [];
+
+        try {
+            await ipcRenderer.invoke('relay:set-security-config', {
+                relaySSRFBlock: ssrf,
+                relayPortBlock: port,
+                relayDomainFilter: domain,
+                relayDomainWhitelist: whitelist
+            });
+        } catch (err) {
+            console.error('[RelayController] Failed to save security config:', err);
+        }
+    };
+
+    // 改变开关时自动保存
+    if (chkSSRF) chkSSRF.addEventListener('change', saveSecurityConfig);
+    if (chkPort) chkPort.addEventListener('change', saveSecurityConfig);
+    if (chkDomain) chkDomain.addEventListener('change', saveSecurityConfig);
+
+    // 点击保存按钮时保存配置与白名单
+    if (btnSaveRelaySecurity) {
+        btnSaveRelaySecurity.addEventListener('click', async () => {
+            const originalText = btnSaveRelaySecurity.innerHTML;
+            btnSaveRelaySecurity.textContent = '⏳ 保存中...';
+            await saveSecurityConfig();
+            btnSaveRelaySecurity.innerHTML = originalText;
+        });
+    }
 }
 
 let relayPackages: any[] = [];
@@ -61,9 +195,31 @@ export async function refreshRelayPackages() {
         const pkgs = await ipcRenderer.invoke('relay:get-packages');
         relayPackages = pkgs || [];
         renderRelayPackages();
+        updatePackageFilterOptions();
     } catch (err) {
         console.error('[RelayController] Failed to get packages:', err);
     }
+}
+
+function updatePackageFilterOptions() {
+    const filterSelect = document.getElementById('relayUserPackageFilter') as HTMLSelectElement;
+    if (!filterSelect) return;
+
+    const currentVal = filterSelect.value;
+    let html = `
+        <option value="all">所有套餐类型</option>
+        <option value="unlimited">无限制</option>
+        <option value="custom">自定义限额</option>
+    `;
+
+    relayPackages.forEach(pkg => {
+        if (pkg && pkg.name) {
+            html += `<option value="${pkg.name}">${pkg.name}</option>`;
+        }
+    });
+
+    filterSelect.innerHTML = html;
+    filterSelect.value = currentVal;
 }
 
 function formatTokenCount(val: number): string {
@@ -146,11 +302,48 @@ function renderRelayPackages() {
 
 export async function refreshRelayUsers() {
     try {
-        const users = await ipcRenderer.invoke('relay:get-users');
-        relayUsers = users || [];
+        const res = await ipcRenderer.invoke('relay:get-users', {
+            page: currentPage,
+            pageSize: pageSize,
+            search: currentSearchQuery,
+            packageTag: currentPackageFilter
+        });
+        relayUsers = res?.users || [];
+        totalUsersCount = res?.total || 0;
+
         renderRelayUsers();
+        renderPagination();
     } catch (err) {
         console.error('[RelayController] Failed to get users:', err);
+    }
+}
+
+function renderPagination() {
+    const info = document.getElementById('relayUserPaginationInfo');
+    const pageNum = document.getElementById('relayUserCurrentPage');
+    const btnPrev = document.getElementById('btnRelayUserPrevPage') as HTMLButtonElement;
+    const btnNext = document.getElementById('btnRelayUserNextPage') as HTMLButtonElement;
+
+    if (pageNum) pageNum.innerText = currentPage.toString();
+
+    const totalPages = Math.ceil(totalUsersCount / pageSize) || 1;
+    if (currentPage > totalPages) {
+        currentPage = totalPages;
+        refreshRelayUsers();
+        return;
+    }
+
+    if (btnPrev) btnPrev.disabled = currentPage <= 1;
+    if (btnNext) btnNext.disabled = currentPage >= totalPages;
+
+    if (info) {
+        if (totalUsersCount === 0) {
+            info.innerText = '共 0 个用户';
+        } else {
+            const start = (currentPage - 1) * pageSize + 1;
+            const end = Math.min(currentPage * pageSize, totalUsersCount);
+            info.innerText = `显示第 ${start} - ${end} 个用户，共 ${totalUsersCount} 个`;
+        }
     }
 }
 

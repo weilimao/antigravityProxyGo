@@ -68,28 +68,113 @@ func (l *MitmListener) Addr() net.Addr {
 
 type ProxyEngine struct {
 	sync.Mutex
-	certMgr         *CertManager
-	handler         *ProxyHandler
-	mitmListener    *MitmListener
-	mitmServer      *http.Server
-	proxyServer     *http.Server
-	activeTunnels   map[net.Conn]net.Conn // clientConn -> remoteConn
-	activeTunnelsMu sync.Mutex
-	isRunning       bool
-	isInterceptMode bool
-	logFn           func(string)
-	stateCallback   func(bool)
-	remoteRelay     RemoteRelayInterface // 远程代理中继 (客户端模式)
+	certMgr               *CertManager
+	handler               *ProxyHandler
+	mitmListener          *MitmListener
+	mitmServer            *http.Server
+	proxyServer           *http.Server
+	activeTunnels         map[net.Conn]net.Conn // clientConn -> remoteConn
+	activeTunnelsMu       sync.Mutex
+	isRunning             bool
+	isInterceptMode       bool
+	logFn                 func(string)
+	stateCallback         func(bool)
+	remoteRelay           RemoteRelayInterface // 远程代理中继 (客户端模式)
+	relaySSRFBlock        bool
+	relayPortBlock        bool
+	relayDomainFilter     bool
+	relayDomainWhitelist  []string
+	relaySecurityMu       sync.RWMutex
 }
 
 func NewProxyEngine(handler *ProxyHandler, logFn func(string), stateCallback func(bool)) *ProxyEngine {
-	return &ProxyEngine{
+	pe := &ProxyEngine{
 		certMgr:       NewCertManager(),
 		handler:       handler,
 		activeTunnels: make(map[net.Conn]net.Conn),
 		logFn:         logFn,
 		stateCallback: stateCallback,
 	}
+
+	if handler != nil {
+		handler.getRemoteRelay = func() RemoteRelayInterface {
+			pe.Lock()
+			defer pe.Unlock()
+			return pe.remoteRelay
+		}
+	}
+
+	return pe
+}
+
+func (pe *ProxyEngine) UpdateSecurityRules(ssrfBlock, portBlock, domainFilter bool, whitelist []string) {
+	pe.relaySecurityMu.Lock()
+	pe.relaySSRFBlock = ssrfBlock
+	pe.relayPortBlock = portBlock
+	pe.relayDomainFilter = domainFilter
+	pe.relayDomainWhitelist = whitelist
+	pe.relaySecurityMu.Unlock()
+}
+
+func (pe *ProxyEngine) validateTargetSafety(targetHostPort string) error {
+	pe.relaySecurityMu.RLock()
+	defer pe.relaySecurityMu.RUnlock()
+
+	host, portStr, err := net.SplitHostPort(targetHostPort)
+	if err != nil {
+		host = targetHostPort
+		portStr = "443"
+	}
+
+	// 1. 端口安全检查
+	if pe.relayPortBlock {
+		if portStr != "443" && portStr != "80" {
+			return fmt.Errorf("端口 %s 已被安全策略限制，中继服务器仅放行 80/443", portStr)
+		}
+	}
+
+	// 2. SSRF 拦截（回环及私有网段 IP 禁连）
+	if pe.relaySSRFBlock {
+		ips, err := net.LookupIP(host)
+		if err == nil {
+			for _, ip := range ips {
+				if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+					return fmt.Errorf("目标地址 %s 解析出的 IP %s 属于内部私有网段，已被拒绝连接", host, ip.String())
+				}
+			}
+		}
+	}
+
+	// 3. 目标域名白名单校验
+	if pe.relayDomainFilter {
+		matched := false
+		for _, pattern := range pe.relayDomainWhitelist {
+			if matchDomainPattern(host, pattern) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("目标域名 %s 不在白名单允许范围内，连接已被拒绝", host)
+		}
+	}
+
+	return nil
+}
+
+func matchDomainPattern(domain, pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return false
+	}
+	if pattern == "*" || pattern == "*.*" {
+		return true
+	}
+	if strings.HasPrefix(pattern, "*.") {
+		suffix := pattern[1:] // e.g. ".googleapis.com"
+		return strings.HasSuffix(domain, suffix) || domain == pattern[2:]
+	}
+	return domain == pattern
 }
 
 func (pe *ProxyEngine) SetMode(mode bool) {
@@ -277,6 +362,19 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 	hostParts := strings.Split(hostAndPort, ":")
 	host := hostParts[0]
 
+	// 提取中继用户ID
+	relayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
+
+	// 如果来自中继用户的连接（即中继服务端特征），执行网络安全拦截检查
+	if relayUserID != "" {
+		if errSec := pe.validateTargetSafety(hostAndPort); errSec != nil {
+			pe.logFn(fmt.Sprintf("🛡️ [中继安全拦截] 拒绝中继用户 %s 连接到 %s: %v", relayUserID, hostAndPort, errSec))
+			clientConn.Write([]byte("HTTP/1.1 403 Forbidden\r\n\r\n"))
+			clientConn.Close()
+			return
+		}
+	}
+
 	// 远程模式优先级最高：所有请求通过远程代理中继
 	if pe.remoteRelay != nil && pe.remoteRelay.IsConnected() {
 		remoteConn, errDial := pe.remoteRelay.DialThroughRemote(hostAndPort)
@@ -335,9 +433,6 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 		tlsClientConn.Close()
 		return
 	}
-
-	// 从 RelayServer 注入的 context 中提取中继用户ID
-	relayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
 
 	var connToEnqueue net.Conn = tlsClientConn
 	if relayUserID != "" {

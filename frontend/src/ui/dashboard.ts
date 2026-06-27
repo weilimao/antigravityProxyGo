@@ -410,34 +410,7 @@ export function requestCertStatus() {
 // Global page tab-switching router
 export function switchView(viewName: string) {
     state.activeView = viewName;
-    const viewDashboard = document.getElementById('view-dashboard');
-    const viewAccounts = document.getElementById('view-accounts');
-    const viewSettings = document.getElementById('view-settings');
-    const viewPackets = document.getElementById('view-packets');
-    const viewOtp = document.getElementById('view-otp');
-    
-    const navDashboard = document.getElementById('nav-dashboard');
-    const navAccounts = document.getElementById('nav-accounts');
-    const navPackets = document.getElementById('nav-packets');
-    const navSettings = document.getElementById('nav-settings');
-    const navOtp = document.getElementById('nav-otp');
-
-    if (viewDashboard) viewDashboard.classList.toggle('hidden', viewName !== 'dashboard');
-    if (viewAccounts) viewAccounts.classList.toggle('hidden', viewName !== 'accounts');
-    if (viewSettings) viewSettings.classList.toggle('hidden', viewName !== 'settings');
-    if (viewPackets) viewPackets.classList.toggle('hidden', viewName !== 'packets');
-    if (viewOtp) viewOtp.classList.toggle('hidden', viewName !== 'otp');
-
-    const activeNavClass = 'text-primary dark:text-primary-fixed-dim border-b-2 border-primary pb-0.5 flex flex-col items-center';
-    const inactiveNavClass = 'text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center';
-
-    if (navDashboard) navDashboard.className = viewName === 'dashboard' ? activeNavClass : inactiveNavClass;
-    if (navAccounts) navAccounts.className = viewName === 'accounts' ? activeNavClass : inactiveNavClass;
-    if (navPackets) navPackets.className = viewName === 'packets' ? activeNavClass : inactiveNavClass;
-    if (navSettings) navSettings.className = viewName === 'settings' ? activeNavClass : inactiveNavClass;
-    if (navOtp) navOtp.className = viewName === 'otp' ? activeNavClass : inactiveNavClass;
-
-    // Manage OTP timer loop
+    // Handle OTP timer and settings update natively if needed
     if (viewName === 'otp') {
         startOtpTimer();
     } else {
@@ -458,6 +431,10 @@ export function switchView(viewName: string) {
     } else if (viewName === 'packets') {
         state.callbacks.refreshPacketsList();
         state.callbacks.updateAnalyzeAccountSelect();
+    } else if (viewName === 'usage') {
+        if (state.usageData) {
+            usageDetails.render(state.usageData);
+        }
     }
 
     renderActiveView();
@@ -590,9 +567,21 @@ export function initDashboardEvents() {
     }
 
     // Collapsible console logs
-    if (consoleHeader && systemConsole) {
+    console.log('consoleHeader:', consoleHeader, 'systemConsole:', systemConsole); if (consoleHeader && systemConsole) {
         consoleHeader.addEventListener('click', () => {
-            systemConsole!.classList.toggle('expanded');
+            const isExpanded = systemConsole!.classList.contains('expanded');
+            if (isExpanded) {
+                systemConsole!.classList.remove('expanded');
+                systemConsole!.style.height = '36px';
+                if (consoleBody) consoleBody.style.display = 'none';
+                consoleHeader!.querySelector('.material-symbols-outlined')!.textContent = 'keyboard_double_arrow_up';
+            } else {
+                systemConsole!.classList.add('expanded');
+                systemConsole!.style.height = '180px';
+                if (consoleBody) consoleBody.style.display = 'block';
+                consoleHeader!.querySelector('.material-symbols-outlined')!.textContent = 'keyboard_double_arrow_down';
+                if (consoleBody) consoleBody.scrollTop = consoleBody.scrollHeight;
+            }
         });
     }
 
@@ -852,7 +841,7 @@ export function renderActiveView() {
         } else if (state.activeTab === 'logs') {
             renderLogsTable();
         }
-    } else if (state.activeView === 'accounts') {
+    } else if (state.activeView === 'usage') {
         if (state.usageData) {
             usageDetails.render(state.usageData);
         }

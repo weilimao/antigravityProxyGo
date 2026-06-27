@@ -2,15 +2,19 @@ package proxy
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"antigravity-proxy/internal/account"
@@ -35,6 +39,11 @@ type ProxyHandler struct {
 	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int)
 	relayQuotaCheck    func(userID, modelName string) error
 	client             *http.Client
+
+	// 远程中继转发相关
+	getRemoteRelay     func() RemoteRelayInterface
+	remoteClient       *http.Client
+	remoteClientMu     sync.Mutex
 }
 
 func NewProxyHandler(
@@ -137,6 +146,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			targetHost = "daily-cloudcode-pa.googleapis.com"
 		} else {
 			targetHost = "cloudcode-pa.googleapis.com"
+		}
+	}
+
+	// 远程中继转发（客户端模式）
+	if h.getRemoteRelay != nil {
+		if rr := h.getRemoteRelay(); rr != nil && rr.IsConnected() {
+			h.forwardThroughRemote(w, r, bodyBytes, targetHost, targetPath, rr)
+			return
 		}
 	}
 
@@ -721,7 +738,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return resp.StatusCode, resp.Header, respBodyBytes, false, errors.New("CREDITS_EXHAUSTED")
 			}
 
-			if resp.StatusCode == 429 {
+			if resp.StatusCode == 429 || resp.StatusCode == 403 || resp.StatusCode == 402 {
 				isQuotaError := strings.Contains(bodyStr, "RESOURCE_EXHAUSTED") || strings.Contains(bodyStr, "quota") || strings.Contains(bodyStr, "exhausted") || strings.Contains(bodyStr, "limit") || strings.Contains(bodyStr, "MODEL_CAPACITY_EXHAUSTED")
 				if isQuotaError {
 					return 429, resp.Header, respBodyBytes, false, errors.New("QUOTA_EXHAUSTED")
@@ -1049,5 +1066,118 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+	}
+}
+
+// getRemoteClient 动态获取并复用具备远程中继拨号链路的全局 http.Client 单例
+func (h *ProxyHandler) getRemoteClient() *http.Client {
+	h.remoteClientMu.Lock()
+	defer h.remoteClientMu.Unlock()
+
+	if h.remoteClient != nil {
+		return h.remoteClient
+	}
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if currentRr := h.getRemoteRelay(); currentRr != nil && currentRr.IsConnected() {
+				return currentRr.DialThroughRemote(addr)
+			}
+			return nil, errors.New("remote relay disconnected")
+		},
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
+		MaxIdleConns:          200,
+		MaxIdleConnsPerHost:   100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	h.remoteClient = &http.Client{
+		Transport: transport,
+		Timeout:   5 * time.Minute,
+	}
+	return h.remoteClient
+}
+
+// forwardThroughRemote 处理客户端模式下的 HTTP 请求路由，将请求在 TLS 层上中继至远端服务器并执行流式转发与抓包
+func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Request, bodyBytes []byte, targetHost, targetPath string, rr RemoteRelayInterface) {
+	logPrefix := fmt.Sprintf("[RemoteForward][%s -> %s%s]", r.Method, targetHost, r.URL.Path)
+	if h.logFn != nil {
+		h.logFn(fmt.Sprintf("%s 🌐 正在将本地 IDE 请求中继转发至远程服务器...", logPrefix))
+	}
+
+	// 1. 构造发往公网目标的 HTTPS 请求，使得中继服务器接收时能执行 MITM 解密
+	targetUrl := "https://" + targetHost + targetPath
+	proxyReq, errReq := http.NewRequestWithContext(r.Context(), r.Method, targetUrl, bytes.NewReader(bodyBytes))
+	if errReq != nil {
+		h.logFn(fmt.Sprintf("❌ Failed to create remote forward request: %v", errReq))
+		http.Error(w, errReq.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 2. 复制原始请求头
+	for k, values := range r.Header {
+		proxyReq.Header[k] = values
+	}
+	proxyReq.Header.Set("Host", targetHost)
+
+	// 3. 使用全局复用的中继 Client 发送请求
+	client := h.getRemoteClient()
+	resp, errDo := client.Do(proxyReq)
+	if errDo != nil {
+		h.logFn(fmt.Sprintf("❌ Remote relay forward Do failed: %v", errDo))
+		http.Error(w, errDo.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 4. 将响应头及状态码写回 IDE 客户端
+	for k, values := range resp.Header {
+		for _, v := range values {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+
+	// 5. 转发响应体并捕获用于本地抓包记录
+	flusher, isFlusher := w.(http.Flusher)
+	buf := make([]byte, 4096)
+	var respBodyBuf bytes.Buffer
+
+	for {
+		n, errRead := resp.Body.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			_, errWrite := w.Write(chunk)
+			if errWrite != nil {
+				h.logFn(fmt.Sprintf("⚠️ Failed to write response to client: %v", errWrite))
+				return
+			}
+			if isFlusher {
+				flusher.Flush()
+			}
+			// 仅在数据量较小时记录响应体，避免过量占用内存
+			if respBodyBuf.Len() < 5*1024*1024 {
+				respBodyBuf.Write(chunk)
+			}
+		}
+		if errRead != nil {
+			if errRead != io.EOF {
+				h.logFn(fmt.Sprintf("⚠️ Error reading response from remote: %v", errRead))
+			}
+			break
+		}
+	}
+
+	// 6. 保存至本地数据包记录器，使前端的“拦截历史”依然能抓包展示
+	if h.packetCap != nil {
+		h.packetCap.SavePacket(r.Method, targetHost, targetPath, r.Header, bodyBytes, resp.Header, respBodyBuf.Bytes(), resp.StatusCode)
+	}
+
+	if h.logFn != nil {
+		h.logFn(fmt.Sprintf("%s ✅ 远程中继转发完成，状态码: %d", logPrefix, resp.StatusCode))
 	}
 }

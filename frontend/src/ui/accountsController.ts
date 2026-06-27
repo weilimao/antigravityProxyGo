@@ -235,23 +235,15 @@ export async function startProjectLogin() {
     if (state.isLoadingAuth) return;
     state.isLoadingAuth = true;
     
-    if (btnAddAccount) {
-        const origText = btnAddAccount.innerHTML;
-        btnAddAccount.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span> 登录中...';
-        btnAddAccount.classList.add('opacity-70', 'cursor-not-allowed');
-
-        try {
-            const result = await showOneStopAuthModal();
-            if (result && result.success) {
-                // GCP login successful
-            }
-        } catch (err: any) {
-            alert('登录发生错误: ' + err.message);
-        } finally {
-            state.isLoadingAuth = false;
-            btnAddAccount.innerHTML = origText;
-            btnAddAccount.classList.remove('opacity-70', 'cursor-not-allowed');
+    try {
+        const result = await showOneStopAuthModal();
+        if (result && result.success) {
+            // GCP login successful
         }
+    } catch (err: any) {
+        alert('登录发生错误: ' + err.message);
+    } finally {
+        state.isLoadingAuth = false;
     }
 }
 
@@ -309,6 +301,49 @@ export function initAccountsEvents() {
     }
     if (btnRefreshAggregateQuota) {
         btnRefreshAggregateQuota.addEventListener('click', refreshAllAccountsQuotas);
+    }
+
+    // Filter & Pagination Event Bindings
+    const inputAccountSearch = document.getElementById('inputAccountSearch') as HTMLInputElement | null;
+    const selectAccountStatus = document.getElementById('selectAccountStatus') as HTMLSelectElement | null;
+    const selectAccountTier = document.getElementById('selectAccountTier') as HTMLSelectElement | null;
+    const btnPrevAccountPage = document.getElementById('btnPrevAccountPage') as HTMLButtonElement | null;
+    const btnNextAccountPage = document.getElementById('btnNextAccountPage') as HTMLButtonElement | null;
+
+    if (inputAccountSearch) {
+        inputAccountSearch.addEventListener('input', (e: any) => {
+            state.accountSearchQuery = e.target.value;
+            state.accountCurrentPage = 1;
+            renderAccounts(state.currentAccountsList);
+        });
+    }
+    if (selectAccountStatus) {
+        selectAccountStatus.addEventListener('change', (e: any) => {
+            state.accountStatusFilter = e.target.value;
+            state.accountCurrentPage = 1;
+            renderAccounts(state.currentAccountsList);
+        });
+    }
+    if (selectAccountTier) {
+        selectAccountTier.addEventListener('change', (e: any) => {
+            state.accountTierFilter = e.target.value;
+            state.accountCurrentPage = 1;
+            renderAccounts(state.currentAccountsList);
+        });
+    }
+    if (btnPrevAccountPage) {
+        btnPrevAccountPage.addEventListener('click', () => {
+            if (state.accountCurrentPage > 1) {
+                state.accountCurrentPage--;
+                renderAccounts(state.currentAccountsList);
+            }
+        });
+    }
+    if (btnNextAccountPage) {
+        btnNextAccountPage.addEventListener('click', () => {
+            state.accountCurrentPage++;
+            renderAccounts(state.currentAccountsList);
+        });
     }
 
     if (btnClearSessions) {

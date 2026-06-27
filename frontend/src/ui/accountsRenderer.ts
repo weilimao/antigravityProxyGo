@@ -113,7 +113,7 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
             }
 
             const groupContainer = document.createElement('div');
-            groupContainer.className = `flex flex-col gap-2 bg-[#f8fafc]/60 dark:bg-[#20293d]/30 border border-slate-100 dark:border-slate-800/30 rounded-lg p-2.5 ${idx > 0 ? 'mt-2' : 'mt-1'}`;
+            groupContainer.className = `flex flex-col gap-1.5 bg-[#f8fafc]/60 dark:bg-[#20293d]/30 border border-slate-100 dark:border-slate-800/30 rounded-lg p-2 ${idx > 0 ? 'mt-1.5' : 'mt-1'}`;
             
             const groupTitle = document.createElement('div');
             groupTitle.className = 'text-[10px] font-bold text-on-surface dark:text-white flex items-center justify-between border-b border-outline-variant/10 pb-1.5 mb-1';
@@ -257,9 +257,43 @@ export function renderAccounts(accounts: any[]) {
     }
     if (!accountsList) return;
     
+    // 1. Filter accounts by channel, searchQuery, statusFilter, and tierFilter
     const filteredAccounts = accounts.filter(acc => {
         const accountChannel = acc.provider;
-        return accountChannel === state.currentViewTab;
+        if (accountChannel !== state.currentViewTab) return false;
+
+        // Search query filter
+        if (state.accountSearchQuery) {
+            const q = state.accountSearchQuery.toLowerCase().trim();
+            const email = (acc.email || '').toLowerCase();
+            const projectId = (acc.projectId || '').toLowerCase();
+            if (!email.includes(q) && !projectId.includes(q)) return false;
+        }
+
+        // Status filter
+        if (state.accountStatusFilter && state.accountStatusFilter !== 'all') {
+            const isEnabled = acc.enabled !== false;
+            const now = Date.now();
+            let isCooling = false;
+            if (acc.cooldowns) {
+                isCooling = Object.values(acc.cooldowns).some((u: any) => typeof u === 'number' && u > now);
+            }
+            if (!isCooling && acc.cooldownUntil && acc.cooldownUntil > now) {
+                isCooling = true;
+            }
+
+            if (state.accountStatusFilter === 'enabled' && !isEnabled) return false;
+            if (state.accountStatusFilter === 'disabled' && isEnabled) return false;
+            if (state.accountStatusFilter === 'cooling' && !isCooling) return false;
+        }
+
+        // Tier filter
+        if (state.accountTierFilter && state.accountTierFilter !== 'all') {
+            const tier = (acc.tier || 'free').toLowerCase();
+            if (tier !== state.accountTierFilter.toLowerCase()) return false;
+        }
+
+        return true;
     });
 
     if (!accountCountBadge) {
@@ -280,6 +314,7 @@ export function renderAccounts(accounts: any[]) {
         }
         accountsList.classList.add('hidden');
         accountsList.innerHTML = '';
+        renderPaginationUI(0, 0, 0, 1);
         return;
     }
     
@@ -289,8 +324,24 @@ export function renderAccounts(accounts: any[]) {
     }
     accountsList.classList.remove('hidden');
     
-    // 1. DOM Pruning: Remove cards of accounts that are no longer present in the active list
-    const targetIds = new Set(filteredAccounts.map(a => a.id));
+    // 2. Pagination Calculation (10 accounts per page)
+    const itemsPerPage = state.accountItemsPerPage || 10;
+    const totalItems = filteredAccounts.length;
+    const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
+
+    if (state.accountCurrentPage > totalPages) {
+        state.accountCurrentPage = totalPages;
+    }
+    if (state.accountCurrentPage < 1) {
+        state.accountCurrentPage = 1;
+    }
+
+    const startIndex = (state.accountCurrentPage - 1) * itemsPerPage;
+    const endIndex = Math.min(startIndex + itemsPerPage, totalItems);
+    const paginatedAccounts = filteredAccounts.slice(startIndex, endIndex);
+
+    // 3. DOM Pruning: Remove cards of accounts that are no longer in current page
+    const targetIds = new Set(paginatedAccounts.map(a => a.id));
     const currentCards = Array.from(accountsList.children);
     currentCards.forEach(child => {
         const accId = child.getAttribute('data-account-id');
@@ -299,8 +350,8 @@ export function renderAccounts(accounts: any[]) {
         }
     });
 
-    // 2. Loop through filtered accounts, either creating new card or updating existing card's attributes
-    filteredAccounts.forEach(acc => {
+    // 4. Loop through current page accounts and render/patch cards
+    paginatedAccounts.forEach(acc => {
         let card = accountsList!.querySelector(`[data-account-id="${acc.id}"]`) as HTMLElement | null;
         let quotaBars: HTMLElement | null = null;
         let refreshBtn: HTMLElement | null = null;
@@ -335,12 +386,12 @@ export function renderAccounts(accounts: any[]) {
             // Card doesn't exist, create it from scratch and bind events
             card = document.createElement('div');
             card.setAttribute('data-account-id', acc.id);
-            card.className = 'bg-white dark:bg-[#1a1f30] border border-outline-variant/30 rounded-xl p-4 flex flex-col gap-3 shadow-sm relative overflow-hidden';
+            card.className = 'bg-white dark:bg-[#1a1f30] border border-outline-variant/30 rounded-xl p-3 flex flex-col gap-2 shadow-sm relative overflow-hidden';
             
             // Background decorative icon
             const bgIcon = document.createElement('div');
             bgIcon.className = 'absolute -right-4 -bottom-4 text-primary opacity-[0.03] pointer-events-none';
-            bgIcon.innerHTML = '<span class="material-symbols-outlined" style="font-size: 80px;">account_circle</span>';
+            bgIcon.innerHTML = '<span class="material-symbols-outlined" style="font-size: 50px;">account_circle</span>';
             card.appendChild(bgIcon);
             
             // ---- Header ----
@@ -411,7 +462,7 @@ export function renderAccounts(accounts: any[]) {
             // ---- AI Credit Section ----
             if (acc.provider === 'antigravity') {
                 const creditSection = document.createElement('div');
-                creditSection.className = 'flex flex-col gap-1.5 border-t border-outline-variant/20 pt-3';
+                creditSection.className = 'flex flex-col gap-1 border-t border-outline-variant/20 pt-2';
                 
                 const creditHeader = document.createElement('div');
                 creditHeader.className = 'flex justify-between items-center';
@@ -431,7 +482,7 @@ export function renderAccounts(accounts: any[]) {
                 
                 // Overages Toggle Button
                 const overagesToggleWrapper = document.createElement('div');
-                overagesToggleWrapper.className = 'flex items-center justify-between text-[11px] mt-1.5 select-none cursor-pointer';
+                overagesToggleWrapper.className = 'flex items-center justify-between text-[11px] mt-1 select-none cursor-pointer';
                 
                 const overagesSwitchId = `overagesToggle-${acc.id}`;
                 const isOveragesChecked = acc.enableOverages === true;
@@ -475,7 +526,7 @@ export function renderAccounts(accounts: any[]) {
 
             // ---- Quota Section ----
             const quotaSection = document.createElement('div');
-            quotaSection.className = 'flex flex-col gap-2 border-t border-outline-variant/20 pt-3';
+            quotaSection.className = 'flex flex-col gap-1.5 border-t border-outline-variant/20 pt-2';
 
             const quotaHeader = document.createElement('div');
             quotaHeader.className = 'flex justify-between items-center';
@@ -492,7 +543,7 @@ export function renderAccounts(accounts: any[]) {
 
             quotaBars = document.createElement('div');
             quotaBars.id = `quotaBars-${acc.id}`;
-            quotaBars.className = 'flex flex-col gap-2';
+            quotaBars.className = 'flex flex-col gap-1.5';
             quotaSection.appendChild(quotaBars);
 
             refreshBtn.onclick = () => loadAccountQuota(acc.id, quotaBars, refreshBtn, true, acc.cooldowns);
@@ -500,7 +551,7 @@ export function renderAccounts(accounts: any[]) {
 
             // ---- Footer ----
             const footer = document.createElement('div');
-            footer.className = 'flex justify-between items-center pt-1 border-t border-outline-variant/20';
+            footer.className = 'flex justify-between items-center pt-3 border-t border-outline-variant/20 mt-auto';
             
             const toggleWrapper = document.createElement('div');
             toggleWrapper.className = 'flex items-center gap-1.5 select-none cursor-pointer';
@@ -698,6 +749,49 @@ export function renderAccounts(accounts: any[]) {
             loadAccountQuota(acc.id, quotaBars, refreshBtn, false, acc.cooldowns);
         }
     });
+
+    renderPaginationUI(totalItems, startIndex, endIndex, totalPages);
+}
+
+function renderPaginationUI(totalItems: number, startIndex: number, endIndex: number, totalPages: number) {
+    const info = document.getElementById('accountsPaginationInfo');
+    const btnPrev = document.getElementById('btnPrevAccountPage') as HTMLButtonElement | null;
+    const btnNext = document.getElementById('btnNextAccountPage') as HTMLButtonElement | null;
+    const numbersContainer = document.getElementById('accountPageNumbers');
+
+    if (info) {
+        if (totalItems === 0) {
+            info.textContent = '显示 0 - 0 条，共 0 条';
+        } else {
+            info.textContent = `显示 ${startIndex + 1} - ${endIndex} 条，共 ${totalItems} 条`;
+        }
+    }
+
+    if (btnPrev) {
+        btnPrev.disabled = state.accountCurrentPage <= 1;
+    }
+    if (btnNext) {
+        btnNext.disabled = state.accountCurrentPage >= totalPages;
+    }
+
+    if (numbersContainer) {
+        numbersContainer.innerHTML = '';
+        for (let i = 1; i <= totalPages; i++) {
+            const btn = document.createElement('button');
+            const isActive = i === state.accountCurrentPage;
+            btn.className = `w-6 h-6 rounded flex items-center justify-center text-[11px] font-medium transition-colors cursor-pointer ${
+                isActive 
+                    ? 'bg-primary text-white font-bold shadow-sm' 
+                    : 'text-outline hover:bg-slate-100 dark:hover:bg-white/10'
+            }`;
+            btn.textContent = i.toString();
+            btn.onclick = () => {
+                state.accountCurrentPage = i;
+                renderAccounts(state.currentAccountsList);
+            };
+            numbersContainer.appendChild(btn);
+        }
+    }
 }
 
 function getFamilyLifetimeTokens(stats: any, isGemini: boolean): number {

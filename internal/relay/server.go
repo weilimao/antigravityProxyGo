@@ -160,9 +160,14 @@ func (tl *trackedListener) Accept() (net.Conn, error) {
 
 func (tl *trackedListener) CloseAll() {
 	tl.mu.Lock()
-	defer tl.mu.Unlock()
+	conns := make([]net.Conn, 0, len(tl.conns))
 	for c := range tl.conns {
-		c.Close()
+		conns = append(conns, c)
+	}
+	tl.mu.Unlock()
+
+	for _, c := range conns {
+		_ = c.Close()
 	}
 }
 

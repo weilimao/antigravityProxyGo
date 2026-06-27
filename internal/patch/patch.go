@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -85,7 +86,17 @@ func PatchAgentAsar(enable bool, homeDir, tempDir, caPath string, logCallback fu
 		logCallback("⚙️ Auto-patching Antigravity Agent app.asar...")
 		err := PatchAsar(asarPath, caPath, logCallback)
 		if err != nil {
-			logCallback(fmt.Sprintf("❌ ASAR Patching failed: %v", err))
+			if os.IsPermission(err) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+				logCallback("❌ ASAR 补丁写入失败：权限不足 (Permission Denied)。")
+				if runtime.GOOS == "darwin" {
+					logCallback("💡 提示：在 macOS 上，请尝试在终端执行以下命令赋予该文件写入权限：")
+					logCallback(fmt.Sprintf("   sudo chmod +w %s", asarPath))
+				} else {
+					logCallback("💡 提示：请尝试以管理员身份运行本程序。")
+				}
+			} else {
+				logCallback(fmt.Sprintf("❌ ASAR Patching failed: %v", err))
+			}
 			return err
 		}
 		logCallback("✅ Antigravity Agent patched successfully.")
@@ -93,7 +104,17 @@ func PatchAgentAsar(enable bool, homeDir, tempDir, caPath string, logCallback fu
 		logCallback("[ASAR Patcher] Restoring original app.asar...")
 		err := RestoreAsar(asarPath)
 		if err != nil {
-			logCallback(fmt.Sprintf("❌ ASAR Restore failed: %v", err))
+			if os.IsPermission(err) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+				logCallback("❌ ASAR 恢复失败：权限不足 (Permission Denied)。")
+				if runtime.GOOS == "darwin" {
+					logCallback("💡 提示：在 macOS 上，请尝试在终端执行以下命令赋予该文件写入权限：")
+					logCallback(fmt.Sprintf("   sudo chmod +w %s", asarPath))
+				} else {
+					logCallback("💡 提示：请尝试以管理员身份运行本程序。")
+				}
+			} else {
+				logCallback(fmt.Sprintf("❌ ASAR Restore failed: %v", err))
+			}
 			return err
 		}
 	}

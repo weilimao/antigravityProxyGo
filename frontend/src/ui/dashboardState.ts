@@ -28,6 +28,13 @@ export interface DashboardState {
     currentPage: number;
     itemsPerPage: number;
 
+    // Account Pool Specific State (Filters & Pagination)
+    accountSearchQuery: string;
+    accountStatusFilter: string;
+    accountTierFilter: string;
+    accountCurrentPage: number;
+    accountItemsPerPage: number;
+
     // Pricing Config Cache
     pricingConfig: { [modelName: string]: any };
 
@@ -82,6 +89,13 @@ const state: DashboardState = {
     // Pagination
     currentPage: 1,
     itemsPerPage: 8,
+
+    // Account Pool Specific State (Filters & Pagination)
+    accountSearchQuery: '',
+    accountStatusFilter: 'all',
+    accountTierFilter: 'all',
+    accountCurrentPage: 1,
+    accountItemsPerPage: 10,
 
     // Pricing Config Cache
     pricingConfig: {},
