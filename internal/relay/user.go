@@ -13,13 +13,35 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+type ModelQuota struct {
+	EnableFixed  bool  `json:"enableFixed"`
+	FixedTokens  int64 `json:"fixedTokens"`
+
+	EnableHourly bool  `json:"enableHourly"`
+	HourlyHours  int   `json:"hourlyHours"`
+	HourlyTokens int64 `json:"hourlyTokens"`
+
+	EnableDaily  bool  `json:"enableDaily"`
+	DailyDays    int   `json:"dailyDays"`
+	DailyTokens  int64 `json:"dailyTokens"`
+}
+
+type UserQuotas struct {
+	Gemini ModelQuota `json:"gemini"`
+	Claude ModelQuota `json:"claude"`
+	ValidDuration int `json:"validDuration"`
+	ValidUnit     string `json:"validUnit"` // "days", "months", "years"
+	ExpireAt      int64  `json:"expireAt"`
+}
+
 type RelayUser struct {
 	ID           string    `json:"id"`
 	Key          string    `json:"key"`
 	PasswordHash string    `json:"passwordHash"`
 	Enabled      bool      `json:"enabled"`
-	CreatedAt    time.Time `json:"createdAt"`
-	Remark       string    `json:"remark,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	Remark       string     `json:"remark,omitempty"`
+	Quotas       UserQuotas `json:"quotas"`
 }
 
 type UserManager struct {
@@ -79,7 +101,7 @@ func (m *UserManager) RemoveUser(id string) error {
 	return fmt.Errorf("user %q not found", id)
 }
 
-func (m *UserManager) UpdateUserEnabled(id string, enabled bool) {
+func (m *UserManager) UpdateUserEnabled(id string, enabled bool) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -87,28 +109,57 @@ func (m *UserManager) UpdateUserEnabled(id string, enabled bool) {
 		if u.ID == id {
 			u.Enabled = enabled
 			m.saveToDiskLocked()
-			return
+			return nil
 		}
 	}
+	return fmt.Errorf("user not found")
+}
+
+func (m *UserManager) UpdateUserQuota(id string, quotas UserQuotas) error {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.ID == id {
+			if quotas.ValidDuration > 0 {
+				now := time.Now()
+				if quotas.ValidUnit == "months" {
+					now = now.AddDate(0, quotas.ValidDuration, 0)
+				} else if quotas.ValidUnit == "years" {
+					now = now.AddDate(quotas.ValidDuration, 0, 0)
+				} else { // default to days
+					now = now.AddDate(0, 0, quotas.ValidDuration)
+				}
+				quotas.ExpireAt = now.Unix()
+			} else {
+				quotas.ExpireAt = 0 // permanent
+			}
+			u.Quotas = quotas
+			m.saveToDiskLocked()
+			return nil
+		}
+	}
+	return fmt.Errorf("user not found")
 }
 
 func (m *UserManager) GetUsers() []*RelayUser {
 	m.RLock()
 	defer m.RUnlock()
 
-	result := make([]*RelayUser, len(m.users))
+	// Return a copy
+	out := make([]*RelayUser, len(m.users))
 	for i, u := range m.users {
-		copied := *u
-		copied.PasswordHash = "***"
-		result[i] = &copied
+		// Create a shallow copy so we don't return the original reference
+		uc := *u
+		uc.PasswordHash = "***"
+		out[i] = &uc
 	}
-	return result
+	return out
 }
 
 func (m *UserManager) GetUserByID(id string) *RelayUser {
 	m.RLock()
 	defer m.RUnlock()
-
 	for _, u := range m.users {
 		if u.ID == id {
 			return u

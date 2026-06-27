@@ -33,6 +33,9 @@ type RelayUserStats struct {
 	TotalCost         float64                     `json:"totalCost"`
 	Models            map[string]*RelayModelStats `json:"models"`
 	LastActiveAt      string                      `json:"lastActiveAt"`
+	Quotas            interface{}                 `json:"quotas"`       // Optional: UserQuotas
+	CurrentUsage      map[string]int64            `json:"currentUsage"` // Optional: map[string]int64
+	ResetAt           map[string]string           `json:"resetAt"`      // Optional: map[string]string
 }
 
 type RelaySample struct {
@@ -42,6 +45,12 @@ type RelaySample struct {
 	InTokens     int
 	OutTokens    int
 	CachedTokens int
+	Method       string
+	Host         string
+	Path         string
+	SessionID    string
+	DurationMs   int64
+	StatusCode   int
 }
 
 type StatsTracker struct {
@@ -151,8 +160,12 @@ func (s *StatsTracker) RecordUsage(sample RelaySample) {
 		InputCost:    inputCost,
 		OutputCost:   outputCost,
 		CachedCost:   cachedCost,
-		DurationMs:   0,
-		StatusCode:   200,
+		DurationMs:   sample.DurationMs,
+		StatusCode:   sample.StatusCode,
+		Method:       sample.Method,
+		Host:         sample.Host,
+		Path:         sample.Path,
+		SessionID:    sample.SessionID,
 	}
 
 	go func() {

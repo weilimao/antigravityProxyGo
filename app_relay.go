@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"antigravity-proxy/internal/cert"
+	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/patch"
 	"antigravity-proxy/internal/proxy"
 	"antigravity-proxy/internal/relay"
@@ -81,6 +83,7 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "relay:get-users":
+		a.ensureRelayInitialized()
 		if a.relayUserMgr == nil {
 			return marshalResponse([]interface{}{})
 		}
@@ -124,12 +127,147 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		a.relayUserMgr.UpdateUserEnabled(userId, enabled)
 		return marshalResponse(map[string]interface{}{"success": true})
 
+	case "relay:update-user-quota":
+		userId := getStringArg(0)
+		if a.relayUserMgr == nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": "relay not initialized"})
+		}
+		var quotas relay.UserQuotas
+		if len(args) > 1 {
+			b, _ := json.Marshal(args[1])
+			_ = json.Unmarshal(b, &quotas)
+		}
+		err := a.relayUserMgr.UpdateUserQuota(userId, quotas)
+		if err != nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		return marshalResponse(map[string]interface{}{"success": true})
+
+	case "relay:get-packages":
+		a.ensureRelayInitialized()
+		if a.relayPackageMgr == nil {
+			return marshalResponse([]interface{}{})
+		}
+		return marshalResponse(a.relayPackageMgr.GetPackages())
+		
+	case "relay:save-package":
+		if a.relayPackageMgr == nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": "not initialized"})
+		}
+		var pkg relay.RelayPackageTemplate
+		if len(args) > 0 {
+			b, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(b, &pkg)
+		}
+		if pkg.ID == "" {
+			_, err := a.relayPackageMgr.AddPackage(pkg.Name, pkg.Quotas)
+			if err != nil {
+				return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+			}
+		} else {
+			err := a.relayPackageMgr.UpdatePackage(pkg.ID, pkg.Name, pkg.Quotas)
+			if err != nil {
+				return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+			}
+		}
+		return marshalResponse(map[string]interface{}{"success": true})
+		
+	case "relay:delete-package":
+		if a.relayPackageMgr == nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": "not initialized"})
+		}
+		id := getStringArg(0)
+		err := a.relayPackageMgr.DeletePackage(id)
+		if err != nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		return marshalResponse(map[string]interface{}{"success": true})
+
 	case "relay:get-user-stats":
 		userId := getStringArg(0)
+		a.ensureRelayInitialized()
 		if a.relayStatsMgr == nil {
 			return marshalResponse(nil)
 		}
-		return marshalResponse(a.relayStatsMgr.GetUserStats(userId))
+		stats := a.relayStatsMgr.GetUserStats(userId)
+		var geminiLifetime, claudeLifetime int64
+		if stats != nil {
+			for mName, mStats := range stats.Models {
+				if strings.Contains(strings.ToLower(mName), "claude") {
+					claudeLifetime += int64(mStats.InputTokens + mStats.OutputTokens + mStats.CachedTokens)
+				} else {
+					geminiLifetime += int64(mStats.InputTokens + mStats.OutputTokens + mStats.CachedTokens)
+				}
+			}
+		}
+
+		var geminiHourlyUsed, geminiDailyUsed int64
+		var claudeHourlyUsed, claudeDailyUsed int64
+		var geminiHourlyResetAt, claudeHourlyResetAt string
+		var geminiDailyResetAt, claudeDailyResetAt string
+		user := a.relayUserMgr.GetUserByID(userId)
+		if user != nil {
+			if user.Quotas.Gemini.EnableHourly && user.Quotas.Gemini.HourlyHours > 0 {
+				since := time.Now().Add(-time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour).Format(time.RFC3339)
+				geminiHourlyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "gemini", since)
+				if geminiHourlyUsed > 0 {
+					if firstTs, err := db.GetOldestRequestTimestampSince(userId, "gemini", since); err == nil && firstTs != "" {
+						if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
+							geminiHourlyResetAt = parsed.Add(time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour).Format(time.RFC3339)
+						}
+					}
+				}
+			}
+			if user.Quotas.Gemini.EnableDaily && user.Quotas.Gemini.DailyDays > 0 {
+				since := time.Now().Add(-time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour).Format(time.RFC3339)
+				geminiDailyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "gemini", since)
+				if geminiDailyUsed > 0 {
+					if firstTs, err := db.GetOldestRequestTimestampSince(userId, "gemini", since); err == nil && firstTs != "" {
+						if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
+							geminiDailyResetAt = parsed.Add(time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour).Format(time.RFC3339)
+						}
+					}
+				}
+			}
+
+			if user.Quotas.Claude.EnableHourly && user.Quotas.Claude.HourlyHours > 0 {
+				since := time.Now().Add(-time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour).Format(time.RFC3339)
+				claudeHourlyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "claude", since)
+				if claudeHourlyUsed > 0 {
+					if firstTs, err := db.GetOldestRequestTimestampSince(userId, "claude", since); err == nil && firstTs != "" {
+						if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
+							claudeHourlyResetAt = parsed.Add(time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour).Format(time.RFC3339)
+						}
+					}
+				}
+			}
+			if user.Quotas.Claude.EnableDaily && user.Quotas.Claude.DailyDays > 0 {
+				since := time.Now().Add(-time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour).Format(time.RFC3339)
+				claudeDailyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "claude", since)
+				if claudeDailyUsed > 0 {
+					if firstTs, err := db.GetOldestRequestTimestampSince(userId, "claude", since); err == nil && firstTs != "" {
+						if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
+							claudeDailyResetAt = parsed.Add(time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour).Format(time.RFC3339)
+						}
+					}
+				}
+			}
+		}
+
+		return marshalResponse(map[string]interface{}{
+			"stats":               stats,
+			"user":                user,
+			"geminiLifetime":      geminiLifetime,
+			"geminiHourlyUsed":    geminiHourlyUsed,
+			"geminiDailyUsed":     geminiDailyUsed,
+			"claudeLifetime":      claudeLifetime,
+			"claudeHourlyUsed":    claudeHourlyUsed,
+			"claudeDailyUsed":     claudeDailyUsed,
+			"geminiHourlyResetAt": geminiHourlyResetAt,
+			"claudeHourlyResetAt": claudeHourlyResetAt,
+			"geminiDailyResetAt":  geminiDailyResetAt,
+			"claudeDailyResetAt":  claudeDailyResetAt,
+		})
 
 	// ========== Remote Connection (Client Mode) ==========
 
@@ -258,7 +396,7 @@ func (a *App) stopRelayServer() {
 
 // ensureRelayInitialized initializes relay components if not already done.
 func (a *App) ensureRelayInitialized() {
-	if a.relayUserMgr != nil {
+	if a.relayUserMgr != nil || a.settingsMgr == nil {
 		return
 	}
 
@@ -266,6 +404,9 @@ func (a *App) ensureRelayInitialized() {
 
 	a.relayUserMgr = relay.NewUserManager()
 	a.relayUserMgr.Init(activeDir)
+
+	a.relayPackageMgr = relay.NewPackageManager()
+	a.relayPackageMgr.Init(activeDir)
 
 	a.relayAuthMgr = relay.NewAuthManager(a.relayUserMgr)
 

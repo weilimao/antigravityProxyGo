@@ -54,12 +54,13 @@ type App struct {
 	isWindowVisible   bool
 	isWindowVisibleMu sync.RWMutex
 	// Relay server components
-	relayUserMgr  *relay.UserManager
-	relayAuthMgr  *relay.AuthManager
-	relayStatsMgr *relay.StatsTracker
-	relayAPIMgr   *relay.APIHandler
-	relayServer   *relay.RelayServer
-	remoteRelay   *proxy.RemoteRelay
+	relayUserMgr    *relay.UserManager
+	relayPackageMgr *relay.PackageManager
+	relayAuthMgr    *relay.AuthManager
+	relayStatsMgr   *relay.StatsTracker
+	relayAPIMgr     *relay.APIHandler
+	relayServer     *relay.RelayServer
+	remoteRelay     *proxy.RemoteRelay
 }
 
 func NewApp() *App {
@@ -139,6 +140,9 @@ func (a *App) startup(ctx context.Context) {
 
 	a.accountMgr.Init(activeDir)
 	a.sessionRouter.Init(activeDir)
+	
+	// Initialize relay managers early so they are always available
+	a.ensureRelayInitialized()
 
 	// 5. Initialize Packet Capturer
 	a.packetCap = stats.NewPacketCapturer(
@@ -186,7 +190,7 @@ func (a *App) startup(ctx context.Context) {
 		a.quotaSvc.SetCapturedProject,
 		a.quotaSvc.GetStoredProject,
 		a.settingsMgr.GetMaxRetries,
-		func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int) {
+		func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int) {
 			if a.relayStatsMgr != nil {
 				a.relayStatsMgr.RecordUsage(relay.RelaySample{
 					UserID:       userID,
@@ -195,8 +199,87 @@ func (a *App) startup(ctx context.Context) {
 					InTokens:     inTokens,
 					OutTokens:    outTokens,
 					CachedTokens: cachedTokens,
+					Method:       method,
+					Host:         host,
+					Path:         path,
+					SessionID:    sessionID,
+					DurationMs:   durationMs,
+					StatusCode:   statusCode,
 				})
 			}
+		},
+		func(userID, modelName string) error {
+			if a.relayUserMgr == nil || a.relayStatsMgr == nil {
+				return nil
+			}
+			user := a.relayUserMgr.GetUserByID(userID)
+			if user == nil {
+				return fmt.Errorf("user not found")
+			}
+			if user.Quotas.ExpireAt > 0 && time.Now().Unix() > user.Quotas.ExpireAt {
+				return fmt.Errorf("account expired")
+			}
+
+			isClaude := strings.Contains(strings.ToLower(modelName), "claude")
+			var quota relay.ModelQuota
+			if isClaude {
+				quota = user.Quotas.Claude
+			} else {
+				quota = user.Quotas.Gemini
+			}
+
+			if !quota.EnableFixed && !quota.EnableHourly && !quota.EnableDaily {
+				return nil
+			}
+
+			stats := a.relayStatsMgr.GetUserStats(userID)
+			if stats == nil && quota.EnableFixed {
+				return nil // no usage yet
+			}
+
+			familyKeyword := "gemini"
+			if isClaude {
+				familyKeyword = "claude"
+			}
+
+			if quota.EnableFixed {
+				var lifetimeTokens int64
+				if stats != nil {
+					for mName, mStats := range stats.Models {
+						if (isClaude && strings.Contains(strings.ToLower(mName), "claude")) || 
+						   (!isClaude && !strings.Contains(strings.ToLower(mName), "claude")) {
+							lifetimeTokens += int64(mStats.InputTokens + mStats.OutputTokens + mStats.CachedTokens)
+						}
+					}
+				}
+				if lifetimeTokens >= quota.FixedTokens {
+					return fmt.Errorf("fixed token limit exceeded")
+				}
+			}
+
+			if quota.EnableHourly && quota.HourlyHours > 0 {
+				since := time.Now().Add(-time.Duration(quota.HourlyHours) * time.Hour).Format(time.RFC3339)
+				usedTokens, err := db.GetTokensForUserModelFamilySince(userID, familyKeyword, since)
+				if err != nil {
+					return fmt.Errorf("failed to check hourly quota")
+				}
+				if usedTokens >= quota.HourlyTokens {
+					return fmt.Errorf("hourly token limit exceeded (%d / %d)", usedTokens, quota.HourlyTokens)
+				}
+			}
+
+			if quota.EnableDaily && quota.DailyDays > 0 {
+				since := time.Now().Add(-time.Duration(quota.DailyDays*24) * time.Hour).Format(time.RFC3339)
+				usedTokens, err := db.GetTokensForUserModelFamilySince(userID, familyKeyword, since)
+				if err != nil {
+					return fmt.Errorf("failed to check daily quota")
+				}
+				if usedTokens >= quota.DailyTokens {
+					return fmt.Errorf("daily token limit exceeded (%d / %d)", usedTokens, quota.DailyTokens)
+				}
+			}
+
+			return nil
 		},
 	)
 
@@ -1245,6 +1328,10 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 					Account:      dr.UserID,
 					DurationMs:   dr.DurationMs,
 					StatusCode:   dr.StatusCode,
+					Method:       dr.Method,
+					Host:         dr.Host,
+					Path:         dr.Path,
+					SessionID:    dr.SessionID,
 				})
 			}
 			if requests == nil {

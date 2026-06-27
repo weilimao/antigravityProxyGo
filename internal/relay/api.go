@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"antigravity-proxy/internal/db"
 )
@@ -128,7 +129,74 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 			Models:  make(map[string]*RelayModelStats),
 		}
 	}
-	writeJSON(w, http.StatusOK, stats)
+
+	// Make a shallow copy to inject quotas without mutating memory stats
+	statsCopy := *stats
+	
+	user := h.authMgr.userMgr.GetUserByID(session.UserID)
+	if user != nil {
+		statsCopy.Quotas = user.Quotas
+		
+		usage := make(map[string]int64)
+		resetAt := make(map[string]string)
+		
+		// For Gemini quotas
+		if user.Quotas.Gemini.EnableHourly && user.Quotas.Gemini.HourlyHours > 0 {
+			since := time.Now().Add(-time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour).Format(time.RFC3339)
+			tokens, _ := db.GetTokensForUserModelFamilySince(user.ID, "gemini", since)
+			usage["gemini_hourly"] = tokens
+			if tokens > 0 {
+				if firstTs, err := db.GetOldestRequestTimestampSince(user.ID, "gemini", since); err == nil && firstTs != "" {
+					if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
+						resetAt["gemini_hourly"] = parsed.Add(time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour).Format(time.RFC3339)
+					}
+				}
+			}
+		}
+		if user.Quotas.Gemini.EnableDaily && user.Quotas.Gemini.DailyDays > 0 {
+			since := time.Now().Add(-time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour).Format(time.RFC3339)
+			tokens, _ := db.GetTokensForUserModelFamilySince(user.ID, "gemini", since)
+			usage["gemini_daily"] = tokens
+			if tokens > 0 {
+				if firstTs, err := db.GetOldestRequestTimestampSince(user.ID, "gemini", since); err == nil && firstTs != "" {
+					if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
+						resetAt["gemini_daily"] = parsed.Add(time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour).Format(time.RFC3339)
+					}
+				}
+			}
+		}
+		
+		// For Claude quotas
+		if user.Quotas.Claude.EnableHourly && user.Quotas.Claude.HourlyHours > 0 {
+			since := time.Now().Add(-time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour).Format(time.RFC3339)
+			tokens, _ := db.GetTokensForUserModelFamilySince(user.ID, "claude", since)
+			usage["claude_hourly"] = tokens
+			if tokens > 0 {
+				if firstTs, err := db.GetOldestRequestTimestampSince(user.ID, "claude", since); err == nil && firstTs != "" {
+					if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
+						resetAt["claude_hourly"] = parsed.Add(time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour).Format(time.RFC3339)
+					}
+				}
+			}
+		}
+		if user.Quotas.Claude.EnableDaily && user.Quotas.Claude.DailyDays > 0 {
+			since := time.Now().Add(-time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour).Format(time.RFC3339)
+			tokens, _ := db.GetTokensForUserModelFamilySince(user.ID, "claude", since)
+			usage["claude_daily"] = tokens
+			if tokens > 0 {
+				if firstTs, err := db.GetOldestRequestTimestampSince(user.ID, "claude", since); err == nil && firstTs != "" {
+					if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
+						resetAt["claude_daily"] = parsed.Add(time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour).Format(time.RFC3339)
+					}
+				}
+			}
+		}
+		
+		statsCopy.CurrentUsage = usage
+		statsCopy.ResetAt = resetAt
+	}
+
+	writeJSON(w, http.StatusOK, &statsCopy)
 }
 
 func (h *APIHandler) log(format string, args ...interface{}) {

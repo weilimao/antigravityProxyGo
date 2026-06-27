@@ -85,6 +85,10 @@ func runMigrations(db *sql.DB) error {
 			cached_cost REAL NOT NULL DEFAULT 0.0,
 			duration_ms INTEGER NOT NULL DEFAULT 0,
 			status_code INTEGER NOT NULL DEFAULT 200,
+			method TEXT NOT NULL DEFAULT '',
+			host TEXT NOT NULL DEFAULT '',
+			path TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_req_logs_user_mode ON request_logs(user_id, mode);`,
@@ -97,11 +101,15 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
-	// Add server_log_id column if not exists (for existing databases)
+	// Add new columns if not exist (for existing databases)
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN server_log_id INTEGER NOT NULL DEFAULT 0;`)
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN input_cost REAL NOT NULL DEFAULT 0.0;`)
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN output_cost REAL NOT NULL DEFAULT 0.0;`)
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN cached_cost REAL NOT NULL DEFAULT 0.0;`)
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN method TEXT NOT NULL DEFAULT '';`)
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN host TEXT NOT NULL DEFAULT '';`)
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN path TEXT NOT NULL DEFAULT '';`)
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN session_id TEXT NOT NULL DEFAULT '';`)
 
 	return nil
 }

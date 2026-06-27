@@ -700,6 +700,20 @@ export function renderAccounts(accounts: any[]) {
     });
 }
 
+function getFamilyLifetimeTokens(stats: any, isGemini: boolean): number {
+    if (!stats || !stats.models) return 0;
+    let total = 0;
+    for (const modelName of Object.keys(stats.models)) {
+        const isClaude = modelName.toLowerCase().includes('claude');
+        if (isGemini && !isClaude) {
+            total += (stats.models[modelName].inputTokens || 0) + (stats.models[modelName].outputTokens || 0) + (stats.models[modelName].cachedTokens || 0);
+        } else if (!isGemini && isClaude) {
+            total += (stats.models[modelName].inputTokens || 0) + (stats.models[modelName].outputTokens || 0) + (stats.models[modelName].cachedTokens || 0);
+        }
+    }
+    return total;
+}
+
 export function updateAggregateQuotaUI() {
     const panel = document.getElementById('aggregate-quota-panel');
     const grid = document.getElementById('aggregate-quota-grid');
@@ -707,7 +721,18 @@ export function updateAggregateQuotaUI() {
     if (!panel || !grid || !info) return;
 
     const isPool = poolModeToggle ? poolModeToggle.checked : false;
-    if (!isPool || !state.currentAccountsList || state.currentAccountsList.length === 0 || state.currentActiveChannel === 'project') {
+    const isRemote = !!state.isRemoteMode;
+    const hasRemoteStats = !!(state.remoteStats && state.remoteStats.quotas);
+
+    // 绝对第一优先级：如果是远程模式，不论本地开没开负载均衡，一律禁止显示本地数据
+    if (isRemote && !hasRemoteStats) {
+        panel.classList.add('hidden');
+        panel.classList.remove('flex');
+        return;
+    }
+    
+    // 第二优先级：如果没有开远程，且（没开负载均衡，或当前账户列表为空，或处于项目通道），则隐藏面板
+    if (!isRemote && (!isPool || !state.currentAccountsList || state.currentAccountsList.length === 0 || state.currentActiveChannel === 'project')) {
         panel.classList.add('hidden');
         panel.classList.remove('flex');
         return;
@@ -715,6 +740,82 @@ export function updateAggregateQuotaUI() {
 
     panel.classList.remove('hidden');
     panel.classList.add('flex');
+    grid.innerHTML = '';
+    
+    if (isRemote && hasRemoteStats) {
+        // Render Remote Quotas instead of Local Pool Quotas
+        const q = state.remoteStats.quotas;
+        const usage = state.remoteStats.currentUsage || {};
+        const resetAt = state.remoteStats.resetAt || {};
+        
+        info.textContent = `Remote Relay Limits`;
+        info.className = 'text-[11px] px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
+        
+        const renderRemoteQuotaBar = (label: string, limitTokens: number, usedTokens: number, resetTimeIso?: string, isDaily?: boolean) => {
+            const percent = limitTokens > 0 ? (usedTokens / limitTokens) * 100 : 0;
+            const remaining = Math.max(0, limitTokens - usedTokens);
+            const remainPercent = Math.max(0, Math.min(100, 100 - percent));
+            
+            const colorClass = remainPercent > 20 ? 'bg-emerald-500' : 'bg-red-500';
+            let resetBadge = '';
+            if (usedTokens > 0 && resetTimeIso) {
+                const d = new Date(resetTimeIso);
+                const hours = d.getHours().toString().padStart(2, '0');
+                const minutes = d.getMinutes().toString().padStart(2, '0');
+                let timeStr = `${hours}:${minutes}`;
+                if (isDaily) {
+                    const month = (d.getMonth() + 1).toString().padStart(2, '0');
+                    const day = d.getDate().toString().padStart(2, '0');
+                    timeStr = `${month}-${day} ${hours}:${minutes}`;
+                }
+                resetBadge = ` <span class="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded ml-1 font-normal">预计 ${timeStr} 刷新</span>`;
+            }
+            
+            grid.innerHTML += `
+                <div class="flex flex-col">
+                    <div class="flex justify-between items-end mb-2">
+                        <span class="text-[12px] font-medium text-on-surface dark:text-white truncate flex items-center" title="${label}">${label}${resetBadge}</span>
+                        <span class="text-[12px] font-bold ${remainPercent > 20 ? 'text-emerald-500' : 'text-red-500'}">${Math.round(remainPercent)}%</span>
+                    </div>
+                    <div class="h-[6px] w-full bg-slate-200 dark:bg-slate-700/50 rounded-full overflow-hidden">
+                        <div class="h-full ${colorClass} transition-all duration-500 relative" style="width: ${remainPercent}%">
+                            <div class="absolute inset-0 bg-white/20"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+        
+        if (q.gemini) {
+            if (q.gemini.enableFixed) {
+                renderRemoteQuotaBar(`Remote Gemini Total`, q.gemini.fixedTokens, getFamilyLifetimeTokens(state.remoteStats, true));
+            }
+            if (q.gemini.enableHourly) {
+                renderRemoteQuotaBar(`Remote Gemini ${q.gemini.hourlyHours}-Hour`, q.gemini.hourlyTokens, usage.gemini_hourly || 0, resetAt.gemini_hourly, false);
+            }
+            if (q.gemini.enableDaily) {
+                renderRemoteQuotaBar(`Remote Gemini ${q.gemini.dailyDays}-Day`, q.gemini.dailyTokens, usage.gemini_daily || 0, resetAt.gemini_daily, true);
+            }
+        }
+        
+        if (q.claude) {
+            if (q.claude.enableFixed) {
+                renderRemoteQuotaBar(`Remote Claude Total`, q.claude.fixedTokens, getFamilyLifetimeTokens(state.remoteStats, false));
+            }
+            if (q.claude.enableHourly) {
+                renderRemoteQuotaBar(`Remote Claude ${q.claude.hourlyHours}-Hour`, q.claude.hourlyTokens, usage.claude_hourly || 0, resetAt.claude_hourly, false);
+            }
+            if (q.claude.enableDaily) {
+                renderRemoteQuotaBar(`Remote Claude ${q.claude.dailyDays}-Day`, q.claude.dailyTokens, usage.claude_daily || 0, resetAt.claude_daily, true);
+            }
+        }
+        
+        if (grid.innerHTML === '') {
+            panel.classList.add('hidden');
+            panel.classList.remove('flex');
+        }
+        return;
+    }
 
     let categories = [
         { group: 'Gemini Models', modelId: 'Weekly Limit', label: 'Gemini Weekly', key: 'gemini_weekly' },

@@ -32,7 +32,8 @@ type ProxyHandler struct {
 	setCapturedProject func(string, string)
 	getStoredProject   func(string) string
 	getMaxRetries      func() int
-	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int)
+	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int)
+	relayQuotaCheck    func(userID, modelName string) error
 	client             *http.Client
 }
 
@@ -49,7 +50,8 @@ func NewProxyHandler(
 	setCapturedProject func(string, string),
 	getStoredProject func(string) string,
 	getMaxRetries func() int,
-	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int),
+	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int),
+	relayQuotaCheck func(userID, modelName string) error,
 ) *ProxyHandler {
 	return &ProxyHandler{
 		accountMgr:         accountMgr,
@@ -65,6 +67,7 @@ func NewProxyHandler(
 		getStoredProject:   getStoredProject,
 		getMaxRetries:      getMaxRetries,
 		relayStatsCallback: relayStatsCallback,
+		relayQuotaCheck:    relayQuotaCheck,
 		client:             netutil.NewClient(5 * time.Minute),
 	}
 }
@@ -155,6 +158,18 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					currentModel = m[1]
 				}
 			}
+		}
+	}
+
+	if relayUserID != "" && h.relayQuotaCheck != nil {
+		if err := h.relayQuotaCheck(relayUserID, currentModel); err != nil {
+			if h.logFn != nil {
+				h.logFn(fmt.Sprintf("⛔ Relay Quota Exceeded for %s: %v", relayUserID, err))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(fmt.Sprintf(`{"error":{"code":403,"message":"%s"}}`, err.Error())))
+			return
 		}
 	}
 
@@ -746,7 +761,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if inTokens > 0 || outTokens > 0 {
 				h.statsTracker.TrackRequest(currentModel, inTokens, outTokens, cachedTokens)
 				if relayUserID != "" && h.relayStatsCallback != nil {
-					h.relayStatsCallback(relayUserID, "", currentModel, inTokens, outTokens, cachedTokens)
+					h.relayStatsCallback(relayUserID, "", currentModel, inTokens, outTokens, cachedTokens,
+						r.Method, r.Host, r.URL.Path, sessionKey, time.Since(startTime).Milliseconds(), resp.StatusCode)
 				}
 				var accMeta *stats.AccountMeta
 				if poolAccount != nil {

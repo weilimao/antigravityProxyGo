@@ -117,8 +117,21 @@ func (pe *ProxyEngine) SetMode(mode bool) {
 
 func (pe *ProxyEngine) SetRemoteRelay(relay RemoteRelayInterface) {
 	pe.Lock()
-	defer pe.Unlock()
 	pe.remoteRelay = relay
+	pe.Unlock()
+
+	// Terminate active passthrough tunnels to force clients to reconnect
+	pe.activeTunnelsMu.Lock()
+	tunnelsCount := len(pe.activeTunnels)
+	if tunnelsCount > 0 {
+		pe.logFn(fmt.Sprintf("🔄 Remote route changed. Closing %d active passthrough tunnels to force client reconnection...", tunnelsCount))
+		for client, remote := range pe.activeTunnels {
+			_ = client.Close()
+			_ = remote.Close()
+		}
+		pe.activeTunnels = make(map[net.Conn]net.Conn)
+	}
+	pe.activeTunnelsMu.Unlock()
 }
 
 func (pe *ProxyEngine) IsInterceptMode() bool {

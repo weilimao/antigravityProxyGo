@@ -7,6 +7,7 @@ import * as pricingController from './pricingController';
 import { refreshDataDir } from './migrationController';
 import { initAppVersion } from './updaterController';
 import { startOtpTimer, stopOtpTimer } from './otpController';
+import { refreshRelayPackages, refreshRelayUsers } from './relayController';
 
 // DOM Elements
 let html: HTMLElement;
@@ -446,6 +447,8 @@ export function switchView(viewName: string) {
     if (viewName === 'settings') {
         refreshDataDir();
         initAppVersion();
+        refreshRelayPackages();
+        refreshRelayUsers();
     } else if (viewName === 'accounts') {
         if (state.currentAccountsList) {
             // Re-render accounts on tab switch

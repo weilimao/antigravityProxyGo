@@ -20,6 +20,7 @@ type RelayServer struct {
 	apiHandler      *APIHandler
 	server          *http.Server
 	listener        net.Listener
+	trackedListener *trackedListener
 	logFn           func(string)
 	isRunning       bool
 	relayUserCtxKey interface{}
@@ -83,13 +84,14 @@ func (s *RelayServer) Start(port string) error {
 	}
 
 	s.listener = listener
+	s.trackedListener = &trackedListener{Listener: listener}
 	s.server = &http.Server{
 		Handler: s,
 	}
 
 	go func() {
 		s.log("Relay server started on %s", addr)
-		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
+		if err := s.server.Serve(s.trackedListener); err != nil && err != http.ErrServerClosed {
 			s.log("Relay server error: %v", err)
 		}
 	}()
@@ -109,6 +111,9 @@ func (s *RelayServer) Stop() {
 	if s.server != nil {
 		_ = s.server.Close()
 	}
+	if s.trackedListener != nil {
+		s.trackedListener.CloseAll()
+	}
 	if s.listener != nil {
 		_ = s.listener.Close()
 	}
@@ -127,4 +132,50 @@ func (s *RelayServer) log(format string, args ...interface{}) {
 	if s.logFn != nil {
 		s.logFn(fmt.Sprintf("[RelayServer] "+format, args...))
 	}
+}
+
+type trackedListener struct {
+	net.Listener
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+}
+
+func (tl *trackedListener) Accept() (net.Conn, error) {
+	c, err := tl.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	tc := &trackedConn{
+		Conn: c,
+		tl:   tl,
+	}
+	tl.mu.Lock()
+	if tl.conns == nil {
+		tl.conns = make(map[net.Conn]struct{})
+	}
+	tl.conns[tc] = struct{}{}
+	tl.mu.Unlock()
+	return tc, nil
+}
+
+func (tl *trackedListener) CloseAll() {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	for c := range tl.conns {
+		c.Close()
+	}
+}
+
+type trackedConn struct {
+	net.Conn
+	tl *trackedListener
+}
+
+func (tc *trackedConn) Close() error {
+	tc.tl.mu.Lock()
+	if tc.tl.conns != nil {
+		delete(tc.tl.conns, tc)
+	}
+	tc.tl.mu.Unlock()
+	return tc.Conn.Close()
 }

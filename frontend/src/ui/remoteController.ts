@@ -209,7 +209,7 @@ function updateRemoteStatusUI(status: any) {
             badge.setAttribute('title', `远程主机: ${state.remoteHost}:${state.remotePort}\n用户Key: ${state.remoteUserKey}`);
         }
         if (statusText) {
-            statusText.innerHTML = `<span class="hidden xl:inline">远程中: ${state.remoteHost}:${state.remotePort} (${state.remoteUserKey})</span><span class="hidden lg:inline xl:hidden">远程中: ${state.remoteHost}</span><span class="inline lg:hidden">远程中</span>`;
+            statusText.textContent = `远端: ${state.remoteHost}:${state.remotePort}`;
         }
         if (btnConnect) btnConnect.classList.add('hidden');
         
@@ -267,6 +267,13 @@ function stopStatsSync() {
         clearInterval(statsSyncTimer);
         statsSyncTimer = null;
     }
+    // 当彻底停止同步时，强制清除内存里的残影数据并重绘UI
+    if (state.remoteStats !== null) {
+        state.remoteStats = null;
+        if (state.callbacks.updateAggregateQuotaUI) {
+            state.callbacks.updateAggregateQuotaUI();
+        }
+    }
 }
 
 async function syncRemoteStats() {
@@ -274,6 +281,9 @@ async function syncRemoteStats() {
         const stats = await ipcRenderer.invoke('remote:sync-stats');
         if (stats) {
             state.remoteStats = stats;
+            if (state.callbacks.updateAggregateQuotaUI) {
+                state.callbacks.updateAggregateQuotaUI();
+            }
             // Emit event so dashboard can update
             document.dispatchEvent(new CustomEvent('remote-stats-updated', { detail: stats }));
         }

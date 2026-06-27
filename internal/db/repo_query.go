@@ -87,7 +87,8 @@ func QueryRecentRequests(userID, mode string, limit int) []*RequestLog {
 	query := `
 		SELECT 
 			id, server_log_id, req_id, timestamp, mode, user_id, model_name, 
-			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, status_code
+			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, status_code,
+			method, host, path, session_id
 		FROM request_logs 
 		WHERE user_id = ? AND mode = ?
 		ORDER BY timestamp DESC, id DESC
@@ -106,6 +107,7 @@ func QueryRecentRequests(userID, mode string, limit int) []*RequestLog {
 		if err := rows.Scan(
 			&l.ID, &l.ServerLogID, &l.ReqID, &l.Timestamp, &l.Mode, &l.UserID, &l.ModelName,
 			&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost, &l.DurationMs, &l.StatusCode,
+			&l.Method, &l.Host, &l.Path, &l.SessionID,
 		); err == nil {
 			logs = append(logs, &l)
 		}

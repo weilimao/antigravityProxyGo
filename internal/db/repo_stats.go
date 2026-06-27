@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
 )
 
@@ -22,6 +23,10 @@ type RequestLog struct {
 	CachedCost   float64 `json:"cached_cost"`
 	DurationMs   int64   `json:"duration_ms"`
 	StatusCode   int     `json:"status_code"`
+	Method       string  `json:"method"`
+	Host         string  `json:"host"`
+	Path         string  `json:"path"`
+	SessionID    string  `json:"session_id"`
 }
 
 // InsertRequestLog inserts a new request log into the database
@@ -33,13 +38,15 @@ func InsertRequestLog(log *RequestLog) error {
 	query := `
 		INSERT INTO request_logs (
 			server_log_id, req_id, timestamp, mode, user_id, model_name, 
-			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, status_code
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, status_code,
+			method, host, path, session_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	res, err := GlobalDB.Exec(query,
 		log.ServerLogID, log.ReqID, log.Timestamp, log.Mode, log.UserID, log.ModelName,
 		log.InTokens, log.OutTokens, log.CachedTokens, log.Cost, log.InputCost, log.OutputCost, log.CachedCost, log.DurationMs, log.StatusCode,
+		log.Method, log.Host, log.Path, log.SessionID,
 	)
 	if err != nil {
 		return err
@@ -75,7 +82,8 @@ func GetRequestLogsSince(userID, mode string, lastID int64, limit int) ([]*Reque
 	query := `
 		SELECT 
 			id, server_log_id, req_id, timestamp, mode, user_id, model_name, 
-			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, status_code
+			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, status_code,
+			method, host, path, session_id
 		FROM request_logs 
 		WHERE user_id = ? AND mode = ? AND id > ?
 		ORDER BY id ASC
@@ -94,6 +102,7 @@ func GetRequestLogsSince(userID, mode string, lastID int64, limit int) ([]*Reque
 		if err := rows.Scan(
 			&l.ID, &l.ServerLogID, &l.ReqID, &l.Timestamp, &l.Mode, &l.UserID, &l.ModelName,
 			&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost, &l.DurationMs, &l.StatusCode,
+			&l.Method, &l.Host, &l.Path, &l.SessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -102,3 +111,58 @@ func GetRequestLogsSince(userID, mode string, lastID int64, limit int) ([]*Reque
 
 	return logs, nil
 }
+
+// GetTokensForUserModelFamilySince calculates total tokens for a specific model family since a given timestamp
+func GetTokensForUserModelFamilySince(userID string, modelKeyword string, sinceIso string) (int64, error) {
+	if GlobalDB == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT SUM(in_tokens + out_tokens + cached_tokens) 
+		FROM request_logs 
+		WHERE user_id = ? 
+		AND model_name LIKE ? 
+		AND timestamp >= ?
+	`
+	likePattern := "%" + modelKeyword + "%"
+	row := GlobalDB.QueryRow(query, userID, likePattern, sinceIso)
+	
+	var total sqlNullableInt64
+	if err := row.Scan(&total.val); err != nil {
+		return 0, err
+	}
+	
+	if total.val == nil {
+		return 0, nil
+	}
+	return *total.val, nil
+}
+
+// GetOldestRequestTimestampSince retrieves the timestamp of the oldest request for a specific model family since a given timestamp
+func GetOldestRequestTimestampSince(userID string, modelKeyword string, sinceIso string) (string, error) {
+	if GlobalDB == nil {
+		return "", fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT MIN(timestamp) 
+		FROM request_logs 
+		WHERE user_id = ? 
+		AND model_name LIKE ? 
+		AND timestamp >= ?
+	`
+	likePattern := "%" + modelKeyword + "%"
+	row := GlobalDB.QueryRow(query, userID, likePattern, sinceIso)
+
+	var firstTimestamp sql.NullString
+	if err := row.Scan(&firstTimestamp); err != nil {
+		return "", err
+	}
+
+	if !firstTimestamp.Valid {
+		return "", nil
+	}
+	return firstTimestamp.String, nil
+}
+
