@@ -17,22 +17,22 @@
 <!-- 模型匹配名称 -->
 <div class="flex flex-col gap-1.5">
 <label class="text-[11px] text-outline font-bold uppercase" for="pricingModelName">模型匹配名称 (如 deepseek-chat)</label>
-<input class="px-3 py-1.5 text-[13px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono" id="pricingModelName" required="" type="text"/>
+<input class="px-3 py-1.5 text-[13px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono" id="pricingModelName" required type="text"/>
 </div>
 <!-- 输入价格 -->
 <div class="flex flex-col gap-1.5">
 <label class="text-[11px] text-outline font-bold uppercase" for="pricingInputVal">输入 Token 单价 (USD / 每百万 Tokens)</label>
-<input class="px-3 py-1.5 text-[13px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono" id="pricingInputVal" min="0" required="" step="0.000001" type="number"/>
+<input class="px-3 py-1.5 text-[13px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono" id="pricingInputVal" min="0" required step="0.000001" type="number"/>
 </div>
 <!-- 输出价格 -->
 <div class="flex flex-col gap-1.5">
 <label class="text-[11px] text-outline font-bold uppercase" for="pricingOutputVal">输出 Token 单价 (USD / 每百万 Tokens)</label>
-<input class="px-3 py-1.5 text-[13px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono" id="pricingOutputVal" min="0" required="" step="0.000001" type="number"/>
+<input class="px-3 py-1.5 text-[13px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono" id="pricingOutputVal" min="0" required step="0.000001" type="number"/>
 </div>
 <!-- 缓存价格 -->
 <div class="flex flex-col gap-1.5">
 <label class="text-[11px] text-outline font-bold uppercase" for="pricingCachedVal">缓存 Token 单价 (USD / 每百万 Tokens)</label>
-<input class="px-3 py-1.5 text-[13px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono" id="pricingCachedVal" min="0" required="" step="0.000001" type="number"/>
+<input class="px-3 py-1.5 text-[13px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono" id="pricingCachedVal" min="0" required step="0.000001" type="number"/>
 </div>
 </form>
 <!-- Modal 底部 -->

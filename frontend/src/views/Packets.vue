@@ -20,7 +20,7 @@
 <span class="material-symbols-outlined text-[16px]">psychology</span>
                     一键 AI 分析接口文档
                 </button>
-<button class="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 text-white hover:bg-emerald-700 border border-emerald-600 rounded-md text-[13px] font-medium transition-colors shadow-sm disabled:opacity-40" disabled="" id="btnDownloadPacketDoc">
+<button class="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 text-white hover:bg-emerald-700 border border-emerald-600 rounded-md text-[13px] font-medium transition-colors shadow-sm disabled:opacity-40" disabled id="btnDownloadPacketDoc">
 <span class="material-symbols-outlined text-[16px]">download</span>
                     下载接口文档
                 </button>
@@ -129,7 +129,7 @@
                 </button>
 </div>
 <!-- 生成的 Markdown 实时显示（支持打字机或直接文本渲染，暗色磨砂编辑器卡片） -->
-<textarea class="w-full h-[550px] bg-slate-950 text-slate-200 font-mono text-[12.5px] p-4 rounded-lg focus:outline-none border border-outline-variant/20 resize-y leading-relaxed" id="packetDocPreviewText" readonly=""></textarea>
+<textarea class="w-full h-[550px] bg-slate-950 text-slate-200 font-mono text-[12.5px] p-4 rounded-lg focus:outline-none border border-outline-variant/20 resize-y leading-relaxed" id="packetDocPreviewText" readonly></textarea>
 </div>
 <!-- AI 分析骨架屏/Loading 遮罩 -->
 <div class="hidden fixed inset-0 z-50 bg-[#10131c]/80 flex flex-col items-center justify-center" id="packetAnalyzeLoading">

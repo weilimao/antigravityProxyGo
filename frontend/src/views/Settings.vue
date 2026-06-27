@@ -26,7 +26,7 @@
 <div class="flex flex-col gap-2 mt-2">
 <label class="text-[12px] font-bold text-outline" data-i18n="currentDirLabel">当前存储路径</label>
 <div class="flex gap-2">
-<input class="flex-grow px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtDataDir" readonly="" type="text">
+<input class="flex-grow px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtDataDir" readonly type="text">
 <button class="px-4 py-2 bg-primary text-white hover:bg-primary/90 rounded-md text-[13px] font-bold transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer" id="btnBrowseDir">
 <span class="material-symbols-outlined text-[16px]">folder</span>
 <span data-i18n="btnChangeDir">更改位置</span>
