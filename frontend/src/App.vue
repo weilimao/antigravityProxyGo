@@ -58,6 +58,10 @@
                 <div id="remoteStatusBadge" class="hidden flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full border whitespace-nowrap flex-shrink-0">
                     <span class="material-symbols-outlined text-[15px]">cloud</span>
                     <span id="remoteStatusText">远程连接中</span>
+                    <button id="btnCopyApiKey" class="hidden ml-2 text-primary dark:text-primary-fixed-dim hover:text-primary/80 text-[11px] font-bold border border-primary/20 rounded px-1.5 py-0.5 flex items-center gap-0.5 bg-primary/5 transition-all" title="复制本地中继 API Key (有效期为 30 天)">
+                        <span class="material-symbols-outlined text-[12px] pointer-events-none">content_copy</span>
+                        复制 Key
+                    </button>
                     <button id="btnRemoteEnable" class="hidden ml-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 text-[11px] font-bold" data-i18n="remoteEnable">启用</button>
                     <button id="btnRemoteDisable" class="hidden ml-1 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-[11px] font-bold" data-i18n="remoteDisable">停用</button>
                     <button id="btnRemoteDisconnect" class="ml-1 text-red-400 hover:text-red-600 text-[11px] font-bold" data-i18n="remoteDisconnect">退出</button>

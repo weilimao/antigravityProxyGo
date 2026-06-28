@@ -18,6 +18,7 @@ type RelayServer struct {
 	engine          http.Handler
 	authMgr         *AuthManager
 	apiHandler      *APIHandler
+	compatHandler   *APICompatHandler
 	server          *http.Server
 	listener        net.Listener
 	trackedListener *trackedListener
@@ -30,6 +31,7 @@ func NewRelayServer(
 	engine http.Handler,
 	authMgr *AuthManager,
 	apiHandler *APIHandler,
+	compatHandler *APICompatHandler,
 	logFn func(string),
 	ctxKey interface{},
 ) *RelayServer {
@@ -37,6 +39,7 @@ func NewRelayServer(
 		engine:          engine,
 		authMgr:         authMgr,
 		apiHandler:      apiHandler,
+		compatHandler:   compatHandler,
 		logFn:           logFn,
 		relayUserCtxKey: ctxKey,
 	}
@@ -46,6 +49,12 @@ func (s *RelayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Route API requests
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		s.apiHandler.ServeHTTP(w, r)
+		return
+	}
+
+	// Route OpenAI/Anthropic compat API requests
+	if strings.HasPrefix(r.URL.Path, "/v1/") {
+		s.compatHandler.ServeHTTP(w, r)
 		return
 	}
 

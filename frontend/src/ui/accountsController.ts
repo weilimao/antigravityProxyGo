@@ -141,13 +141,54 @@ export async function refreshAllQuotas() {
 }
 
 export async function refreshAllAccountsQuotas() {
-    if (state.isRefreshingAggregate || !state.currentAccountsList || state.currentAccountsList.length === 0) return;
+    if (state.isRefreshingAggregate) return;
+
+    // 实时获取/兜底 DOM 元素，防止静态缓存失效
+    const icon = btnRefreshAggregateIcon || document.getElementById('btnRefreshAggregateIcon');
+    const btn = btnRefreshAggregateQuota || (document.getElementById('btnRefreshAggregateQuota') as HTMLButtonElement | null);
+
+    if (state.isRemoteMode) {
+        state.isRefreshingAggregate = true;
+        if (btn && icon) {
+            icon.classList.add('animate-spin');
+            btn.disabled = true;
+            btn.classList.add('opacity-60', 'cursor-not-allowed');
+        }
+
+        const startTime = Date.now();
+        try {
+            const stats = await ipcRenderer.invoke('remote:sync-stats');
+            if (stats) {
+                state.remoteStats = stats;
+                updateAggregateQuotaUI();
+                document.dispatchEvent(new CustomEvent('remote-stats-updated', { detail: stats }));
+            }
+        } catch (err) {
+            console.error('[AccountsController] Failed to sync remote stats on click:', err);
+        } finally {
+            // 保障至少 800 毫秒的旋转时间，提供良好的刷新视觉反馈
+            const elapsed = Date.now() - startTime;
+            if (elapsed < 800) {
+                await new Promise(r => setTimeout(r, 800 - elapsed));
+            }
+
+            state.isRefreshingAggregate = false;
+            if (btn && icon) {
+                icon.classList.remove('animate-spin');
+                btn.disabled = false;
+                btn.classList.remove('opacity-60', 'cursor-not-allowed');
+            }
+        }
+        return;
+    }
+
+    if (!state.currentAccountsList || state.currentAccountsList.length === 0) return;
     state.isRefreshingAggregate = true;
 
-    if (btnRefreshAggregateQuota && btnRefreshAggregateIcon) {
-        btnRefreshAggregateIcon.classList.add('animate-spin');
-        btnRefreshAggregateQuota.disabled = true;
-        btnRefreshAggregateQuota.classList.add('opacity-60', 'cursor-not-allowed');
+    if (btn && icon) {
+        icon.classList.add('animate-spin');
+        btn.disabled = true;
+        btn.classList.add('opacity-60', 'cursor-not-allowed');
     }
 
     try {
@@ -168,10 +209,10 @@ export async function refreshAllAccountsQuotas() {
         }
     } finally {
         state.isRefreshingAggregate = false;
-        if (btnRefreshAggregateQuota && btnRefreshAggregateIcon) {
-            btnRefreshAggregateIcon.classList.remove('animate-spin');
-            btnRefreshAggregateQuota.disabled = false;
-            btnRefreshAggregateQuota.classList.remove('opacity-60', 'cursor-not-allowed');
+        if (btn && icon) {
+            icon.classList.remove('animate-spin');
+            btn.disabled = false;
+            btn.classList.remove('opacity-60', 'cursor-not-allowed');
         }
     }
 }

@@ -109,27 +109,36 @@ export function initRelayEvents() {
     const btnRelaySubTabUsers = document.getElementById('btnRelaySubTabUsers');
     const btnRelaySubTabPackages = document.getElementById('btnRelaySubTabPackages');
     const btnRelaySubTabSecurity = document.getElementById('btnRelaySubTabSecurity');
+    const btnRelaySubTabModelMapping = document.getElementById('btnRelaySubTabModelMapping');
     
     const panelUsers = document.getElementById('relay-sub-panel-users');
     const panelPackages = document.getElementById('relay-sub-panel-packages');
     const panelSecurity = document.getElementById('relay-sub-panel-security');
+    const panelModelMapping = document.getElementById('relay-sub-panel-modelmapping');
 
     const subTabActiveClass = 'px-4 py-1.5 text-[12px] font-bold bg-primary/10 text-primary dark:bg-primary/20 rounded-lg cursor-pointer transition-all duration-200';
     const subTabInactiveClass = 'px-4 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg cursor-pointer transition-all duration-200';
 
-    function switchSubTab(active: 'users' | 'packages' | 'security') {
+    function switchSubTab(active: 'users' | 'packages' | 'security' | 'modelmapping') {
         if (panelUsers) panelUsers.classList.toggle('hidden', active !== 'users');
         if (panelPackages) panelPackages.classList.toggle('hidden', active !== 'packages');
         if (panelSecurity) panelSecurity.classList.toggle('hidden', active !== 'security');
+        if (panelModelMapping) panelModelMapping.classList.toggle('hidden', active !== 'modelmapping');
 
         if (btnRelaySubTabUsers) btnRelaySubTabUsers.className = active === 'users' ? subTabActiveClass : subTabInactiveClass;
         if (btnRelaySubTabPackages) btnRelaySubTabPackages.className = active === 'packages' ? subTabActiveClass : subTabInactiveClass;
         if (btnRelaySubTabSecurity) btnRelaySubTabSecurity.className = active === 'security' ? subTabActiveClass : subTabInactiveClass;
+        if (btnRelaySubTabModelMapping) btnRelaySubTabModelMapping.className = active === 'modelmapping' ? subTabActiveClass : subTabInactiveClass;
+
+        if (active === 'modelmapping') {
+            loadModelMappings();
+        }
     }
 
     if (btnRelaySubTabUsers) btnRelaySubTabUsers.addEventListener('click', () => switchSubTab('users'));
     if (btnRelaySubTabPackages) btnRelaySubTabPackages.addEventListener('click', () => switchSubTab('packages'));
     if (btnRelaySubTabSecurity) btnRelaySubTabSecurity.addEventListener('click', () => switchSubTab('security'));
+    if (btnRelaySubTabModelMapping) btnRelaySubTabModelMapping.addEventListener('click', () => switchSubTab('modelmapping'));
 
     // 绑定安全拦截设置元素
     const chkSSRF = document.getElementById('chkRelaySSRFBlock') as HTMLInputElement | null;
@@ -184,6 +193,117 @@ export function initRelayEvents() {
             btnSaveRelaySecurity.textContent = '⏳ 保存中...';
             await saveSecurityConfig();
             btnSaveRelaySecurity.innerHTML = originalText;
+        });
+    }
+
+    // ========== 模型映射配置交互 ==========
+    let modelMappings: any[] = [];
+
+    async function loadModelMappings() {
+        try {
+            const list = await ipcRenderer.invoke('relay:get-model-mapping');
+            modelMappings = list || [];
+            renderModelMappingTable(modelMappings);
+        } catch (err) {
+            console.error('[RelayController] Failed to get model mappings:', err);
+        }
+    }
+
+    function renderModelMappingTable(mappings: any[]) {
+        const tbody = document.getElementById('modelMappingTableBody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        mappings.forEach((item, index) => {
+            const tr = document.createElement('tr');
+            tr.className = 'border-b border-outline-variant/15 hover:bg-slate-50 dark:hover:bg-white/5';
+            tr.innerHTML = `
+                <td class="py-2 px-1">
+                    <input type="text" class="w-full px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white client-model-input" value="${item.clientModel || ''}" data-index="${index}" placeholder="例如: gpt-4o" />
+                </td>
+                <td class="py-2 px-1">
+                    <input type="text" class="w-full px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white target-model-input" value="${item.targetModel || ''}" data-index="${index}" placeholder="例如: gemini-1.5-pro" />
+                </td>
+                <td class="py-2 text-center">
+                    <input type="checkbox" class="text-primary focus:ring-primary rounded expose-checkbox" ${item.expose ? 'checked' : ''} data-index="${index}" />
+                </td>
+                <td class="py-2 text-center">
+                    <button class="text-red-500 hover:text-red-700 transition-colors flex items-center justify-center mx-auto btn-delete-mapping cursor-pointer" data-index="${index}">
+                        <span class="material-symbols-outlined text-[18px]">delete</span>
+                    </button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        // 绑定删除按钮事件
+        tbody.querySelectorAll('.btn-delete-mapping').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const idx = parseInt((e.currentTarget as HTMLElement).getAttribute('data-index') || '0');
+                mappings.splice(idx, 1);
+                renderModelMappingTable(mappings);
+            });
+        });
+
+        // 绑定输入改变事件
+        tbody.querySelectorAll('.client-model-input').forEach(input => {
+            input.addEventListener('input', (e) => {
+                const target = e.target as HTMLInputElement;
+                const idx = parseInt(target.getAttribute('data-index') || '0');
+                mappings[idx].clientModel = target.value.trim();
+            });
+        });
+        tbody.querySelectorAll('.target-model-input').forEach(input => {
+            input.addEventListener('input', (e) => {
+                const target = e.target as HTMLInputElement;
+                const idx = parseInt(target.getAttribute('data-index') || '0');
+                mappings[idx].targetModel = target.value.trim();
+            });
+        });
+        tbody.querySelectorAll('.expose-checkbox').forEach(chk => {
+            chk.addEventListener('change', (e) => {
+                const target = e.target as HTMLInputElement;
+                const idx = parseInt(target.getAttribute('data-index') || '0');
+                mappings[idx].expose = target.checked;
+            });
+        });
+    }
+
+    const btnAddModelMapping = document.getElementById('btnAddModelMapping');
+    if (btnAddModelMapping) {
+        btnAddModelMapping.addEventListener('click', () => {
+            modelMappings.push({ clientModel: '', targetModel: '', expose: true });
+            renderModelMappingTable(modelMappings);
+        });
+    }
+
+    const btnSaveModelMapping = document.getElementById('btnSaveModelMapping');
+    if (btnSaveModelMapping) {
+        btnSaveModelMapping.addEventListener('click', async () => {
+            const originalText = btnSaveModelMapping.innerHTML;
+            btnSaveModelMapping.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">sync</span><span>保存中...</span>';
+            
+            // 过滤空映射
+            const filteredMappings = modelMappings.filter(m => m.clientModel && m.clientModel.trim() !== '' && m.targetModel && m.targetModel.trim() !== '');
+            try {
+                const res = await ipcRenderer.invoke('relay:set-model-mapping', filteredMappings);
+                if (res && res.success) {
+                    btnSaveModelMapping.innerHTML = '<span class="material-symbols-outlined text-[16px]">done</span><span>保存成功</span>';
+                    setTimeout(() => {
+                        btnSaveModelMapping.innerHTML = originalText;
+                    }, 2000);
+                } else {
+                    btnSaveModelMapping.innerHTML = '<span class="material-symbols-outlined text-[16px]">error</span><span>保存失败</span>';
+                    setTimeout(() => {
+                        btnSaveModelMapping.innerHTML = originalText;
+                    }, 2000);
+                }
+            } catch (err) {
+                console.error('[RelayController] Failed to save model mappings:', err);
+                btnSaveModelMapping.innerHTML = '<span class="material-symbols-outlined text-[16px]">error</span><span>保存失败</span>';
+                setTimeout(() => {
+                    btnSaveModelMapping.innerHTML = originalText;
+                }, 2000);
+            }
         });
     }
 }

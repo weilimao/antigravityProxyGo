@@ -160,3 +160,49 @@ func DialContext(ctx context.Context, network, address string) (net.Conn, error)
 func base64Encode(src string) string {
 	return base64.StdEncoding.EncodeToString([]byte(src))
 }
+
+// IsLocalAddress checks if the host is a local loopback, unspecified, or local interface address.
+func IsLocalAddress(host string) bool {
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0" {
+		return true
+	}
+	// Try parsing it as an IP
+	ip := net.ParseIP(host)
+	if ip != nil {
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return true
+		}
+		return isIPLocal(ip)
+	}
+
+	// Resolve hostname
+	ips, err := net.LookupIP(host)
+	if err == nil {
+		for _, ip := range ips {
+			if ip.IsLoopback() || ip.IsUnspecified() || isIPLocal(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isIPLocal(ip net.IP) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		var localIP net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			localIP = v.IP
+		case *net.IPAddr:
+			localIP = v.IP
+		}
+		if localIP != nil && localIP.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}

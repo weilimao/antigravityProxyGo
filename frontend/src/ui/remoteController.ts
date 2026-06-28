@@ -34,6 +34,10 @@ export function initRemoteEvents() {
     if (btnRemoteCancel) {
         btnRemoteCancel.addEventListener('click', closeRemoteModal);
     }
+    const btnCopyApiKey = document.getElementById('btnCopyApiKey');
+    if (btnCopyApiKey) {
+        btnCopyApiKey.addEventListener('click', handleCopyApiKey);
+    }
 
     // Listen for remote state changes
     ipcRenderer.on('remote-state', (_e: any, config: any) => {
@@ -200,6 +204,7 @@ function updateRemoteStatusUI(status: any) {
     state.remoteHost = status?.host || status?.savedHost || '';
     state.remotePort = status?.port || status?.savedPort || '';
     state.remoteUserKey = status?.userKey || status?.savedKey || '';
+    state.remoteToken = status?.token || '';
     
     if (isConnected && isEnabled) {
         // Active remote mode
@@ -212,6 +217,9 @@ function updateRemoteStatusUI(status: any) {
             statusText.textContent = `远端: ${state.remoteHost}:${state.remotePort}`;
         }
         if (btnConnect) btnConnect.classList.add('hidden');
+        
+        const btnCopy = document.getElementById('btnCopyApiKey');
+        if (btnCopy) btnCopy.classList.remove('hidden');
         
         if (btnRemoteDisable) btnRemoteDisable.classList.remove('hidden');
         if (btnRemoteEnable) btnRemoteEnable.classList.add('hidden');
@@ -231,10 +239,16 @@ function updateRemoteStatusUI(status: any) {
         if (btnRemoteDisable) btnRemoteDisable.classList.add('hidden');
         if (btnRemoteEnable) btnRemoteEnable.classList.remove('hidden');
         if (btnRemoteDisconnect) btnRemoteDisconnect.classList.remove('hidden');
+        
+        const btnCopy = document.getElementById('btnCopyApiKey');
+        if (btnCopy) btnCopy.classList.add('hidden');
     } else {
         // Not logged in / disconnected completely
         if (badge) badge.classList.add('hidden');
         if (btnConnect) btnConnect.classList.remove('hidden');
+        
+        const btnCopy = document.getElementById('btnCopyApiKey');
+        if (btnCopy) btnCopy.classList.add('hidden');
     }
     
     // Disable intercept toggle in active remote mode
@@ -289,5 +303,26 @@ async function syncRemoteStats() {
         }
     } catch (err) {
         console.error('[RemoteController] Stats sync failed:', err);
+    }
+}
+
+async function handleCopyApiKey() {
+    if (!state.remoteToken) {
+        alert('❌ 未获取到有效的 API Key');
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(state.remoteToken);
+        const btn = document.getElementById('btnCopyApiKey');
+        if (btn) {
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = `<span class="material-symbols-outlined text-[12px] pointer-events-none">done</span>已复制`;
+            setTimeout(() => {
+                btn.innerHTML = originalHtml;
+            }, 1500);
+        }
+    } catch (err) {
+        console.error('Failed to copy token:', err);
+        alert(`复制失败，请手动在控制台复制:\n${state.remoteToken}`);
     }
 }

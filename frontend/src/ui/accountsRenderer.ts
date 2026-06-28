@@ -358,15 +358,15 @@ export function renderAccounts(accounts: any[]) {
         
         let isCooling = false;
         let coolingCategories: string[] = [];
-        let maxCooldownTime = 0;
+        let minCooldownTime = 0;
         const now = Date.now();
         if (acc.cooldowns) {
             Object.entries(acc.cooldowns).forEach(([cat, until]) => {
                 const u = until as number;
                 if (u && u > now) {
                     coolingCategories.push(cat);
-                    if (u > maxCooldownTime) {
-                        maxCooldownTime = u;
+                    if (minCooldownTime === 0 || u < minCooldownTime) {
+                        minCooldownTime = u;
                     }
                 }
             });
@@ -374,7 +374,7 @@ export function renderAccounts(accounts: any[]) {
         if (coolingCategories.length === 0 && acc.cooldownUntil) {
             if (acc.cooldownUntil > now) {
                 coolingCategories.push('all');
-                maxCooldownTime = acc.cooldownUntil;
+                minCooldownTime = acc.cooldownUntil;
             }
         }
         isCooling = coolingCategories.length > 0;
@@ -448,7 +448,7 @@ export function renderAccounts(accounts: any[]) {
             statusBadge.className = 'acc-status-badge';
             if (isOverallCooling) {
                 statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
-                const dateStr = formatCooldownTime(maxCooldownTime);
+                const dateStr = formatCooldownTime(minCooldownTime);
                 statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> 冷静中 (${dateStr}恢复)`;
             } else {
                 statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
@@ -680,7 +680,7 @@ export function renderAccounts(accounts: any[]) {
             if (statusBadge) {
                 if (isOverallCooling) {
                     statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
-                    const dateStr = formatCooldownTime(maxCooldownTime);
+                    const dateStr = formatCooldownTime(minCooldownTime);
                     statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> 冷静中 (${dateStr}恢复)`;
                 } else {
                     statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';

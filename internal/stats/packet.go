@@ -484,7 +484,7 @@ func (pc *PacketCapturer) AnalyzePackets(accountId string, sourceType string) (s
 	executeRequest := func(token string) (int, []byte, error) {
 		prompt := pc.generatePrompt(targets)
 		if projectId == "" {
-			projectId = "expanded-palisade-stpfc"
+			projectId = "favorable-synapse-ttvcb"
 		}
 
 		reqBodyMap := map[string]interface{}{

@@ -13,6 +13,7 @@ import (
 	"antigravity-proxy/internal/patch"
 	"antigravity-proxy/internal/proxy"
 	"antigravity-proxy/internal/relay"
+	"antigravity-proxy/internal/settings"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -83,6 +84,22 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		)
 
 		a.AddLog("🛡️ 中继服务网络安全规则已保存并热加载")
+		return marshalResponse(map[string]interface{}{"success": true})
+
+	case "relay:get-model-mapping":
+		return marshalResponse(a.settingsMgr.GetRelayModelMapping())
+
+	case "relay:set-model-mapping":
+		var mapping []settings.ModelMappingEntry
+		if len(args) > 0 {
+			b, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(b, &mapping)
+		}
+		err := a.settingsMgr.SetRelayModelMapping(mapping)
+		if err != nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		a.AddLog("🔄 中继大模型映射配置已保存")
 		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "relay:get-config":
@@ -483,6 +500,7 @@ func (a *App) startRelayServer(port string) error {
 		a.proxyEngine,
 		a.relayAuthMgr,
 		a.relayAPIMgr,
+		a.relayCompatAPIMgr,
 		a.AddLog,
 		proxy.RelayUserCtxKey,
 	)
@@ -524,6 +542,15 @@ func (a *App) ensureRelayInitialized() {
 
 	caCertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
 	a.relayAPIMgr = relay.NewAPIHandler(a.relayAuthMgr, a.relayStatsMgr, a.AddLog, caCertPath)
+
+	a.relayCompatAPIMgr = relay.NewAPICompatHandler(
+		a.relayAuthMgr,
+		a.accountMgr,
+		a.sessionRouter,
+		a.relayStatsMgr,
+		a.settingsMgr,
+		a.AddLog,
+	)
 
 	// Start session cleanup timer
 	go func() {
@@ -636,6 +663,7 @@ func (a *App) getRemoteStatusPayload() map[string]interface{} {
 		"host":                remoteConfig.Host,
 		"port":                remoteConfig.Port,
 		"userKey":             remoteConfig.UserKey,
+		"token":               remoteConfig.Token,
 	}
 }
 

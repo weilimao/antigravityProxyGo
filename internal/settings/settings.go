@@ -23,6 +23,12 @@ var dataDirs = []string{
 	"certs",
 }
 
+type ModelMappingEntry struct {
+	ClientModel string `json:"clientModel"`
+	TargetModel string `json:"targetModel"`
+	Expose      bool   `json:"expose"`
+}
+
 type Config struct {
 	DataDirectory   string `json:"dataDirectory"`
 	EnableSystemLog bool   `json:"enableSystemLog"`
@@ -41,6 +47,74 @@ type Config struct {
 	RelayPortBlock       bool     `json:"relayPortBlock"`
 	RelayDomainFilter    bool     `json:"relayDomainFilter"`
 	RelayDomainWhitelist []string `json:"relayDomainWhitelist"`
+	RelayModelMapping    []ModelMappingEntry `json:"relayModelMapping"`
+}
+
+func GetDefaultModelMappings() []ModelMappingEntry {
+	return []ModelMappingEntry{
+		{ClientModel: "gemini-3-flash-agent", TargetModel: "gemini-3-flash-agent", Expose: true},
+		{ClientModel: "gemini-2.5-flash-thinking", TargetModel: "gemini-2.5-flash-thinking", Expose: true},
+		{ClientModel: "gemini-2.5-pro", TargetModel: "gemini-2.5-pro", Expose: true},
+		{ClientModel: "gemini-2.0-flash-thinking-exp-01-21", TargetModel: "gemini-2.0-flash-thinking-exp-01-21", Expose: true},
+		{ClientModel: "gemini-2.0-flash-lite-preview-02-05", TargetModel: "gemini-2.0-flash-lite-preview-02-05", Expose: true},
+		{ClientModel: "gemini-2.0-pro-exp-02-05", TargetModel: "gemini-2.0-pro-exp-02-05", Expose: true},
+		{ClientModel: "gemini-2.0-flash-thinking-exp", TargetModel: "gemini-2.0-flash-thinking-exp", Expose: true},
+		{ClientModel: "gemini-2.0-flash-exp", TargetModel: "gemini-2.0-flash-exp", Expose: true},
+		{ClientModel: "gemini-1.5-pro-latest", TargetModel: "gemini-1.5-pro", Expose: true},
+		{ClientModel: "gemini-1.5-flash-latest", TargetModel: "gemini-1.5-flash", Expose: true},
+		{ClientModel: "gemini-1.5-pro-exp-0827", TargetModel: "gemini-1.5-pro-exp-0827", Expose: true},
+
+		{ClientModel: "gemini-2.0-flash-thinking-exp-1219", TargetModel: "gemini-2.0-flash-thinking-exp-1219", Expose: true},
+		{ClientModel: "gemini-exp-1206", TargetModel: "gemini-exp-1206", Expose: true},
+		{ClientModel: "gemini-exp-1121", TargetModel: "gemini-exp-1121", Expose: true},
+		{ClientModel: "gemini-exp-1114", TargetModel: "gemini-exp-1114", Expose: true},
+		{ClientModel: "gemini-1.5-pro-exp-0801", TargetModel: "gemini-1.5-pro-exp-0801", Expose: true},
+		{ClientModel: "gemini-1.5-pro-002", TargetModel: "gemini-1.5-pro-002", Expose: true},
+		{ClientModel: "gemini-1.5-pro-001", TargetModel: "gemini-1.5-pro-001", Expose: true},
+		{ClientModel: "gemini-1.5-flash-002", TargetModel: "gemini-1.5-flash-002", Expose: true},
+		{ClientModel: "gemini-1.5-flash-001", TargetModel: "gemini-1.5-flash-001", Expose: true},
+		{ClientModel: "gemini-1.5-flash-8b", TargetModel: "gemini-1.5-flash-8b", Expose: true},
+		{ClientModel: "text-embedding-004", TargetModel: "text-embedding-004", Expose: true},
+		{ClientModel: "text-embedding-003", TargetModel: "text-embedding-003", Expose: true},
+
+		{ClientModel: "gemini-1.5-flash-exp-0827", TargetModel: "gemini-1.5-flash-exp-0827", Expose: true},
+		{ClientModel: "gemini-1.5-flash-8b-exp-0827", TargetModel: "gemini-1.5-flash-8b-exp-0827", Expose: true},
+		{ClientModel: "learnlm-1.5-pro-experimental", TargetModel: "learnlm-1.5-pro-experimental", Expose: true},
+		{ClientModel: "gemini-1.0-pro", TargetModel: "gemini-1.0-pro", Expose: true},
+		{ClientModel: "aqa", TargetModel: "aqa", Expose: true},
+		{ClientModel: "gemini-3.5-flash-low", TargetModel: "gemini-3.5-flash-low", Expose: true},
+		{ClientModel: "gemini-pro-agent", TargetModel: "gemini-pro-agent", Expose: true},
+		{ClientModel: "claude-sonnet-4-6", TargetModel: "claude-sonnet-4-6", Expose: true},
+		{ClientModel: "claude-opus-4-6-thinking", TargetModel: "claude-opus-4-6-thinking", Expose: true},
+		{ClientModel: "gemini-3-flash", TargetModel: "gemini-3-flash", Expose: true},
+		{ClientModel: "tab_flash_lite_preview", TargetModel: "tab_flash_lite_preview", Expose: true},
+		{ClientModel: "gemini-3.5-flash-extra-low", TargetModel: "gemini-3.5-flash-extra-low", Expose: true},
+		{ClientModel: "tab_jump_flash_lite_preview", TargetModel: "tab_jump_flash_lite_preview", Expose: true},
+		{ClientModel: "gemini-3.1-flash-lite", TargetModel: "gemini-3.1-flash-lite", Expose: true},
+		{ClientModel: "gemini-3.1-pro-low", TargetModel: "gemini-3.1-pro-low", Expose: true},
+		{ClientModel: "gemini-2.5-flash", TargetModel: "gemini-2.5-flash", Expose: true},
+		{ClientModel: "gemini-2.5-flash-lite", TargetModel: "gemini-2.5-flash-lite", Expose: true},
+		{ClientModel: "gemini-3.5-flash", TargetModel: "gemini-3.5-flash", Expose: true},
+		{ClientModel: "gemini-3.1-pro-preview", TargetModel: "gemini-3.1-pro-preview", Expose: true},
+		{ClientModel: "gemini-3-flash-preview", TargetModel: "gemini-3-flash-preview", Expose: true},
+		{ClientModel: "gpt-cos-120b-medium", TargetModel: "gpt-cos-120b-medium", Expose: true},
+		{ClientModel: "gemini-1.5-pro", TargetModel: "gemini-1.5-pro", Expose: true},
+		{ClientModel: "gemini-1.5-flash", TargetModel: "gemini-1.5-flash", Expose: true},
+		{ClientModel: "gemini-2.0-flash", TargetModel: "gemini-2.0-flash", Expose: true},
+		{ClientModel: "gemini-2.0-pro-exp-02-05", TargetModel: "gemini-2.0-pro-exp-02-05", Expose: true},
+
+		{ClientModel: "claude-3-5-sonnet", TargetModel: "gemini-1.5-pro", Expose: false},
+		{ClientModel: "claude-3-opus", TargetModel: "gemini-1.5-pro", Expose: false},
+		{ClientModel: "claude-3-haiku", TargetModel: "gemini-1.5-flash", Expose: false},
+		{ClientModel: "claude-3-5-haiku", TargetModel: "gemini-1.5-flash", Expose: false},
+		{ClientModel: "gpt-4o", TargetModel: "gemini-1.5-pro", Expose: false},
+		{ClientModel: "gpt-4-turbo", TargetModel: "gemini-1.5-pro", Expose: false},
+		{ClientModel: "gpt-4", TargetModel: "gemini-1.5-pro", Expose: false},
+		{ClientModel: "gpt-3.5", TargetModel: "gemini-1.5-flash", Expose: false},
+		{ClientModel: "o1-mini", TargetModel: "gemini-1.5-flash", Expose: false},
+		{ClientModel: "o1-pro", TargetModel: "gemini-2.0-flash", Expose: false},
+		{ClientModel: "o1-preview", TargetModel: "gemini-2.0-flash", Expose: false},
+	}
 }
 
 type Manager struct {
@@ -71,6 +145,7 @@ func (m *Manager) Init(defaultPath string) {
 		RelayPortBlock:       true,
 		RelayDomainFilter:    false,
 		RelayDomainWhitelist: []string{"*.googleapis.com", "*.google.com", "*.anthropic.com", "*.openai.com"},
+		RelayModelMapping:    GetDefaultModelMappings(),
 	}
 
 	m.loadConfig()
@@ -97,6 +172,29 @@ func (m *Manager) loadConfig() {
 	}
 
 	m.config = parsed
+
+	defaults := GetDefaultModelMappings()
+	existingMap := make(map[string]bool)
+	for _, entry := range m.config.RelayModelMapping {
+		existingMap[entry.ClientModel] = true
+	}
+
+	modified := false
+	if len(m.config.RelayModelMapping) == 0 {
+		m.config.RelayModelMapping = defaults
+		modified = true
+	} else {
+		for _, def := range defaults {
+			if !existingMap[def.ClientModel] {
+				m.config.RelayModelMapping = append(m.config.RelayModelMapping, def)
+				modified = true
+			}
+		}
+	}
+
+	if modified {
+		_ = m.SaveConfig()
+	}
 
 	if parsed.DataDirectory != "" {
 		if _, err := os.Stat(parsed.DataDirectory); err == nil {
@@ -329,6 +427,22 @@ func (m *Manager) SetRelayDomainWhitelist(val []string) error {
 	m.Lock()
 	defer m.Unlock()
 	m.config.RelayDomainWhitelist = val
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRelayModelMapping() []ModelMappingEntry {
+	m.RLock()
+	defer m.RUnlock()
+	if len(m.config.RelayModelMapping) == 0 {
+		return GetDefaultModelMappings()
+	}
+	return m.config.RelayModelMapping
+}
+
+func (m *Manager) SetRelayModelMapping(val []ModelMappingEntry) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RelayModelMapping = val
 	return m.SaveConfig()
 }
 
@@ -566,6 +680,7 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			RelayPortBlock:       true,
 			RelayDomainFilter:    false,
 			RelayDomainWhitelist: []string{"*.googleapis.com", "*.google.com", "*.anthropic.com", "*.openai.com"},
+			RelayModelMapping:    GetDefaultModelMappings(),
 		}
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")
 		if err != nil {
@@ -633,6 +748,8 @@ type ManagerInterface interface {
 	SetRelayDomainFilter(val bool) error
 	GetRelayDomainWhitelist() []string
 	SetRelayDomainWhitelist(val []string) error
+	GetRelayModelMapping() []ModelMappingEntry
+	SetRelayModelMapping(val []ModelMappingEntry) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,

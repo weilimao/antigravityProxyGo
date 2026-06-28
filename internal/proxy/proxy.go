@@ -31,6 +31,7 @@ type MetadataConn struct {
 type RemoteRelayInterface interface {
 	IsConnected() bool
 	DialThroughRemote(targetHostPort string) (net.Conn, error)
+	GetConfig() RemoteConfig
 }
 
 type MitmListener struct {
@@ -377,16 +378,26 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// 远程模式优先级最高：所有请求通过远程代理中继
 	if pe.remoteRelay != nil && pe.remoteRelay.IsConnected() {
-		remoteConn, errDial := pe.remoteRelay.DialThroughRemote(hostAndPort)
-		if errDial != nil {
-			pe.logFn(fmt.Sprintf("❌ Remote relay failed for %s: %v", hostAndPort, errDial))
-			_, _ = clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-			_ = clientConn.Close()
+		isLocalRelayLoop := false
+		if relayUserID != "" {
+			conf := pe.remoteRelay.GetConfig()
+			if conf.IsLocal {
+				isLocalRelayLoop = true
+			}
+		}
+
+		if !isLocalRelayLoop {
+			remoteConn, errDial := pe.remoteRelay.DialThroughRemote(hostAndPort)
+			if errDial != nil {
+				pe.logFn(fmt.Sprintf("❌ Remote relay failed for %s: %v", hostAndPort, errDial))
+				_, _ = clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+				_ = clientConn.Close()
+				return
+			}
+			_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+			pe.setupBidirectionalTunnel(clientConn, remoteConn)
 			return
 		}
-		_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-		pe.setupBidirectionalTunnel(clientConn, remoteConn)
-		return
 	}
 
 	isTargetHost := strings.Contains(host, "generativelanguage.googleapis.com") || strings.Contains(host, "cloudcode-pa.googleapis.com") || strings.Contains(host, "cloudaicompanion.googleapis.com") || strings.Contains(host, "aiplatform.googleapis.com")

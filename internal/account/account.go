@@ -29,7 +29,7 @@ type Account struct {
 	EnableOverages bool             `json:"enableOverages"`
 	Credits        *float64         `json:"credits"`
 	Cooldowns      map[string]int64 `json:"cooldowns"`     // category -> untilTimeMs
-	CooldownUntil  int64            `json:"cooldownUntil"` // max(cooldowns)
+	CooldownUntil  int64            `json:"cooldownUntil"` // min(cooldowns)
 	TwoFASecret    string           `json:"twofa_secret,omitempty"`
 }
 
@@ -778,7 +778,7 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 				delete(acc.Cooldowns, category)
 				acc.CooldownUntil = 0
 				for _, v := range acc.Cooldowns {
-					if v > acc.CooldownUntil {
+					if acc.CooldownUntil == 0 || v < acc.CooldownUntil {
 						acc.CooldownUntil = v
 					}
 				}
@@ -809,7 +809,7 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 				delete(acc.Cooldowns, category)
 				acc.CooldownUntil = 0
 				for _, v := range acc.Cooldowns {
-					if v > acc.CooldownUntil {
+					if acc.CooldownUntil == 0 || v < acc.CooldownUntil {
 						acc.CooldownUntil = v
 					}
 				}
@@ -834,13 +834,13 @@ func (m *Manager) SetAccountCooldown(id string, untilTimeMs int64, modelName str
 			}
 			a.Cooldowns[category] = untilTimeMs
 
-			var maxCooldown int64 = 0
+			var minCooldown int64 = 0
 			for _, v := range a.Cooldowns {
-				if v > maxCooldown {
-					maxCooldown = v
+				if minCooldown == 0 || v < minCooldown {
+					minCooldown = v
 				}
 			}
-			a.CooldownUntil = maxCooldown
+			a.CooldownUntil = minCooldown
 			changed = true
 			break
 		}
@@ -996,16 +996,13 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 	updateCatCooldown("gemini", geminiExhausted, geminiResetTime)
 	updateCatCooldown("claude", claudeExhausted, claudeResetTime)
 
-	var maxCooldown int64 = 0
+	var minCooldown int64 = 0
 	for _, v := range acc.Cooldowns {
-		if v > maxCooldown {
-			maxCooldown = v
+		if minCooldown == 0 || v < minCooldown {
+			minCooldown = v
 		}
 	}
-	newCooldownUntil := maxCooldown
-	if maxCooldown == 0 {
-		newCooldownUntil = 0
-	}
+	newCooldownUntil := minCooldown
 
 	if acc.CooldownUntil != newCooldownUntil {
 		acc.CooldownUntil = newCooldownUntil

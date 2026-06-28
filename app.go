@@ -56,10 +56,11 @@ type App struct {
 	relayUserMgr    *relay.UserManager
 	relayPackageMgr *relay.PackageManager
 	relayAuthMgr    *relay.AuthManager
-	relayStatsMgr   *relay.StatsTracker
-	relayAPIMgr     *relay.APIHandler
-	relayServer     *relay.RelayServer
-	remoteRelay     *proxy.RemoteRelay
+	relayStatsMgr     *relay.StatsTracker
+	relayAPIMgr       *relay.APIHandler
+	relayCompatAPIMgr *relay.APICompatHandler
+	relayServer       *relay.RelayServer
+	remoteRelay       *proxy.RemoteRelay
 }
 
 func NewApp() *App {

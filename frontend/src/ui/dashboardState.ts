@@ -48,6 +48,7 @@ export interface DashboardState {
     remoteHost: string;
     remotePort: string;
     remoteUserKey: string;
+    remoteToken: string;
     remoteStats: any | null;
 
     // Shared Callbacks for Cross-Module Communication
@@ -110,6 +111,7 @@ const state: DashboardState = {
     remoteHost: '',
     remotePort: '',
     remoteUserKey: '',
+    remoteToken: '',
     remoteStats: null,
 
     // Shared Callbacks for Cross-Module Communication

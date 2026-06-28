@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/db"
+	"antigravity-proxy/internal/netutil"
 )
 
 // RemoteConfig holds the configuration for connecting to a remote relay server
@@ -24,6 +25,7 @@ type RemoteConfig struct {
 	UserKey   string `json:"userKey"`
 	Token     string `json:"token"`
 	Connected bool   `json:"connected"`
+	IsLocal   bool   `json:"isLocal"`
 }
 
 // RemoteRelay manages client-side connection to a remote proxy relay server
@@ -97,6 +99,7 @@ func (rr *RemoteRelay) Login(host, port, key, password string) error {
 		UserKey:   key,
 		Token:     result.Token,
 		Connected: true,
+		IsLocal:   netutil.IsLocalAddress(host),
 	}
 	rr.Unlock()
 

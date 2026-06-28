@@ -198,6 +198,7 @@
   <button id="btnRelaySubTabUsers" class="px-4 py-1.5 text-[12px] font-bold bg-primary/10 text-primary dark:bg-primary/20 rounded-lg cursor-pointer transition-all duration-200" data-i18n="relaySubTabUsers">中继用户</button>
   <button id="btnRelaySubTabPackages" class="px-4 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg cursor-pointer transition-all duration-200" data-i18n="relaySubTabPackages">限额套餐</button>
   <button id="btnRelaySubTabSecurity" class="px-4 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg cursor-pointer transition-all duration-200" data-i18n="relaySubTabSecurity">中继配置</button>
+  <button id="btnRelaySubTabModelMapping" class="px-4 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg cursor-pointer transition-all duration-200" data-i18n="relaySubTabModelMapping">模型映射</button>
 </div>
 </div>
 
@@ -336,6 +337,45 @@
                     </button>
                 </div>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- 模型映射面板 (默认隐藏) -->
+<div id="relay-sub-panel-modelmapping" class="flex flex-col gap-6 w-full hidden">
+    <div class="bg-white dark:bg-[#1e2538] rounded-xl border border-outline-variant/20 p-5">
+        <div class="flex items-center justify-between mb-5">
+            <h3 class="text-[14px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+                <span class="material-symbols-outlined text-[18px] text-primary">alt_route</span>
+                <span>自定义中继模型映射</span>
+            </h3>
+            <button class="flex items-center gap-1 text-[12px] font-medium text-primary hover:text-primary/80 transition-colors cursor-pointer" id="btnAddModelMapping">
+                <span class="material-symbols-outlined text-[16px]">add</span>
+                <span>添加映射</span>
+            </button>
+        </div>
+        
+        <div class="overflow-x-auto max-h-[400px] overflow-y-auto pr-1">
+            <table class="w-full text-left text-[12px]">
+                <thead>
+                    <tr class="border-b border-outline-variant/25 text-outline/80">
+                        <th class="py-2.5 font-bold pl-2">客户端请求模型 (Client Model)</th>
+                        <th class="py-2.5 font-bold pl-2">真实目标模型 (Target Model)</th>
+                        <th class="py-2.5 font-bold text-center w-[120px]">是否公开 (Expose)</th>
+                        <th class="py-2.5 font-bold text-center w-[80px]">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="modelMappingTableBody">
+                    <!-- 动态渲染映射行 -->
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="flex justify-end gap-3 mt-6 border-t border-outline-variant/20 pt-4">
+            <button class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white rounded-lg hover:bg-primary/90 transition-all duration-200 cursor-pointer shadow-md shadow-primary/20 flex items-center gap-1" id="btnSaveModelMapping">
+                <span class="material-symbols-outlined text-[16px]">save</span>
+                <span>保存映射配置</span>
+            </button>
         </div>
     </div>
 </div>

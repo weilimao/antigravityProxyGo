@@ -152,8 +152,17 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 远程中继转发（客户端模式）
 	if h.getRemoteRelay != nil {
 		if rr := h.getRemoteRelay(); rr != nil && rr.IsConnected() {
-			h.forwardThroughRemote(w, r, bodyBytes, targetHost, targetPath, rr)
-			return
+			isLocalRelayLoop := false
+			if relayUserID != "" {
+				conf := rr.GetConfig()
+				if conf.IsLocal {
+					isLocalRelayLoop = true
+				}
+			}
+			if !isLocalRelayLoop {
+				h.forwardThroughRemote(w, r, bodyBytes, targetHost, targetPath, rr)
+				return
+			}
 		}
 	}
 
@@ -503,7 +512,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if (localTargetHost == "cloudcode-pa.googleapis.com" || localTargetHost == "daily-cloudcode-pa.googleapis.com") && isRealModelRequest(localTargetPath) {
 					localTargetHost = "aiplatform.googleapis.com"
 					customHeaders.Set("Host", localTargetHost)
-
+					
 					action := "generateContent"
 					if strings.Contains(localTargetPath, "streamGenerateContent") {
 						action = "streamGenerateContent"
@@ -558,6 +567,54 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						if attemptIndex == 0 && oldPath != localTargetPath {
 							h.logFn(fmt.Sprintf("🔄 [Vertex AI 路由] 重写模型 ID: %s -> %s", currentModel, targetModel))
 						}
+					}
+				}
+			} else {
+				// 对于 Antigravity 个人通道网页账户：如果拦截到发往 generativelanguage 官方模型的推理请求，
+				// 底层在发送给谷歌前，动态且防呆地将其伪装改写为发往云助手的正式推理项目接口，以避免 scopes 不足的 403 拒绝
+				if localTargetHost == "generativelanguage.googleapis.com" && isRealModelRequest(localTargetPath) {
+					localTargetHost = "daily-cloudcode-pa.googleapis.com"
+					customHeaders.Set("Host", localTargetHost)
+
+					action := "streamGenerateContent"
+					queryStr := "?alt=sse"
+					localTargetPath = fmt.Sprintf("/v1internal:%s%s", action, queryStr)
+
+					var standardReq map[string]interface{}
+					if err := json.Unmarshal(finalReqBody, &standardReq); err == nil {
+						modelName := targetModel
+						if modelName == "" {
+							modelName = currentModel
+						}
+
+						standardReq["sessionId"] = fmt.Sprintf("-%d", time.Now().UnixNano()/1e6)
+
+						actualProjectId := poolAccount.ProjectID
+						if actualProjectId == "" {
+							actualProjectId = h.getStoredProject("default")
+						}
+						if actualProjectId == "" {
+							actualProjectId = "favorable-synapse-ttvcb" // 最终兜底
+						}
+
+						wrappedReq := map[string]interface{}{
+							"project": actualProjectId,
+							"requestId": fmt.Sprintf("chat/%d-%d", time.Now().Unix(), rand.Intn(1000000)),
+							"request": standardReq,
+							"model": modelName,
+							"userAgent": "antigravity",
+							"requestType": "chat",
+							"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
+						}
+						if wrappedBytes, err := json.Marshal(wrappedReq); err == nil {
+							finalReqBody = wrappedBytes
+							customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
+							customHeaders.Set("User-Agent", "antigravity/hub/2.2.1 windows/amd64")
+						}
+					}
+
+					if attemptIndex == 0 {
+						h.logFn(fmt.Sprintf("🔄 [Antigravity 网页路由] 重写并封装专有载荷: %s -> https://%s%s", r.URL.Path, localTargetHost, localTargetPath))
 					}
 				}
 			}
