@@ -1,5 +1,6 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
+import { generateSinglePacketMarkdown, formatJsonText } from './packetFormatter';
 
 let packetsList: any[] = [];
 let selectedPacket: any = null;
@@ -39,6 +40,7 @@ let packetAnalyzeProgressMsg: HTMLElement | null;
 
 let btnCopyReqBody: HTMLButtonElement | null;
 let btnCopyResBody: HTMLButtonElement | null;
+let btnExportSinglePacket: HTMLButtonElement | null;
 
 // Clipboard helper
 export function copyElementText(elementId: string) {
@@ -62,16 +64,6 @@ export function copyElementText(elementId: string) {
     });
 }
 
-// JSON styling helper
-export function formatJsonText(text: any): string {
-    if (!text) return '';
-    if (typeof text === 'object') return JSON.stringify(text, null, 2);
-    try {
-        return JSON.stringify(JSON.parse(text), null, 2);
-    } catch (e) {
-        return text;
-    }
-}
 
 // Render intercepted packages list
 export async function refreshPacketsList() {
@@ -142,6 +134,7 @@ export async function refreshPacketsList() {
         packetListContainer.innerHTML = `<div class="text-center py-12 text-outline text-[13px]">暂无符合过滤条件的接口包</div>`;
         if (packetDetailsPlaceholder) packetDetailsPlaceholder.classList.remove('hidden');
         if (packetDetailsContainer) packetDetailsContainer.classList.add('hidden');
+        if (btnExportSinglePacket) btnExportSinglePacket.classList.add('hidden');
         selectedPacket = null;
         return;
     }
@@ -196,11 +189,13 @@ export function selectPacketItem(id: string) {
     if (!selectedPacket) {
         if (packetDetailsPlaceholder) packetDetailsPlaceholder.classList.remove('hidden');
         if (packetDetailsContainer) packetDetailsContainer.classList.add('hidden');
+        if (btnExportSinglePacket) btnExportSinglePacket.classList.add('hidden');
         return;
     }
 
     if (packetDetailsPlaceholder) packetDetailsPlaceholder.classList.add('hidden');
     if (packetDetailsContainer) packetDetailsContainer.classList.remove('hidden');
+    if (btnExportSinglePacket) btnExportSinglePacket.classList.remove('hidden');
 
     // Fill elements
     selectedPacketMethod = document.getElementById('selectedPacketMethod');
@@ -263,6 +258,25 @@ export function initPacketsEvents() {
     btnCopyReqBody = document.getElementById('btnCopyReqBody') as HTMLButtonElement | null;
     btnCopyResBody = document.getElementById('btnCopyResBody') as HTMLButtonElement | null;
     packetAnalyzeAccountSelect = document.getElementById('packetAnalyzeAccountSelect') as HTMLSelectElement | null;
+    btnExportSinglePacket = document.getElementById('btnExportSinglePacket') as HTMLButtonElement | null;
+
+    if (btnExportSinglePacket) {
+        btnExportSinglePacket.addEventListener('click', async () => {
+            if (!selectedPacket) {
+                alert('请先选择一条接口数据包进行导出');
+                return;
+            }
+            try {
+                const md = generateSinglePacketMarkdown(selectedPacket);
+                const success = await ipcRenderer.invoke('packet:export-single', md, selectedPacket.method, selectedPacket.path);
+                if (success) {
+                    alert('接口数据包已成功导出为 Markdown 文件！');
+                }
+            } catch (err: any) {
+                alert(`导出失败: ${err.message}`);
+            }
+        });
+    }
 
     if (btnCopyGeneratedDoc) {
         btnCopyGeneratedDoc.addEventListener('click', () => {

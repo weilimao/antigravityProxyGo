@@ -14,8 +14,17 @@ import (
 // ...（保持原样，以下由于替换边界包含故完整列出）
 
 type OpenAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolName   string           `json:"tool_name,omitempty"`
+}
+
+type OpenAIToolCall struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type OpenAIRequest struct {
@@ -24,6 +33,7 @@ type OpenAIRequest struct {
 	Temperature *float64        `json:"temperature,omitempty"`
 	MaxTokens   *int            `json:"max_tokens,omitempty"`
 	Stream      bool            `json:"stream,omitempty"`
+	Tools       []AnthropicTool `json:"-"`
 }
 
 type OpenAIResponseChoice struct {
@@ -335,6 +345,9 @@ func MapClientModelToGemini(clientModel string, customMapping []settings.ModelMa
 	if strings.Contains(m, "o1-pro") || strings.Contains(m, "o1-preview") {
 		return "gemini-2.0-flash"
 	}
+	if strings.Contains(m, "gpt-5") {
+		return "gemini-3-flash-agent"
+	}
 
 	// Default Fallback
 	return "gemini-1.5-pro"
@@ -342,9 +355,95 @@ func MapClientModelToGemini(clientModel string, customMapping []settings.ModelMa
 
 // ===== Convert Requests =====
 
+// ParseUnifiedOpenAIRequest 统一解析 Chat Completions 与 Responses 报文格式
+func ParseUnifiedOpenAIRequest(bodyBytes []byte) (*OpenAIRequest, error) {
+	type TempReq struct {
+		Model        string               `json:"model"`
+		Messages     []OpenAIMessage      `json:"messages"`
+		Input        []ResponsesInputItem `json:"input"`
+		Tools        []ResponsesToolDef   `json:"tools,omitempty"`
+		Instructions string               `json:"instructions"`
+		Temperature  *float64             `json:"temperature,omitempty"`
+		MaxTokens    *int                 `json:"max_tokens,omitempty"`
+		Stream       bool                 `json:"stream,omitempty"`
+		Request      *TempReq             `json:"request,omitempty"`
+	}
+
+	var temp TempReq
+	if err := json.Unmarshal(bodyBytes, &temp); err != nil {
+		return nil, err
+	}
+
+	if temp.Request != nil {
+		if temp.Model == "" && temp.Request.Model != "" {
+			temp.Model = temp.Request.Model
+		}
+		if len(temp.Messages) == 0 && len(temp.Request.Messages) > 0 {
+			temp.Messages = temp.Request.Messages
+		}
+		if len(temp.Input) == 0 && len(temp.Request.Input) > 0 {
+			temp.Input = temp.Request.Input
+		}
+		if len(temp.Tools) == 0 && len(temp.Request.Tools) > 0 {
+			temp.Tools = temp.Request.Tools
+		}
+		if temp.Instructions == "" && temp.Request.Instructions != "" {
+			temp.Instructions = temp.Request.Instructions
+		}
+		if temp.Temperature == nil && temp.Request.Temperature != nil {
+			temp.Temperature = temp.Request.Temperature
+		}
+		if temp.MaxTokens == nil && temp.Request.MaxTokens != nil {
+			temp.MaxTokens = temp.Request.MaxTokens
+		}
+		if !temp.Stream && temp.Request.Stream {
+			temp.Stream = temp.Request.Stream
+		}
+	}
+
+	req := &OpenAIRequest{
+		Model:       temp.Model,
+		Temperature: temp.Temperature,
+		MaxTokens:   temp.MaxTokens,
+		Stream:      temp.Stream,
+	}
+
+	// 1. 如果是标准的 Chat Completions，直接返回
+	if len(temp.Messages) > 0 {
+		req.Messages = temp.Messages
+		return req, nil
+	}
+
+	// 2. 如果是 Responses 格式，将其翻译为 Messages 数组
+	var messages []OpenAIMessage
+	if temp.Instructions != "" {
+		messages = append(messages, OpenAIMessage{
+			Role:    "system",
+			Content: temp.Instructions,
+		})
+	}
+
+	if len(temp.Input) > 0 {
+		parsedMessages := parseResponsesInput(temp.Input)
+		messages = append(messages, parsedMessages...)
+	}
+	
+	req.Tools = parseResponsesTools(temp.Tools)
+	req.Messages = messages
+	return req, nil
+}
+
 func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 	gemReq := &GeminiRequest{
 		Contents: make([]GeminiContent, 0),
+	}
+
+	// 翻译工具定义
+	gemReq.Tools = translateToolsToGemini(openReq.Tools)
+	if len(gemReq.Tools) > 0 {
+		gemReq.ToolConfig = &GeminiToolConfig{
+			FunctionCallingConfig: &GeminiFCConfig{Mode: "VALIDATED"},
+		}
 	}
 
 	var systemInstructionParts []GeminiPart
@@ -356,16 +455,52 @@ func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 			continue
 		}
 
-		// Translate role to "user" or "model" (Gemini requirement)
-		gemRole := "user"
+		// 处理 assistant 消息（可能包含工具调用）
 		if role == "assistant" {
-			gemRole = "model"
+			var parts []GeminiPart
+			if msg.Content != "" {
+				parts = append(parts, GeminiPart{Text: msg.Content})
+			}
+			for _, tc := range msg.ToolCalls {
+				args := parseToolCallArgs(tc.Arguments)
+				parts = append(parts, GeminiPart{
+					FunctionCall: &GeminiFunctionCall{
+						Name: tc.Name,
+						Args: args,
+						ID:   tc.ID,
+					},
+					ThoughtSignature: "skip_thought_signature_validator",
+				})
+			}
+			if len(parts) > 0 {
+				gemReq.Contents = append(gemReq.Contents, GeminiContent{
+					Role:  "model",
+					Parts: parts,
+				})
+			}
+		} else if role == "tool" {
+			// 工具结果 → Gemini functionResponse
+			toolName := msg.ToolName
+			if toolName == "" {
+				toolName = findOpenAIToolNameByID(openReq.Messages, msg.ToolCallID)
+			}
+			gemReq.Contents = append(gemReq.Contents, GeminiContent{
+				Role: "user",
+				Parts: []GeminiPart{{
+					FunctionResponse: &GeminiFunctionResponse{
+						Name:     toolName,
+						Response: map[string]interface{}{"result": msg.Content},
+						ID:       msg.ToolCallID,
+					},
+				}},
+			})
+		} else {
+			// user 消息
+			gemReq.Contents = append(gemReq.Contents, GeminiContent{
+				Role:  "user",
+				Parts: []GeminiPart{{Text: msg.Content}},
+			})
 		}
-
-		gemReq.Contents = append(gemReq.Contents, GeminiContent{
-			Role:  gemRole,
-			Parts: []GeminiPart{{Text: msg.Content}},
-		})
 	}
 
 	if len(systemInstructionParts) > 0 {
@@ -380,6 +515,9 @@ func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 			MaxOutputTokens: openReq.MaxTokens,
 		}
 	}
+
+	// 强制满足 Gemini 的严格 user/model 角色交替约束
+	gemReq.Contents = mergeConsecutiveRoles(gemReq.Contents)
 
 	return gemReq
 }
@@ -507,12 +645,23 @@ func TranslateAnthropicToGemini(anthReq *AnthropicRequest) *GeminiRequest {
 	return gemReq
 }
 
-// findToolNameByID 在消息历史中查找与 tool_use_id 对应的工具名称
 func findToolNameByID(messages []AnthropicMessage, toolUseID string) string {
 	for _, msg := range messages {
 		for _, block := range msg.Content {
 			if block.Type == "tool_use" && block.ID == toolUseID {
 				return block.Name
+			}
+		}
+	}
+	return "unknown"
+}
+
+// findOpenAIToolNameByID 在消息历史中查找 tool_call_id 对应的工具名称
+func findOpenAIToolNameByID(messages []OpenAIMessage, toolCallID string) string {
+	for _, msg := range messages {
+		for _, tc := range msg.ToolCalls {
+			if tc.ID == toolCallID {
+				return tc.Name
 			}
 		}
 	}
@@ -543,4 +692,16 @@ func extractToken(r *http.Request) string {
 	}
 	// 支持从 URL 参数 key 提取 (作为兜底)
 	return strings.TrimSpace(r.URL.Query().Get("key"))
+}
+
+// parseToolCallArgs 将 JSON 字符串格式的参数解析为 map
+func parseToolCallArgs(argsStr string) map[string]interface{} {
+	if argsStr == "" {
+		return map[string]interface{}{}
+	}
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
+		return map[string]interface{}{"raw": argsStr}
+	}
+	return args
 }

@@ -248,3 +248,85 @@ func TestAnthropicRequestSystemJSONUnmarshal(t *testing.T) {
 		t.Errorf("expected system array to be joined to 'Part1 Part2', got %q", req2.System)
 	}
 }
+
+// TestParseUnifiedOpenAIRequest 验证 ParseUnifiedOpenAIRequest 在解析传统与新版 Responses 协议时的行为
+func TestParseUnifiedOpenAIRequest(t *testing.T) {
+	// 1. 传统格式
+	traditionalJSON := []byte(`{
+		"model": "gpt-4o",
+		"messages": [
+			{"role": "user", "content": "hello"}
+		]
+	}`)
+	req, err := ParseUnifiedOpenAIRequest(traditionalJSON)
+	if err != nil {
+		t.Fatalf("failed to parse traditional request: %v", err)
+	}
+	if len(req.Messages) != 1 || req.Messages[0].Content != "hello" {
+		t.Errorf("unexpected parsed messages for traditional: %+v", req.Messages)
+	}
+
+	// 2. Responses 格式 (带 instructions 和 input block 数组)
+	responsesJSON := []byte(`{
+		"model": "gpt-4o",
+		"instructions": "You are a robot.",
+		"input": [
+			{
+				"role": "user",
+				"content": [
+					{"type": "input_text", "text": "how are you?"}
+				]
+			}
+		]
+	}`)
+	req2, err := ParseUnifiedOpenAIRequest(responsesJSON)
+	if err != nil {
+		t.Fatalf("failed to parse responses request: %v", err)
+	}
+	if len(req2.Messages) != 2 {
+		t.Fatalf("expected 2 messages (system + user), got %d", len(req2.Messages))
+	}
+	if req2.Messages[0].Role != "system" || req2.Messages[0].Content != "You are a robot." {
+		t.Errorf("unexpected system instruction: %+v", req2.Messages[0])
+	}
+	if req2.Messages[1].Role != "user" || req2.Messages[1].Content != "how are you?" {
+		t.Errorf("unexpected user message: %+v", req2.Messages[1])
+	}
+}
+
+// TestTranslateOpenAIToGeminiRoleMerging 验证 TranslateOpenAIToGemini 自动合并连续相同角色消息以符合 Gemini API 规范
+func TestTranslateOpenAIToGeminiRoleMerging(t *testing.T) {
+	req := &OpenAIRequest{
+		Model: "gpt-4o",
+		Messages: []OpenAIMessage{
+			{Role: "user", Content: "Hello part 1"},
+			{Role: "user", Content: "Hello part 2"},
+			{Role: "assistant", Content: "Hi, I am model"},
+			{Role: "user", Content: "Ok, bye"},
+		},
+	}
+
+	geminiReq := TranslateOpenAIToGemini(req)
+
+	// 验证合并后的消息数应当为 3 条 (user merged, model, user)
+	if len(geminiReq.Contents) != 3 {
+		t.Fatalf("expected 3 content entries after role merging, got %d", len(geminiReq.Contents))
+	}
+
+	if geminiReq.Contents[0].Role != "user" {
+		t.Errorf("expected role 'user', got %q", geminiReq.Contents[0].Role)
+	}
+	if len(geminiReq.Contents[0].Parts) != 2 {
+		t.Errorf("expected 2 parts for merged user role, got %d", len(geminiReq.Contents[0].Parts))
+	}
+	if geminiReq.Contents[0].Parts[0].Text != "Hello part 1" || geminiReq.Contents[0].Parts[1].Text != "Hello part 2" {
+		t.Errorf("unexpected contents for merged user role: %+v", geminiReq.Contents[0].Parts)
+	}
+
+	if geminiReq.Contents[1].Role != "model" || geminiReq.Contents[1].Parts[0].Text != "Hi, I am model" {
+		t.Errorf("unexpected content for model role: %+v", geminiReq.Contents[1])
+	}
+	if geminiReq.Contents[2].Role != "user" || geminiReq.Contents[2].Parts[0].Text != "Ok, bye" {
+		t.Errorf("unexpected content for final user role: %+v", geminiReq.Contents[2])
+	}
+}

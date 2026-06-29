@@ -61,6 +61,10 @@
 <div class="flex justify-between items-center pb-2 border-b border-outline-variant/30">
 <span class="text-[12px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider">接口报文详情</span>
 <div class="flex gap-2">
+<button class="hidden items-center gap-1 px-2.5 py-0.5 bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-fixed-dim rounded text-[11px] font-bold transition-colors border border-primary/20 cursor-pointer" id="btnExportSinglePacket">
+    <span class="material-symbols-outlined text-[12px]">description</span>
+    导出 MD
+</button>
 <span class="hidden font-bold px-2 py-0.5 text-[11px] rounded text-white bg-primary" id="selectedPacketMethod">POST</span>
 <span class="hidden font-bold px-2 py-0.5 text-[11px] rounded bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400" id="selectedPacketStatusCode">200</span>
 </div>

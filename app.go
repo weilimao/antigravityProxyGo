@@ -1121,6 +1121,36 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		}
 		_ = os.WriteFile(filePath, []byte(markdown), 0644)
 		return marshalResponse(true)
+
+	case "packet:export-single":
+		markdown := getStringArg(0)
+		method := getStringArg(1)
+		pathStr := getStringArg(2)
+		
+		// Clean up pathStr to be a safe filename
+		safePath := pathStr
+		invalidChars := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"}
+		for _, char := range invalidChars {
+			safePath = strings.ReplaceAll(safePath, char, "_")
+		}
+		safePath = strings.Trim(safePath, " _")
+		if safePath == "" {
+			safePath = "api"
+		}
+		
+		defaultName := fmt.Sprintf("packet_%s_%s.md", strings.ToLower(method), safePath)
+		filePath, _ := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
+			Title:           "保存单条接口抓包日志",
+			DefaultFilename: defaultName,
+			Filters: []wailsRuntime.FileFilter{
+				{DisplayName: "Markdown Files", Pattern: "*.md"},
+			},
+		})
+		if filePath == "" {
+			return marshalResponse(false)
+		}
+		_ = os.WriteFile(filePath, []byte(markdown), 0644)
+		return marshalResponse(true)
 	}
 
 	return `{"error":"Unknown channel"}`, nil

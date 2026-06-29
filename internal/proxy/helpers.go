@@ -1,8 +1,11 @@
 package proxy
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"regexp"
@@ -206,4 +209,26 @@ func (h *ProxyHandler) logRequestToTracker(
 		SessionID:      sessionKey,
 		DurationMs:     time.Since(startTime).Milliseconds(),
 	})
+}
+
+// decompressIfNeeded returns the decompressed bytes if the headers indicate the content is gzipped.
+func decompressIfNeeded(body []byte, headers http.Header) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	isGzip := false
+	if strings.Contains(strings.ToLower(headers.Get("Content-Encoding")), "gzip") {
+		isGzip = true
+	}
+	if isGzip {
+		reader, err := gzip.NewReader(bytes.NewReader(body))
+		if err == nil {
+			defer reader.Close()
+			decompressed, errRead := io.ReadAll(reader)
+			if errRead == nil {
+				return decompressed
+			}
+		}
+	}
+	return body
 }

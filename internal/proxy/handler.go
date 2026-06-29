@@ -736,7 +736,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if resp.StatusCode >= 400 {
 			if !(resp.StatusCode == 429 && strings.Contains(localTargetPath, "retrieveUserQuota")) {
-				bodySnippet := string(respBodyBytes)
+				bodySnippet := string(decompressIfNeeded(respBodyBytes, resp.Header))
 				if len(bodySnippet) > 1000 {
 					bodySnippet = bodySnippet[:1000] + "... (truncated)"
 				}
