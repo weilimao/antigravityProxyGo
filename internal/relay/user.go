@@ -32,6 +32,7 @@ type UserQuotas struct {
 	ValidDuration int `json:"validDuration"`
 	ValidUnit     string `json:"validUnit"` // "days", "months", "years"
 	ExpireAt      int64  `json:"expireAt"`
+	RateLimit     int    `json:"rateLimit"` // 每分钟请求次数限制，0 表示默认 30
 }
 
 type RelayUser struct {

@@ -12,12 +12,14 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/netutil"
 	"antigravity-proxy/internal/session"
 	"antigravity-proxy/internal/stats"
@@ -36,7 +38,7 @@ type ProxyHandler struct {
 	setCapturedProject func(string, string)
 	getStoredProject   func(string) string
 	getMaxRetries      func() int
-	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int)
+	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string)
 	relayQuotaCheck    func(userID, modelName string) error
 	client             *http.Client
 
@@ -59,7 +61,7 @@ func NewProxyHandler(
 	setCapturedProject func(string, string),
 	getStoredProject func(string) string,
 	getMaxRetries func() int,
-	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int),
+	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string),
 	relayQuotaCheck func(userID, modelName string) error,
 ) *ProxyHandler {
 	return &ProxyHandler{
@@ -835,8 +837,17 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if inTokens > 0 || outTokens > 0 {
 				h.statsTracker.TrackRequest(currentModel, inTokens, outTokens, cachedTokens)
 				if relayUserID != "" && h.relayStatsCallback != nil {
+					reqID := r.Header.Get("X-Antigravity-Req-ID")
+					var headerKeys []string
+					for k := range r.Header {
+						headerKeys = append(headerKeys, fmt.Sprintf("%s=%v", k, r.Header.Values(k)))
+					}
+					if f, err := os.OpenFile(`B:\antigravityProxy\data\debug.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+						f.WriteString(fmt.Sprintf("[%s] ServeHTTP headers: %s\n", time.Now().Format(time.RFC3339), strings.Join(headerKeys, " | ")))
+						f.Close()
+					}
 					h.relayStatsCallback(relayUserID, "", currentModel, inTokens, outTokens, cachedTokens,
-						r.Method, r.Host, r.URL.Path, sessionKey, time.Since(startTime).Milliseconds(), resp.StatusCode)
+						r.Method, r.Host, r.URL.Path, sessionKey, time.Since(startTime).Milliseconds(), resp.StatusCode, reqID)
 				}
 				var accMeta *stats.AccountMeta
 				if poolAccount != nil {
@@ -1161,6 +1172,7 @@ func (h *ProxyHandler) getRemoteClient() *http.Client {
 
 // forwardThroughRemote 处理客户端模式下的 HTTP 请求路由，将请求在 TLS 层上中继至远端服务器并执行流式转发与抓包
 func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Request, bodyBytes []byte, targetHost, targetPath string, rr RemoteRelayInterface) {
+	startTime := time.Now()
 	logPrefix := fmt.Sprintf("[RemoteForward][%s -> %s%s]", r.Method, targetHost, r.URL.Path)
 	if h.logFn != nil {
 		h.logFn(fmt.Sprintf("%s 🌐 正在将本地 IDE 请求中继转发至远程服务器...", logPrefix))
@@ -1180,6 +1192,10 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 		proxyReq.Header[k] = values
 	}
 	proxyReq.Header.Set("Host", targetHost)
+
+	// Generate and set unique request ID for Option B async logging
+	reqID := fmt.Sprintf("rl_%d", time.Now().UnixNano())
+	proxyReq.Header.Set("X-Antigravity-Req-ID", reqID)
 
 	// 3. 使用全局复用的中继 Client 发送请求
 	client := h.getRemoteClient()
@@ -1237,4 +1253,58 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 	if h.logFn != nil {
 		h.logFn(fmt.Sprintf("%s ✅ 远程中继转发完成，状态码: %d", logPrefix, resp.StatusCode))
 	}
+
+	// 7. 直接在客户端本地计算并保存请求日志，不再网络中继拉取服务端日志
+	inTokens, outTokens, cachedTokens := 0, 0, 0
+	currentModel := "unknown"
+	modelMatch := reModelInPath.FindStringSubmatch(targetPath)
+	if len(modelMatch) > 1 {
+		currentModel = modelMatch[1]
+	} else if strings.Contains(strings.ToLower(targetPath), "generatecontent") {
+		currentModel = "antigravity-core"
+		if len(bodyBytes) > 0 {
+			var bodyJson struct {
+				Model string `json:"model"`
+			}
+			if json.Unmarshal(bodyBytes, &bodyJson) == nil && bodyJson.Model != "" {
+				currentModel = bodyJson.Model
+			}
+		}
+	}
+
+	if resp.StatusCode == 200 && strings.Contains(strings.ToLower(targetPath), "generatecontent") {
+		bodyStr := respBodyBuf.String()
+		pm := rePromptTokens.FindAllStringSubmatch(bodyStr, -1)
+		cm := reCandidateTokens.FindAllStringSubmatch(bodyStr, -1)
+		cc := reCachedTokens.FindAllStringSubmatch(bodyStr, -1)
+
+		if len(pm) > 0 && len(pm[len(pm)-1]) > 1 {
+			inTokens, _ = strconv.Atoi(pm[len(pm)-1][1])
+		}
+		if len(cm) > 0 && len(cm[len(cm)-1]) > 1 {
+			outTokens, _ = strconv.Atoi(cm[len(cm)-1][1])
+		}
+		if len(cc) > 0 && len(cc[len(cc)-1]) > 1 {
+			cachedTokens, _ = strconv.Atoi(cc[len(cc)-1][1])
+		}
+	}
+
+	dbItem := &db.RequestLog{
+		ReqID:        reqID,
+		Timestamp:    time.Now().Format(time.RFC3339),
+		Mode:         "remote",
+		UserID:       rr.GetConfig().UserKey,
+		ModelName:    currentModel,
+		InTokens:     inTokens,
+		OutTokens:    outTokens,
+		CachedTokens: cachedTokens,
+		Cost:         0.0,
+		DurationMs:   time.Since(startTime).Milliseconds(),
+		StatusCode:   resp.StatusCode,
+		Method:       r.Method,
+		Host:         targetHost,
+		Path:         r.URL.Path,
+		SessionID:    "remote_session",
+	}
+	_ = db.InsertRequestLog(dbItem)
 }

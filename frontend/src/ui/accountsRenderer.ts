@@ -829,9 +829,9 @@ function getFamilyLifetimeTokens(stats: any, isGemini: boolean): number {
     for (const modelName of Object.keys(stats.models)) {
         const isClaude = modelName.toLowerCase().includes('claude');
         if (isGemini && !isClaude) {
-            total += (stats.models[modelName].inputTokens || 0) + (stats.models[modelName].outputTokens || 0) + (stats.models[modelName].cachedTokens || 0);
+            total += (stats.models[modelName].inputTokens || 0) + (stats.models[modelName].outputTokens || 0);
         } else if (!isGemini && isClaude) {
-            total += (stats.models[modelName].inputTokens || 0) + (stats.models[modelName].outputTokens || 0) + (stats.models[modelName].cachedTokens || 0);
+            total += (stats.models[modelName].inputTokens || 0) + (stats.models[modelName].outputTokens || 0);
         }
     }
     return total;
@@ -870,8 +870,10 @@ export function updateAggregateQuotaUI() {
         const q = state.remoteStats.quotas;
         const usage = state.remoteStats.currentUsage || {};
         const resetAt = state.remoteStats.resetAt || {};
+        const isZH = state.currentLanguage === 'zh';
         
-        info.textContent = `Remote Relay Limits`;
+        const pkgName = state.remoteStats.packageName || (isZH ? '自定义配置' : 'Custom');
+        info.textContent = isZH ? `远程中继套餐: ${pkgName}` : `Remote Plan: ${pkgName}`;
         info.className = 'text-[11px] px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400';
         
         const renderRemoteQuotaBar = (label: string, limitTokens: number, usedTokens: number, resetTimeIso?: string, isDaily?: boolean) => {
@@ -891,14 +893,31 @@ export function updateAggregateQuotaUI() {
                     const day = d.getDate().toString().padStart(2, '0');
                     timeStr = `${month}-${day} ${hours}:${minutes}`;
                 }
-                resetBadge = ` <span class="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded ml-1 font-normal">预计 ${timeStr} 刷新</span>`;
+                const labelReset = isZH ? `预计 ${timeStr} 刷新` : `Resets at ${timeStr}`;
+                resetBadge = ` <span class="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded ml-1 font-normal">${labelReset}</span>`;
             }
+
+            const formatTokenCount = (num: number): string => {
+                if (num >= 1000000) {
+                    return (num / 1000000).toFixed(2) + 'M';
+                }
+                if (num >= 1000) {
+                    return (num / 1000).toFixed(1) + 'K';
+                }
+                return num.toString();
+            };
+
+            const remainingText = formatTokenCount(remaining);
+            const limitText = formatTokenCount(limitTokens);
             
             grid.innerHTML += `
                 <div class="flex flex-col">
-                    <div class="flex justify-between items-end mb-2">
+                    <div class="flex justify-between items-end mb-1.5">
                         <span class="text-[12px] font-medium text-on-surface dark:text-white truncate flex items-center" title="${label}">${label}${resetBadge}</span>
-                        <span class="text-[12px] font-bold ${remainPercent > 20 ? 'text-emerald-500' : 'text-red-500'}">${Math.round(remainPercent)}%</span>
+                        <div class="text-[12px] flex items-center gap-1.5 font-bold">
+                            <span class="text-outline/70 font-data-mono font-medium">${remainingText}/${limitText}</span>
+                            <span class="${remainPercent > 20 ? 'text-emerald-500' : 'text-red-500'} font-data-mono">${Math.round(remainPercent)}%</span>
+                        </div>
                     </div>
                     <div class="h-[6px] w-full bg-slate-200 dark:bg-slate-700/50 rounded-full overflow-hidden">
                         <div class="h-full ${colorClass} transition-all duration-500 relative" style="width: ${remainPercent}%">
@@ -911,31 +930,54 @@ export function updateAggregateQuotaUI() {
         
         if (q.gemini) {
             if (q.gemini.enableFixed) {
-                renderRemoteQuotaBar(`Remote Gemini Total`, q.gemini.fixedTokens, getFamilyLifetimeTokens(state.remoteStats, true));
+                const label = isZH ? '远端 Gemini 总额度' : 'Remote Gemini Total';
+                renderRemoteQuotaBar(label, q.gemini.fixedTokens, getFamilyLifetimeTokens(state.remoteStats, true));
             }
             if (q.gemini.enableHourly) {
-                renderRemoteQuotaBar(`Remote Gemini ${q.gemini.hourlyHours}-Hour`, q.gemini.hourlyTokens, usage.gemini_hourly || 0, resetAt.gemini_hourly, false);
+                const label = isZH 
+                    ? `远端 Gemini ${q.gemini.hourlyHours}小时限额` 
+                    : `Remote Gemini ${q.gemini.hourlyHours}-Hour`;
+                renderRemoteQuotaBar(label, q.gemini.hourlyTokens, usage.gemini_hourly || 0, resetAt.gemini_hourly, false);
             }
             if (q.gemini.enableDaily) {
-                renderRemoteQuotaBar(`Remote Gemini ${q.gemini.dailyDays}-Day`, q.gemini.dailyTokens, usage.gemini_daily || 0, resetAt.gemini_daily, true);
+                const label = isZH 
+                    ? `远端 Gemini ${q.gemini.dailyDays}天限额` 
+                    : `Remote Gemini ${q.gemini.dailyDays}-Day`;
+                renderRemoteQuotaBar(label, q.gemini.dailyTokens, usage.gemini_daily || 0, resetAt.gemini_daily, true);
             }
         }
         
         if (q.claude) {
             if (q.claude.enableFixed) {
-                renderRemoteQuotaBar(`Remote Claude Total`, q.claude.fixedTokens, getFamilyLifetimeTokens(state.remoteStats, false));
+                const label = isZH ? '远端 Claude 总额度' : 'Remote Claude Total';
+                renderRemoteQuotaBar(label, q.claude.fixedTokens, getFamilyLifetimeTokens(state.remoteStats, false));
             }
             if (q.claude.enableHourly) {
-                renderRemoteQuotaBar(`Remote Claude ${q.claude.hourlyHours}-Hour`, q.claude.hourlyTokens, usage.claude_hourly || 0, resetAt.claude_hourly, false);
+                const label = isZH 
+                    ? `远端 Claude ${q.claude.hourlyHours}小时限额` 
+                    : `Remote Claude ${q.claude.hourlyHours}-Hour`;
+                renderRemoteQuotaBar(label, q.claude.hourlyTokens, usage.claude_hourly || 0, resetAt.claude_hourly, false);
             }
             if (q.claude.enableDaily) {
-                renderRemoteQuotaBar(`Remote Claude ${q.claude.dailyDays}-Day`, q.claude.dailyTokens, usage.claude_daily || 0, resetAt.claude_daily, true);
+                const label = isZH 
+                    ? `远端 Claude ${q.claude.dailyDays}天限额` 
+                    : `Remote Claude ${q.claude.dailyDays}-Day`;
+                renderRemoteQuotaBar(label, q.claude.dailyTokens, usage.claude_daily || 0, resetAt.claude_daily, true);
             }
         }
         
         if (grid.innerHTML === '') {
             panel.classList.add('hidden');
             panel.classList.remove('flex');
+        } else {
+            const childCount = grid.children.length;
+            if (childCount === 2) {
+                grid.className = 'grid grid-cols-1 sm:grid-cols-2 gap-4';
+            } else if (childCount === 1) {
+                grid.className = 'grid grid-cols-1 gap-4';
+            } else {
+                grid.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4';
+            }
         }
         return;
     }
@@ -1036,4 +1078,13 @@ export function updateAggregateQuotaUI() {
         }
         grid.appendChild(cell);
     });
+
+    const childCount = grid.children.length;
+    if (childCount === 2) {
+        grid.className = 'grid grid-cols-1 sm:grid-cols-2 gap-4';
+    } else if (childCount === 1) {
+        grid.className = 'grid grid-cols-1 gap-4';
+    } else {
+        grid.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4';
+    }
 }

@@ -330,3 +330,34 @@ func TestTranslateOpenAIToGeminiRoleMerging(t *testing.T) {
 		t.Errorf("unexpected content for final user role: %+v", geminiReq.Contents[2])
 	}
 }
+
+func TestRateLimiter(t *testing.T) {
+	limiter := NewRateLimiter()
+
+	// 1. 设置限制值为 3 次
+	limit := 3
+	userID := "user-123"
+
+	// 连续允许 3 次
+	for i := 0; i < 3; i++ {
+		if !limiter.Allow(userID, limit) {
+			t.Errorf("expected request %d to be allowed", i+1)
+		}
+	}
+
+	// 第 4 次应当被拒绝
+	if limiter.Allow(userID, limit) {
+		t.Error("expected 4th request to be blocked by rate limit")
+	}
+
+	// 0 限制值应当退化为 30
+	userID2 := "user-456"
+	for i := 0; i < 30; i++ {
+		if !limiter.Allow(userID2, 0) {
+			t.Errorf("expected request %d with default limit to be allowed", i+1)
+		}
+	}
+	if limiter.Allow(userID2, 0) {
+		t.Error("expected 31st request with default limit to be blocked")
+	}
+}

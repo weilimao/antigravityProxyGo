@@ -99,6 +99,10 @@
                     <span class="material-symbols-outlined text-[14px]" id="btnRefreshAllIcon">sync</span>
                     <span>刷新配额</span>
                 </button>
+                <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim bg-outline-variant/10 hover:bg-primary/10 border border-outline-variant/20 hover:border-primary/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none" id="btnManageAutoTrigger" title="配置和管理账号池自动化刷新与定时触发任务">
+                    <span class="material-symbols-outlined text-[14px]">timer</span>
+                    <span>自动化任务</span>
+                </button>
             </div>
         </div>
         <!-- 批量操作栏 -->
@@ -108,35 +112,9 @@
                 <span class="font-medium text-on-surface dark:text-white" id="lblSelectedCount">已选择 0 个账号</span>
             </div>
             <div class="flex items-center gap-2 flex-wrap">
-                <span class="text-outline">测试模型:</span>
-                <select id="selectTestModel" class="px-2 py-1 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all cursor-pointer">
-                    <optgroup label="Gemini Models">
-                        <option value="gemini-3.5-flash">gemini-3.5-flash</option>
-                        <option value="gemini-3.5-flash-low">gemini-3.5-flash-low</option>
-                        <option value="gemini-3.5-flash-extra-low">gemini-3.5-flash-extra-low</option>
-                        <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
-                        <option value="gemini-3.1-pro-low">gemini-3.1-pro-low</option>
-                        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-                        <option value="gemini-3-flash">gemini-3-flash</option>
-                        <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
-                        <option value="gemini-3-flash-agent">gemini-3-flash-agent</option>
-                        <option value="gemini-pro-agent">gemini-pro-agent</option>
-                        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                        <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
-                    </optgroup>
-                    <optgroup label="Claude Models">
-                        <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
-                        <option value="claude-opus-4-6-thinking">claude-opus-4-6-thinking</option>
-                    </optgroup>
-                    <optgroup label="Others">
-                        <option value="gpt-oss-120b-medium">gpt-oss-120b-medium</option>
-                        <option value="tab_flash_lite_preview">tab_flash_lite_preview</option>
-                        <option value="tab_jump_flash_lite_preview">tab_jump_flash_lite_preview</option>
-                    </optgroup>
-                </select>
                 <button id="btnTriggerTestResponse" class="flex items-center gap-1.5 px-3.5 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-lg text-[12px] font-bold transition-all shadow-sm cursor-pointer select-none">
-                    <span class="material-symbols-outlined text-[15px]" id="btnTriggerTestIcon">play_arrow</span>
-                    <span>触发测试回复</span>
+                    <span class="material-symbols-outlined text-[15px]" id="btnTriggerTestIcon">bolt</span>
+                    <span>触发测试刷新</span>
                 </button>
             </div>
         </div>

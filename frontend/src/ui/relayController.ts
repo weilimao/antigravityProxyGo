@@ -401,6 +401,10 @@ function renderRelayPackages() {
                             <span class="text-outline font-medium">Claude系列</span>
                             <span class="text-on-surface dark:text-slate-200 font-bold">${formatQuotaSummary(q.claude)}</span>
                         </div>
+                        <div class="flex items-center justify-between bg-outline-variant/5 p-2 rounded-lg border border-outline-variant/10">
+                            <span class="text-outline font-medium">请求速率</span>
+                            <span class="text-on-surface dark:text-slate-200 font-bold">${q.rateLimit || 30} 次/分钟</span>
+                        </div>
                     </div>
                 </div>
                 <div class="mt-3 text-[11px] text-outline text-right flex items-center justify-end gap-1 group-hover:text-primary transition-colors">
@@ -497,7 +501,7 @@ function renderRelayUsers() {
                                (q1[f].dailyDays || 0) === (q2[f].dailyDays || 0) &&
                                (q1[f].dailyTokens || 0) === (q2[f].dailyTokens || 0);
                     };
-                    if (check('gemini') && check('claude') && (q1.validDuration || 0) === (q2.validDuration || 0) && (q1.validUnit || 'months') === (q2.validUnit || 'months')) {
+                    if (check('gemini') && check('claude') && (q1.validDuration || 0) === (q2.validDuration || 0) && (q1.validUnit || 'months') === (q2.validUnit || 'months') && (q1.rateLimit || 30) === (q2.rateLimit || 30)) {
                         pkgName = pkg.name;
                         matched = true;
                         break;
@@ -599,11 +603,13 @@ function renderRelayUsers() {
         gemini: { enableFixed: false, fixedTokens: 0, enableHourly: false, hourlyHours: 0, hourlyTokens: 0, enableDaily: false, dailyDays: 0, dailyTokens: 0 },
         claude: { enableFixed: false, fixedTokens: 0, enableHourly: false, hourlyHours: 0, hourlyTokens: 0, enableDaily: false, dailyDays: 0, dailyTokens: 0 },
         validDuration: 0,
-        validUnit: 'months'
+        validUnit: 'months',
+        rateLimit: 30
     };
     
     (document.getElementById('quotaValidDuration') as HTMLInputElement).value = quotas.validDuration?.toString() || '0';
     (document.getElementById('quotaValidUnit') as HTMLInputElement).value = quotas.validUnit || 'months';
+    (document.getElementById('quotaRateLimit') as HTMLInputElement).value = quotas.rateLimit?.toString() || '30';
     
     const setupForm = (family: 'gemini' | 'claude') => {
         const q = quotas[family];
@@ -644,7 +650,7 @@ function renderRelayUsers() {
                            (q1[f].dailyDays || 0) === (q2[f].dailyDays || 0) &&
                            (q1[f].dailyTokens || 0) === (q2[f].dailyTokens || 0);
                 };
-                matched = check('gemini') && check('claude') && (q1.validDuration || 0) === (q2.validDuration || 0) && (q1.validUnit || 'months') === (q2.validUnit || 'months');
+                matched = check('gemini') && check('claude') && (q1.validDuration || 0) === (q2.validDuration || 0) && (q1.validUnit || 'months') === (q2.validUnit || 'months') && (q1.rateLimit || 30) === (q2.rateLimit || 30);
             }
             if (matched) {
                 btn.className = "flex-1 py-1.5 px-2 text-[12px] bg-primary/10 dark:bg-primary/20 border-2 border-primary text-primary font-bold rounded-lg transition-all shadow-sm";
@@ -718,6 +724,7 @@ function renderRelayUsers() {
     
     (document.getElementById('quotaValidDuration') as HTMLInputElement).value = pkg.quotas?.validDuration?.toString() || '0';
     (document.getElementById('quotaValidUnit') as HTMLInputElement).value = pkg.quotas?.validUnit || 'months';
+    (document.getElementById('quotaRateLimit') as HTMLInputElement).value = pkg.quotas?.rateLimit?.toString() || '30';
     
     const apply = (family: 'gemini' | 'claude') => {
         const q = pkg.quotas[family];
@@ -742,7 +749,8 @@ function renderRelayUsers() {
         gemini: { enableFixed: false, fixedTokens: 0, enableHourly: false, hourlyHours: 0, hourlyTokens: 0, enableDaily: false, dailyDays: 0, dailyTokens: 0 },
         claude: { enableFixed: false, fixedTokens: 0, enableHourly: false, hourlyHours: 0, hourlyTokens: 0, enableDaily: false, dailyDays: 0, dailyTokens: 0 },
         validDuration: 1,
-        validUnit: 'months'
+        validUnit: 'months',
+        rateLimit: 30
     };
     let name = '';
 
@@ -764,6 +772,7 @@ function renderRelayUsers() {
     
     (document.getElementById('quotaValidDuration') as HTMLInputElement).value = quotas.validDuration?.toString() || '0';
     (document.getElementById('quotaValidUnit') as HTMLInputElement).value = quotas.validUnit || 'months';
+    (document.getElementById('quotaRateLimit') as HTMLInputElement).value = quotas.rateLimit?.toString() || '30';
 
     const setupForm = (family: 'gemini' | 'claude') => {
         const q = quotas[family] || {};
@@ -820,7 +829,8 @@ function renderRelayUsers() {
         gemini: getFormData('gemini'),
         claude: getFormData('claude'),
         validDuration: parseInt((document.getElementById('quotaValidDuration') as HTMLInputElement).value) || 0,
-        validUnit: (document.getElementById('quotaValidUnit') as HTMLInputElement).value || 'months'
+        validUnit: (document.getElementById('quotaValidUnit') as HTMLInputElement).value || 'months',
+        rateLimit: parseInt((document.getElementById('quotaRateLimit') as HTMLInputElement).value) || 30
     };
     
     try {
@@ -851,7 +861,7 @@ function renderRelayUsers() {
             } else {
                 const stats = res.stats || {};
                 const user = res.user || {};
-                const totalTokens = (stats.totalInputTokens || 0) + (stats.totalOutputTokens || 0) + (stats.totalCachedTokens || 0);
+                const totalTokens = (stats.totalInputTokens || 0) + (stats.totalOutputTokens || 0);
                 
                 let html = `
                     <div class="grid grid-cols-2 gap-3 mb-4">
@@ -977,7 +987,7 @@ function renderRelayUsers() {
                 if (stats.models && Object.keys(stats.models).length > 0) {
                     html += '<div class="text-[12px] font-bold mb-2 mt-4 text-on-surface dark:text-white">按模型统计</div>';
                     for (const [modelName, modelStats] of Object.entries<any>(stats.models)) {
-                        const modelTotalTokens = (modelStats.inputTokens || 0) + (modelStats.outputTokens || 0) + (modelStats.cachedTokens || 0);
+                        const modelTotalTokens = (modelStats.inputTokens || 0) + (modelStats.outputTokens || 0);
                         html += `
                             <div class="bg-white/50 dark:bg-white/5 p-3 rounded-lg border border-outline-variant/20 text-[12px] mb-2">
                                 <div class="font-semibold text-primary mb-2">${modelName}</div>

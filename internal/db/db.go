@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -39,8 +40,8 @@ func InitDB(dataDir string) error {
 	}
 
 	// Configure connection pool
-	db.SetMaxOpenConns(1) // SQLite works best with 1 writer to avoid BUSY errors
-	db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(50) // Allow concurrent readers in WAL mode
+	db.SetMaxIdleConns(10)
 	db.SetConnMaxLifetime(time.Hour)
 
 	if err := db.Ping(); err != nil {
@@ -48,7 +49,7 @@ func InitDB(dataDir string) error {
 	}
 
 	GlobalDB = db
-	return runMigrations(db)
+	return runMigrations(db, dataDir)
 }
 
 // CloseDB closes the database connection
@@ -61,10 +62,10 @@ func CloseDB() {
 	}
 }
 
-func runMigrations(db *sql.DB) error {
-	// Enable WAL mode for better concurrency and performance
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
-		log.Printf("Warning: Failed to enable WAL mode: %v\n", err)
+func runMigrations(db *sql.DB, dataDir string) error {
+	// Enable WAL mode and busy timeout for better concurrency and performance
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`); err != nil {
+		log.Printf("Warning: Failed to enable WAL mode/busy timeout: %v\n", err)
 	}
 
 	schemas := []string{
@@ -92,7 +93,33 @@ func runMigrations(db *sql.DB) error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_req_logs_user_mode ON request_logs(user_id, mode);`,
+		`CREATE INDEX IF NOT EXISTS idx_req_logs_user_timestamp ON request_logs(user_id, timestamp);`,
 		`CREATE INDEX IF NOT EXISTS idx_req_logs_timestamp ON request_logs(timestamp);`,
+		`CREATE TABLE IF NOT EXISTS user_hourly_trends (
+			user_id TEXT NOT NULL,
+			hour_bucket TEXT NOT NULL,
+			requests INTEGER NOT NULL DEFAULT 0,
+			in_tokens INTEGER NOT NULL DEFAULT 0,
+			out_tokens INTEGER NOT NULL DEFAULT 0,
+			cached_tokens INTEGER NOT NULL DEFAULT 0,
+			cost REAL NOT NULL DEFAULT 0.0,
+			input_cost REAL NOT NULL DEFAULT 0.0,
+			output_cost REAL NOT NULL DEFAULT 0.0,
+			cached_cost REAL NOT NULL DEFAULT 0.0,
+			PRIMARY KEY (user_id, hour_bucket)
+		);`,
+		`CREATE TABLE IF NOT EXISTS auto_trigger_tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			account_ids TEXT NOT NULL,
+			model_names TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			trigger_type TEXT NOT NULL,
+			interval_seconds INTEGER DEFAULT 0,
+			next_trigger_time TEXT,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
 	}
 
 	for _, schema := range schemas {
@@ -110,6 +137,72 @@ func runMigrations(db *sql.DB) error {
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN host TEXT NOT NULL DEFAULT '';`)
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN path TEXT NOT NULL DEFAULT '';`)
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN session_id TEXT NOT NULL DEFAULT '';`)
+
+	// 1. Resolve and map client-side raw keys (e.g. "weilimao") to server-side user IDs (e.g. hash)
+	relayUsersPath := filepath.Join(dataDir, "relay_users.json")
+	if bytes, err := os.ReadFile(relayUsersPath); err == nil {
+		var users []struct {
+			ID  string `json:"id"`
+			Key string `json:"key"`
+		}
+		if err := json.Unmarshal(bytes, &users); err == nil {
+			for _, u := range users {
+				if u.ID != "" && u.Key != "" {
+					// Update raw request_logs
+					_, _ = db.Exec("UPDATE request_logs SET user_id = ? WHERE user_id = ? AND mode = 'remote'", u.ID, u.Key)
+					
+					// Merge existing hourly trends
+					_, _ = db.Exec(`
+						INSERT INTO user_hourly_trends (
+							user_id, hour_bucket, requests, in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost
+						)
+						SELECT ?, hour_bucket, requests, in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost
+						FROM user_hourly_trends
+						WHERE user_id = ?
+						ON CONFLICT(user_id, hour_bucket) DO UPDATE SET
+							requests = requests + excluded.requests,
+							in_tokens = in_tokens + excluded.in_tokens,
+							out_tokens = out_tokens + excluded.out_tokens,
+							cached_tokens = cached_tokens + excluded.cached_tokens,
+							cost = cost + excluded.cost,
+							input_cost = input_cost + excluded.input_cost,
+							output_cost = output_cost + excluded.output_cost,
+							cached_cost = cached_cost + excluded.cached_cost;
+					`, u.ID, u.Key)
+
+					// Delete old key entries
+					_, _ = db.Exec("DELETE FROM user_hourly_trends WHERE user_id = ?", u.Key)
+				}
+			}
+		}
+	}
+
+	// 2. Deduplicate existing remote logs to clean up any duplicates created by the previous bug
+	_, _ = db.Exec(`DELETE FROM request_logs WHERE mode = 'remote' AND id NOT IN (SELECT MIN(id) FROM request_logs WHERE mode = 'remote' GROUP BY server_log_id);`)
+
+	// 3. Migrate existing request logs into user_hourly_trends
+	_, _ = db.Exec(`
+		INSERT OR IGNORE INTO user_hourly_trends (
+			user_id, hour_bucket, requests, in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost
+		)
+		SELECT 
+			user_id,
+			substr(timestamp, 6, 2) || '/' || substr(timestamp, 9, 2) || ' ' || substr(timestamp, 12, 2) || ':00' as hour_bucket,
+			count(*),
+			sum(in_tokens),
+			sum(out_tokens),
+			sum(cached_tokens),
+			sum(cost),
+			sum(input_cost),
+			sum(output_cost),
+			sum(cached_cost)
+		FROM request_logs
+		WHERE mode = 'remote' AND user_id IS NOT NULL AND timestamp IS NOT NULL AND length(timestamp) >= 19
+		GROUP BY user_id, hour_bucket;
+	`)
+
+	// 4. Clean up any invalid formatted trend rows starting with year format e.g. "2026-"
+	_, _ = db.Exec("DELETE FROM user_hourly_trends WHERE hour_bucket LIKE '202%';")
 
 	return nil
 }

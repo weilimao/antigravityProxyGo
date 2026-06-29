@@ -60,6 +60,11 @@ func (cm *CertManager) Init(caCertPath, caKeyPath string) error {
 			return fmt.Errorf("无法加载 CA 私钥: %v", err)
 		}
 
+		// Validate that the certificate and private key match
+		if _, err := tls.X509KeyPair(caCertBytes, caKeyBytes); err != nil {
+			return fmt.Errorf("CA 证书与私钥不匹配: %v", err)
+		}
+
 		keyBlock, _ := pem.Decode(caKeyBytes)
 		if keyBlock == nil {
 			return errors.New("CA 私钥 PEM 解码失败")

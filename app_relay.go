@@ -320,9 +320,9 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		if stats != nil {
 			for mName, mStats := range stats.Models {
 				if strings.Contains(strings.ToLower(mName), "claude") {
-					claudeLifetime += int64(mStats.InputTokens + mStats.OutputTokens + mStats.CachedTokens)
+					claudeLifetime += int64(mStats.InputTokens + mStats.OutputTokens)
 				} else {
-					geminiLifetime += int64(mStats.InputTokens + mStats.OutputTokens + mStats.CachedTokens)
+					geminiLifetime += int64(mStats.InputTokens + mStats.OutputTokens)
 				}
 			}
 		}
@@ -519,6 +519,9 @@ func (a *App) stopRelayServer() {
 		a.relayServer.Stop()
 		a.AddLog("🛑 Relay server stopped")
 	}
+	if a.relayStatsMgr != nil {
+		a.relayStatsMgr.Close()
+	}
 }
 
 // ensureRelayInitialized initializes relay components if not already done.
@@ -541,7 +544,7 @@ func (a *App) ensureRelayInitialized() {
 	a.relayStatsMgr.Init(activeDir)
 
 	caCertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
-	a.relayAPIMgr = relay.NewAPIHandler(a.relayAuthMgr, a.relayStatsMgr, a.AddLog, caCertPath)
+	a.relayAPIMgr = relay.NewAPIHandler(a.relayAuthMgr, a.relayStatsMgr, a.relayPackageMgr, a.AddLog, caCertPath)
 
 	a.relayCompatAPIMgr = relay.NewAPICompatHandler(
 		a.relayAuthMgr,
@@ -583,32 +586,58 @@ func (a *App) connectRemote(host, port, key, password string) error {
 	// Download remote server's CA cert for trust chain
 	activeDir := a.settingsMgr.GetActiveDataDirectory()
 	remoteCACertPath := filepath.Join(activeDir, "certs", "certs", "remote_ca.pem")
-	if err := a.remoteRelay.DownloadCACert(remoteCACertPath); err != nil {
-		a.AddLog(fmt.Sprintf("⚠️ Failed to download remote CA cert: %v", err))
-	} else {
-		// Overwrite local ca.pem with remote one for MITM trust
-		localCACertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
-		if remoteData, readErr := os.ReadFile(remoteCACertPath); readErr == nil {
-			_ = os.WriteFile(localCACertPath, remoteData, 0644)
-			a.AddLog("📜 Remote CA cert installed as local CA cert")
+	localCACertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
 
-			// 重新注入 CA 证书到系统/IDE运行环境
-			a.AddLog("🚀 正在将远程 CA 证书重载并注入至 IDE 及系统环境...")
-			homeDir, _ := os.UserHomeDir()
-			defaultUserData := a.settingsMgr.GetDefaultUserDataPath()
-			go func() {
-				_ = patch.PatchAll(true, defaultUserData, homeDir, localCACertPath, a.AddLog)
-				if !cert.CheckCertStatus(localCACertPath) {
-					a.AddLog("🛡️ 正在向操作系统信任库自动导入远端中继根证书...")
-					_, errStr := cert.InstallCert(localCACertPath)
-					if errStr != "" {
-						a.AddLog(fmt.Sprintf("⚠️ 自动导入系统证书库提示: %s", errStr))
-					} else {
-						a.AddLog("✅ 远端中继根证书已成功导入系统受信任存储区")
-					}
+	if err := a.remoteRelay.DownloadCACert(remoteCACertPath); err == nil {
+		a.AddLog("✅ 成功下载远端 CA 证书")
+
+		// 1. 合并证书逻辑：读取本地 ca.pem 和下载 of remote_ca.pem
+		localData, errReadLocal := os.ReadFile(localCACertPath)
+		remoteData, errReadRemote := os.ReadFile(remoteCACertPath)
+
+		if errReadLocal == nil && errReadRemote == nil {
+			// 检查 localData 中是否已经包含 remoteData
+			if !strings.Contains(string(localData), string(remoteData)) {
+				// 将 remoteData 追加到 localData 中
+				combined := append(localData, []byte("\n")...)
+				combined = append(combined, remoteData...)
+				if errWrite := os.WriteFile(localCACertPath, combined, 0644); errWrite == nil {
+					a.AddLog("💾 已将远端中继 CA 证书合并至本地 ca.pem")
+				} else {
+					a.AddLog(fmt.Sprintf("⚠️ 合并远端证书失败: %v", errWrite))
 				}
-			}()
+			} else {
+				a.AddLog("ℹ️ 本地 ca.pem 已包含远端 CA 证书，无需重复合并")
+			}
 		}
+
+		// 2. 重载本地代理证书并注入 IDE 环境
+		homeDir, _ := os.UserHomeDir()
+		defaultUserData := a.settingsMgr.GetDefaultUserDataPath()
+		go func() {
+			// 重新将合并后的 ca.pem 注入到 IDE 的运行环境
+			_ = patch.PatchAll(true, defaultUserData, homeDir, localCACertPath, a.AddLog)
+
+			// 检查远端证书系统信任状态并异步导入
+			if !cert.CheckCertStatus(remoteCACertPath) {
+				a.AddLog("🛡️ 正在向操作系统信任库导入远端中继根证书...")
+				_, errStr := cert.InstallCert(remoteCACertPath)
+				if errStr != "" {
+					a.AddLog(fmt.Sprintf("⚠️ 自动导入系统证书库提示: %s", errStr))
+				} else {
+					a.AddLog("✅ 远端中继根证书已成功导入系统受信任存储区")
+				}
+			} else {
+				a.AddLog("✅ 远端中继根证书已处于系统受信任状态，无需重复导入")
+			}
+		}()
+
+		// 3. 重载代理引擎的证书
+		if errReload := a.proxyEngine.ReloadCertificates(activeDir); errReload != nil {
+			a.AddLog(fmt.Sprintf("⚠️ 代理引擎重载证书失败: %v", errReload))
+		}
+	} else {
+		a.AddLog(fmt.Sprintf("⚠️ 下载远端 CA 证书失败: %v，将跳过远端证书的合并与系统导入", err))
 	}
 
 	wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
@@ -621,25 +650,15 @@ func (a *App) disconnectRemote() {
 		a.remoteRelay.Disconnect()
 		a.proxyEngine.SetRemoteRelay(nil)
 
-		// 还原重载本地 CA 证书到系统/IDE运行环境
+		// 重新加载本地证书到内存中，使代理引擎能够继续正常解密签名
 		activeDir := a.settingsMgr.GetActiveDataDirectory()
-		localCACertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
-		a.AddLog("🔄 正在恢复本地 CA 证书信任链及系统环境...")
-		homeDir, _ := os.UserHomeDir()
-		defaultUserData := a.settingsMgr.GetDefaultUserDataPath()
-		go func() {
-			_ = patch.PatchAll(true, defaultUserData, homeDir, localCACertPath, a.AddLog)
-			if !cert.CheckCertStatus(localCACertPath) {
-				a.AddLog("🛡️ 正在向操作系统信任库还原导入本地根证书...")
-				_, errStr := cert.InstallCert(localCACertPath)
-				if errStr != "" {
-					a.AddLog(fmt.Sprintf("⚠️ 还原系统证书库提示: %s", errStr))
-				} else {
-					a.AddLog("✅ 本地根证书已成功导入系统受信任存储区")
-				}
-			}
-		}()
+		if errReload := a.proxyEngine.ReloadCertificates(activeDir); errReload != nil {
+			a.AddLog(fmt.Sprintf("⚠️ 重新加载本地 CA 证书失败: %v", errReload))
+		} else {
+			a.AddLog("✅ 代理引擎已成功重载本地 CA 证书")
+		}
 
+		a.AddLog("🔄 已断开远程中继并切换至本地代理模式")
 		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 	}
 }

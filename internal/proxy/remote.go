@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,34 @@ type RemoteConfig struct {
 	IsLocal   bool   `json:"isLocal"`
 }
 
+// noProxyClient is a custom HTTP client that explicitly bypasses system proxy settings.
+// This is critical for local testing and health checks to prevent routing loops back into our own proxy port (18443).
+var noProxyClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			proxyURL, err := http.ProxyFromEnvironment(req)
+			if err != nil || proxyURL == nil {
+				return nil, err
+			}
+			host := proxyURL.Hostname()
+			port := proxyURL.Port()
+			// 仅当系统代理指向本程序的拦截端口 18443 时，才予以绕过直连，防止本地测试死循环
+			if (host == "127.0.0.1" || host == "localhost" || host == "::1") && port == "18443" {
+				return nil, nil
+			}
+			return proxyURL, nil
+		},
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
+
 // RemoteRelay manages client-side connection to a remote proxy relay server
 type RemoteRelay struct {
 	sync.RWMutex
@@ -44,6 +73,9 @@ func NewRemoteRelay(logFn func(string)) *RemoteRelay {
 
 // Login authenticates with the remote relay server and stores the session token
 func (rr *RemoteRelay) Login(host, port, key, password string) error {
+	if host == "localhost" {
+		host = "127.0.0.1"
+	}
 	if err := rr.TestConnection(host, port); err != nil {
 		return fmt.Errorf("connection test failed: %w", err)
 	}
@@ -67,7 +99,7 @@ func (rr *RemoteRelay) Login(host, port, key, password string) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := noProxyClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("login request failed: %w", err)
 	}
@@ -128,7 +160,7 @@ func (rr *RemoteRelay) Disconnect() {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, logoutURL, nil)
 		if err == nil {
 			req.Header.Set("Authorization", "Bearer "+token)
-			_, _ = http.DefaultClient.Do(req)
+			_, _ = noProxyClient.Do(req)
 		}
 	}
 
@@ -209,7 +241,7 @@ func (rr *RemoteRelay) FetchRemoteStats() (map[string]interface{}, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := noProxyClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("stats request failed: %w", err)
 	}
@@ -232,59 +264,59 @@ func (rr *RemoteRelay) FetchRemoteStats() (map[string]interface{}, error) {
 }
 
 // FetchAndSyncRemoteLogs retrieves new logs from the remote relay and syncs them to local SQLite
+// Deprecated: No longer syncing raw logs.
 func (rr *RemoteRelay) FetchAndSyncRemoteLogs(userKey string) error {
+	return nil
+}
+
+// FetchRemoteTrends retrieves hourly trends from the remote relay server
+func (rr *RemoteRelay) FetchRemoteTrends() ([]*db.HourlyTrendSummary, error) {
 	rr.RLock()
 	host := rr.config.Host
 	port := rr.config.Port
 	token := rr.config.Token
 	rr.RUnlock()
 
-	maxID := db.GetMaxServerLogID(userKey, "remote")
-	syncURL := fmt.Sprintf("http://%s:%s/api/logs/sync?last_id=%d&limit=200", host, port, maxID)
+	trendsURL := fmt.Sprintf("http://%s:%s/api/trends", host, port)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, syncURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, trendsURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create log sync request: %w", err)
+		return nil, fmt.Errorf("failed to create trends request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := noProxyClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("log sync request failed: %w", err)
+		return nil, fmt.Errorf("trends request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read log sync response: %w", err)
+		return nil, fmt.Errorf("failed to read trends response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("log sync failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("trends request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var data struct {
-		Logs []*db.RequestLog `json:"logs"`
+		Trends []*db.HourlyTrendSummary `json:"trends"`
 	}
 	if err := json.Unmarshal(body, &data); err != nil {
-		return fmt.Errorf("failed to parse log sync response: %w", err)
+		return nil, fmt.Errorf("failed to parse trends response: %w", err)
 	}
 
-	for _, item := range data.Logs {
-		item.ServerLogID = item.ID // Save remote ID to ServerLogID
-		item.ID = 0                // Reset local ID for auto increment
-		item.UserID = userKey
-		item.Mode = "remote"
-		_ = db.InsertRequestLog(item)
-	}
-
-	return nil
+	return data.Trends, nil
 }
 
 // TestConnection verifies connectivity to the remote relay server's health endpoint
 func (rr *RemoteRelay) TestConnection(host, port string) error {
+	if host == "localhost" {
+		host = "127.0.0.1"
+	}
 	healthURL := fmt.Sprintf("http://%s:%s/api/health", host, port)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -294,7 +326,7 @@ func (rr *RemoteRelay) TestConnection(host, port string) error {
 		return fmt.Errorf("failed to create health check request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := noProxyClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("health check failed: %w", err)
 	}
@@ -326,7 +358,7 @@ func (rr *RemoteRelay) DownloadCACert(savePath string) error {
 		return fmt.Errorf("failed to create cert request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := noProxyClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download CA cert: %w", err)
 	}
@@ -354,6 +386,72 @@ func (rr *RemoteRelay) DownloadCACert(savePath string) error {
 	if rr.logFn != nil {
 		rr.logFn(fmt.Sprintf("📜 Remote CA cert saved to %s", savePath))
 	}
+	return nil
+}
+
+// FetchAndSaveRemoteLogDetail fetches a specific log from the remote server by req_id and saves it locally
+func (rr *RemoteRelay) FetchAndSaveRemoteLogDetail(reqID string, userKey string) error {
+	if f, err := os.OpenFile(`B:\antigravityProxy\data\debug.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+		f.WriteString(fmt.Sprintf("[%s] FetchAndSaveRemoteLogDetail start: reqID=%s, userKey=%s\n", time.Now().Format(time.RFC3339), reqID, userKey))
+		f.Close()
+	}
+
+	rr.RLock()
+	host := rr.config.Host
+	port := rr.config.Port
+	token := rr.config.Token
+	rr.RUnlock()
+
+	detailURL := fmt.Sprintf("http://%s:%s/api/logs/detail?req_id=%s", host, port, reqID)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, detailURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create log detail request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := noProxyClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("log detail request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read log detail response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("log detail failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var data struct {
+		Log *db.RequestLog `json:"log"`
+	}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return fmt.Errorf("failed to parse log detail response: %w", err)
+	}
+
+	if data.Log != nil {
+		item := data.Log
+		item.ServerLogID = item.ID // Save remote ID to ServerLogID
+		item.ID = 0                // Reset local ID for auto increment
+		item.UserID = userKey
+		item.Mode = "remote"
+		dbErr := db.InsertRequestLog(item)
+		if f, err := os.OpenFile(`B:\antigravityProxy\data\debug.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			f.WriteString(fmt.Sprintf("[%s] FetchAndSaveRemoteLogDetail: Log fetched successfully, InsertRequestLog error: %v\n", time.Now().Format(time.RFC3339), dbErr))
+			f.Close()
+		}
+	} else {
+		if f, err := os.OpenFile(`B:\antigravityProxy\data\debug.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			f.WriteString(fmt.Sprintf("[%s] FetchAndSaveRemoteLogDetail: data.Log is nil!\n", time.Now().Format(time.RFC3339)))
+			f.Close()
+		}
+	}
+
 	return nil
 }
 

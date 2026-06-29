@@ -90,6 +90,7 @@ type Manager struct {
 	OnAccountsUpdated        func(accounts []*Account)
 	OnAccountDisabled        func(accountId string)
 	OnAccountCooldownUpdated func(accountId string, category string, untilTimeMs int64)
+	OnQuotaRestored          func(accountId string, categories []string)
 	FetchQuota               func(account *Account) (*QuotaResult, error)
 	RefreshToken             func(account *Account) (string, error)
 }
@@ -974,6 +975,7 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 	}
 
 	changed := false
+	var restoredCategories []string
 
 	updateCatCooldown := func(cat string, exhausted bool, resetTime int64) {
 		if exhausted {
@@ -989,6 +991,7 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 			if _, ok := acc.Cooldowns[cat]; ok {
 				delete(acc.Cooldowns, cat)
 				changed = true
+				restoredCategories = append(restoredCategories, cat)
 			}
 		}
 	}
@@ -1020,6 +1023,10 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 		if m.OnAccountCooldownUpdated != nil {
 			// 触发事件通知
 			go m.OnAccountCooldownUpdated(id, "all", newCooldownUntil)
+		}
+
+		if len(restoredCategories) > 0 && m.OnQuotaRestored != nil {
+			go m.OnQuotaRestored(id, restoredCategories)
 		}
 	}
 

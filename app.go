@@ -16,6 +16,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/autotrigger"
 	"antigravity-proxy/internal/cert"
 	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/patch"
@@ -60,7 +61,8 @@ type App struct {
 	relayAPIMgr       *relay.APIHandler
 	relayCompatAPIMgr *relay.APICompatHandler
 	relayServer       *relay.RelayServer
-	remoteRelay       *proxy.RemoteRelay
+	remoteRelay          *proxy.RemoteRelay
+	autoTriggerScheduler *autotrigger.Scheduler
 }
 
 func NewApp() *App {
@@ -127,6 +129,18 @@ func (a *App) startup(ctx context.Context) {
 		a.sessionRouter.InvalidateByAccountId(accountId)
 	}
 
+	a.accountMgr.OnQuotaRestored = func(accountId string, categories []string) {
+		acc := a.accountMgr.GetAccountByID(accountId)
+		email := accountId
+		if acc != nil {
+			email = acc.Email
+		}
+		a.AddLog(fmt.Sprintf("🔄 [自动触发] 检测到账号 %s 的配额限制已恢复 (%s)，触发自动化任务...", email, strings.Join(categories, ", ")))
+		if a.autoTriggerScheduler != nil {
+			go a.autoTriggerScheduler.OnQuotaRefreshed(accountId)
+		}
+	}
+
 	a.authMgr = quota.NewAuthManager(a.accountMgr)
 	a.quotaSvc = quota.NewQuotaService()
 	a.quotaSvc.Init(activeDir)
@@ -140,6 +154,15 @@ func (a *App) startup(ctx context.Context) {
 
 	a.accountMgr.Init(activeDir)
 	a.sessionRouter.Init(activeDir)
+
+	// 5. Initialize Auto Trigger Task Scheduler
+	a.autoTriggerScheduler = autotrigger.NewScheduler(
+		a.accountMgr,
+		a.quotaSvc,
+		a.authMgr,
+		a.AddLog,
+	)
+	a.autoTriggerScheduler.Start()
 	
 	// Initialize relay managers early so they are always available
 	a.ensureRelayInitialized()
@@ -190,9 +213,14 @@ func (a *App) startup(ctx context.Context) {
 		a.quotaSvc.SetCapturedProject,
 		a.quotaSvc.GetStoredProject,
 		a.settingsMgr.GetMaxRetries,
-		func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int) {
+		func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string) {
+			if f, err := os.OpenFile(`B:\antigravityProxy\data\debug.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+				f.WriteString(fmt.Sprintf("[%s] relayStatsCallback: UserID=%s, ReqID=%s, Model=%s\n", time.Now().Format(time.RFC3339), userID, reqID, modelName))
+				f.Close()
+			}
 			if a.relayStatsMgr != nil {
 				a.relayStatsMgr.RecordUsage(relay.RelaySample{
+					ReqID:        reqID,
 					UserID:       userID,
 					UserKey:      userKey,
 					ModelName:    modelName,
@@ -248,7 +276,7 @@ func (a *App) startup(ctx context.Context) {
 					for mName, mStats := range stats.Models {
 						if (isClaude && strings.Contains(strings.ToLower(mName), "claude")) || 
 						   (!isClaude && !strings.Contains(strings.ToLower(mName), "claude")) {
-							lifetimeTokens += int64(mStats.InputTokens + mStats.OutputTokens + mStats.CachedTokens)
+							lifetimeTokens += int64(mStats.InputTokens + mStats.OutputTokens)
 						}
 					}
 				}
@@ -354,6 +382,10 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) shutdown() {
 	tray.QuitTray()
+
+	if a.autoTriggerScheduler != nil {
+		a.autoTriggerScheduler.Stop()
+	}
 
 	if a.monitorCancel != nil {
 		a.monitorCancel()
@@ -750,6 +782,9 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		return res, err
 	}
 	if res, handled, err := a.handleAccountIPC(channel, args); handled {
+		return res, err
+	}
+	if res, handled, err := a.handleAutoTriggerIPC(channel, args); handled {
 		return res, err
 	}
 
@@ -1232,7 +1267,7 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 	usagePayload := a.usageTracker.GetPayload()
 	if a.remoteRelay != nil && a.remoteRelay.GetConfig().Connected {
 		cfg := a.remoteRelay.GetConfig()
-		_ = a.remoteRelay.FetchAndSyncRemoteLogs(cfg.UserKey)
+		// No remote log syncing to local database anymore. All metrics are pre-aggregated and queried on-demand.
 
 		if remoteStats, err := a.remoteRelay.FetchRemoteStats(); err == nil && remoteStats != nil {
 			// 完全使用远端数据构建一套纯净的 GlobalStats
@@ -1279,28 +1314,28 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 				}
 			}
 
-			// 从 SQLite 聚合出 trends 和 requests 实时列表
-			dbTrends := db.QueryHourlyTrends(cfg.UserKey, "remote")
-			dbRequests := db.QueryRecentRequests(cfg.UserKey, "remote", 50)
-
+			// Fetch hourly aggregated trends directly from the remote relay server
 			var trends []*stats.HourlyTrend
-			for _, dt := range dbTrends {
-				trends = append(trends, &stats.HourlyTrend{
-					Time:       dt.Time,
-					Input:      dt.Input,
-					Output:     dt.Output,
-					Cached:     dt.Cached,
-					Requests:   dt.Requests,
-					Cost:       dt.Cost,
-					InputCost:  dt.InputCost,
-					OutputCost: dt.OutputCost,
-					CachedCost: dt.CachedCost,
-				})
+			if remoteTrends, err := a.remoteRelay.FetchRemoteTrends(); err == nil {
+				for _, dt := range remoteTrends {
+					trends = append(trends, &stats.HourlyTrend{
+						Time:       dt.Time,
+						Input:      dt.Input,
+						Output:     dt.Output,
+						Cached:     dt.Cached,
+						Requests:   dt.Requests,
+						Cost:       dt.Cost,
+						InputCost:  dt.InputCost,
+						OutputCost: dt.OutputCost,
+						CachedCost: dt.CachedCost,
+					})
+				}
 			}
 			if trends == nil {
 				trends = []*stats.HourlyTrend{}
 			}
 
+			dbRequests := db.QueryRecentRequests(cfg.UserKey, "remote", 50)
 			var requests []*stats.RequestLog
 			for _, dr := range dbRequests {
 				formattedTime := dr.Timestamp

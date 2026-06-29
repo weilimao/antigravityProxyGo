@@ -62,15 +62,11 @@ func GetMaxServerLogID(userID, mode string) int64 {
 		return 0
 	}
 	row := GlobalDB.QueryRow(`SELECT max(server_log_id) FROM request_logs WHERE user_id = ? AND mode = ?`, userID, mode)
-	var maxID sqlNullableInt64
-	if err := row.Scan(&maxID.val); err == nil && maxID.val != nil {
-		return *maxID.val
+	var maxID sql.NullInt64
+	if err := row.Scan(&maxID); err == nil && maxID.Valid {
+		return maxID.Int64
 	}
 	return 0
-}
-
-type sqlNullableInt64 struct {
-	val *int64
 }
 
 // GetRequestLogsSince retrieves logs for a user/mode that were created after lastID
@@ -119,7 +115,7 @@ func GetTokensForUserModelFamilySince(userID string, modelKeyword string, sinceI
 	}
 
 	query := `
-		SELECT SUM(in_tokens + out_tokens + cached_tokens) 
+		SELECT SUM(in_tokens + out_tokens) 
 		FROM request_logs 
 		WHERE user_id = ? 
 		AND model_name LIKE ? 
@@ -128,15 +124,15 @@ func GetTokensForUserModelFamilySince(userID string, modelKeyword string, sinceI
 	likePattern := "%" + modelKeyword + "%"
 	row := GlobalDB.QueryRow(query, userID, likePattern, sinceIso)
 	
-	var total sqlNullableInt64
-	if err := row.Scan(&total.val); err != nil {
+	var total sql.NullInt64
+	if err := row.Scan(&total); err != nil {
 		return 0, err
 	}
 	
-	if total.val == nil {
+	if !total.Valid {
 		return 0, nil
 	}
-	return *total.val, nil
+	return total.Int64, nil
 }
 
 // GetOldestRequestTimestampSince retrieves the timestamp of the oldest request for a specific model family since a given timestamp
@@ -165,4 +161,31 @@ func GetOldestRequestTimestampSince(userID string, modelKeyword string, sinceIso
 	}
 	return firstTimestamp.String, nil
 }
+
+// GetMaxLogID retrieves the maximum local id for a given user and mode
+func GetMaxLogID(userID, mode string) int64 {
+	if GlobalDB == nil {
+		return 0
+	}
+	row := GlobalDB.QueryRow(`SELECT max(id) FROM request_logs WHERE user_id = ? AND mode = ?`, userID, mode)
+	var maxID sql.NullInt64
+	if err := row.Scan(&maxID); err == nil && maxID.Valid {
+		return maxID.Int64
+	}
+	return 0
+}
+
+// HasServerLogID checks if a log with the given server_log_id already exists locally for this user and mode
+func HasServerLogID(userID string, serverLogID int64, mode string) bool {
+	if GlobalDB == nil {
+		return false
+	}
+	row := GlobalDB.QueryRow(`SELECT 1 FROM request_logs WHERE user_id = ? AND server_log_id = ? AND mode = ? LIMIT 1`, userID, serverLogID, mode)
+	var val int
+	if err := row.Scan(&val); err == nil {
+		return true
+	}
+	return false
+}
+
 

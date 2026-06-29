@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"antigravity-proxy/internal/netutil"
@@ -31,11 +33,16 @@ type GeminiRequest struct {
 }
 
 // TriggerTestResponse sends a minimal generateContent request to Google/Vertex AI using the account credentials.
-func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, getStoredProject func(string) string, refreshToken func(*Account) (string, error)) error {
+func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, prompt string, getStoredProject func(string) string, refreshToken func(*Account) (string, error)) (string, error) {
 	// 1. Refresh access token
 	accessToken, err := refreshToken(acc)
 	if err != nil {
-		return fmt.Errorf("refresh token failed: %w", err)
+		return "", fmt.Errorf("refresh token failed: %w", err)
+	}
+
+	testPrompt := prompt
+	if testPrompt == "" {
+		testPrompt = "ok"
 	}
 
 	client := netutil.NewClient(15 * time.Second)
@@ -48,7 +55,7 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, ge
 			Contents: []Content{
 				{
 					Role: "user",
-					Parts: []Part{{Text: "ok"}},
+					Parts: []Part{{Text: testPrompt}},
 				},
 			},
 			GenerationConfig: GenerationConfig{MaxOutputTokens: 1},
@@ -56,12 +63,12 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, ge
 
 		jsonBytes, err := json.Marshal(reqBody)
 		if err != nil {
-			return err
+			return "", err
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", targetUrl, bytes.NewBuffer(jsonBytes))
 		if err != nil {
-			return err
+			return "", err
 		}
 
 		req.Header.Set("Content-Type", "application/json")
@@ -70,14 +77,19 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, ge
 
 		resp, err := client.Do(req)
 		if err != nil {
-			return err
+			return "", err
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("HTTP error %d", resp.StatusCode)
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("read response body failed: %w", err)
 		}
-		return nil
+
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("HTTP error %d: %s", resp.StatusCode, string(bodyBytes))
+		}
+		return extractTextFromGeminiResponse(bodyBytes), nil
 	} else {
 		// Antigravity (Official Account)
 		targetUrl := "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
@@ -97,7 +109,7 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, ge
 			Contents: []Content{
 				{
 					Role: "user",
-					Parts: []Part{{Text: "ok"}},
+					Parts: []Part{{Text: testPrompt}},
 				},
 			},
 			GenerationConfig: GenerationConfig{MaxOutputTokens: 1},
@@ -115,12 +127,12 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, ge
 
 		jsonBytes, err := json.Marshal(wrappedReq)
 		if err != nil {
-			return err
+			return "", err
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", targetUrl, bytes.NewBuffer(jsonBytes))
 		if err != nil {
-			return err
+			return "", err
 		}
 
 		req.Header.Set("Content-Type", "application/json")
@@ -130,13 +142,65 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, ge
 
 		resp, err := client.Do(req)
 		if err != nil {
-			return err
+			return "", err
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("HTTP error %d", resp.StatusCode)
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("read response body failed: %w", err)
 		}
-		return nil
+
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("HTTP error %d: %s", resp.StatusCode, string(bodyBytes))
+		}
+		return extractTextFromGeminiResponse(bodyBytes), nil
 	}
+}
+
+type GeminiResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"content"`
+	} `json:"candidates"`
+}
+
+type AntigravityWrappedResponse struct {
+	Response GeminiResponse `json:"response"`
+}
+
+func extractTextFromGeminiResponse(body []byte) string {
+	// 1. Try wrapped format first (e.g. Antigravity official proxy response)
+	var wrapped AntigravityWrappedResponse
+	if err := json.Unmarshal(body, &wrapped); err == nil {
+		if len(wrapped.Response.Candidates) > 0 && len(wrapped.Response.Candidates[0].Content.Parts) > 0 {
+			t := wrapped.Response.Candidates[0].Content.Parts[0].Text
+			if t != "" {
+				return t
+			}
+		}
+	}
+
+	// 2. Try standard Gemini response format
+	var resp GeminiResponse
+	if err := json.Unmarshal(body, &resp); err == nil {
+		if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
+			t := resp.Candidates[0].Content.Parts[0].Text
+			if t != "" {
+				return t
+			}
+		}
+	}
+
+	s := string(body)
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\t", "")
+	if len(s) > 100 {
+		return s[:97] + "..."
+	}
+	return s
 }

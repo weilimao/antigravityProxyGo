@@ -36,9 +36,11 @@ type RelayUserStats struct {
 	Quotas            interface{}                 `json:"quotas"`       // Optional: UserQuotas
 	CurrentUsage      map[string]int64            `json:"currentUsage"` // Optional: map[string]int64
 	ResetAt           map[string]string           `json:"resetAt"`      // Optional: map[string]string
+	PackageName       string                      `json:"packageName"`  // Optional: package name
 }
 
 type RelaySample struct {
+	ReqID        string
 	UserID       string
 	UserKey      string
 	ModelName    string
@@ -53,6 +55,17 @@ type RelaySample struct {
 	StatusCode   int
 }
 
+type PendingTrend struct {
+	Requests     int
+	InTokens     int
+	OutTokens    int
+	CachedTokens int
+	Cost         float64
+	InputCost    float64
+	OutputCost   float64
+	CachedCost   float64
+}
+
 type StatsTracker struct {
 	sync.RWMutex
 	persistPath     string
@@ -60,12 +73,21 @@ type StatsTracker struct {
 	saveTimeout     *time.Timer
 	saveTimeoutLock sync.Mutex
 	pricingMgr      *pricing.Manager
+
+	trendBuffer     map[string]map[string]*PendingTrend
+	bufferMu        sync.Mutex
+	flusherStopChan chan struct{}
+
+	logCache        map[string]*db.RequestLog
 }
 
 func NewStatsTracker(pricingMgr *pricing.Manager) *StatsTracker {
 	return &StatsTracker{
-		users:      make(map[string]*RelayUserStats),
-		pricingMgr: pricingMgr,
+		users:           make(map[string]*RelayUserStats),
+		pricingMgr:      pricingMgr,
+		trendBuffer:     make(map[string]map[string]*PendingTrend),
+		flusherStopChan: make(chan struct{}),
+		logCache:        make(map[string]*db.RequestLog),
 	}
 }
 
@@ -75,6 +97,7 @@ func (s *StatsTracker) Init(dataDir string) {
 	s.Unlock()
 
 	s.LoadFromDisk()
+	s.startFlusher()
 }
 
 func (s *StatsTracker) RecordUsage(sample RelaySample) {
@@ -146,35 +169,78 @@ func (s *StatsTracker) RecordUsage(sample RelaySample) {
 	userBucket.TotalCost = math.Round((userBucket.TotalCost+cost)*1000000.0) / 1000000.0
 	userBucket.LastActiveAt = timestamp
 
-	// Create and insert request log into SQLite
-	reqLog := &db.RequestLog{
-		ReqID:        fmt.Sprintf("rl_%d", time.Now().UnixNano()),
-		Timestamp:    timestamp,
-		Mode:         "remote",
-		UserID:       sample.UserID,
-		ModelName:    sample.ModelName,
-		InTokens:     inTokens,
-		OutTokens:    outTokens,
-		CachedTokens: cachedTokens,
-		Cost:         cost,
-		InputCost:    inputCost,
-		OutputCost:   outputCost,
-		CachedCost:   cachedCost,
-		DurationMs:   sample.DurationMs,
-		StatusCode:   sample.StatusCode,
-		Method:       sample.Method,
-		Host:         sample.Host,
-		Path:         sample.Path,
-		SessionID:    sample.SessionID,
+	// Buffer the trend data in memory
+	s.bufferMu.Lock()
+	hourBucket := time.Now().Format("01/02 15:00")
+	if s.trendBuffer[sample.UserID] == nil {
+		s.trendBuffer[sample.UserID] = make(map[string]*PendingTrend)
+	}
+	tRecord := s.trendBuffer[sample.UserID][hourBucket]
+	if tRecord == nil {
+		tRecord = &PendingTrend{}
+		s.trendBuffer[sample.UserID][hourBucket] = tRecord
+	}
+	tRecord.Requests++
+	tRecord.InTokens += inTokens
+	tRecord.OutTokens += outTokens
+	tRecord.CachedTokens += cachedTokens
+	tRecord.Cost += cost
+	tRecord.InputCost += inputCost
+	tRecord.OutputCost += outputCost
+	tRecord.CachedCost += cachedCost
+	s.bufferMu.Unlock()
+
+	// Cache the log in memory for Option B
+	if sample.ReqID != "" {
+		reqLog := &db.RequestLog{
+			ReqID:        sample.ReqID,
+			Timestamp:    timestamp,
+			Mode:         "remote",
+			UserID:       sample.UserID,
+			ModelName:    sample.ModelName,
+			InTokens:     inTokens,
+			OutTokens:    outTokens,
+			CachedTokens: cachedTokens,
+			Cost:         cost,
+			InputCost:    inputCost,
+			OutputCost:   outputCost,
+			CachedCost:   cachedCost,
+			DurationMs:   sample.DurationMs,
+			StatusCode:   sample.StatusCode,
+			Method:       sample.Method,
+			Host:         sample.Host,
+			Path:         sample.Path,
+			SessionID:    sample.SessionID,
+		}
+
+		s.Lock()
+		if s.logCache == nil {
+			s.logCache = make(map[string]*db.RequestLog)
+		}
+		s.logCache[sample.ReqID] = reqLog
+		if len(s.logCache) > 1000 {
+			for k := range s.logCache {
+				delete(s.logCache, k)
+				break
+			}
+		}
+		s.Unlock()
 	}
 
-	go func() {
-		if err := db.InsertRequestLog(reqLog); err != nil {
-			fmt.Printf("[RelayStats] DB Insert Error: %v\n", err)
-		}
-	}()
-
 	s.scheduleSave()
+}
+
+func (s *StatsTracker) GetCachedLog(reqID string) *db.RequestLog {
+	s.Lock()
+	defer s.Unlock()
+	if s.logCache == nil {
+		return nil
+	}
+	log, exists := s.logCache[reqID]
+	if exists {
+		delete(s.logCache, reqID)
+	}
+	return log
 }
 
 func (s *StatsTracker) GetUserStats(userID string) *RelayUserStats {
@@ -300,4 +366,70 @@ func deepCopyUserStats(src *RelayUserStats) *RelayUserStats {
 		copied.Models[k] = &ms
 	}
 	return &copied
+}
+
+func (s *StatsTracker) startFlusher() {
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.flushTrends()
+			case <-s.flusherStopChan:
+				s.flushTrends()
+				return
+			}
+		}
+	}()
+}
+
+func (s *StatsTracker) flushTrends() {
+	s.bufferMu.Lock()
+	snapshot := s.trendBuffer
+	if len(snapshot) > 0 {
+		s.trendBuffer = make(map[string]map[string]*PendingTrend)
+	}
+	s.bufferMu.Unlock()
+
+	if len(snapshot) == 0 {
+		return
+	}
+
+	if db.GlobalDB == nil {
+		return
+	}
+
+	tx, err := db.GlobalDB.Begin()
+	if err != nil {
+		fmt.Printf("[RelayStats] Failed to begin transaction for trends flush: %v\n", err)
+		return
+	}
+	defer tx.Rollback()
+
+	for userID, buckets := range snapshot {
+		for hourBucket, u := range buckets {
+			err := db.UpsertHourlyTrendsBatch(tx, userID, hourBucket, u.Requests, u.InTokens, u.OutTokens, u.CachedTokens, u.Cost, u.InputCost, u.OutputCost, u.CachedCost)
+			if err != nil {
+				fmt.Printf("[RelayStats] Failed to upsert trend batch for %s: %v\n", userID, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		fmt.Printf("[RelayStats] Failed to commit trends flush transaction: %v\n", err)
+	}
+}
+
+func (s *StatsTracker) Close() {
+	// Stop flusher and trigger final flush
+	select {
+	case <-s.flusherStopChan:
+		// already closed
+	default:
+		close(s.flusherStopChan)
+	}
+
+	// Make sure stats are saved to disk
+	s.SaveToDisk()
 }

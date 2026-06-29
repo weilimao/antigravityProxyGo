@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"antigravity-proxy/internal/account"
@@ -25,6 +26,7 @@ type APICompatHandler struct {
 	logFn         func(string)
 	client        *http.Client
 	settingsMgr   settings.ManagerInterface
+	rateLimiter   *RateLimiter
 }
 
 func NewAPICompatHandler(
@@ -43,6 +45,7 @@ func NewAPICompatHandler(
 		settingsMgr:   settingsMgr,
 		logFn:         logFn,
 		client:        netutil.NewClient(5 * time.Minute),
+		rateLimiter:   NewRateLimiter(),
 	}
 }
 
@@ -75,6 +78,26 @@ func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path := r.URL.Path
+
+	// 校验速率限制 (每分钟最多请求次数，默认为30次)
+	if r.Method == http.MethodPost && (path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/messages") {
+		limit := 30
+		user := h.authMgr.userMgr.GetUserByID(session.UserID)
+		if user != nil && user.Quotas.RateLimit > 0 {
+			limit = user.Quotas.RateLimit
+		}
+		if !h.rateLimiter.Allow(session.UserID, limit) {
+			h.log("🚦 Rate limit exceeded for user %s (%d requests/min)", session.UserKey, limit)
+			writeJSON(w, http.StatusTooManyRequests, map[string]interface{}{
+				"error": map[string]interface{}{
+					"message": fmt.Sprintf("Rate limit exceeded. Maximum %d requests per minute.", limit),
+					"type":    "rate_limit_error",
+					"code":    "rate_limit_exceeded",
+				},
+			})
+			return
+		}
+	}
 
 	// 1. 模型列表接口
 	if path == "/v1/models" && r.Method == http.MethodGet {
@@ -418,12 +441,14 @@ func (h *APICompatHandler) dispatchToGemini(
 		return
 	}
 
+	reqID := r.Header.Get("X-Antigravity-Req-ID")
+
 	// 4. 流式传输（SSE）处理
 	if stream {
-		h.handleStreamResponse(w, resp.Body, userSession, geminiModel, apiFormat, startTime, r.URL.Path)
+		h.handleStreamResponse(w, resp.Body, userSession, geminiModel, apiFormat, startTime, r.URL.Path, reqID)
 	} else {
 		// 5. 非流式传输处理
-		h.handleNormalResponse(w, resp.Body, userSession, geminiModel, apiFormat, startTime, r.URL.Path)
+		h.handleNormalResponse(w, resp.Body, userSession, geminiModel, apiFormat, startTime, r.URL.Path, reqID)
 	}
 }
 
@@ -445,6 +470,7 @@ func (h *APICompatHandler) handleNormalResponse(
 	apiFormat string,
 	startTime time.Time,
 	path string,
+	reqID string,
 ) {
 	data, err := io.ReadAll(respBody)
 	if err != nil {
@@ -610,6 +636,7 @@ func (h *APICompatHandler) handleNormalResponse(
 	// 记录用量统计
 	duration := time.Since(startTime).Milliseconds()
 	h.statsTracker.RecordUsage(RelaySample{
+		ReqID:        reqID,
 		UserID:       userSession.UserID,
 		UserKey:      userSession.UserKey,
 		ModelName:    geminiModel,
@@ -633,6 +660,7 @@ func (h *APICompatHandler) handleStreamResponse(
 	apiFormat string,
 	startTime time.Time,
 	path string,
+	reqID string,
 ) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -1123,6 +1151,7 @@ func (h *APICompatHandler) handleStreamResponse(
 	// 记录用量统计
 	duration := time.Since(startTime).Milliseconds()
 	h.statsTracker.RecordUsage(RelaySample{
+		ReqID:        reqID,
 		UserID:       userSession.UserID,
 		UserKey:      userSession.UserKey,
 		ModelName:    geminiModel,
@@ -1136,4 +1165,44 @@ func (h *APICompatHandler) handleStreamResponse(
 		DurationMs:   duration,
 		StatusCode:   http.StatusOK,
 	})
+}
+
+type RateLimiter struct {
+	mu           sync.Mutex
+	userRequests map[string][]time.Time
+}
+
+func NewRateLimiter() *RateLimiter {
+	return &RateLimiter{
+		userRequests: make(map[string][]time.Time),
+	}
+}
+
+func (l *RateLimiter) Allow(userID string, limit int) bool {
+	if limit <= 0 {
+		limit = 30
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	oneMinuteAgo := now.Add(-1 * time.Minute)
+
+	reqs := l.userRequests[userID]
+	var validReqs []time.Time
+	for _, t := range reqs {
+		if t.After(oneMinuteAgo) {
+			validReqs = append(validReqs, t)
+		}
+	}
+
+	if len(validReqs) >= limit {
+		l.userRequests[userID] = validReqs
+		return false
+	}
+
+	validReqs = append(validReqs, now)
+	l.userRequests[userID] = validReqs
+	return true
 }

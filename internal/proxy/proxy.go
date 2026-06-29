@@ -32,6 +32,7 @@ type RemoteRelayInterface interface {
 	IsConnected() bool
 	DialThroughRemote(targetHostPort string) (net.Conn, error)
 	GetConfig() RemoteConfig
+	FetchAndSaveRemoteLogDetail(reqID string, userKey string) error
 }
 
 type MitmListener struct {
@@ -314,6 +315,15 @@ func (pe *ProxyEngine) dialWithProxy(address string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return netutil.DialContext(ctx, "tcp", address)
+}
+
+func (pe *ProxyEngine) ReloadCertificates(dataDir string) error {
+	pe.Lock()
+	defer pe.Unlock()
+
+	caCertPath := filepath.Join(dataDir, "certs", "certs", "ca.pem")
+	caKeyPath := filepath.Join(dataDir, "certs", "keys", "ca.private.key")
+	return pe.certMgr.Init(caCertPath, caKeyPath)
 }
 
 func (pe *ProxyEngine) ResetConnections() {

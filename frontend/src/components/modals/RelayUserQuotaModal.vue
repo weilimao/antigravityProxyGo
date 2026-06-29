@@ -27,6 +27,13 @@
 </select>
 </div>
 </div>
+<div class="mb-4">
+<label class="block text-[12px] font-medium text-outline mb-1 flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">speed</span>
+<span>请求速率限制 (次/分钟)</span>
+</label>
+<input class="w-full px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-transparent text-on-surface dark:text-white focus:outline-none focus:border-primary" id="quotaRateLimit" placeholder="默认每分钟 30 次" type="number"/>
+</div>
 <div class="mb-4 bg-outline-variant/5 p-3 rounded-lg border border-outline-variant/20" id="quotaPresetsContainer">
 <div class="text-[12px] font-medium text-outline mb-2">快速设置套餐</div>
 <div class="flex gap-2 flex-wrap" id="dynamicQuotaPresets"></div>

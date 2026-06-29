@@ -24,7 +24,9 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 	case "accounts:trigger-test-response":
 		var payload struct {
 			AccountIDs []string `json:"accountIds"`
+			ModelNames []string `json:"modelNames"`
 			ModelName  string   `json:"modelName"`
+			Prompt     string   `json:"prompt"`
 		}
 		if len(args) > 0 {
 			bytesPayload, _ := json.Marshal(args[0])
@@ -35,21 +37,34 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 			data, err := marshalResponse(map[string]interface{}{"success": false, "error": "没有选中的账号"})
 			return data, true, err
 		}
-		if payload.ModelName == "" {
+
+		models := payload.ModelNames
+		if len(models) == 0 && payload.ModelName != "" {
+			models = []string{payload.ModelName}
+		}
+
+		if len(models) == 0 {
 			data, err := marshalResponse(map[string]interface{}{"success": false, "error": "请选择模型"})
 			return data, true, err
 		}
 
+		type ModelResult struct {
+			Model    string `json:"model"`
+			Success  bool   `json:"success"`
+			Response string `json:"response,omitempty"`
+			Error    string `json:"error,omitempty"`
+		}
+
 		type AccountResult struct {
-			Email   string `json:"email"`
-			Success bool   `json:"success"`
-			Error   string `json:"error,omitempty"`
+			Email        string        `json:"email"`
+			Success      bool          `json:"success"`
+			ModelResults []ModelResult `json:"modelResults"`
 		}
 
 		results := make([]AccountResult, len(payload.AccountIDs))
 		var wg sync.WaitGroup
 
-		a.AddLog(fmt.Sprintf("⚡ [测试回复] 开始批量对 %d 个账号触发最短回复...", len(payload.AccountIDs)))
+		a.AddLog(fmt.Sprintf("⚡ [测试回复] 开始批量对 %d 个账号触发 %d 个模型的最短回复...", len(payload.AccountIDs), len(models)))
 
 		for i, id := range payload.AccountIDs {
 			acc := a.accountMgr.GetAccountByID(id)
@@ -57,7 +72,9 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 				results[i] = AccountResult{
 					Email:   id,
 					Success: false,
-					Error:   "账号未找到",
+					ModelResults: []ModelResult{
+						{Model: "all", Success: false, Error: "账号未找到"},
+					},
 				}
 				continue
 			}
@@ -66,30 +83,42 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 			go func(idx int, targetAcc *account.Account) {
 				defer wg.Done()
 				
-				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
+				modelResults := make([]ModelResult, len(models))
+				successModels := 0
+				for mIdx, model := range models {
+					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					respText, err := account.TriggerTestResponse(
+						ctx, 
+						targetAcc, 
+						model, 
+						payload.Prompt,
+						a.quotaSvc.GetStoredProject, 
+						a.authMgr.RefreshToken,
+					)
+					cancel()
 
-				err := account.TriggerTestResponse(
-					ctx, 
-					targetAcc, 
-					payload.ModelName, 
-					a.quotaSvc.GetStoredProject, 
-					a.authMgr.RefreshToken,
-				)
+					if err != nil {
+						a.AddLog(fmt.Sprintf("❌ [测试回复] 账号 %s 触发模型 %s 失败: %v", targetAcc.Email, model, err))
+						modelResults[mIdx] = ModelResult{
+							Model:   model,
+							Success: false,
+							Error:   err.Error(),
+						}
+					} else {
+						a.AddLog(fmt.Sprintf("✅ [测试回复] 账号 %s 触发模型 %s 成功！响应: %s", targetAcc.Email, model, respText))
+						modelResults[mIdx] = ModelResult{
+							Model:    model,
+							Success:  true,
+							Response: respText,
+						}
+						successModels++
+					}
+				}
 
-				if err != nil {
-					a.AddLog(fmt.Sprintf("❌ [测试回复] 账号 %s 触发失败: %v", targetAcc.Email, err))
-					results[idx] = AccountResult{
-						Email:   targetAcc.Email,
-						Success: false,
-						Error:   err.Error(),
-					}
-				} else {
-					a.AddLog(fmt.Sprintf("✅ [测试回复] 账号 %s 触发成功！模型: %s", targetAcc.Email, payload.ModelName))
-					results[idx] = AccountResult{
-						Email:   targetAcc.Email,
-						Success: true,
-					}
+				results[idx] = AccountResult{
+					Email:        targetAcc.Email,
+					Success:      successModels > 0,
+					ModelResults: modelResults,
 				}
 			}(i, acc)
 		}

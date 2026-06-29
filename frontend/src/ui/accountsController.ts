@@ -25,6 +25,51 @@ let btnChannelGeminiCli: HTMLButtonElement | null;
 let btnExportAccounts: HTMLButtonElement | null;
 let btnImportAccounts: HTMLButtonElement | null;
 
+// 触发测试回复 Modal 变量定义
+let triggerTestModal: HTMLDivElement | null;
+let triggerTestModalContainer: HTMLDivElement | null;
+let btnTriggerModalClose: HTMLButtonElement | null;
+let btnTriggerModalCancel: HTMLButtonElement | null;
+let btnStartTriggerTest: HTMLButtonElement | null;
+let btnStartTriggerIcon: HTMLElement | null;
+let inputTriggerPrompt: HTMLInputElement | null;
+let btnTriggerModalSelectAll: HTMLButtonElement | null;
+let btnTriggerModalClearAll: HTMLButtonElement | null;
+let triggerLogsArea: HTMLDivElement | null;
+let triggerResultsContainer: HTMLDivElement | null;
+let triggerResultsTableBody: HTMLTableSectionElement | null;
+let triggerModalAccountCount: HTMLSpanElement | null;
+
+// 自动化任务包 Modal 变量定义
+let btnManageAutoTrigger: HTMLButtonElement | null;
+let autoTriggerModal: HTMLDivElement | null;
+let autoTriggerModalContainer: HTMLDivElement | null;
+let btnAutoTriggerModalClose: HTMLButtonElement | null;
+let btnAutoTriggerModalCloseSecondary: HTMLButtonElement | null;
+let panelTaskList: HTMLDivElement | null;
+let panelTaskEdit: HTMLDivElement | null;
+let footerTaskList: HTMLDivElement | null;
+let footerTaskEdit: HTMLDivElement | null;
+let btnCreateNewTask: HTMLButtonElement | null;
+let autoTriggerTasksTableBody: HTMLTableSectionElement | null;
+
+let editTaskId: HTMLInputElement | null;
+let editTaskName: HTMLInputElement | null;
+let editTaskPrompt: HTMLInputElement | null;
+let editTaskTriggerType: HTMLSelectElement | null;
+let editTaskInterval: HTMLInputElement | null;
+let containerTaskInterval: HTMLDivElement | null;
+let editAccountsGrid: HTMLDivElement | null;
+let editModelsGemini: HTMLDivElement | null;
+let editModelsClaude: HTMLDivElement | null;
+let editModelsOthers: HTMLDivElement | null;
+let btnEditSelectAllAccounts: HTMLButtonElement | null;
+let btnEditClearAllAccounts: HTMLButtonElement | null;
+let btnEditSelectAllModels: HTMLButtonElement | null;
+let btnEditClearAllModels: HTMLButtonElement | null;
+let btnCancelEditTask: HTMLButtonElement | null;
+let btnSaveTask: HTMLButtonElement | null;
+
 let btnShowSessionBindings: HTMLButtonElement | null;
 let sessionBindingsModal: HTMLDivElement | null;
 let sessionBindingsModalCloseBtn: HTMLButtonElement | null;
@@ -570,8 +615,78 @@ export function initAccountsEvents() {
         btnTrigger.addEventListener('click', triggerTestResponse);
     }
 
+    // 触发测试刷新 Modal DOM 与事件绑定
+    triggerTestModal = document.getElementById('triggerTestModal') as HTMLDivElement | null;
+    triggerTestModalContainer = document.getElementById('triggerTestModalContainer') as HTMLDivElement | null;
+    btnTriggerModalClose = document.getElementById('btnTriggerModalClose') as HTMLButtonElement | null;
+    btnTriggerModalCancel = document.getElementById('btnTriggerModalCancel') as HTMLButtonElement | null;
+    btnStartTriggerTest = document.getElementById('btnStartTriggerTest') as HTMLButtonElement | null;
+    btnStartTriggerIcon = document.getElementById('btnStartTriggerIcon');
+    inputTriggerPrompt = document.getElementById('inputTriggerPrompt') as HTMLInputElement | null;
+    btnTriggerModalSelectAll = document.getElementById('btnTriggerModalSelectAll') as HTMLButtonElement | null;
+    btnTriggerModalClearAll = document.getElementById('btnTriggerModalClearAll') as HTMLButtonElement | null;
+    triggerLogsArea = document.getElementById('triggerLogsArea') as HTMLDivElement | null;
+    triggerResultsContainer = document.getElementById('triggerResultsContainer') as HTMLDivElement | null;
+    triggerResultsTableBody = document.getElementById('triggerResultsTableBody') as HTMLTableSectionElement | null;
+    triggerModalAccountCount = document.getElementById('triggerModalAccountCount') as HTMLSpanElement | null;
+
+    if (btnTriggerModalClose) {
+        btnTriggerModalClose.addEventListener('click', hideTriggerTestModal);
+    }
+    if (btnTriggerModalCancel) {
+        btnTriggerModalCancel.addEventListener('click', hideTriggerTestModal);
+    }
+    if (triggerTestModal) {
+        triggerTestModal.addEventListener('click', (e: MouseEvent) => {
+            if (btnStartTriggerTest && btnStartTriggerTest.disabled && triggerResultsContainer?.classList.contains('hidden')) {
+                return; // 测试执行中不允许背景关闭
+            }
+            if (e.target === triggerTestModal) {
+                hideTriggerTestModal();
+            }
+        });
+    }
+    if (btnTriggerModalSelectAll) {
+        btnTriggerModalSelectAll.addEventListener('click', () => {
+            const checkboxes = document.querySelectorAll('.trigger-model-checkbox') as NodeListOf<HTMLInputElement>;
+            checkboxes.forEach(cb => cb.checked = true);
+        });
+    }
+    if (btnTriggerModalClearAll) {
+        btnTriggerModalClearAll.addEventListener('click', () => {
+            const checkboxes = document.querySelectorAll('.trigger-model-checkbox') as NodeListOf<HTMLInputElement>;
+            checkboxes.forEach(cb => cb.checked = false);
+        });
+    }
+    if (btnStartTriggerTest) {
+        btnStartTriggerTest.addEventListener('click', startTriggerTestExecution);
+    }
+
+    // 绑定全局 log 事件，过滤显示测试进度
+    ipcRenderer.on('log', (event: any, logText: string) => {
+        if (logText && logText.includes('[测试回复]') && triggerLogsArea) {
+            if (triggerLogsArea.innerHTML.includes('等待配置')) {
+                triggerLogsArea.innerHTML = '';
+            }
+            const div = document.createElement('div');
+            if (logText.includes('❌')) {
+                div.className = 'text-red-400';
+            } else if (logText.includes('✅')) {
+                div.className = 'text-emerald-400';
+            } else if (logText.includes('⚡') || logText.includes('🏁')) {
+                div.className = 'text-amber-400 font-medium';
+            } else {
+                div.className = 'text-slate-300';
+            }
+            div.textContent = logText;
+            triggerLogsArea.appendChild(div);
+            triggerLogsArea.scrollTop = triggerLogsArea.scrollHeight;
+        }
+    });
+
     // 主动触发一次账号数据同步，确保在前端初始化完毕后拉取到最新数据
     ipcRenderer.send('accounts:get');
+    initAutoTriggerModalEvents();
 }
 
 async function loadSessionBindings() {
@@ -793,72 +908,668 @@ export function updateBatchActionBarUI() {
     }
 }
 
-async function triggerTestResponse() {
-    const btn = document.getElementById('btnTriggerTestResponse') as HTMLButtonElement | null;
-    const icon = document.getElementById('btnTriggerTestIcon');
-    const selectModel = document.getElementById('selectTestModel') as HTMLSelectElement | null;
-
-    if (!btn || !selectModel) return;
+function triggerTestResponse() {
     if (state.selectedAccountIds.length === 0) {
         alert('请先勾选需要触发测试回复的账号！');
         return;
     }
+    showTriggerTestModal();
+}
 
-    const modelName = selectModel.value;
-    const count = state.selectedAccountIds.length;
+function showTriggerTestModal() {
+    if (!triggerTestModal || !triggerTestModalContainer) return;
 
-    if (!confirm(`确定要对选中的 ${count} 个账号触发模型 ${modelName} 的最简测试回复吗？\n（这会向 Google 发送一次仅包含最少 token 的请求以刷新额度与冷静计时）`)) {
+    if (triggerModalAccountCount) {
+        triggerModalAccountCount.textContent = `已选择 ${state.selectedAccountIds.length} 个账号`;
+    }
+
+    if (inputTriggerPrompt) {
+        inputTriggerPrompt.value = 'ok';
+        inputTriggerPrompt.disabled = false;
+    }
+
+    const checkboxes = document.querySelectorAll('.trigger-model-checkbox') as NodeListOf<HTMLInputElement>;
+    checkboxes.forEach(cb => {
+        cb.disabled = false;
+        cb.checked = (cb.value === 'gemini-3.5-flash');
+    });
+
+    if (triggerLogsArea) {
+        triggerLogsArea.innerHTML = '<div class="text-outline dark:text-outline-variant italic">等待配置并开始触发...</div>';
+    }
+
+    if (triggerResultsContainer) {
+        triggerResultsContainer.classList.add('hidden');
+    }
+
+    if (triggerResultsTableBody) {
+        triggerResultsTableBody.innerHTML = '';
+    }
+
+    if (btnStartTriggerTest) {
+        btnStartTriggerTest.disabled = false;
+        const span = btnStartTriggerTest.querySelector('span:last-child');
+        if (span) span.textContent = '开始触发';
+    }
+    if (btnTriggerModalCancel) {
+        btnTriggerModalCancel.textContent = '取消';
+        btnTriggerModalCancel.disabled = false;
+    }
+    if (btnTriggerModalClose) {
+        btnTriggerModalClose.disabled = false;
+    }
+
+    triggerTestModal.classList.remove('pointer-events-none', 'opacity-0');
+    triggerTestModal.classList.add('opacity-100');
+    triggerTestModalContainer.classList.remove('scale-95');
+    triggerTestModalContainer.classList.add('scale-100');
+}
+
+function hideTriggerTestModal() {
+    if (!triggerTestModal || !triggerTestModalContainer) return;
+
+    if (btnStartTriggerTest && btnStartTriggerTest.disabled && triggerResultsContainer?.classList.contains('hidden')) {
         return;
     }
 
-    // Set loading state
-    btn.disabled = true;
-    if (icon) icon.classList.add('animate-spin');
-    const span = btn.querySelector('span:last-child');
-    const origText = span ? span.textContent : '触发测试回复';
+    triggerTestModal.classList.add('opacity-0', 'pointer-events-none');
+    triggerTestModal.classList.remove('opacity-100');
+    triggerTestModalContainer.classList.add('scale-95');
+    triggerTestModalContainer.classList.remove('scale-100');
+
+    if (state.selectedAccountIds.length > 0 && triggerResultsContainer && !triggerResultsContainer.classList.contains('hidden')) {
+        const accountsListEl = document.getElementById('accountsList');
+        if (accountsListEl) {
+            for (const accountId of state.selectedAccountIds) {
+                const card = accountsListEl.querySelector(`[data-account-id="${accountId}"]`);
+                const quotaBars = document.getElementById(`quotaBars-${accountId}`);
+                const refreshBtn = card?.querySelector('[data-quota-refresh-btn]') as HTMLElement | null;
+                if (quotaBars) {
+                    loadAccountQuota(accountId, quotaBars, refreshBtn, true, {});
+                }
+            }
+        }
+
+        state.selectedAccountIds = [];
+        updateBatchActionBarUI();
+        const chkAll = document.getElementById('chkSelectAllAccounts') as HTMLInputElement | null;
+        if (chkAll) chkAll.checked = false;
+    }
+}
+
+async function startTriggerTestExecution() {
+    if (!btnStartTriggerTest || !triggerLogsArea) return;
+
+    const checkedBoxes = document.querySelectorAll('.trigger-model-checkbox:checked') as NodeListOf<HTMLInputElement>;
+    if (checkedBoxes.length === 0) {
+        alert('请先选择至少一个测试模型！');
+        return;
+    }
+
+    const modelNames = Array.from(checkedBoxes).map(cb => cb.value);
+    const prompt = inputTriggerPrompt ? inputTriggerPrompt.value.trim() : 'ok';
+
+    if (inputTriggerPrompt) inputTriggerPrompt.disabled = true;
+    const checkboxes = document.querySelectorAll('.trigger-model-checkbox') as NodeListOf<HTMLInputElement>;
+    checkboxes.forEach(cb => cb.disabled = true);
+    
+    btnStartTriggerTest.disabled = true;
+    if (btnTriggerModalCancel) btnTriggerModalCancel.disabled = true;
+    if (btnTriggerModalClose) btnTriggerModalClose.disabled = true;
+
+    if (btnStartTriggerIcon) btnStartTriggerIcon.classList.add('animate-spin');
+    const span = btnStartTriggerTest.querySelector('span:last-child');
     if (span) span.textContent = '正在触发...';
+
+    triggerLogsArea.innerHTML = '<div class="text-primary font-bold">⚡ [测试任务] 开始批量向后端发送请求...</div>';
 
     try {
         const res = await ipcRenderer.invoke('accounts:trigger-test-response', {
             accountIds: state.selectedAccountIds,
-            modelName: modelName
+            modelNames: modelNames,
+            prompt: prompt
         });
 
-        if (res && res.success) {
-            alert(`批量触发完成！\n成功: ${res.successCount}/${res.totalCount}`);
-            
-            // Auto refresh quota for all selected accounts
-            const accountsListEl = document.getElementById('accountsList');
-            if (accountsListEl) {
-                for (const accountId of state.selectedAccountIds) {
-                    const card = accountsListEl.querySelector(`[data-account-id="${accountId}"]`);
-                    const quotaBars = document.getElementById(`quotaBars-${accountId}`);
-                    const refreshBtn = card?.querySelector('[data-quota-refresh-btn]') as HTMLElement | null;
-                    if (quotaBars) {
-                        loadAccountQuota(accountId, quotaBars, refreshBtn, true, {});
-                    }
-                }
-            }
-            
-            // Clear selection and hide bar
-            state.selectedAccountIds = [];
-            updateBatchActionBarUI();
-            
-            // Reload select all checkbox to reflect change
-            const chkAll = document.getElementById('chkSelectAllAccounts') as HTMLInputElement | null;
-            if (chkAll) chkAll.checked = false;
+        if (res && res.success && res.results) {
+            renderTriggerResultsTable(res.results);
+            const finishDiv = document.createElement('div');
+            finishDiv.className = 'text-emerald-400 font-bold mt-2';
+            finishDiv.textContent = `🏁 [测试任务] 执行完毕！成功数量: ${res.successCount}/${res.totalCount}`;
+            triggerLogsArea.appendChild(finishDiv);
+            triggerLogsArea.scrollTop = triggerLogsArea.scrollHeight;
         } else {
-            alert('触发失败: ' + (res?.error || '未知错误'));
+            const errDiv = document.createElement('div');
+            errDiv.className = 'text-red-400 font-bold mt-2';
+            errDiv.textContent = '❌ [测试任务] 执行失败: ' + (res?.error || '未知错误');
+            triggerLogsArea.appendChild(errDiv);
         }
     } catch (err: any) {
-        alert('触发发生错误: ' + err.message);
+        const errDiv = document.createElement('div');
+        errDiv.className = 'text-red-400 font-bold mt-2';
+        errDiv.textContent = '❌ [测试任务] 执行时发生错误: ' + err.message;
+        triggerLogsArea.appendChild(errDiv);
     } finally {
-        btn.disabled = false;
-        if (icon) icon.classList.remove('animate-spin');
-        if (span) span.textContent = origText;
+        if (btnStartTriggerIcon) btnStartTriggerIcon.classList.remove('animate-spin');
+        if (span) span.textContent = '已完成';
+        
+        if (btnTriggerModalCancel) {
+            btnTriggerModalCancel.disabled = false;
+            btnTriggerModalCancel.textContent = '关闭';
+        }
+        if (btnTriggerModalClose) btnTriggerModalClose.disabled = false;
     }
+}
+
+function renderTriggerResultsTable(results: Array<{
+    email: string;
+    success: boolean;
+    modelResults: Array<{
+        model: string;
+        success: boolean;
+        response?: string;
+        error?: string;
+    }>;
+}>) {
+    const tableBody = triggerResultsTableBody;
+    if (!tableBody || !triggerResultsContainer) return;
+
+    tableBody.innerHTML = '';
+    
+    results.forEach(accRes => {
+        const email = accRes.email;
+        if (!accRes.modelResults || accRes.modelResults.length === 0) {
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors border-b border-outline-variant/10';
+            tr.innerHTML = `
+                <td class="p-2.5 font-medium truncate" title="${email}">${email}</td>
+                <td class="p-2.5 text-outline">-</td>
+                <td class="p-2.5 text-center">
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 dark:bg-red-950/40 text-red-500">失败</span>
+                </td>
+                <td class="p-2.5 text-red-400 truncate" title="未返回模型结果">未返回模型结果</td>
+            `;
+            tableBody.appendChild(tr);
+            return;
+        }
+
+        accRes.modelResults.forEach(modelRes => {
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors border-b border-outline-variant/10';
+            
+            const statusBadge = modelRes.success 
+                ? '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/40 text-emerald-500">成功</span>'
+                : '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 dark:bg-red-950/40 text-red-500">失败</span>';
+            
+            let detailText = '-';
+            let detailClass = 'text-outline';
+            if (modelRes.success) {
+                detailText = modelRes.response || '(无内容)';
+                detailClass = 'text-emerald-500 dark:text-emerald-400 truncate font-mono';
+            } else {
+                detailText = modelRes.error || '未知错误';
+                detailClass = 'text-red-400 truncate';
+            }
+
+            const cursorClass = detailText !== '-' ? 'cursor-pointer hover:underline hover:text-primary dark:hover:text-primary-fixed-dim detail-cell' : '';
+
+            tr.innerHTML = `
+                <td class="p-2.5 font-medium truncate" title="${email}">${email}</td>
+                <td class="p-2.5 font-mono text-[11px]">${modelRes.model}</td>
+                <td class="p-2.5 text-center">${statusBadge}</td>
+                <td class="p-2.5 ${detailClass} ${cursorClass}" title="${detailText !== '-' ? '点击可在上方进程日志区查看格式化 JSON' : ''}">${detailText}</td>
+            `;
+
+            const detailTd = tr.querySelector('.detail-cell');
+            if (detailTd) {
+                detailTd.addEventListener('click', () => {
+                    const logArea = triggerLogsArea;
+                    if (logArea) {
+                        let formattedText = detailText;
+                        try {
+                            const parsed = JSON.parse(detailText);
+                            formattedText = JSON.stringify(parsed, null, 4);
+                        } catch (e) {
+                            // ignore, keep raw
+                        }
+
+                        if (logArea.innerHTML.includes('等待配置')) {
+                            logArea.innerHTML = '';
+                        }
+
+                        const div = document.createElement('div');
+                        div.className = 'mt-3 p-3 bg-slate-900 border border-primary/20 rounded-lg text-emerald-400 font-mono text-[11px] whitespace-pre-wrap leading-relaxed animate-fadeIn';
+                        div.innerHTML = `<span class="text-amber-400 font-bold">📋 [详情查看] 账号 ${email} - 模型 ${modelRes.model} 的响应 JSON:</span>\n${formattedText}`;
+
+                        logArea.appendChild(div);
+                        logArea.scrollTop = logArea.scrollHeight;
+                    }
+                });
+            }
+
+            tableBody.appendChild(tr);
+        });
+    });
+
+    triggerResultsContainer.classList.remove('hidden');
 }
 
 // Register shared callbacks
 state.callbacks.renderAccounts = renderAccounts;
 state.callbacks.updateAggregateQuotaUI = updateAggregateQuotaUI;
+
+// ==================== 自动化定时与刷新任务 Modal 控制逻辑 ====================
+
+const AUTO_MODELS_GEMINI = [
+    "gemini-3.5-flash", "gemini-3.5-flash-low", "gemini-3.5-flash-extra-low",
+    "gemini-3.1-flash-lite", "gemini-3.1-pro-low", "gemini-3.1-pro-preview",
+    "gemini-3-flash", "gemini-3-flash-preview", "gemini-3-flash-agent",
+    "gemini-pro-agent", "gemini-2.5-flash", "gemini-2.5-flash-lite"
+];
+const AUTO_MODELS_CLAUDE = [
+    "claude-sonnet-4-6", "claude-opus-4-6-thinking"
+];
+const AUTO_MODELS_OTHERS = [
+    "gpt-oss-120b-medium", "tab_flash_lite_preview", "tab_jump_flash_lite_preview"
+];
+
+function initAutoTriggerModalEvents() {
+    btnManageAutoTrigger = document.getElementById('btnManageAutoTrigger') as HTMLButtonElement | null;
+    autoTriggerModal = document.getElementById('autoTriggerModal') as HTMLDivElement | null;
+    autoTriggerModalContainer = document.getElementById('autoTriggerModalContainer') as HTMLDivElement | null;
+    btnAutoTriggerModalClose = document.getElementById('btnAutoTriggerModalClose') as HTMLButtonElement | null;
+    btnAutoTriggerModalCloseSecondary = document.getElementById('btnAutoTriggerModalCloseSecondary') as HTMLButtonElement | null;
+    panelTaskList = document.getElementById('panelTaskList') as HTMLDivElement | null;
+    panelTaskEdit = document.getElementById('panelTaskEdit') as HTMLDivElement | null;
+    footerTaskList = document.getElementById('footerTaskList') as HTMLDivElement | null;
+    footerTaskEdit = document.getElementById('footerTaskEdit') as HTMLDivElement | null;
+    btnCreateNewTask = document.getElementById('btnCreateNewTask') as HTMLButtonElement | null;
+    autoTriggerTasksTableBody = document.getElementById('autoTriggerTasksTableBody') as HTMLTableSectionElement | null;
+
+    editTaskId = document.getElementById('editTaskId') as HTMLInputElement | null;
+    editTaskName = document.getElementById('editTaskName') as HTMLInputElement | null;
+    editTaskPrompt = document.getElementById('editTaskPrompt') as HTMLInputElement | null;
+    editTaskTriggerType = document.getElementById('editTaskTriggerType') as HTMLSelectElement | null;
+    editTaskInterval = document.getElementById('editTaskInterval') as HTMLInputElement | null;
+    containerTaskInterval = document.getElementById('containerTaskInterval') as HTMLDivElement | null;
+    editAccountsGrid = document.getElementById('editAccountsGrid') as HTMLDivElement | null;
+    editModelsGemini = document.getElementById('editModelsGemini') as HTMLDivElement | null;
+    editModelsClaude = document.getElementById('editModelsClaude') as HTMLDivElement | null;
+    editModelsOthers = document.getElementById('editModelsOthers') as HTMLDivElement | null;
+    btnEditSelectAllAccounts = document.getElementById('btnEditSelectAllAccounts') as HTMLButtonElement | null;
+    btnEditClearAllAccounts = document.getElementById('btnEditClearAllAccounts') as HTMLButtonElement | null;
+    btnEditSelectAllModels = document.getElementById('btnEditSelectAllModels') as HTMLButtonElement | null;
+    btnEditClearAllModels = document.getElementById('btnEditClearAllModels') as HTMLButtonElement | null;
+    btnCancelEditTask = document.getElementById('btnCancelEditTask') as HTMLButtonElement | null;
+    btnSaveTask = document.getElementById('btnSaveTask') as HTMLButtonElement | null;
+
+    if (btnManageAutoTrigger) {
+        btnManageAutoTrigger.addEventListener('click', openAutoTriggerModal);
+    }
+    if (btnAutoTriggerModalClose) {
+        btnAutoTriggerModalClose.addEventListener('click', closeAutoTriggerModal);
+    }
+    if (btnAutoTriggerModalCloseSecondary) {
+        btnAutoTriggerModalCloseSecondary.addEventListener('click', closeAutoTriggerModal);
+    }
+    if (autoTriggerModal) {
+        autoTriggerModal.addEventListener('click', (e: MouseEvent) => {
+            if (e.target === autoTriggerModal) {
+                closeAutoTriggerModal();
+            }
+        });
+    }
+
+    if (btnCreateNewTask) {
+        btnCreateNewTask.addEventListener('click', () => {
+            prepareTaskEditForm();
+            switchAutoTriggerPanel('edit');
+        });
+    }
+    if (btnCancelEditTask) {
+        btnCancelEditTask.addEventListener('click', () => {
+            switchAutoTriggerPanel('list');
+        });
+    }
+    if (btnSaveTask) {
+        btnSaveTask.addEventListener('click', saveAutoTriggerTask);
+    }
+
+    if (editTaskTriggerType) {
+        editTaskTriggerType.addEventListener('change', () => {
+            if (containerTaskInterval) {
+                if (editTaskTriggerType?.value === 'timer') {
+                    containerTaskInterval.classList.remove('hidden');
+                } else {
+                    containerTaskInterval.classList.add('hidden');
+                }
+            }
+        });
+    }
+
+    if (btnEditSelectAllAccounts) {
+        btnEditSelectAllAccounts.addEventListener('click', () => {
+            const cbs = editAccountsGrid?.querySelectorAll('input[type="checkbox"]') as NodeListOf<HTMLInputElement>;
+            cbs?.forEach(cb => cb.checked = true);
+        });
+    }
+    if (btnEditClearAllAccounts) {
+        btnEditClearAllAccounts.addEventListener('click', () => {
+            const cbs = editAccountsGrid?.querySelectorAll('input[type="checkbox"]') as NodeListOf<HTMLInputElement>;
+            cbs?.forEach(cb => cb.checked = false);
+        });
+    }
+
+    if (btnEditSelectAllModels) {
+        btnEditSelectAllModels.addEventListener('click', () => {
+            const cbs = document.querySelectorAll('.edit-model-cb') as NodeListOf<HTMLInputElement>;
+            cbs?.forEach(cb => cb.checked = true);
+        });
+    }
+    if (btnEditClearAllModels) {
+        btnEditClearAllModels.addEventListener('click', () => {
+            const cbs = document.querySelectorAll('.edit-model-cb') as NodeListOf<HTMLInputElement>;
+            cbs?.forEach(cb => cb.checked = false);
+        });
+    }
+}
+
+function openAutoTriggerModal() {
+    if (!autoTriggerModal || !autoTriggerModalContainer) return;
+    autoTriggerModal.classList.remove('opacity-0', 'pointer-events-none');
+    autoTriggerModalContainer.classList.remove('scale-95');
+    autoTriggerModalContainer.classList.add('scale-100');
+    
+    switchAutoTriggerPanel('list');
+    loadAutoTriggerTasks();
+}
+
+function closeAutoTriggerModal() {
+    if (!autoTriggerModal || !autoTriggerModalContainer) return;
+    autoTriggerModalContainer.classList.remove('scale-100');
+    autoTriggerModalContainer.classList.add('scale-95');
+    autoTriggerModal.classList.add('opacity-0', 'pointer-events-none');
+}
+
+function switchAutoTriggerPanel(panel: 'list' | 'edit') {
+    if (!panelTaskList || !panelTaskEdit || !footerTaskList || !footerTaskEdit) return;
+    if (panel === 'list') {
+        panelTaskList.classList.remove('hidden');
+        footerTaskList.classList.remove('hidden');
+        panelTaskEdit.classList.add('hidden');
+        footerTaskEdit.classList.add('hidden');
+    } else {
+        panelTaskList.classList.add('hidden');
+        footerTaskList.classList.add('hidden');
+        panelTaskEdit.classList.remove('hidden');
+        footerTaskEdit.classList.remove('hidden');
+    }
+}
+
+async function loadAutoTriggerTasks() {
+    if (!autoTriggerTasksTableBody) return;
+    autoTriggerTasksTableBody.innerHTML = `
+        <tr>
+            <td class="p-8 text-center text-outline dark:text-outline-variant italic" colspan="6">
+                ⏳ 正在加载定时任务列表...
+            </td>
+        </tr>
+    `;
+
+    try {
+        const res = await ipcRenderer.invoke('autotrigger:list');
+        if (res && res.success && res.tasks) {
+            renderAutoTriggerTasksTable(res.tasks);
+        } else {
+            autoTriggerTasksTableBody.innerHTML = `
+                <tr>
+                    <td class="p-8 text-center text-red-400" colspan="6">
+                        ❌ 加载失败: ${res?.error || '未知错误'}
+                    </td>
+                </tr>
+            `;
+        }
+    } catch (err: any) {
+        autoTriggerTasksTableBody.innerHTML = `
+            <tr>
+                <td class="p-8 text-center text-red-400" colspan="6">
+                    ❌ 加载发生异常: ${err.message}
+                </td>
+            </tr>
+        `;
+    }
+}
+
+function renderAutoTriggerTasksTable(tasks: Array<any>) {
+    const tableBody = autoTriggerTasksTableBody;
+    if (!tableBody) return;
+    tableBody.innerHTML = '';
+
+    if (tasks.length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td class="p-8 text-center text-outline dark:text-outline-variant italic" colspan="6">
+                    暂无配置好的自动化任务包，点击上方“新建任务包”添加。
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tasks.forEach(task => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors border-b border-outline-variant/10';
+
+        const triggerTypeBadge = task.triggerType === 'timer'
+            ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 dark:bg-blue-950/40 text-blue-500">
+                <span class="material-symbols-outlined text-[12px]">schedule</span>
+                定时 (${Math.round(task.intervalSeconds / 60)}分钟)
+               </span>`
+            : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-purple-100 dark:bg-purple-950/40 text-purple-400">
+                <span class="material-symbols-outlined text-[12px]">sync</span>
+                配额刷新后
+               </span>`;
+
+        const accCount = task.accountIds ? task.accountIds.length : 0;
+        const modelCount = task.modelNames ? task.modelNames.length : 0;
+
+        const isChecked = task.enabled ? 'checked' : '';
+
+        tr.innerHTML = `
+            <td class="p-3 font-bold text-on-surface dark:text-white truncate" title="${task.name}">${task.name}</td>
+            <td class="p-3">${triggerTypeBadge}</td>
+            <td class="p-3 font-mono text-[11px]">${accCount} 个账号</td>
+            <td class="p-3 font-mono text-[11px]">${modelCount} 个模型</td>
+            <td class="p-3 text-center">
+                <label class="switch">
+                    <input type="checkbox" class="task-toggle-cb" data-task-id="${task.id}" ${isChecked}>
+                    <span class="slider"></span>
+                </label>
+            </td>
+            <td class="p-3 text-center">
+                <div class="flex items-center justify-center gap-2">
+                    <button class="btn-task-edit text-primary dark:text-primary-fixed-dim hover:underline font-bold" data-task-id="${task.id}">编辑</button>
+                    <span class="text-outline/30">|</span>
+                    <button class="btn-task-delete text-red-400 hover:underline font-bold" data-task-id="${task.id}">删除</button>
+                </div>
+            </td>
+        `;
+
+        tableBody.appendChild(tr);
+    });
+
+    const toggleCbs = tableBody.querySelectorAll('.task-toggle-cb') as NodeListOf<HTMLInputElement>;
+    toggleCbs.forEach(cb => {
+        cb.addEventListener('change', async (e: any) => {
+            const id = parseInt(cb.getAttribute('data-task-id') || '0', 10);
+            const enabled = e.target.checked;
+            try {
+                await ipcRenderer.invoke('autotrigger:toggle', { id, enabled });
+            } catch (err: any) {
+                alert('切换状态失败: ' + err.message);
+                cb.checked = !enabled;
+            }
+        });
+    });
+
+    const editBtns = tableBody.querySelectorAll('.btn-task-edit') as NodeListOf<HTMLButtonElement>;
+    editBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const id = parseInt(btn.getAttribute('data-task-id') || '0', 10);
+            const targetTask = tasks.find(t => t.id === id);
+            if (targetTask) {
+                prepareTaskEditForm(targetTask);
+                switchAutoTriggerPanel('edit');
+            }
+        });
+    });
+
+    const deleteBtns = tableBody.querySelectorAll('.btn-task-delete') as NodeListOf<HTMLButtonElement>;
+    deleteBtns.forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const id = parseInt(btn.getAttribute('data-task-id') || '0', 10);
+            if (confirm('确定要删除该自动化触发任务包吗？')) {
+                try {
+                    await ipcRenderer.invoke('autotrigger:delete', { id });
+                    loadAutoTriggerTasks();
+                } catch (err: any) {
+                    alert('删除失败: ' + err.message);
+                }
+            }
+        });
+    });
+}
+
+function prepareTaskEditForm(task?: any) {
+    const accGrid = editAccountsGrid;
+    if (!accGrid || !editTaskId || !editTaskName || !editTaskPrompt || !editTaskTriggerType || !editTaskInterval || !containerTaskInterval || !editModelsGemini || !editModelsClaude || !editModelsOthers) return;
+
+    if (task) {
+        editTaskId.value = task.id.toString();
+        editTaskName.value = task.name || '';
+        editTaskPrompt.value = task.prompt || 'ok';
+        editTaskTriggerType.value = task.triggerType || 'timer';
+        editTaskInterval.value = Math.round((task.intervalSeconds || 3600) / 60).toString();
+    } else {
+        editTaskId.value = '';
+        editTaskName.value = '';
+        editTaskPrompt.value = 'ok';
+        editTaskTriggerType.value = 'timer';
+        editTaskInterval.value = '60';
+    }
+
+    if (editTaskTriggerType.value === 'timer') {
+        containerTaskInterval.classList.remove('hidden');
+    } else {
+        containerTaskInterval.classList.add('hidden');
+    }
+
+    accGrid.innerHTML = '';
+    let currentAccs = (state.currentAccountsList || []).filter((acc: any) => acc.provider === state.currentViewTab);
+
+    // 对于官方通道账号（provider = 'antigravity'）按邮箱 email 去重，防止同一邮箱多实例展示
+    if (state.currentViewTab === 'antigravity') {
+        const seenEmails = new Set<string>();
+        currentAccs = currentAccs.filter((acc: any) => {
+            if (seenEmails.has(acc.email)) return false;
+            seenEmails.add(acc.email);
+            return true;
+        });
+    }
+
+    if (currentAccs.length === 0) {
+        accGrid.innerHTML = `<div class="col-span-2 text-outline italic">当前通道无可用账号</div>`;
+    } else {
+        currentAccs.forEach((acc: any) => {
+            // 新建时默认不勾选任何账号
+            const isChecked = task && task.accountIds ? task.accountIds.includes(acc.id) : false;
+            const displayName = acc.provider === 'project' && acc.projectId
+                ? `${acc.email} (项目: ${acc.projectId})`
+                : acc.email;
+
+            const div = document.createElement('div');
+            div.className = 'flex items-center gap-1.5 truncate';
+            div.innerHTML = `
+                <input type="checkbox" id="chk_acc_${acc.id}" value="${acc.id}" class="edit-acc-cb rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" ${isChecked ? 'checked' : ''}>
+                <label for="chk_acc_${acc.id}" class="truncate cursor-pointer select-none" title="${displayName}">${displayName}</label>
+            `;
+            accGrid.appendChild(div);
+        });
+    }
+
+    const renderModelGroup = (container: HTMLDivElement, modelsList: string[]) => {
+        container.innerHTML = '';
+        modelsList.forEach(m => {
+            // 新建时模型默认不勾选
+            const isChecked = task && task.modelNames ? task.modelNames.includes(m) : false;
+            const div = document.createElement('div');
+            div.className = 'flex items-center gap-1.5 text-[11px] truncate';
+            div.innerHTML = `
+                <input type="checkbox" id="chk_mod_${m.replace(/[^a-zA-Z0-9]/g, '_')}" value="${m}" class="edit-model-cb rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" ${isChecked ? 'checked' : ''}>
+                <label for="chk_mod_${m.replace(/[^a-zA-Z0-9]/g, '_')}" class="truncate font-mono text-[10.5px] cursor-pointer select-none" title="${m}">${m}</label>
+            `;
+            container.appendChild(div);
+        });
+    };
+
+    renderModelGroup(editModelsGemini, AUTO_MODELS_GEMINI);
+    renderModelGroup(editModelsClaude, AUTO_MODELS_CLAUDE);
+    renderModelGroup(editModelsOthers, AUTO_MODELS_OTHERS);
+}
+
+async function saveAutoTriggerTask() {
+    if (!editTaskName || !editTaskPrompt || !editTaskTriggerType || !editTaskInterval) return;
+
+    const name = editTaskName.value.trim();
+    if (!name) {
+        alert('请输入任务包名称！');
+        return;
+    }
+
+    const prompt = editTaskPrompt.value.trim() || 'ok';
+    const triggerType = editTaskTriggerType.value;
+    const intervalMinutes = parseInt(editTaskInterval.value || '60', 10);
+    const intervalSeconds = Math.max(intervalMinutes * 60, 300);
+
+    const accCbs = editAccountsGrid?.querySelectorAll('.edit-acc-cb:checked') as NodeListOf<HTMLInputElement>;
+    const selectedAccountIDs: string[] = [];
+    accCbs?.forEach(cb => selectedAccountIDs.push(cb.value));
+
+    if (selectedAccountIDs.length === 0) {
+        alert('请至少选择一个关联账号！');
+        return;
+    }
+
+    const modelCbs = document.querySelectorAll('.edit-model-cb:checked') as NodeListOf<HTMLInputElement>;
+    const selectedModelNames: string[] = [];
+    modelCbs?.forEach(cb => selectedModelNames.push(cb.value));
+
+    if (selectedModelNames.length === 0) {
+        alert('请至少选择一个触发测试模型！');
+        return;
+    }
+
+    const id = editTaskId?.value ? parseInt(editTaskId.value, 10) : 0;
+
+    const payload = {
+        id: id,
+        name: name,
+        accountIds: selectedAccountIDs,
+        modelNames: selectedModelNames,
+        prompt: prompt,
+        triggerType: triggerType,
+        intervalSeconds: intervalSeconds,
+        enabled: true
+    };
+
+    try {
+        const res = await ipcRenderer.invoke('autotrigger:save', payload);
+        if (res && res.success) {
+            switchAutoTriggerPanel('list');
+            loadAutoTriggerTasks();
+        } else {
+            alert('保存失败: ' + (res?.error || '未知错误'));
+        }
+    } catch (err: any) {
+        alert('保存引发异常: ' + err.message);
+    }
+}

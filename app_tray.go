@@ -26,9 +26,11 @@ func (a *App) SetQuitting(quitting bool) {
 func (a *App) initTray() {
 	tray.SetupTray(
 		func() {
-			// 点击“显示控制面板”：显示窗口并使其获取焦点
-			wailsRuntime.WindowShow(a.ctx)
-			a.SetWindowVisible(true)
+			// 点击“显示控制面板”：显示窗口并使其获取焦点，使用 goroutine 异步执行以避免阻塞托盘自身的事件协程
+			go func() {
+				wailsRuntime.WindowShow(a.ctx)
+				a.SetWindowVisible(true)
+			}()
 		},
 		func() {
 			// 点击“退出代理引擎”：设置退出标志并异步调用退出，避免阻塞托盘自身的事件协程

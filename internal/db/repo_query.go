@@ -1,6 +1,8 @@
 package db
 
 import (
+	"database/sql"
+	"fmt"
 	"math"
 )
 
@@ -165,4 +167,67 @@ func QueryHourlyTrends(userID, mode string) []*HourlyTrendSummary {
 		trends = []*HourlyTrendSummary{}
 	}
 	return trends
+}
+
+func GetUserHourlyTrends(userID string) ([]*HourlyTrendSummary, error) {
+	if GlobalDB == nil {
+		return []*HourlyTrendSummary{}, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT hour_bucket, requests, in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost
+		FROM user_hourly_trends
+		WHERE user_id = ?
+		ORDER BY hour_bucket ASC
+		LIMIT 720
+	`
+
+	rows, err := GlobalDB.Query(query, userID)
+	if err != nil {
+		return []*HourlyTrendSummary{}, err
+	}
+	defer rows.Close()
+
+	var trends []*HourlyTrendSummary
+	for rows.Next() {
+		var b string
+		var reqs, inT, outT, cacheT int
+		var cost, inCost, outCost, cacheCost float64
+		if err := rows.Scan(&b, &reqs, &inT, &outT, &cacheT, &cost, &inCost, &outCost, &cacheCost); err == nil {
+			trends = append(trends, &HourlyTrendSummary{
+				Time:       b,
+				Input:      inT,
+				Output:     outT,
+				Cached:     cacheT,
+				Requests:   reqs,
+				Cost:       math.Round(cost*1000000.0) / 1000000.0,
+				InputCost:  math.Round(inCost*1000000.0) / 1000000.0,
+				OutputCost: math.Round(outCost*1000000.0) / 1000000.0,
+				CachedCost: math.Round(cacheCost*1000000.0) / 1000000.0,
+			})
+		}
+	}
+	if trends == nil {
+		trends = []*HourlyTrendSummary{}
+	}
+	return trends, nil
+}
+
+func UpsertHourlyTrendsBatch(tx *sql.Tx, userID string, hourBucket string, requests int, inTokens int, outTokens int, cachedTokens int, cost float64, inCost float64, outCost float64, cacheCost float64) error {
+	query := `
+		INSERT INTO user_hourly_trends (
+			user_id, hour_bucket, requests, in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, hour_bucket) DO UPDATE SET
+			requests = requests + excluded.requests,
+			in_tokens = in_tokens + excluded.in_tokens,
+			out_tokens = out_tokens + excluded.out_tokens,
+			cached_tokens = cached_tokens + excluded.cached_tokens,
+			cost = cost + excluded.cost,
+			input_cost = input_cost + excluded.input_cost,
+			output_cost = output_cost + excluded.output_cost,
+			cached_cost = cached_cost + excluded.cached_cost;
+	`
+	_, err := tx.Exec(query, userID, hourBucket, requests, inTokens, outTokens, cachedTokens, cost, inCost, outCost, cacheCost)
+	return err
 }

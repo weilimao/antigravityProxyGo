@@ -121,6 +121,8 @@
     <RelayUserModal />
     <RelayUserStatsModal />
     <RelayUserQuotaModal />
+    <TriggerTestModal />
+    <AutoTriggerModal />
   </div>
 </template>
 
@@ -143,6 +145,8 @@ import RemoteModal from './components/modals/RemoteModal.vue';
 import RelayUserModal from './components/modals/RelayUserModal.vue';
 import RelayUserStatsModal from './components/modals/RelayUserStatsModal.vue';
 import RelayUserQuotaModal from './components/modals/RelayUserQuotaModal.vue';
+import TriggerTestModal from './components/modals/TriggerTestModal.vue';
+import AutoTriggerModal from './components/modals/AutoTriggerModal.vue';
 import { initRemoteEvents } from './ui/remoteController';
 import { setLanguage, switchView, initDashboardEvents } from './ui/dashboard';
 import { initAccountsEvents } from './ui/accountsController';

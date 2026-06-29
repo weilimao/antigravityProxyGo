@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,14 +14,42 @@ import (
 type APIHandler struct {
 	authMgr    *AuthManager
 	statsMgr   *StatsTracker
+	packageMgr *PackageManager
 	logFn      func(string)
 	caCertPath string // 服务器 CA 证书路径，供远程客户端下载
 }
 
-func NewAPIHandler(authMgr *AuthManager, statsMgr *StatsTracker, logFn func(string), caCertPath string) *APIHandler {
+func compareQuotas(q1, q2 UserQuotas) bool {
+	checkFamily := func(f1, f2 ModelQuota) bool {
+		return f1.EnableFixed == f2.EnableFixed &&
+			f1.FixedTokens == f2.FixedTokens &&
+			f1.EnableHourly == f2.EnableHourly &&
+			f1.HourlyHours == f2.HourlyHours &&
+			f1.HourlyTokens == f2.HourlyTokens &&
+			f1.EnableDaily == f2.EnableDaily &&
+			f1.DailyDays == f2.DailyDays &&
+			f1.DailyTokens == f2.DailyTokens
+	}
+	rl1 := q1.RateLimit
+	if rl1 <= 0 {
+		rl1 = 30
+	}
+	rl2 := q2.RateLimit
+	if rl2 <= 0 {
+		rl2 = 30
+	}
+	return checkFamily(q1.Gemini, q2.Gemini) &&
+		checkFamily(q1.Claude, q2.Claude) &&
+		q1.ValidDuration == q2.ValidDuration &&
+		q1.ValidUnit == q2.ValidUnit &&
+		rl1 == rl2
+}
+
+func NewAPIHandler(authMgr *AuthManager, statsMgr *StatsTracker, packageMgr *PackageManager, logFn func(string), caCertPath string) *APIHandler {
 	return &APIHandler{
 		authMgr:    authMgr,
 		statsMgr:   statsMgr,
+		packageMgr: packageMgr,
 		logFn:      logFn,
 		caCertPath: caCertPath,
 	}
@@ -40,8 +67,12 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleLogout(w, r)
 	case path == "/api/stats" && r.Method == http.MethodGet:
 		h.handleStats(w, r)
+	case path == "/api/trends" && r.Method == http.MethodGet:
+		h.handleTrends(w, r)
 	case path == "/api/logs/sync" && r.Method == http.MethodGet:
 		h.handleLogsSync(w, r)
+	case path == "/api/logs/detail" && r.Method == http.MethodGet:
+		h.handleLogDetail(w, r)
 	case path == "/api/cert" && r.Method == http.MethodGet:
 		h.handleCert(w, r)
 	default:
@@ -137,61 +168,88 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		statsCopy.Quotas = user.Quotas
 		
+		packageName := "自定义套餐"
+		isGeminiUnlimited := !user.Quotas.Gemini.EnableFixed && !user.Quotas.Gemini.EnableHourly && !user.Quotas.Gemini.EnableDaily
+		isClaudeUnlimited := !user.Quotas.Claude.EnableFixed && !user.Quotas.Claude.EnableHourly && !user.Quotas.Claude.EnableDaily
+		if isGeminiUnlimited && isClaudeUnlimited {
+			packageName = "无限制"
+		}
+		if h.packageMgr != nil {
+			pkgs := h.packageMgr.GetPackages()
+			for _, pkg := range pkgs {
+				if compareQuotas(user.Quotas, pkg.Quotas) {
+					packageName = pkg.Name
+					break
+				}
+			}
+		}
+		statsCopy.PackageName = packageName
+		
 		usage := make(map[string]int64)
 		resetAt := make(map[string]string)
 		
 		// For Gemini quotas
 		if user.Quotas.Gemini.EnableHourly && user.Quotas.Gemini.HourlyHours > 0 {
 			since := time.Now().Add(-time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour).Format(time.RFC3339)
-			tokens, _ := db.GetTokensForUserModelFamilySince(user.ID, "gemini", since)
-			usage["gemini_hourly"] = tokens
-			if tokens > 0 {
-				if firstTs, err := db.GetOldestRequestTimestampSince(user.ID, "gemini", since); err == nil && firstTs != "" {
-					if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
-						resetAt["gemini_hourly"] = parsed.Add(time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour).Format(time.RFC3339)
-					}
+			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "gemini", since); err == nil {
+				usage["geminiHourly"] = u
+			}
+			t, _ := db.GetOldestRequestTimestampSince(session.UserID, "gemini", since)
+			if t != "" {
+				if oldest, err := time.Parse(time.RFC3339, t); err == nil {
+					resetAt["geminiHourly"] = oldest.Add(time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour).Format(time.RFC3339)
 				}
 			}
 		}
 		if user.Quotas.Gemini.EnableDaily && user.Quotas.Gemini.DailyDays > 0 {
 			since := time.Now().Add(-time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour).Format(time.RFC3339)
-			tokens, _ := db.GetTokensForUserModelFamilySince(user.ID, "gemini", since)
-			usage["gemini_daily"] = tokens
-			if tokens > 0 {
-				if firstTs, err := db.GetOldestRequestTimestampSince(user.ID, "gemini", since); err == nil && firstTs != "" {
-					if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
-						resetAt["gemini_daily"] = parsed.Add(time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour).Format(time.RFC3339)
-					}
+			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "gemini", since); err == nil {
+				usage["geminiDaily"] = u
+			}
+			t, _ := db.GetOldestRequestTimestampSince(session.UserID, "gemini", since)
+			if t != "" {
+				if oldest, err := time.Parse(time.RFC3339, t); err == nil {
+					resetAt["geminiDaily"] = oldest.Add(time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour).Format(time.RFC3339)
 				}
 			}
 		}
-		
+		if user.Quotas.Gemini.EnableFixed {
+			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "gemini", "1970-01-01T00:00:00Z"); err == nil {
+				usage["geminiFixed"] = u
+			}
+		}
+
 		// For Claude quotas
 		if user.Quotas.Claude.EnableHourly && user.Quotas.Claude.HourlyHours > 0 {
 			since := time.Now().Add(-time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour).Format(time.RFC3339)
-			tokens, _ := db.GetTokensForUserModelFamilySince(user.ID, "claude", since)
-			usage["claude_hourly"] = tokens
-			if tokens > 0 {
-				if firstTs, err := db.GetOldestRequestTimestampSince(user.ID, "claude", since); err == nil && firstTs != "" {
-					if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
-						resetAt["claude_hourly"] = parsed.Add(time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour).Format(time.RFC3339)
-					}
+			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "claude", since); err == nil {
+				usage["claudeHourly"] = u
+			}
+			t, _ := db.GetOldestRequestTimestampSince(session.UserID, "claude", since)
+			if t != "" {
+				if oldest, err := time.Parse(time.RFC3339, t); err == nil {
+					resetAt["claudeHourly"] = oldest.Add(time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour).Format(time.RFC3339)
 				}
 			}
 		}
 		if user.Quotas.Claude.EnableDaily && user.Quotas.Claude.DailyDays > 0 {
 			since := time.Now().Add(-time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour).Format(time.RFC3339)
-			tokens, _ := db.GetTokensForUserModelFamilySince(user.ID, "claude", since)
-			usage["claude_daily"] = tokens
-			if tokens > 0 {
-				if firstTs, err := db.GetOldestRequestTimestampSince(user.ID, "claude", since); err == nil && firstTs != "" {
-					if parsed, err := time.Parse(time.RFC3339, firstTs); err == nil {
-						resetAt["claude_daily"] = parsed.Add(time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour).Format(time.RFC3339)
-					}
+			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "claude", since); err == nil {
+				usage["claudeDaily"] = u
+			}
+			t, _ := db.GetOldestRequestTimestampSince(session.UserID, "claude", since)
+			if t != "" {
+				if oldest, err := time.Parse(time.RFC3339, t); err == nil {
+					resetAt["claudeDaily"] = oldest.Add(time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour).Format(time.RFC3339)
 				}
 			}
 		}
-		
+		if user.Quotas.Claude.EnableFixed {
+			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "claude", "1970-01-01T00:00:00Z"); err == nil {
+				usage["claudeFixed"] = u
+			}
+		}
+
 		statsCopy.CurrentUsage = usage
 		statsCopy.ResetAt = resetAt
 	}
@@ -207,46 +265,38 @@ func (h *APIHandler) log(format string, args ...interface{}) {
 
 func (h *APIHandler) handleCert(w http.ResponseWriter, _ *http.Request) {
 	if h.caCertPath == "" {
-		writeJSON(w, http.StatusNotFound, map[string]interface{}{
-			"error": "CA certificate path not configured",
-		})
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{"error": "cert path not configured"})
 		return
 	}
 
 	data, err := os.ReadFile(h.caCertPath)
 	if err != nil {
-		h.log("Failed to read CA cert: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-			"error": "failed to read CA certificate",
-		})
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "failed to read cert file: " + err.Error()})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/x-pem-file")
-	w.Header().Set("Content-Disposition", "attachment; filename=\"antigravity-relay-ca.pem\"")
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.Header().Set("Content-Disposition", "attachment; filename=antigravity-ca.crt")
 	w.WriteHeader(http.StatusOK)
-	h.log("Successfully served CA certificate to remote client")
 	_, _ = w.Write(data)
 }
 
 func extractBearerToken(r *http.Request) string {
-	header := r.Header.Get("Authorization")
-	if header == "" {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
 		return ""
 	}
-	parts := strings.SplitN(header, " ", 2)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		return ""
+	parts := strings.Split(authHeader, " ")
+	if len(parts) == 2 && parts[0] == "Bearer" {
+		return parts[1]
 	}
-	return strings.TrimSpace(parts[1])
+	return ""
 }
 
-func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
+func writeJSON(w http.ResponseWriter, statusCode int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		fmt.Printf("[RelayAPI] Failed to write JSON response: %v\n", err)
-	}
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func readJSON(r *http.Request, v interface{}) error {
@@ -255,6 +305,14 @@ func readJSON(r *http.Request, v interface{}) error {
 }
 
 func (h *APIHandler) handleLogsSync(w http.ResponseWriter, r *http.Request) {
+	// Deprecated: return empty logs to save network bandwidth and SQLite workload
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"logs":  []*db.RequestLog{},
+		"maxId": int64(0),
+	})
+}
+
+func (h *APIHandler) handleTrends(w http.ResponseWriter, r *http.Request) {
 	token := extractBearerToken(r)
 	if token == "" {
 		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing token"})
@@ -267,32 +325,42 @@ func (h *APIHandler) handleLogsSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lastIDStr := r.URL.Query().Get("last_id")
-	limitStr := r.URL.Query().Get("limit")
-	
-	var lastID int64 = 0
-	if lastIDStr != "" {
-		lastID, _ = strconv.ParseInt(lastIDStr, 10, 64)
-	}
-	
-	limit := 100
-	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
-			limit = l
-		}
-	}
-
-	logs, err := db.GetRequestLogsSince(session.UserID, "remote", lastID, limit)
+	trends, err := db.GetUserHourlyTrends(session.UserID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to query logs: " + err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to query trends: " + err.Error()})
 		return
 	}
 
-	if logs == nil {
-		logs = []*db.RequestLog{}
+	if trends == nil {
+		trends = []*db.HourlyTrendSummary{}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"logs": logs,
+		"trends": trends,
+	})
+}
+
+func (h *APIHandler) handleLogDetail(w http.ResponseWriter, r *http.Request) {
+	token := extractBearerToken(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing token"})
+		return
+	}
+
+	_, err := h.authMgr.ValidateToken(token)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	reqID := r.URL.Query().Get("req_id")
+	if reqID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "missing req_id"})
+		return
+	}
+
+	log := h.statsMgr.GetCachedLog(reqID)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"log": log,
 	})
 }
