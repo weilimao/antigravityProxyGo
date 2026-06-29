@@ -749,6 +749,9 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 	if res, handled, err := a.handleTotpIPC(channel, args); handled {
 		return res, err
 	}
+	if res, handled, err := a.handleAccountIPC(channel, args); handled {
+		return res, err
+	}
 
 	getStringArg := func(idx int) string {
 		if idx < len(args) {

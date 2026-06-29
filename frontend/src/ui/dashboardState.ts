@@ -34,6 +34,7 @@ export interface DashboardState {
     accountTierFilter: string;
     accountCurrentPage: number;
     accountItemsPerPage: number;
+    selectedAccountIds: string[];
 
     // Pricing Config Cache
     pricingConfig: { [modelName: string]: any };
@@ -97,6 +98,7 @@ const state: DashboardState = {
     accountTierFilter: 'all',
     accountCurrentPage: 1,
     accountItemsPerPage: 10,
+    selectedAccountIds: [],
 
     // Pricing Config Cache
     pricingConfig: {},

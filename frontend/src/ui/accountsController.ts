@@ -484,16 +484,19 @@ export function initAccountsEvents() {
     if (btnChannelAntigravity) {
         btnChannelAntigravity.addEventListener('click', () => {
             state.currentViewTab = 'antigravity';
+            state.selectedAccountIds = [];
             ipcRenderer.send('channel:switch', 'antigravity');
             updateViewTabUI();
             if (state.currentAccountsList) {
                 renderAccounts(state.currentAccountsList);
             }
             updateAggregateQuotaUI();
+            updateBatchActionBarUI();
         });
     }
     if (btnChannelProject) {
         btnChannelProject.addEventListener('click', () => {
+            state.selectedAccountIds = [];
             state.currentViewTab = 'project';
             ipcRenderer.send('channel:switch', 'project');
             updateViewTabUI();
@@ -501,6 +504,7 @@ export function initAccountsEvents() {
                 renderAccounts(state.currentAccountsList);
             }
             updateAggregateQuotaUI();
+            updateBatchActionBarUI();
         });
     }
     /* if (btnChannelGeminiCli) {
@@ -534,6 +538,37 @@ export function initAccountsEvents() {
             state.callbacks.updateAnalyzeAccountSelect();
         }
     });
+
+    // 监听账号多选事件以刷新批量操作栏
+    document.addEventListener('account-selection-changed', updateBatchActionBarUI);
+
+    // 全选按钮绑定
+    const chkAll = document.getElementById('chkSelectAllAccounts') as HTMLInputElement | null;
+    if (chkAll) {
+        chkAll.addEventListener('change', (e: any) => {
+            const isChecked = e.target.checked;
+            const visibleCheckboxes = document.querySelectorAll('.account-card-checkbox') as NodeListOf<HTMLInputElement>;
+            visibleCheckboxes.forEach(cb => {
+                const accId = cb.getAttribute('data-account-id');
+                if (!accId) return;
+                cb.checked = isChecked;
+                if (isChecked) {
+                    if (!state.selectedAccountIds.includes(accId)) {
+                        state.selectedAccountIds.push(accId);
+                    }
+                } else {
+                    state.selectedAccountIds = state.selectedAccountIds.filter(id => id !== accId);
+                }
+            });
+            updateBatchActionBarUI();
+        });
+    }
+
+    // 触发测试回复按钮绑定
+    const btnTrigger = document.getElementById('btnTriggerTestResponse') as HTMLButtonElement | null;
+    if (btnTrigger) {
+        btnTrigger.addEventListener('click', triggerTestResponse);
+    }
 
     // 主动触发一次账号数据同步，确保在前端初始化完毕后拉取到最新数据
     ipcRenderer.send('accounts:get');
@@ -731,6 +766,98 @@ async function clearAllSessionBindings() {
 // Global window registration for DOM inline click events
 (window as any).startLogin = startLogin;
 (window as any).startProjectLogin = startProjectLogin;
+
+export function updateBatchActionBarUI() {
+    const bar = document.getElementById('batchActionBar');
+    const lbl = document.getElementById('lblSelectedCount');
+    const chkAll = document.getElementById('chkSelectAllAccounts') as HTMLInputElement | null;
+    if (!bar || !lbl) return;
+
+    const count = state.selectedAccountIds.length;
+    if (count > 0) {
+        bar.classList.remove('hidden');
+        bar.classList.add('flex');
+        lbl.textContent = `已选择 ${count} 个账号`;
+    } else {
+        bar.classList.remove('flex');
+        bar.classList.add('hidden');
+    }
+
+    if (chkAll) {
+        const visibleCheckboxes = document.querySelectorAll('.account-card-checkbox') as NodeListOf<HTMLInputElement>;
+        if (visibleCheckboxes.length > 0) {
+            chkAll.checked = Array.from(visibleCheckboxes).every(cb => cb.checked);
+        } else {
+            chkAll.checked = false;
+        }
+    }
+}
+
+async function triggerTestResponse() {
+    const btn = document.getElementById('btnTriggerTestResponse') as HTMLButtonElement | null;
+    const icon = document.getElementById('btnTriggerTestIcon');
+    const selectModel = document.getElementById('selectTestModel') as HTMLSelectElement | null;
+
+    if (!btn || !selectModel) return;
+    if (state.selectedAccountIds.length === 0) {
+        alert('请先勾选需要触发测试回复的账号！');
+        return;
+    }
+
+    const modelName = selectModel.value;
+    const count = state.selectedAccountIds.length;
+
+    if (!confirm(`确定要对选中的 ${count} 个账号触发模型 ${modelName} 的最简测试回复吗？\n（这会向 Google 发送一次仅包含最少 token 的请求以刷新额度与冷静计时）`)) {
+        return;
+    }
+
+    // Set loading state
+    btn.disabled = true;
+    if (icon) icon.classList.add('animate-spin');
+    const span = btn.querySelector('span:last-child');
+    const origText = span ? span.textContent : '触发测试回复';
+    if (span) span.textContent = '正在触发...';
+
+    try {
+        const res = await ipcRenderer.invoke('accounts:trigger-test-response', {
+            accountIds: state.selectedAccountIds,
+            modelName: modelName
+        });
+
+        if (res && res.success) {
+            alert(`批量触发完成！\n成功: ${res.successCount}/${res.totalCount}`);
+            
+            // Auto refresh quota for all selected accounts
+            const accountsListEl = document.getElementById('accountsList');
+            if (accountsListEl) {
+                for (const accountId of state.selectedAccountIds) {
+                    const card = accountsListEl.querySelector(`[data-account-id="${accountId}"]`);
+                    const quotaBars = document.getElementById(`quotaBars-${accountId}`);
+                    const refreshBtn = card?.querySelector('[data-quota-refresh-btn]') as HTMLElement | null;
+                    if (quotaBars) {
+                        loadAccountQuota(accountId, quotaBars, refreshBtn, true, {});
+                    }
+                }
+            }
+            
+            // Clear selection and hide bar
+            state.selectedAccountIds = [];
+            updateBatchActionBarUI();
+            
+            // Reload select all checkbox to reflect change
+            const chkAll = document.getElementById('chkSelectAllAccounts') as HTMLInputElement | null;
+            if (chkAll) chkAll.checked = false;
+        } else {
+            alert('触发失败: ' + (res?.error || '未知错误'));
+        }
+    } catch (err: any) {
+        alert('触发发生错误: ' + err.message);
+    } finally {
+        btn.disabled = false;
+        if (icon) icon.classList.remove('animate-spin');
+        if (span) span.textContent = origText;
+    }
+}
 
 // Register shared callbacks
 state.callbacks.renderAccounts = renderAccounts;

@@ -396,7 +396,27 @@ export function renderAccounts(accounts: any[]) {
             
             // ---- Header ----
             const header = document.createElement('div');
-            header.className = 'flex justify-between items-start';
+            header.className = 'flex items-start justify-between gap-1.5';
+
+            const leftGroup = document.createElement('div');
+            leftGroup.className = 'flex items-start gap-2 min-w-0 flex-1';
+
+            const checkboxEl = document.createElement('input');
+            checkboxEl.type = 'checkbox';
+            checkboxEl.className = 'account-card-checkbox w-4 h-4 rounded border-outline-variant/40 dark:border-white/20 text-primary focus:ring-primary cursor-pointer mt-0.5 flex-shrink-0';
+            checkboxEl.setAttribute('data-account-id', acc.id);
+            checkboxEl.checked = state.selectedAccountIds.includes(acc.id);
+            checkboxEl.addEventListener('change', (e: any) => {
+                const isChecked = e.target.checked;
+                if (isChecked) {
+                    if (!state.selectedAccountIds.includes(acc.id)) {
+                        state.selectedAccountIds.push(acc.id);
+                    }
+                } else {
+                    state.selectedAccountIds = state.selectedAccountIds.filter(id => id !== acc.id);
+                }
+                document.dispatchEvent(new CustomEvent('account-selection-changed'));
+            });
 
             const info = document.createElement('div');
             info.className = 'acc-info-header flex flex-col flex-1 min-w-0 mr-2';
@@ -455,7 +475,9 @@ export function renderAccounts(accounts: any[]) {
                 statusBadge.innerHTML = '<span class="material-symbols-outlined text-[12px]">check_circle</span> 有效';
             }
             
-            header.appendChild(info);
+            leftGroup.appendChild(checkboxEl);
+            leftGroup.appendChild(info);
+            header.appendChild(leftGroup);
             header.appendChild(statusBadge);
             card.appendChild(header);
             
@@ -737,6 +759,12 @@ export function renderAccounts(accounts: any[]) {
                 }
             }
 
+            // 4. Update selected checkbox state
+            const checkboxEl = card.querySelector('.account-card-checkbox') as HTMLInputElement | null;
+            if (checkboxEl) {
+                checkboxEl.checked = state.selectedAccountIds.includes(acc.id);
+            }
+
             quotaBars = document.getElementById(`quotaBars-${acc.id}`);
             refreshBtn = card.querySelector('[data-quota-refresh-btn]') as HTMLElement;
         }
@@ -751,6 +779,7 @@ export function renderAccounts(accounts: any[]) {
     });
 
     renderPaginationUI(totalItems, startIndex, endIndex, totalPages);
+    document.dispatchEvent(new CustomEvent('account-selection-changed'));
 }
 
 function renderPaginationUI(totalItems: number, startIndex: number, endIndex: number, totalPages: number) {
