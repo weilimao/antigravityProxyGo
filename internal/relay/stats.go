@@ -213,7 +213,6 @@ func (s *StatsTracker) RecordUsage(sample RelaySample) {
 			SessionID:    sample.SessionID,
 		}
 
-		s.Lock()
 		if s.logCache == nil {
 			s.logCache = make(map[string]*db.RequestLog)
 		}
@@ -224,7 +223,6 @@ func (s *StatsTracker) RecordUsage(sample RelaySample) {
 				break
 			}
 		}
-		s.Unlock()
 	}
 
 	s.scheduleSave()
