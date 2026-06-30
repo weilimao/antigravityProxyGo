@@ -191,12 +191,25 @@ func (h *ProxyHandler) logRequestToTracker(
 		}
 	}
 
+	logPath := targetPath
+	if p := r.Header.Get("X-Antigravity-Original-Path"); p != "" {
+		logPath = p
+	}
+	logMethod := r.Method
+	if m := r.Header.Get("X-Antigravity-Original-Method"); m != "" {
+		logMethod = m
+	}
+	logSession := sessionKey
+	if p := r.Header.Get("X-Antigravity-Original-Path"); p != "" {
+		logSession = "compat-api"
+	}
+
 	h.statsTracker.AddRequestLog(&stats.RequestLog{
 		ID:             fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
 		Timestamp:      time.Now().Format("01/02 15:04:05"),
-		Method:         r.Method,
+		Method:         logMethod,
 		Host:           targetHost,
-		Path:           targetPath,
+		Path:           logPath,
 		Model:          currentModel,
 		Account:        allocatedAccount,
 		InTokens:       inTokens,
@@ -206,7 +219,7 @@ func (h *ProxyHandler) logRequestToTracker(
 		StatusCode:     statusCode,
 		RequestBody:    reqBody,
 		RequestHeaders: headersMap,
-		SessionID:      sessionKey,
+		SessionID:      logSession,
 		DurationMs:     time.Since(startTime).Milliseconds(),
 	})
 }

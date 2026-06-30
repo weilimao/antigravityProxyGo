@@ -2,8 +2,20 @@ package relay
 
 import (
 	"encoding/json"
-	"strings"
 )
+
+// parseRawMessageToString 将 json.RawMessage 转换为 string，如果原本是字符串则剥离引号，否则保留原样（如数组JSON）。
+func parseRawMessageToString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if raw[0] == '"' {
+		var s string
+		json.Unmarshal(raw, &s)
+		return s
+	}
+	return string(raw)
+}
 
 // ResponsesInputItem 表示 Responses API input 数组中的一个条目
 type ResponsesInputItem struct {
@@ -14,7 +26,7 @@ type ResponsesInputItem struct {
 	CallID    string          `json:"call_id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Arguments string          `json:"arguments,omitempty"`
-	Output    string          `json:"output,omitempty"`
+	Output    json.RawMessage `json:"output,omitempty"`
 	Status    string          `json:"status,omitempty"`
 }
 
@@ -64,55 +76,20 @@ func parseResponsesInput(items []ResponsesInputItem) []OpenAIMessage {
 			flushPendingToolCalls()
 			messages = append(messages, OpenAIMessage{
 				Role:       "tool",
-				Content:    item.Output,
+				Content:    parseRawMessageToString(item.Output),
 				ToolCallID: item.CallID,
 			})
 
 		case "message", "":
 			flushPendingToolCalls()
-			if item.Role == "" {
-				continue
-			}
-			
-			if len(item.Content) == 0 {
+			if item.Role == "" || len(item.Content) == 0 {
 				continue
 			}
 
-			// 尝试解析 content
-			var contentStr string
-			if err := json.Unmarshal(item.Content, &contentStr); err == nil {
-				messages = append(messages, OpenAIMessage{
-					Role:    item.Role,
-					Content: contentStr,
-				})
-				continue
-			}
-
-			var blocks []responsesContentBlock
-			if err := json.Unmarshal(item.Content, &blocks); err == nil {
-				var textParts []string
-				for _, b := range blocks {
-					if b.Text != "" && (b.Type == "text" || b.Type == "output_text" || b.Type == "input_text") {
-						textParts = append(textParts, b.Text)
-					}
-				}
-				messages = append(messages, OpenAIMessage{
-					Role:    item.Role,
-					Content: strings.Join(textParts, "\n"),
-				})
-				continue
-			}
-
-			var singleBlock responsesContentBlock
-			if err := json.Unmarshal(item.Content, &singleBlock); err == nil {
-				if singleBlock.Text != "" && (singleBlock.Type == "text" || singleBlock.Type == "output_text" || singleBlock.Type == "input_text") {
-					messages = append(messages, OpenAIMessage{
-						Role:    item.Role,
-						Content: singleBlock.Text,
-					})
-				}
-				continue
-			}
+			messages = append(messages, OpenAIMessage{
+				Role:    item.Role,
+				Content: parseRawMessageToString(item.Content),
+			})
 		}
 	}
 	

@@ -422,7 +422,8 @@ func (h *APICompatHandler) dispatchToGemini(
 	// 将用户的凭证传递给本地代理，本地代理将据此提取 sessionKey 自动粘性绑定账号池并执行扣费统计
 	req.Header.Set("Authorization", "Bearer " + userSession.UserKey)
 	req.Header.Set("X-Relay-User-Id", userSession.UserID)
-
+	req.Header.Set("X-Antigravity-Original-Path", r.URL.Path)
+	req.Header.Set("X-Antigravity-Original-Method", r.Method)
 	h.log("Forwarding translated request to local proxy (18443) | Model: %s | Stream: %v", geminiModel, stream)
 
 	resp, err := h.client.Do(req)

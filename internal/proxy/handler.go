@@ -158,7 +158,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.getRemoteRelay != nil {
 		if rr := h.getRemoteRelay(); rr != nil && rr.IsConnected() {
 			isLocalRelayLoop := false
-			if relayUserID != "" {
+			incomingRelayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
+			if incomingRelayUserID != "" {
 				conf := rr.GetConfig()
 				if conf.IsLocal {
 					isLocalRelayLoop = true
@@ -1230,7 +1231,7 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			_, errWrite := w.Write(chunk)
 			if errWrite != nil {
 				h.logFn(fmt.Sprintf("⚠️ Failed to write response to client: %v", errWrite))
-				return
+				break
 			}
 			if isFlusher {
 				flusher.Flush()
@@ -1304,6 +1305,19 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 		cachedCost := math.Round((float64(cachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
 		totalCost := inputCost + outputCost + cachedCost
 
+		logMethod := r.Method
+		if m := r.Header.Get("X-Antigravity-Original-Method"); m != "" {
+			logMethod = m
+		}
+		logPath := r.URL.Path
+		if p := r.Header.Get("X-Antigravity-Original-Path"); p != "" {
+			logPath = p
+		}
+		sessionID := "remote_session"
+		if p := r.Header.Get("X-Antigravity-Original-Path"); p != "" {
+			sessionID = "compat-api"
+		}
+
 		dbItem := &db.RequestLog{
 			ReqID:        reqID,
 			Timestamp:    time.Now().Format(time.RFC3339),
@@ -1319,12 +1333,30 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			CachedCost:   cachedCost,
 			DurationMs:   time.Since(startTime).Milliseconds(),
 			StatusCode:   resp.StatusCode,
-			Method:       r.Method,
+			Method:       logMethod,
 			Host:         targetHost,
-			Path:         r.URL.Path,
-			SessionID:    "remote_session",
+			Path:         logPath,
+			SessionID:    sessionID,
 		}
 		_ = db.InsertRequestLog(dbItem)
+
+		// Record locally in memory tracker so it shows up on the client dashboard
+		h.statsTracker.AddRequestLog(&stats.RequestLog{
+			ID:           reqID,
+			Timestamp:    time.Now().Format("01/02 15:04:05"),
+			Method:       logMethod,
+			Host:         targetHost,
+			Path:         logPath,
+			Model:        currentModel,
+			Account:      rr.GetConfig().UserKey,
+			InTokens:     inTokens,
+			OutTokens:    outTokens,
+			CachedTokens: cachedTokens,
+			Cost:         totalCost,
+			StatusCode:   resp.StatusCode,
+			SessionID:    sessionID,
+			DurationMs:   time.Since(startTime).Milliseconds(),
+		})
 
 		// Record usage locally so the client UI can reflect the remote quota consumption
 		h.usageTracker.RecordUsage(stats.UsageSample{

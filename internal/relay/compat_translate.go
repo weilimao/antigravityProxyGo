@@ -27,6 +27,35 @@ type OpenAIToolCall struct {
 	Arguments string `json:"arguments"`
 }
 
+// UnmarshalJSON 使 OpenAIMessage.Content 兼容字符串及数组（用于 Vision API 等场景）
+func (m *OpenAIMessage) UnmarshalJSON(data []byte) error {
+	type Alias OpenAIMessage
+	var aux struct {
+		*Alias
+		Content json.RawMessage `json:"content"`
+	}
+	aux.Alias = (*Alias)(m)
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	
+	if len(aux.Content) == 0 || string(aux.Content) == "null" {
+		return nil
+	}
+	
+	if aux.Content[0] == '"' {
+		var s string
+		if err := json.Unmarshal(aux.Content, &s); err != nil {
+			return err
+		}
+		m.Content = s
+	} else {
+		m.Content = string(aux.Content)
+	}
+	
+	return nil
+}
+
 type OpenAIRequest struct {
 	Model       string          `json:"model"`
 	Messages    []OpenAIMessage `json:"messages"`
@@ -221,8 +250,14 @@ type AnthropicResponse struct {
 
 // ===== Gemini Types =====
 
+type GeminiBlob struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
+}
+
 type GeminiPart struct {
 	Text             string                  `json:"text,omitempty"`
+	InlineData       *GeminiBlob             `json:"inlineData,omitempty"`
 	FunctionCall     *GeminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *GeminiFunctionResponse `json:"functionResponse,omitempty"`
 	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
@@ -433,6 +468,61 @@ func ParseUnifiedOpenAIRequest(bodyBytes []byte) (*OpenAIRequest, error) {
 	return req, nil
 }
 
+// parseOpenAIContentString 尝试将可能包含数组格式或纯文本的 OpenAI Content 转换为 GeminiPart 切片，支持图片（Base64）。
+func parseOpenAIContentString(contentStr string) []GeminiPart {
+	if contentStr == "" {
+		return nil
+	}
+	trimmed := strings.TrimSpace(contentStr)
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []map[string]interface{}
+		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+			var parts []GeminiPart
+			for _, item := range arr {
+				t, _ := item["type"].(string)
+				if t == "text" || t == "output_text" || t == "input_text" {
+					if text, ok := item["text"].(string); ok && text != "" {
+						parts = append(parts, GeminiPart{Text: text})
+					}
+				} else if t == "image_url" {
+					if imgObj, ok := item["image_url"].(map[string]interface{}); ok {
+						if urlStr, ok := imgObj["url"].(string); ok && strings.HasPrefix(urlStr, "data:") {
+							idx := strings.Index(urlStr, ";base64,")
+							if idx > 0 {
+								parts = append(parts, GeminiPart{
+									InlineData: &GeminiBlob{
+										MimeType: urlStr[5:idx],
+										Data:     urlStr[idx+8:],
+									},
+								})
+							}
+						}
+					}
+				} else if t == "image" { // Anthropic / Claude Code style tool result
+					if source, ok := item["source"].(map[string]interface{}); ok {
+						if data, ok := source["data"].(string); ok {
+							mime := "image/jpeg"
+							if m, ok := source["media_type"].(string); ok {
+								mime = m
+							}
+							parts = append(parts, GeminiPart{
+								InlineData: &GeminiBlob{
+									MimeType: mime,
+									Data:     data,
+								},
+							})
+						}
+					}
+				}
+			}
+			if len(parts) > 0 {
+				return parts
+			}
+		}
+	}
+	return []GeminiPart{{Text: contentStr}}
+}
+
 func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 	gemReq := &GeminiRequest{
 		Contents: make([]GeminiContent, 0),
@@ -451,16 +541,13 @@ func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 	for _, msg := range openReq.Messages {
 		role := strings.ToLower(msg.Role)
 		if role == "system" {
-			systemInstructionParts = append(systemInstructionParts, GeminiPart{Text: msg.Content})
+			systemInstructionParts = append(systemInstructionParts, parseOpenAIContentString(msg.Content)...)
 			continue
 		}
 
 		// 处理 assistant 消息（可能包含工具调用）
 		if role == "assistant" {
-			var parts []GeminiPart
-			if msg.Content != "" {
-				parts = append(parts, GeminiPart{Text: msg.Content})
-			}
+			parts := parseOpenAIContentString(msg.Content)
 			for _, tc := range msg.ToolCalls {
 				args := parseToolCallArgs(tc.Arguments)
 				parts = append(parts, GeminiPart{
@@ -484,21 +571,50 @@ func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 			if toolName == "" {
 				toolName = findOpenAIToolNameByID(openReq.Messages, msg.ToolCallID)
 			}
+			
+			// 提取 text 部分作为 functionResponse 的 result，将图片部分（如果有）作为独立的 user 内容块（Gemini 不支持 FunctionResponse 中带图片，但可通过 user 消息附加图片上下文）
+			contentParts := parseOpenAIContentString(msg.Content)
+			var textResult strings.Builder
+			var imageParts []GeminiPart
+			
+			for _, p := range contentParts {
+				if p.InlineData != nil {
+					imageParts = append(imageParts, p)
+				} else if p.Text != "" {
+					if textResult.Len() > 0 {
+						textResult.WriteString("\n")
+					}
+					textResult.WriteString(p.Text)
+				}
+			}
+			
+			if textResult.Len() == 0 && len(imageParts) > 0 {
+				textResult.WriteString("[Image Result attached]")
+			}
+			
 			gemReq.Contents = append(gemReq.Contents, GeminiContent{
 				Role: "user",
 				Parts: []GeminiPart{{
 					FunctionResponse: &GeminiFunctionResponse{
 						Name:     toolName,
-						Response: map[string]interface{}{"result": msg.Content},
+						Response: map[string]interface{}{"result": textResult.String()},
 						ID:       msg.ToolCallID,
 					},
 				}},
 			})
+			
+			if len(imageParts) > 0 {
+				gemReq.Contents = append(gemReq.Contents, GeminiContent{
+					Role:  "user",
+					Parts: imageParts,
+				})
+			}
+			
 		} else {
 			// user 消息
 			gemReq.Contents = append(gemReq.Contents, GeminiContent{
 				Role:  "user",
-				Parts: []GeminiPart{{Text: msg.Content}},
+				Parts: parseOpenAIContentString(msg.Content),
 			})
 		}
 	}
