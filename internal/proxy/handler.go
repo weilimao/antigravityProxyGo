@@ -154,6 +154,47 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// ==========================================
+	// 拦截并 Mock Antigravity 客户端登录验证请求
+	// ==========================================
+	isRelayConnected := false
+	if h.getRemoteRelay != nil && h.getRemoteRelay() != nil {
+		isRelayConnected = h.getRemoteRelay().IsConnected()
+	}
+	hasLocalAccounts := false
+	if h.accountMgr != nil {
+		hasLocalAccounts = len(h.accountMgr.GetRawAccounts()) > 0
+	}
+
+	if (isRelayConnected || hasLocalAccounts) && strings.Contains(targetPath, "v1internal") {
+		if strings.Contains(targetPath, "fetchUserInfo") {
+			if h.logFn != nil {
+				h.logFn("⚖️ [Mock] 拦截并放行客户端登录验证 (fetchUserInfo)")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			w.Write([]byte(`{"regionCode":"JP","userSettings":{}}`))
+			return
+		} else if strings.Contains(targetPath, "loadCodeAssist") {
+			if h.logFn != nil {
+				h.logFn("⚖️ [Mock] 拦截并放行客户端权限验证 (loadCodeAssist)")
+			}
+			mockCodeAssist := `{"allowedTiers":[{"description":"Gemini-powered code suggestions and chat in multiple IDEs","id":"free-tier","isDefault":true,"name":"Antigravity","privacyNotice":{"showNotice":true}},{"description":"Unlimited coding assistant with the most powerful Gemini models","id":"standard-tier","name":"Antigravity","privacyNotice":{},"userDefinedCloudaicompanionProject":true,"usesGcpTos":true}],"cloudaicompanionProject":"favorable-synapse-ttvcb","currentTier":{"description":"Gemini-powered code suggestions and chat in multiple IDEs","id":"free-tier","name":"Antigravity","privacyNotice":{"showNotice":true},"upgradeSubscriptionText":"Upgrade to get 1,500 requests per day with Agent Mode and Gemini CLI, access to Gemini in Google Cloud, plus $1,000 in Google Cloud credits","upgradeSubscriptionType":"GDP_HELIUM","upgradeSubscriptionUri":"https://codeassist.google.com/upgrade"},"gcpManaged":false,"paidTier":{"availableCredits":[{"creditType":"GOOGLE_ONE_AI","minimumCreditAmountForUsage":"50"}],"description":"Google AI Pro","id":"g1-pro-tier","name":"Google AI Pro","upgradeSubscriptionText":"You can upgrade to a Google AI Ultra plan to receive higher rate limits.","upgradeSubscriptionUri":"https://antigravity.google/g1-upgrade"},"upgradeSubscriptionUri":"https://codeassist.google.com/upgrade"}`
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			w.Write([]byte(mockCodeAssist))
+			return
+		} else if strings.Contains(targetPath, "fetchAdminControls") || strings.Contains(targetPath, "listExperiments") {
+			if h.logFn != nil {
+				h.logFn(fmt.Sprintf("⚖️ [Mock] 拦截并响应客户端配置请求 (%s)", targetPath))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			w.Write([]byte(`{}`))
+			return
+		}
+	}
+
 	// 远程中继转发（客户端模式）
 	if h.getRemoteRelay != nil {
 		if rr := h.getRemoteRelay(); rr != nil && rr.IsConnected() {
