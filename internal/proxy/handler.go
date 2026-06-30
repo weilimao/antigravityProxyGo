@@ -86,6 +86,9 @@ func NewProxyHandler(
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	relayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
+	if relayUserID == "" {
+		relayUserID = r.Header.Get("X-Relay-User-Id")
+	}
 	_ = relayUserID // used later for relay stats callback
 	if r.Method == http.MethodConnect {
 		http.Error(w, "CONNECT not supported inside Decrypted Server", http.StatusBadRequest)
@@ -819,7 +822,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Analyze normal token counts from response body (if success)
 		if resp.StatusCode == 200 && strings.Contains(strings.ToLower(localTargetPath), "generatecontent") {
-			bodyStr := string(respBodyBytes)
+			bodyStr := string(decompressIfNeeded(respBodyBytes, resp.Header))
 			pm := rePromptTokens.FindAllStringSubmatch(bodyStr, -1)
 			cm := reCandidateTokens.FindAllStringSubmatch(bodyStr, -1)
 			cc := reCachedTokens.FindAllStringSubmatch(bodyStr, -1)
@@ -1273,7 +1276,7 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 	}
 
 	if resp.StatusCode == 200 && strings.Contains(strings.ToLower(targetPath), "generatecontent") {
-		bodyStr := respBodyBuf.String()
+		bodyStr := string(decompressIfNeeded(respBodyBuf.Bytes(), resp.Header))
 		pm := rePromptTokens.FindAllStringSubmatch(bodyStr, -1)
 		cm := reCandidateTokens.FindAllStringSubmatch(bodyStr, -1)
 		cc := reCachedTokens.FindAllStringSubmatch(bodyStr, -1)
@@ -1289,22 +1292,54 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	dbItem := &db.RequestLog{
-		ReqID:        reqID,
-		Timestamp:    time.Now().Format(time.RFC3339),
-		Mode:         "remote",
-		UserID:       rr.GetConfig().UserKey,
-		ModelName:    currentModel,
-		InTokens:     inTokens,
-		OutTokens:    outTokens,
-		CachedTokens: cachedTokens,
-		Cost:         0.0,
-		DurationMs:   time.Since(startTime).Milliseconds(),
-		StatusCode:   resp.StatusCode,
-		Method:       r.Method,
-		Host:         targetHost,
-		Path:         r.URL.Path,
-		SessionID:    "remote_session",
+	isRealModel := strings.Contains(strings.ToLower(r.URL.Path), "generatecontent") || strings.Contains(strings.ToLower(r.URL.Path), "predict")
+	if isRealModel && currentModel != "" && currentModel != "unknown" {
+		rate := h.statsTracker.GetPricingMgr().GetPricingForModel(currentModel)
+		nonCachedIn := inTokens - cachedTokens
+		if nonCachedIn < 0 {
+			nonCachedIn = 0
+		}
+		inputCost := math.Round((float64(nonCachedIn)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+		outputCost := math.Round((float64(outTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
+		cachedCost := math.Round((float64(cachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
+		totalCost := inputCost + outputCost + cachedCost
+
+		dbItem := &db.RequestLog{
+			ReqID:        reqID,
+			Timestamp:    time.Now().Format(time.RFC3339),
+			Mode:         "remote",
+			UserID:       rr.GetConfig().UserKey,
+			ModelName:    currentModel,
+			InTokens:     inTokens,
+			OutTokens:    outTokens,
+			CachedTokens: cachedTokens,
+			Cost:         totalCost,
+			InputCost:    inputCost,
+			OutputCost:   outputCost,
+			CachedCost:   cachedCost,
+			DurationMs:   time.Since(startTime).Milliseconds(),
+			StatusCode:   resp.StatusCode,
+			Method:       r.Method,
+			Host:         targetHost,
+			Path:         r.URL.Path,
+			SessionID:    "remote_session",
+		}
+		_ = db.InsertRequestLog(dbItem)
+
+		// Record usage locally so the client UI can reflect the remote quota consumption
+		h.usageTracker.RecordUsage(stats.UsageSample{
+			ModelName:    currentModel,
+			InTokens:     inTokens,
+			OutTokens:    outTokens,
+			CachedTokens: cachedTokens,
+			Account:      nil, // This will map to "direct" which is used for global totals like remote quotas
+		})
+
+		// 触发 Relay Quota 扣减（如果是 Relay 下游用户请求）
+		relayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
+		if relayUserID != "" && h.relayStatsCallback != nil {
+			h.relayStatsCallback(relayUserID, "", currentModel, inTokens, outTokens, cachedTokens,
+				r.Method, targetHost, targetPath, "remote_session", time.Since(startTime).Milliseconds(), resp.StatusCode, reqID)
+		}
 	}
-	_ = db.InsertRequestLog(dbItem)
 }

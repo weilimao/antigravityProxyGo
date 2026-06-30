@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -219,6 +221,38 @@ func (a *App) startup(ctx context.Context) {
 				f.Close()
 			}
 			if a.relayStatsMgr != nil {
+				rate := a.statsTracker.GetPricingMgr().GetPricingForModel(modelName)
+				nonCachedIn := inTokens - cachedTokens
+				if nonCachedIn < 0 {
+					nonCachedIn = 0
+				}
+				inputCost := math.Round((float64(nonCachedIn)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+				outputCost := math.Round((float64(outTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
+				cachedCost := math.Round((float64(cachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
+				totalCost := inputCost + outputCost + cachedCost
+
+				dbItem := &db.RequestLog{
+					ReqID:        reqID,
+					Timestamp:    time.Now().Format(time.RFC3339),
+					Mode:         "remote_relay",
+					UserID:       userID,
+					ModelName:    modelName,
+					InTokens:     inTokens,
+					OutTokens:    outTokens,
+					CachedTokens: cachedTokens,
+					Cost:         totalCost,
+					InputCost:    inputCost,
+					OutputCost:   outputCost,
+					CachedCost:   cachedCost,
+					DurationMs:   durationMs,
+					StatusCode:   statusCode,
+					Method:       method,
+					Host:         host,
+					Path:         path,
+					SessionID:    sessionID,
+				}
+				_ = db.InsertRequestLog(dbItem)
+
 				a.relayStatsMgr.RecordUsage(relay.RelaySample{
 					ReqID:        reqID,
 					UserID:       userID,
@@ -1314,11 +1348,29 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 				}
 			}
 
+			// 恢复历史数据：从 SQLite 聚合出旧的 local trends（因为远端服务器升级前可能没有记录旧的历史）
+			localTrends := db.QueryHourlyTrends(cfg.UserKey, "remote")
+			
+			trendMap := make(map[string]*stats.HourlyTrend)
+			for _, dt := range localTrends {
+				trendMap[dt.Time] = &stats.HourlyTrend{
+					Time:       dt.Time,
+					Input:      dt.Input,
+					Output:     dt.Output,
+					Cached:     dt.Cached,
+					Requests:   dt.Requests,
+					Cost:       dt.Cost,
+					InputCost:  dt.InputCost,
+					OutputCost: dt.OutputCost,
+					CachedCost: dt.CachedCost,
+				}
+			}
+
 			// Fetch hourly aggregated trends directly from the remote relay server
-			var trends []*stats.HourlyTrend
 			if remoteTrends, err := a.remoteRelay.FetchRemoteTrends(); err == nil {
 				for _, dt := range remoteTrends {
-					trends = append(trends, &stats.HourlyTrend{
+					// 远端数据优先级更高，覆盖本地（因为远端可能包含了其他设备共享的中继数据）
+					trendMap[dt.Time] = &stats.HourlyTrend{
 						Time:       dt.Time,
 						Input:      dt.Input,
 						Output:     dt.Output,
@@ -1328,9 +1380,20 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 						InputCost:  dt.InputCost,
 						OutputCost: dt.OutputCost,
 						CachedCost: dt.CachedCost,
-					})
+					}
 				}
 			}
+
+			var trends []*stats.HourlyTrend
+			var keys []string
+			for k := range trendMap {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				trends = append(trends, trendMap[k])
+			}
+
 			if trends == nil {
 				trends = []*stats.HourlyTrend{}
 			}

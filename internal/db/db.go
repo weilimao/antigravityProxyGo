@@ -148,8 +148,11 @@ func runMigrations(db *sql.DB, dataDir string) error {
 		if err := json.Unmarshal(bytes, &users); err == nil {
 			for _, u := range users {
 				if u.ID != "" && u.Key != "" {
-					// Update raw request_logs
-					_, _ = db.Exec("UPDATE request_logs SET user_id = ? WHERE user_id = ? AND mode = 'remote'", u.ID, u.Key)
+					// The old raw request_logs were actually saved as mode = 'local' and user_id = GoogleAccount email on the server, not mode = 'remote' with UserKey.
+					// The client saves mode = 'remote' and user_id = UserKey. 
+					// Running this update would corrupt the client's local logs by changing their user_id to the server's UUID.
+					// RECOVERY: If any local logs were already corrupted by previous versions, restore them back to the UserKey.
+					_, _ = db.Exec("UPDATE request_logs SET user_id = ? WHERE user_id = ? AND mode = 'remote'", u.Key, u.ID)
 					
 					// Merge existing hourly trends
 					_, _ = db.Exec(`
@@ -178,7 +181,7 @@ func runMigrations(db *sql.DB, dataDir string) error {
 	}
 
 	// 2. Deduplicate existing remote logs to clean up any duplicates created by the previous bug
-	_, _ = db.Exec(`DELETE FROM request_logs WHERE mode = 'remote' AND id NOT IN (SELECT MIN(id) FROM request_logs WHERE mode = 'remote' GROUP BY server_log_id);`)
+	_, _ = db.Exec(`DELETE FROM request_logs WHERE mode = 'remote' AND server_log_id > 0 AND id NOT IN (SELECT MIN(id) FROM request_logs WHERE mode = 'remote' AND server_log_id > 0 GROUP BY server_log_id);`)
 
 	// 3. Migrate existing request logs into user_hourly_trends
 	_, _ = db.Exec(`

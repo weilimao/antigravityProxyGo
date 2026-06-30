@@ -421,6 +421,7 @@ func (h *APICompatHandler) dispatchToGemini(
 	req.Header.Set("Content-Type", "application/json")
 	// 将用户的凭证传递给本地代理，本地代理将据此提取 sessionKey 自动粘性绑定账号池并执行扣费统计
 	req.Header.Set("Authorization", "Bearer " + userSession.UserKey)
+	req.Header.Set("X-Relay-User-Id", userSession.UserID)
 
 	h.log("Forwarding translated request to local proxy (18443) | Model: %s | Stream: %v", geminiModel, stream)
 
@@ -633,23 +634,6 @@ func (h *APICompatHandler) handleNormalResponse(
 		writeJSON(w, http.StatusOK, &anthResp)
 	}
 
-	// 记录用量统计
-	duration := time.Since(startTime).Milliseconds()
-	h.statsTracker.RecordUsage(RelaySample{
-		ReqID:        reqID,
-		UserID:       userSession.UserID,
-		UserKey:      userSession.UserKey,
-		ModelName:    geminiModel,
-		InTokens:     inTokens,
-		OutTokens:    outTokens,
-		CachedTokens: 0,
-		Method:       http.MethodPost,
-		Host:         "127.0.0.1",
-		Path:         path,
-		SessionID:    "compat-api-normal",
-		DurationMs:   duration,
-		StatusCode:   http.StatusOK,
-	})
 }
 
 func (h *APICompatHandler) handleStreamResponse(
@@ -1149,22 +1133,7 @@ func (h *APICompatHandler) handleStreamResponse(
 	flusher.Flush()
 
 	// 记录用量统计
-	duration := time.Since(startTime).Milliseconds()
-	h.statsTracker.RecordUsage(RelaySample{
-		ReqID:        reqID,
-		UserID:       userSession.UserID,
-		UserKey:      userSession.UserKey,
-		ModelName:    geminiModel,
-		InTokens:     inTokens,
-		OutTokens:    outTokens,
-		CachedTokens: 0,
-		Method:       http.MethodPost,
-		Host:         "127.0.0.1",
-		Path:         path,
-		SessionID:    "compat-api-stream",
-		DurationMs:   duration,
-		StatusCode:   http.StatusOK,
-	})
+
 }
 
 type RateLimiter struct {

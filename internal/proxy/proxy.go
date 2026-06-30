@@ -386,30 +386,6 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 远程模式优先级最高：所有请求通过远程代理中继
-	if pe.remoteRelay != nil && pe.remoteRelay.IsConnected() {
-		isLocalRelayLoop := false
-		if relayUserID != "" {
-			conf := pe.remoteRelay.GetConfig()
-			if conf.IsLocal {
-				isLocalRelayLoop = true
-			}
-		}
-
-		if !isLocalRelayLoop {
-			remoteConn, errDial := pe.remoteRelay.DialThroughRemote(hostAndPort)
-			if errDial != nil {
-				pe.logFn(fmt.Sprintf("❌ Remote relay failed for %s: %v", hostAndPort, errDial))
-				_, _ = clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-				_ = clientConn.Close()
-				return
-			}
-			_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-			pe.setupBidirectionalTunnel(clientConn, remoteConn)
-			return
-		}
-	}
-
 	isTargetHost := strings.Contains(host, "generativelanguage.googleapis.com") || strings.Contains(host, "cloudcode-pa.googleapis.com") || strings.Contains(host, "cloudaicompanion.googleapis.com") || strings.Contains(host, "aiplatform.googleapis.com")
 
 	pe.Lock()
@@ -419,7 +395,31 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 	pe.logFn(fmt.Sprintf("🔍 Host: %s | Decrypt: %v | UA: %s", host, shouldDecrypt, r.Header.Get("User-Agent")))
 
 	if !shouldDecrypt {
-		// Passthrough Tunnel
+		// 远程模式优先级最高：所有无需解密的请求通过远程代理中继
+		if pe.remoteRelay != nil && pe.remoteRelay.IsConnected() {
+			isLocalRelayLoop := false
+			if relayUserID != "" {
+				conf := pe.remoteRelay.GetConfig()
+				if conf.IsLocal {
+					isLocalRelayLoop = true
+				}
+			}
+
+			if !isLocalRelayLoop {
+				remoteConn, errDial := pe.remoteRelay.DialThroughRemote(hostAndPort)
+				if errDial != nil {
+					pe.logFn(fmt.Sprintf("❌ Remote relay failed for %s: %v", hostAndPort, errDial))
+					_, _ = clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+					_ = clientConn.Close()
+					return
+				}
+				_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+				pe.setupBidirectionalTunnel(clientConn, remoteConn)
+				return
+			}
+		}
+
+		// Passthrough Tunnel (直接本地中转)
 		remoteConn, errDial := pe.dialWithProxy(hostAndPort)
 		if errDial != nil {
 			pe.logFn(fmt.Sprintf("❌ CONNECT %s Dial error: %v", hostAndPort, errDial))

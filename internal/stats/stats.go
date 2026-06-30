@@ -94,6 +94,10 @@ func NewTracker(pricingMgr *pricing.Manager) *Tracker {
 	}
 }
 
+func (t *Tracker) GetPricingMgr() *pricing.Manager {
+	return t.pricingMgr
+}
+
 func (t *Tracker) Init(userDataPath string) {
 	t.Lock()
 	t.persistPath = filepath.Join(userDataPath, "stats.json")
