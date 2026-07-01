@@ -361,3 +361,75 @@ func TestRateLimiter(t *testing.T) {
 		t.Error("expected 31st request with default limit to be blocked")
 	}
 }
+
+func TestAPIKeyQuotaLimits(t *testing.T) {
+	// 1. 初始化临时的 UserManager
+	userMgr := NewUserManager()
+	userMgr.persistPath = "relay_users_quota_test.json"
+	defer os.Remove(userMgr.persistPath)
+
+	user, err := userMgr.AddUser("test_quota_user", "password123", "Unit Test User")
+	if err != nil {
+		t.Fatalf("failed to add user: %v", err)
+	}
+
+	// 2. 创建 API Key
+	apiKey, err := userMgr.CreateAPIKey(user.ID, "Test Key")
+	if err != nil {
+		t.Fatalf("failed to create API Key: %v", err)
+	}
+
+	// 3. 验证默认不限制 (limits are 0)
+	if apiKey.LimitGeminiTokens != 0 || apiKey.LimitClaudeTokens != 0 {
+		t.Errorf("expected default limits to be 0, got Gemini: %d, Claude: %d", apiKey.LimitGeminiTokens, apiKey.LimitClaudeTokens)
+	}
+
+	// 4. 更新 API Key 配额限制
+	err = userMgr.UpdateAPIKeyQuota(user.ID, apiKey.ID, 500000, 100000)
+	if err != nil {
+		t.Fatalf("failed to update API Key quota: %v", err)
+	}
+
+	// 5. 校验更新后的 API Key 属性
+	u, key, err := userMgr.ValidateAPIKey(apiKey.Key)
+	if err != nil {
+		t.Fatalf("failed to validate API Key: %v", err)
+	}
+	if u.ID != user.ID {
+		t.Errorf("expected user ID %q, got %q", user.ID, u.ID)
+	}
+	if key.LimitGeminiTokens != 500000 || key.LimitClaudeTokens != 100000 {
+		t.Errorf("expected updated limits Gemini: 500000, Claude: 100000, got Gemini: %d, Claude: %d", key.LimitGeminiTokens, key.LimitClaudeTokens)
+	}
+
+	// 6. 模拟记录使用量
+	userMgr.RecordAPIKeyUsage(user.ID, apiKey.ID, false, 12000) // Gemini used 12000
+	userMgr.RecordAPIKeyUsage(user.ID, apiKey.ID, true, 8000)   // Claude used 8000
+
+	// 7. 再次校验已用数量
+	_, key2, err := userMgr.ValidateAPIKey(apiKey.Key)
+	if err != nil {
+		t.Fatalf("failed to validate API Key after usage: %v", err)
+	}
+	if key2.UsedGeminiTokens != 12000 || key2.UsedClaudeTokens != 8000 {
+		t.Errorf("expected used Gemini: 12000, Claude: 8000, got Gemini: %d, Claude: %d", key2.UsedGeminiTokens, key2.UsedClaudeTokens)
+	}
+}
+
+func TestAPIHandlerRoutes(t *testing.T) {
+	userMgr := NewUserManager()
+	authMgr := NewAuthManager(userMgr)
+	statsMgr := NewStatsTracker(nil)
+	pkgMgr := NewPackageManager()
+	handler := NewAPIHandler(authMgr, statsMgr, pkgMgr, func(s string) {}, "")
+
+	// Test POST /api/keys/update-quota
+	req, _ := http.NewRequest(http.MethodPost, "/api/keys/update-quota", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	// Since we didn't pass a valid token, it should return 401 Unauthorized, NOT 404!
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+}

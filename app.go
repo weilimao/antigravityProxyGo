@@ -218,7 +218,7 @@ func (a *App) startup(ctx context.Context) {
 		a.quotaSvc.SetCapturedProject,
 		a.quotaSvc.GetStoredProject,
 		a.settingsMgr.GetMaxRetries,
-		func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string) {
+		func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string) {
 			if f, err := os.OpenFile(`B:\antigravityProxy\data\debug.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 				f.WriteString(fmt.Sprintf("[%s] relayStatsCallback: UserID=%s, ReqID=%s, Model=%s\n", time.Now().Format(time.RFC3339), userID, reqID, modelName))
 				f.Close()
@@ -259,7 +259,7 @@ func (a *App) startup(ctx context.Context) {
 				a.relayStatsMgr.RecordUsage(relay.RelaySample{
 					ReqID:        reqID,
 					UserID:       userID,
-					UserKey:      userKey,
+					UserKey:      apiKeyID,
 					ModelName:    modelName,
 					InTokens:     inTokens,
 					OutTokens:    outTokens,
@@ -272,8 +272,13 @@ func (a *App) startup(ctx context.Context) {
 					StatusCode:   statusCode,
 				})
 			}
+			if a.relayUserMgr != nil && apiKeyID != "" {
+				isClaude := strings.Contains(strings.ToLower(modelName), "claude")
+				totalTokens := int64(inTokens + outTokens)
+				a.relayUserMgr.RecordAPIKeyUsage(userID, apiKeyID, isClaude, totalTokens)
+			}
 		},
-		func(userID, modelName string) error {
+		func(userID, apiKeyID, modelName string) error {
 			if a.relayUserMgr == nil || a.relayStatsMgr == nil {
 				return nil
 			}
@@ -283,6 +288,24 @@ func (a *App) startup(ctx context.Context) {
 			}
 			if user.Quotas.ExpireAt > 0 && time.Now().Unix() > user.Quotas.ExpireAt {
 				return fmt.Errorf("account expired")
+			}
+
+			if apiKeyID != "" {
+				for _, key := range user.APIKeys {
+					if key.ID == apiKeyID {
+						isClaude := strings.Contains(strings.ToLower(modelName), "claude")
+						if isClaude {
+							if key.LimitClaudeTokens > 0 && key.UsedClaudeTokens >= key.LimitClaudeTokens {
+								return fmt.Errorf("API Key Claude token limit exceeded (%d / %d)", key.UsedClaudeTokens, key.LimitClaudeTokens)
+							}
+						} else {
+							if key.LimitGeminiTokens > 0 && key.UsedGeminiTokens >= key.LimitGeminiTokens {
+								return fmt.Errorf("API Key Gemini token limit exceeded (%d / %d)", key.UsedGeminiTokens, key.LimitGeminiTokens)
+							}
+						}
+						break
+					}
+				}
 			}
 
 			isClaude := strings.Contains(strings.ToLower(modelName), "claude")

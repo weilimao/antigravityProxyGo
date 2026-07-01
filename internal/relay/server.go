@@ -14,17 +14,18 @@ type contextKey string
 const RelayUserCtxKey contextKey = "relayUserID"
 
 type RelayServer struct {
-	mu              sync.Mutex
-	engine          http.Handler
-	authMgr         *AuthManager
-	apiHandler      *APIHandler
-	compatHandler   *APICompatHandler
-	server          *http.Server
-	listener        net.Listener
-	trackedListener *trackedListener
-	logFn           func(string)
-	isRunning       bool
-	relayUserCtxKey interface{}
+	mu                sync.Mutex
+	engine            http.Handler
+	authMgr           *AuthManager
+	apiHandler        *APIHandler
+	compatHandler     *APICompatHandler
+	server            *http.Server
+	listener          net.Listener
+	trackedListener   *trackedListener
+	logFn             func(string)
+	isRunning         bool
+	relayUserCtxKey   interface{}
+	relayAPIKeyCtxKey interface{}
 }
 
 func NewRelayServer(
@@ -33,15 +34,17 @@ func NewRelayServer(
 	apiHandler *APIHandler,
 	compatHandler *APICompatHandler,
 	logFn func(string),
-	ctxKey interface{},
+	userCtxKey interface{},
+	apiKeyCtxKey interface{},
 ) *RelayServer {
 	return &RelayServer{
-		engine:          engine,
-		authMgr:         authMgr,
-		apiHandler:      apiHandler,
-		compatHandler:   compatHandler,
-		logFn:           logFn,
-		relayUserCtxKey: ctxKey,
+		engine:            engine,
+		authMgr:           authMgr,
+		apiHandler:        apiHandler,
+		compatHandler:     compatHandler,
+		logFn:             logFn,
+		relayUserCtxKey:   userCtxKey,
+		relayAPIKeyCtxKey: apiKeyCtxKey,
 	}
 }
 
@@ -65,7 +68,7 @@ func (s *RelayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Authenticate proxy request
-	userID, err := s.authMgr.ValidateProxyAuth(r)
+	userID, apiKeyID, err := s.authMgr.ValidateProxyAuth(r)
 	if err != nil {
 		s.log("Proxy auth failed: %v", err)
 		w.Header().Set("Proxy-Authenticate", "Bearer")
@@ -75,6 +78,9 @@ func (s *RelayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Inject userID into request context and forward to proxy engine
 	ctx := context.WithValue(r.Context(), s.relayUserCtxKey, userID)
+	if apiKeyID != "" && s.relayAPIKeyCtxKey != nil {
+		ctx = context.WithValue(ctx, s.relayAPIKeyCtxKey, apiKeyID)
+	}
 	s.engine.ServeHTTP(w, r.WithContext(ctx))
 }
 

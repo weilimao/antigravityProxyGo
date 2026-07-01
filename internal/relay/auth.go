@@ -14,6 +14,7 @@ type RelaySession struct {
 	Token     string
 	UserID    string
 	UserKey   string
+	APIKeyID  string
 	CreatedAt time.Time
 	ExpiresAt time.Time
 }
@@ -61,10 +62,11 @@ func (a *AuthManager) ValidateToken(token string) (*RelaySession, error) {
 
 	if !exists {
 		// 校验是否是持久化 API Key
-		if user, err := a.userMgr.ValidateAPIKey(token); err == nil {
+		if user, key, err := a.userMgr.ValidateAPIKey(token); err == nil {
 			return &RelaySession{
 				UserID:    user.ID,
 				UserKey:   user.Key,
+				APIKeyID:  key.ID,
 				ExpiresAt: time.Now().Add(5 * time.Minute),
 			}, nil
 		}
@@ -88,23 +90,23 @@ func (a *AuthManager) ValidateToken(token string) (*RelaySession, error) {
 	return session, nil
 }
 
-func (a *AuthManager) ValidateProxyAuth(r *http.Request) (string, error) {
+func (a *AuthManager) ValidateProxyAuth(r *http.Request) (string, string, error) {
 	header := r.Header.Get("Proxy-Authorization")
 	if header == "" {
-		return "", fmt.Errorf("missing Proxy-Authorization header")
+		return "", "", fmt.Errorf("missing Proxy-Authorization header")
 	}
 
 	parts := strings.SplitN(header, " ", 2)
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		return "", fmt.Errorf("invalid Proxy-Authorization format")
+		return "", "", fmt.Errorf("invalid Proxy-Authorization format")
 	}
 
 	token := strings.TrimSpace(parts[1])
 	session, err := a.ValidateToken(token)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return session.UserID, nil
+	return session.UserID, session.APIKeyID, nil
 }
 
 func (a *AuthManager) Logout(token string) {

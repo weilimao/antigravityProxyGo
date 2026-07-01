@@ -36,10 +36,14 @@ type UserQuotas struct {
 }
 
 type UserAPIKey struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Key       string    `json:"key"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	Key               string    `json:"key"`
+	CreatedAt         time.Time `json:"createdAt"`
+	LimitGeminiTokens int64     `json:"limitGeminiTokens"`
+	LimitClaudeTokens int64     `json:"limitClaudeTokens"`
+	UsedGeminiTokens   int64     `json:"usedGeminiTokens"`
+	UsedClaudeTokens   int64     `json:"usedClaudeTokens"`
 }
 
 type RelayUser struct {
@@ -234,7 +238,7 @@ func (m *UserManager) DeleteAPIKey(userID string, keyID string) error {
 	return fmt.Errorf("user not found")
 }
 
-func (m *UserManager) ValidateAPIKey(token string) (*RelayUser, error) {
+func (m *UserManager) ValidateAPIKey(token string) (*RelayUser, *UserAPIKey, error) {
 	m.RLock()
 	defer m.RUnlock()
 
@@ -242,13 +246,55 @@ func (m *UserManager) ValidateAPIKey(token string) (*RelayUser, error) {
 		if !u.Enabled {
 			continue
 		}
-		for _, k := range u.APIKeys {
+		for i, k := range u.APIKeys {
 			if k.Key == token {
-				return u, nil
+				return u, &u.APIKeys[i], nil
 			}
 		}
 	}
-	return nil, fmt.Errorf("invalid api key")
+	return nil, nil, fmt.Errorf("invalid api key")
+}
+
+func (m *UserManager) UpdateAPIKeyQuota(userID string, keyID string, limitGemini, limitClaude int64) error {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.ID == userID {
+			for i, k := range u.APIKeys {
+				if k.ID == keyID {
+					u.APIKeys[i].LimitGeminiTokens = limitGemini
+					u.APIKeys[i].LimitClaudeTokens = limitClaude
+					m.saveToDiskLocked()
+					return nil
+				}
+			}
+			return fmt.Errorf("api key not found")
+		}
+	}
+	return fmt.Errorf("user not found")
+}
+
+func (m *UserManager) RecordAPIKeyUsage(userID string, apiKeyID string, isClaude bool, tokens int64) {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.ID == userID {
+			for i, k := range u.APIKeys {
+				if k.ID == apiKeyID {
+					if isClaude {
+						u.APIKeys[i].UsedClaudeTokens += tokens
+					} else {
+						u.APIKeys[i].UsedGeminiTokens += tokens
+					}
+					m.saveToDiskLocked()
+					return
+				}
+			}
+			return
+		}
+	}
 }
 
 func (m *UserManager) saveToDiskLocked() {

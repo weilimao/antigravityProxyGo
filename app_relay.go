@@ -39,6 +39,20 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		return false
 	}
 
+	getInt64Arg := func(idx int) int64 {
+		if idx < len(args) {
+			switch v := args[idx].(type) {
+			case float64:
+				return int64(v)
+			case int64:
+				return v
+			case int:
+				return int64(v)
+			}
+		}
+		return 0
+	}
+
 	marshalResponse := func(val interface{}) (string, bool, error) {
 		b, err := json.Marshal(val)
 		if err != nil {
@@ -503,6 +517,19 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
 		return marshalResponse(map[string]interface{}{"success": true})
+
+	case "remote:update-key-quota":
+		if a.remoteRelay == nil || !a.remoteRelay.IsConnected() {
+			return marshalResponse(map[string]interface{}{"success": false, "error": "not connected"})
+		}
+		id := getStringArg(0)
+		limitGemini := getInt64Arg(1)
+		limitClaude := getInt64Arg(2)
+		err := a.remoteRelay.UpdateRemoteKeyQuota(id, limitGemini, limitClaude)
+		if err != nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		return marshalResponse(map[string]interface{}{"success": true})
 	}
 
 	return "", false, nil
@@ -523,6 +550,7 @@ func (a *App) startRelayServer(port string) error {
 		a.relayCompatAPIMgr,
 		a.AddLog,
 		proxy.RelayUserCtxKey,
+		proxy.RelayAPIKeyCtxKey,
 	)
 
 	if err := a.relayServer.Start(port); err != nil {

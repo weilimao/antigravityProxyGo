@@ -21,10 +21,14 @@ type ContextKey string
 // RelayUserCtxKey is the context key for relay user ID
 const RelayUserCtxKey ContextKey = "relayUserID"
 
+// RelayAPIKeyCtxKey is the context key for relay API key ID
+const RelayAPIKeyCtxKey ContextKey = "relayAPIKeyID"
+
 // MetadataConn wraps a net.Conn with additional metadata for relay user tracking
 type MetadataConn struct {
 	net.Conn
-	RelayUserID string
+	RelayUserID   string
+	RelayAPIKeyID string
 }
 
 // RemoteRelayInterface defines the interface for remote proxy relay
@@ -248,8 +252,13 @@ func (pe *ProxyEngine) Start(dataDir string) error {
 	pe.mitmServer = &http.Server{
 		Handler: pe.handler,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
-			if mc, ok := c.(*MetadataConn); ok && mc.RelayUserID != "" {
-				return context.WithValue(ctx, RelayUserCtxKey, mc.RelayUserID)
+			if mc, ok := c.(*MetadataConn); ok {
+				if mc.RelayUserID != "" {
+					ctx = context.WithValue(ctx, RelayUserCtxKey, mc.RelayUserID)
+				}
+				if mc.RelayAPIKeyID != "" {
+					ctx = context.WithValue(ctx, RelayAPIKeyCtxKey, mc.RelayAPIKeyID)
+				}
 			}
 			return ctx
 		},
@@ -457,7 +466,12 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	var connToEnqueue net.Conn = tlsClientConn
 	if relayUserID != "" {
-		connToEnqueue = &MetadataConn{Conn: tlsClientConn, RelayUserID: relayUserID}
+		relayAPIKeyID, _ := r.Context().Value(RelayAPIKeyCtxKey).(string)
+		connToEnqueue = &MetadataConn{
+			Conn:          tlsClientConn,
+			RelayUserID:   relayUserID,
+			RelayAPIKeyID: relayAPIKeyID,
+		}
 	}
 
 	// Enqueue to decrypted HTTP Server

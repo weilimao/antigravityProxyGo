@@ -38,8 +38,8 @@ type ProxyHandler struct {
 	setCapturedProject func(string, string)
 	getStoredProject   func(string) string
 	getMaxRetries      func() int
-	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string)
-	relayQuotaCheck    func(userID, modelName string) error
+	relayStatsCallback func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string)
+	relayQuotaCheck    func(userID, apiKeyID, modelName string) error
 	client             *http.Client
 
 	// 远程中继转发相关
@@ -61,8 +61,8 @@ func NewProxyHandler(
 	setCapturedProject func(string, string),
 	getStoredProject func(string) string,
 	getMaxRetries func() int,
-	relayStatsCallback func(userID, userKey, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string),
-	relayQuotaCheck func(userID, modelName string) error,
+	relayStatsCallback func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string),
+	relayQuotaCheck func(userID, apiKeyID, modelName string) error,
 ) *ProxyHandler {
 	return &ProxyHandler{
 		accountMgr:         accountMgr,
@@ -88,6 +88,10 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	relayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
 	if relayUserID == "" {
 		relayUserID = r.Header.Get("X-Relay-User-Id")
+	}
+	relayAPIKeyID, _ := r.Context().Value(RelayAPIKeyCtxKey).(string)
+	if relayAPIKeyID == "" {
+		relayAPIKeyID = r.Header.Get("X-Relay-Api-Key-Id")
 	}
 	_ = relayUserID // used later for relay stats callback
 	if r.Method == http.MethodConnect {
@@ -235,7 +239,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if relayUserID != "" && h.relayQuotaCheck != nil {
-		if err := h.relayQuotaCheck(relayUserID, currentModel); err != nil {
+		if err := h.relayQuotaCheck(relayUserID, relayAPIKeyID, currentModel); err != nil {
 			if h.logFn != nil {
 				h.logFn(fmt.Sprintf("⛔ Relay Quota Exceeded for %s: %v", relayUserID, err))
 			}
@@ -891,7 +895,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						f.WriteString(fmt.Sprintf("[%s] ServeHTTP headers: %s\n", time.Now().Format(time.RFC3339), strings.Join(headerKeys, " | ")))
 						f.Close()
 					}
-					h.relayStatsCallback(relayUserID, "", currentModel, inTokens, outTokens, cachedTokens,
+					h.relayStatsCallback(relayUserID, relayAPIKeyID, currentModel, inTokens, outTokens, cachedTokens,
 						r.Method, r.Host, r.URL.Path, sessionKey, time.Since(startTime).Milliseconds(), resp.StatusCode, reqID)
 				}
 				var accMeta *stats.AccountMeta
@@ -1218,6 +1222,10 @@ func (h *ProxyHandler) getRemoteClient() *http.Client {
 // forwardThroughRemote 处理客户端模式下的 HTTP 请求路由，将请求在 TLS 层上中继至远端服务器并执行流式转发与抓包
 func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Request, bodyBytes []byte, targetHost, targetPath string, rr RemoteRelayInterface) {
 	startTime := time.Now()
+	relayAPIKeyID, _ := r.Context().Value(RelayAPIKeyCtxKey).(string)
+	if relayAPIKeyID == "" {
+		relayAPIKeyID = r.Header.Get("X-Relay-Api-Key-Id")
+	}
 	logPrefix := fmt.Sprintf("[RemoteForward][%s -> %s%s]", r.Method, targetHost, r.URL.Path)
 	if h.logFn != nil {
 		h.logFn(fmt.Sprintf("%s 🌐 正在将本地 IDE 请求中继转发至远程服务器...", logPrefix))
@@ -1411,7 +1419,7 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 		// 触发 Relay Quota 扣减（如果是 Relay 下游用户请求）
 		relayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
 		if relayUserID != "" && h.relayStatsCallback != nil {
-			h.relayStatsCallback(relayUserID, "", currentModel, inTokens, outTokens, cachedTokens,
+			h.relayStatsCallback(relayUserID, relayAPIKeyID, currentModel, inTokens, outTokens, cachedTokens,
 				r.Method, targetHost, targetPath, "remote_session", time.Since(startTime).Milliseconds(), resp.StatusCode, reqID)
 		}
 	}

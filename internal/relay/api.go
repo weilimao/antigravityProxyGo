@@ -79,6 +79,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGetAPIKeys(w, r)
 	case path == "/api/keys" && r.Method == http.MethodPost:
 		h.handleCreateAPIKey(w, r)
+	case path == "/api/keys/update-quota" && r.Method == http.MethodPost:
+		h.handleUpdateAPIKeyQuota(w, r)
 	case strings.HasPrefix(path, "/api/keys/") && r.Method == http.MethodDelete:
 		h.handleDeleteAPIKey(w, r)
 	default:
@@ -216,6 +218,40 @@ func (h *APIHandler) handleDeleteAPIKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	err = h.authMgr.userMgr.DeleteAPIKey(session.UserID, keyID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+	})
+}
+
+func (h *APIHandler) handleUpdateAPIKeyQuota(w http.ResponseWriter, r *http.Request) {
+	token := extractBearerToken(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing token"})
+		return
+	}
+	session, err := h.authMgr.ValidateToken(token)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	var req struct {
+		ID                string `json:"id"`
+		LimitGeminiTokens int64  `json:"limitGeminiTokens"`
+		LimitClaudeTokens int64  `json:"limitClaudeTokens"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid request body"})
+		return
+	}
+	if req.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "missing key id"})
+		return
+	}
+	err = h.authMgr.userMgr.UpdateAPIKeyQuota(session.UserID, req.ID, req.LimitGeminiTokens, req.LimitClaudeTokens)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
 		return

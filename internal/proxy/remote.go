@@ -337,6 +337,48 @@ func (rr *RemoteRelay) DeleteRemoteKey(id string) error {
 	return nil
 }
 
+// UpdateRemoteKeyQuota updates the Gemini and Claude token quotas for a specific API Key on the remote server
+func (rr *RemoteRelay) UpdateRemoteKeyQuota(id string, limitGemini, limitClaude int64) error {
+	rr.RLock()
+	config := rr.config
+	rr.RUnlock()
+
+	if !config.Connected {
+		return fmt.Errorf("not connected to remote relay")
+	}
+
+	url := fmt.Sprintf("http://%s:%s/api/keys/update-quota", config.Host, config.Port)
+	payload := map[string]interface{}{
+		"id":                 id,
+		"limitGeminiTokens":  limitGemini,
+		"limitClaudeTokens":  limitClaude,
+	}
+	body, _ := json.Marshal(payload)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+config.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := noProxyClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	return nil
+}
+
 // FetchRemoteStats retrieves statistics from the remote relay server
 func (rr *RemoteRelay) FetchRemoteStats() (map[string]interface{}, error) {
 	rr.RLock()
