@@ -1,14 +1,23 @@
 package relay
 
 import (
+	"regexp"
 	"strings"
 )
 
-func EncodeThoughtSignature(sig string) string {
-	if sig == "" {
-		return ""
+var thoughtSigRegex = regexp.MustCompile(`(?s)\r?\n?<!--thought_signature:.*?-->`)
+
+// SanitizeAllThoughtSignatures 清洗掉文本中残留的所有 thought_signature 注释标签
+func SanitizeAllThoughtSignatures(text string) string {
+	if !strings.Contains(text, "<!--thought_signature:") {
+		return text
 	}
-	return "\n<!--thought_signature:" + sig + "-->"
+	return thoughtSigRegex.ReplaceAllString(text, "")
+}
+
+func EncodeThoughtSignature(sig string) string {
+	// 彻底禁用把签名暴露到纯文本中的行为
+	return ""
 }
 
 func DecodeThoughtSignature(text string) (string, []string) {

@@ -522,7 +522,6 @@ func (h *APICompatHandler) handleNormalResponse(
 	// 提取回复内容（text + functionCall）与用量
 	var contentBlocks []AnthropicContent
 	hasFunctionCall := false
-	lastThoughtSignature := ""
 	if len(gemResp.Candidates) > 0 {
 		for _, part := range gemResp.Candidates[0].Content.Parts {
 			if part.Text != "" {
@@ -530,16 +529,6 @@ func (h *APICompatHandler) handleNormalResponse(
 			}
 			if part.FunctionCall != nil {
 				hasFunctionCall = true
-				if part.ThoughtSignature != "" && part.ThoughtSignature != lastThoughtSignature {
-					lastThoughtSignature = part.ThoughtSignature
-					sigText := EncodeThoughtSignature(part.ThoughtSignature)
-					// If last block is text, append to it, otherwise create a new one
-					if len(contentBlocks) > 0 && contentBlocks[len(contentBlocks)-1].Type == "text" {
-						contentBlocks[len(contentBlocks)-1].Text += sigText
-					} else {
-						contentBlocks = append(contentBlocks, AnthropicContent{Type: "text", Text: sigText})
-					}
-				}
 				contentBlocks = append(contentBlocks, AnthropicContent{
 					Type:  "tool_use",
 					ID:    generateToolUseID(),
@@ -559,10 +548,25 @@ func (h *APICompatHandler) handleNormalResponse(
 	// 根据要求的 API 格式，翻译响应包
 	if apiFormat == "openai" {
 		replyText := ""
+		var toolCalls []OpenAIToolCall
 		for _, b := range contentBlocks {
 			if b.Type == "text" {
 				replyText += b.Text
+			} else if b.Type == "tool_use" {
+				argsJSON, _ := json.Marshal(b.Input)
+				toolCalls = append(toolCalls, OpenAIToolCall{
+					ID:   b.ID,
+					Type: "function",
+					Function: OpenAIToolCallFunction{
+						Name:      b.Name,
+						Arguments: string(argsJSON),
+					},
+				})
 			}
+		}
+		finishReason := "stop"
+		if len(toolCalls) > 0 {
+			finishReason = "tool_calls"
 		}
 		openResp := OpenAIResponse{
 			ID:      fmt.Sprintf("chatcmpl-%d", rand.Int63()),
@@ -573,10 +577,11 @@ func (h *APICompatHandler) handleNormalResponse(
 				{
 					Index: 0,
 					Message: OpenAIMessage{
-						Role:    "assistant",
-						Content: replyText,
+						Role:      "assistant",
+						Content:   replyText,
+						ToolCalls: toolCalls,
 					},
-					FinishReason: "stop",
+					FinishReason: finishReason,
 				},
 			},
 			Usage: OpenAIResponseUsage{
@@ -681,7 +686,6 @@ func (h *APICompatHandler) handleStreamResponse(
 	blockIndex := 0
 	textBlockOpen := false
 	hasFunctionCall := false
-	lastThoughtSignature := ""
 	openAIRoleSent := false
 
 	// Anthropic 协议下，开始流时首发 message_start
@@ -713,6 +717,7 @@ func (h *APICompatHandler) handleStreamResponse(
 	responsesMsgOpened := false
 	responsesMsgID := fmt.Sprintf("msg_%s_0", streamID)
 	var responsesTextBuf strings.Builder
+	hasOpenAIToolCall := false
 
 	// Responses 协议下，开始流时首发 response.created 和 response.in_progress
 	if apiFormat == "responses" {
@@ -872,7 +877,67 @@ func (h *APICompatHandler) handleStreamResponse(
 			}
 
 			if part.FunctionCall != nil {
-				if apiFormat == "responses" {
+				if apiFormat == "openai" {
+					hasOpenAIToolCall = true
+					callID := fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), rand.Int63n(1000))
+					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+					if len(argsJSON) == 0 || string(argsJSON) == "null" {
+						argsJSON = []byte("{}")
+					}
+					startChunk := OpenAIStreamChunk{
+						ID:      streamID,
+						Object:  "chat.completion.chunk",
+						Created: createdAt,
+						Model:   geminiModel,
+						Choices: []OpenAIStreamChoice{
+							{
+								Index: 0,
+								Delta: OpenAIDelta{
+									ToolCalls: []OpenAIToolCall{
+										{
+											Index: 0,
+											ID:    callID,
+											Type:  "function",
+											Function: OpenAIToolCallFunction{
+												Name:      part.FunctionCall.Name,
+												Arguments: "",
+											},
+										},
+									},
+								},
+								FinishReason: nil,
+							},
+						},
+					}
+					startBytes, _ := json.Marshal(startChunk)
+					fmt.Fprintf(w, "data: %s\n\n", string(startBytes))
+
+					argsChunk := OpenAIStreamChunk{
+						ID:      streamID,
+						Object:  "chat.completion.chunk",
+						Created: createdAt,
+						Model:   geminiModel,
+						Choices: []OpenAIStreamChoice{
+							{
+								Index: 0,
+								Delta: OpenAIDelta{
+									ToolCalls: []OpenAIToolCall{
+										{
+											Index: 0,
+											Function: OpenAIToolCallFunction{
+												Arguments: string(argsJSON),
+											},
+										},
+									},
+								},
+								FinishReason: nil,
+							},
+						},
+					}
+					argsBytes, _ := json.Marshal(argsChunk)
+					fmt.Fprintf(w, "data: %s\n\n", string(argsBytes))
+					flusher.Flush()
+				} else if apiFormat == "responses" {
 					callID := fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), rand.Int63n(1000))
 					fcItemID := fmt.Sprintf("fc_%s", callID)
 					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
@@ -939,51 +1004,14 @@ func (h *APICompatHandler) handleStreamResponse(
 				} else if apiFormat == "anthropic" {
 					hasFunctionCall = true
 
-					// Inject thought signature into the text block if present
-					if part.ThoughtSignature != "" && part.ThoughtSignature != lastThoughtSignature {
-						lastThoughtSignature = part.ThoughtSignature
-						sigText := EncodeThoughtSignature(part.ThoughtSignature)
-						if !textBlockOpen {
-							blockStart := map[string]interface{}{
-								"type":  "content_block_start",
-								"index": blockIndex,
-								"content_block": map[string]interface{}{"type": "text", "text": sigText},
-							}
-							blockStartBytes, _ := json.Marshal(blockStart)
-							fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", string(blockStartBytes))
-							
-							// Immediately stop it
-							stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
-							stopBytes, _ := json.Marshal(stopEvt)
-							fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
-							blockIndex++
-						} else {
-							// Append to currently open text block
-							delta := map[string]interface{}{
-								"type":  "content_block_delta",
-								"index": blockIndex,
-								"delta": map[string]interface{}{"type": "text_delta", "text": sigText},
-							}
-							deltaBytes, _ := json.Marshal(delta)
-							fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(deltaBytes))
-							
-							// Close the text block
-							stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
-							stopBytes, _ := json.Marshal(stopEvt)
-							fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
-							blockIndex++
-							textBlockOpen = false
-						}
+					// 在发出 tool_use 之前，先关闭未完成的 text block
+					if textBlockOpen {
+						stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
+						stopBytes, _ := json.Marshal(stopEvt)
+						fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
+						blockIndex++
+						textBlockOpen = false
 						flusher.Flush()
-					} else {
-						// 先关闭未完成的 text block
-						if textBlockOpen {
-							stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
-							stopBytes, _ := json.Marshal(stopEvt)
-							fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
-							blockIndex++
-							textBlockOpen = false
-						}
 					}
 
 					toolID := generateToolUseID()
@@ -1029,13 +1057,17 @@ func (h *APICompatHandler) handleStreamResponse(
 
 	// 发射结束帧
 	if apiFormat == "openai" {
+		var finishReason interface{} = "stop"
+		if hasOpenAIToolCall {
+			finishReason = "tool_calls"
+		}
 		finalChunk := OpenAIStreamChunk{
 			ID:      streamID,
 			Object:  "chat.completion.chunk",
 			Created: createdAt,
 			Model:   geminiModel,
 			Choices: []OpenAIStreamChoice{
-				{Index: 0, Delta: OpenAIDelta{}, FinishReason: "stop"},
+				{Index: 0, Delta: OpenAIDelta{}, FinishReason: finishReason},
 			},
 		}
 		finalBytes, _ := json.Marshal(finalChunk)

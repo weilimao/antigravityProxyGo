@@ -120,6 +120,43 @@ func QueryRecentRequests(userID, mode string, limit int) []*RequestLog {
 	return logs
 }
 
+func QueryAllRequestLogs() ([]*RequestLog, error) {
+	if GlobalDB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT
+			id, server_log_id, req_id, timestamp, mode, user_id, model_name,
+			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, status_code,
+			method, host, path, session_id
+		FROM request_logs
+		ORDER BY timestamp DESC, id DESC
+	`
+
+	rows, err := GlobalDB.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []*RequestLog
+	for rows.Next() {
+		var l RequestLog
+		if err := rows.Scan(
+			&l.ID, &l.ServerLogID, &l.ReqID, &l.Timestamp, &l.Mode, &l.UserID, &l.ModelName,
+			&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost, &l.DurationMs, &l.StatusCode,
+			&l.Method, &l.Host, &l.Path, &l.SessionID,
+		); err == nil {
+			logs = append(logs, &l)
+		}
+	}
+	if logs == nil {
+		logs = []*RequestLog{}
+	}
+	return logs, nil
+}
+
 func QueryHourlyTrends(userID, mode string) []*HourlyTrendSummary {
 	if GlobalDB == nil {
 		return []*HourlyTrendSummary{}

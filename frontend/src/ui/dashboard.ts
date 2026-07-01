@@ -601,11 +601,18 @@ export function initDashboardEvents() {
     if (btnExportLogs) {
         btnExportLogs.addEventListener('click', () => {
             try {
-                const dirInfo = ipcRenderer.sendSync('settings:get-dir-sync') || {};
-                const activeDir = dirInfo.activeDir || ipcRenderer.sendSync('get-userdata-path') || '';
-                ipcRenderer.send('settings:open-folder', activeDir);
+                let text = '';
+                if (consoleBody) {
+                    text = Array.from(consoleBody.children)
+                        .map(child => child.textContent)
+                        .join('\n');
+                }
+                if (!text) {
+                    text = '暂无日志内容 / No logs available';
+                }
+                ipcRenderer.send('settings:export-logs', text);
             } catch (err) {
-                console.error('Failed to open folder:', err);
+                console.error('Failed to export logs:', err);
             }
         });
     }

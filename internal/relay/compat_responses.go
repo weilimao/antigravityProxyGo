@@ -2,6 +2,7 @@ package relay
 
 import (
 	"encoding/json"
+	"strings"
 )
 
 // parseRawMessageToString 将 json.RawMessage 转换为 string，如果原本是字符串则剥离引号，否则保留原样（如数组JSON）。
@@ -13,6 +14,20 @@ func parseRawMessageToString(raw json.RawMessage) string {
 		var s string
 		json.Unmarshal(raw, &s)
 		return s
+	}
+	if raw[0] == '[' {
+		var arr []map[string]interface{}
+		if err := json.Unmarshal(raw, &arr); err == nil {
+			var sb strings.Builder
+			for _, item := range arr {
+				if t, ok := item["text"].(string); ok {
+					sb.WriteString(t)
+				}
+			}
+			if sb.Len() > 0 {
+				return sb.String()
+			}
+		}
 	}
 	return string(raw)
 }

@@ -21,10 +21,58 @@ type OpenAIMessage struct {
 	ToolName   string           `json:"tool_name,omitempty"`
 }
 
+type OpenAIToolCallFunction struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
 type OpenAIToolCall struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	Index     int                    `json:"index,omitempty"`
+	ID        string                 `json:"id,omitempty"`
+	Type      string                 `json:"type,omitempty"`
+	Function  OpenAIToolCallFunction `json:"function"`
+	Name      string                 `json:"name,omitempty"`
+	Arguments string                 `json:"arguments,omitempty"`
+}
+
+func (tc *OpenAIToolCall) UnmarshalJSON(data []byte) error {
+	type Alias OpenAIToolCall
+	var aux Alias
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*tc = OpenAIToolCall(aux)
+	if tc.Name == "" && tc.Function.Name != "" {
+		tc.Name = tc.Function.Name
+	} else if tc.Function.Name == "" && tc.Name != "" {
+		tc.Function.Name = tc.Name
+	}
+	if tc.Arguments == "" && tc.Function.Arguments != "" {
+		tc.Arguments = tc.Function.Arguments
+	} else if tc.Function.Arguments == "" && tc.Arguments != "" {
+		tc.Function.Arguments = tc.Arguments
+	}
+	if tc.ID != "" && tc.Type == "" {
+		tc.Type = "function"
+	}
+	return nil
+}
+
+func (tc OpenAIToolCall) MarshalJSON() ([]byte, error) {
+	type Alias OpenAIToolCall
+	aux := Alias(tc)
+	if aux.ID != "" && aux.Type == "" {
+		aux.Type = "function"
+	}
+	if aux.Function.Name == "" && aux.Name != "" {
+		aux.Function.Name = aux.Name
+	}
+	if aux.Function.Arguments == "" && aux.Arguments != "" {
+		aux.Function.Arguments = aux.Arguments
+	}
+	aux.Name = ""
+	aux.Arguments = ""
+	return json.Marshal(aux)
 }
 
 // UnmarshalJSON 使 OpenAIMessage.Content 兼容字符串及数组（用于 Vision API 等场景）
@@ -87,8 +135,9 @@ type OpenAIResponse struct {
 }
 
 type OpenAIDelta struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role      string           `json:"role,omitempty"`
+	Content   string           `json:"content,omitempty"`
+	ToolCalls []OpenAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type OpenAIStreamChoice struct {
@@ -482,7 +531,10 @@ func parseOpenAIContentString(contentStr string) []GeminiPart {
 				t, _ := item["type"].(string)
 				if t == "text" || t == "output_text" || t == "input_text" {
 					if text, ok := item["text"].(string); ok && text != "" {
-						parts = append(parts, GeminiPart{Text: text})
+						clean := SanitizeAllThoughtSignatures(text)
+						if clean != "" {
+							parts = append(parts, GeminiPart{Text: clean})
+						}
 					}
 				} else if t == "image_url" {
 					if imgObj, ok := item["image_url"].(map[string]interface{}); ok {
@@ -520,7 +572,7 @@ func parseOpenAIContentString(contentStr string) []GeminiPart {
 			}
 		}
 	}
-	return []GeminiPart{{Text: contentStr}}
+	return []GeminiPart{{Text: SanitizeAllThoughtSignatures(contentStr)}}
 }
 
 func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
@@ -645,7 +697,7 @@ func TranslateAnthropicToGemini(anthReq *AnthropicRequest) *GeminiRequest {
 
 	if anthReq.System != "" {
 		gemReq.SystemInstruction = &GeminiInstruction{
-			Parts: []GeminiPart{{Text: anthReq.System}},
+			Parts: []GeminiPart{{Text: SanitizeAllThoughtSignatures(anthReq.System)}},
 		}
 	}
 
@@ -677,46 +729,30 @@ func TranslateAnthropicToGemini(anthReq *AnthropicRequest) *GeminiRequest {
 		// 分离普通 Part 和 functionResponse Part，因为 Gemini 要求 functionResponse 使用 role:"function"
 		var normalParts []GeminiPart
 		var funcRespParts []GeminiPart
-		
-		// 收集所有在 text block 中发现的 thoughtSignature（由于我们将其追加到 text 后面，可能会有多个）
-		var thoughtSigs []string
 
 		for _, block := range msg.Content {
 			switch block.Type {
 			case "text":
 				if block.Text != "" {
-					cleanText, sigs := DecodeThoughtSignature(block.Text)
-					if len(sigs) > 0 {
-						thoughtSigs = append(thoughtSigs, sigs...)
-					}
+					cleanText := SanitizeAllThoughtSignatures(block.Text)
 					if cleanText != "" {
 						normalParts = append(normalParts, GeminiPart{Text: cleanText})
 					}
 				}
 			case "tool_use":
 				// assistant 消息中的工具调用 → Gemini functionCall Part
-				sig := ""
-				if len(thoughtSigs) > 0 {
-					// 消费一个 signature
-					sig = thoughtSigs[0]
-					thoughtSigs = thoughtSigs[1:]
-				}
-				if sig == "" {
-					sig = "skip_thought_signature_validator"
-				}
-				
 				normalParts = append(normalParts, GeminiPart{
 					FunctionCall: &GeminiFunctionCall{
 						Name: block.Name,
 						Args: block.Input,
 						ID:   block.ID,
 					},
-					ThoughtSignature: sig,
+					ThoughtSignature: "skip_thought_signature_validator",
 				})
 			case "tool_result":
 				// user 消息中的工具结果 → Gemini functionResponse Part
 				toolName := findToolNameByID(anthReq.Messages, block.ToolUseID)
-				resultText := extractToolResultText(block)
+				resultText := SanitizeAllThoughtSignatures(extractToolResultText(block))
 				funcRespParts = append(funcRespParts, GeminiPart{
 					FunctionResponse: &GeminiFunctionResponse{
 						Name:     toolName,

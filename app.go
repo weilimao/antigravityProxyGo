@@ -21,6 +21,7 @@ import (
 	"antigravity-proxy/internal/autotrigger"
 	"antigravity-proxy/internal/cert"
 	"antigravity-proxy/internal/db"
+	"antigravity-proxy/internal/dialogs"
 	"antigravity-proxy/internal/patch"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/proxy"
@@ -47,6 +48,7 @@ type App struct {
 	authMgr       *quota.AuthManager
 	proxyEngine   *proxy.ProxyEngine
 	updateMgr     *update.Manager
+	dialogSvc     dialogs.Dialogs
 	logBuffer     []string
 	logBufferMu   sync.Mutex
 	monitorCancel context.CancelFunc
@@ -87,6 +89,9 @@ func (a *App) startup(ctx context.Context) {
 	}
 	_, _ = settings.EnsureConfigExists(defaultUserData)
 	a.settingsMgr.Init(defaultUserData)
+
+	// Initialize unified file dialog service (依赖注入：settingsMgr + AddLog)
+	a.dialogSvc = dialogs.NewWailsDialogs(a.settingsMgr, a.AddLog)
 
 	// Ensure registry key points to the correct/current executable path if autostart is enabled
 	if a.settingsMgr.GetAutoStart() {
@@ -625,14 +630,12 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 		}
 
 	case "accounts:export-all":
-		filePath, _ := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
-			Title:           "导出账号配置",
-			DefaultFilename: "accounts_export.json",
-			Filters: []wailsRuntime.FileFilter{
-				{DisplayName: "JSON Files", Pattern: "*.json"},
-			},
+		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+			Title:       "导出账号配置",
+			DefaultName: "accounts_export.json",
+			Filters:     []dialogs.FileFilter{{DisplayName: "JSON Files", Pattern: "*.json"}},
 		})
-		if filePath != "" {
+		if ok {
 			data, _ := json.MarshalIndent(map[string]interface{}{"accounts": a.accountMgr.GetRawAccounts()}, "", "  ")
 			_ = os.WriteFile(filePath, data, 0644)
 			a.AddLog("📥 [账号导出] 成功导出所有账号")
@@ -641,14 +644,12 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 	case "accounts:export-single":
 		acc := a.accountMgr.GetAccountByID(getStringArg(0))
 		if acc != nil {
-			filePath, _ := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
-				Title:           "导出单账号配置",
-				DefaultFilename: fmt.Sprintf("account_%s.json", acc.Email),
-				Filters: []wailsRuntime.FileFilter{
-					{DisplayName: "JSON Files", Pattern: "*.json"},
-				},
+			filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+				Title:       "导出单账号配置",
+				DefaultName: fmt.Sprintf("account_%s.json", acc.Email),
+				Filters:     []dialogs.FileFilter{{DisplayName: "JSON Files", Pattern: "*.json"}},
 			})
-			if filePath != "" {
+			if ok {
 				data, _ := json.MarshalIndent(map[string]interface{}{"accounts": []*account.Account{acc}}, "", "  ")
 				_ = os.WriteFile(filePath, data, 0644)
 				a.AddLog("📥 [账号导出] 成功导出账号: " + acc.Email)
@@ -656,13 +657,11 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 		}
 
 	case "accounts:import":
-		filePath, _ := wailsRuntime.OpenFileDialog(a.ctx, wailsRuntime.OpenDialogOptions{
-			Title: "导入账号配置",
-			Filters: []wailsRuntime.FileFilter{
-				{DisplayName: "JSON Files", Pattern: "*.json"},
-			},
+		filePath, ok, _ := a.dialogSvc.Open(a.ctx, dialogs.OpenRequest{
+			Title:   "导入账号配置",
+			Filters: []dialogs.FileFilter{{DisplayName: "JSON Files", Pattern: "*.json"}},
 		})
-		if filePath != "" {
+		if ok {
 			if fileData, err := os.ReadFile(filePath); err == nil {
 				var wrapper struct {
 					Accounts []*account.Account `json:"accounts"`
@@ -823,6 +822,22 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 		} else {
 			a.AddLog("👋 更新安装包已成功启动，正在退出当前进程以完成更新...")
 			os.Exit(0)
+		}
+
+	case "settings:export-logs":
+		logContent := getStringArg(0)
+		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+			DefaultName: fmt.Sprintf("system_logs_%s.txt", time.Now().Format("20060102150405")),
+			Title:       "Export System Logs",
+			Filters:     []dialogs.FileFilter{{DisplayName: "Text Files", Pattern: "*.txt"}},
+		})
+		if ok && filePath != "" {
+			err := os.WriteFile(filePath, []byte(logContent), 0644)
+			if err != nil {
+				a.AddLog(fmt.Sprintf("❌ Failed to export system logs: %v", err))
+			} else {
+				a.AddLog(fmt.Sprintf("✅ System logs exported to: %s", filePath))
+			}
 		}
 
 	case "settings:open-folder":
@@ -1008,10 +1023,8 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		return marshalResponse(res)
 
 	case "settings:change-dir":
-		targetDir, _ := wailsRuntime.OpenDirectoryDialog(a.ctx, wailsRuntime.OpenDialogOptions{
-			Title: "选择数据存储目录",
-		})
-		if targetDir == "" {
+		targetDir, ok, _ := a.dialogSvc.OpenDir(a.ctx, dialogs.DirRequest{Title: "选择数据存储目录"})
+		if !ok {
 			return marshalResponse(map[string]interface{}{"success": false, "error": "用户取消选择"})
 		}
 
@@ -1123,15 +1136,15 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 
 	case "retry-error-logs:export":
 		logs := a.errLogger.GetLogs()
-		filePath, _ := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
-			Title:           "导出重试与报错日志",
-			DefaultFilename: fmt.Sprintf("antigravity_retry_error_logs_%d.json", time.Now().Unix()),
-			Filters: []wailsRuntime.FileFilter{
+		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+			Title:       "导出重试与报错日志",
+			DefaultName: fmt.Sprintf("antigravity_retry_error_logs_%d.json", time.Now().Unix()),
+			Filters: []dialogs.FileFilter{
 				{DisplayName: "JSON Files", Pattern: "*.json"},
 				{DisplayName: "CSV Files", Pattern: "*.csv"},
 			},
 		})
-		if filePath == "" {
+		if !ok {
 			return marshalResponse(false)
 		}
 
@@ -1153,6 +1166,46 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		}
 
 		_ = os.WriteFile(filePath, content, 0644)
+		return marshalResponse(true)
+
+	case "request-logs:export":
+		logs, err := db.QueryAllRequestLogs()
+		if err != nil {
+			a.AddLog(fmt.Sprintf("❌ [请求日志导出] 查询数据库失败: %v", err))
+			return marshalResponse(false)
+		}
+		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+			Title:       "导出请求日志",
+			DefaultName: fmt.Sprintf("antigravity_request_logs_%d.json", time.Now().Unix()),
+			Filters: []dialogs.FileFilter{
+				{DisplayName: "JSON Files", Pattern: "*.json"},
+				{DisplayName: "CSV Files", Pattern: "*.csv"},
+			},
+		})
+		if !ok {
+			return marshalResponse(false)
+		}
+
+		var content []byte
+		if strings.HasSuffix(filePath, ".csv") {
+			var csv strings.Builder
+			csv.WriteString("\uFEFF时间,模式,账号/用户,请求方式,域名,路径,模型,输入Token,输出Token,缓存Token,总成本,耗时(ms),状态码,会话ID\n")
+			for _, log := range logs {
+				formattedTime := log.Timestamp
+				if t, err := time.Parse(time.RFC3339, log.Timestamp); err == nil {
+					formattedTime = t.Local().Format("2006-01-02 15:04:05")
+				}
+				csv.WriteString(fmt.Sprintf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,%d,%d,%f,%d,%d,\"%s\"\n",
+					formattedTime, log.Mode, log.UserID, log.Method, log.Host, log.Path, log.ModelName,
+					log.InTokens, log.OutTokens, log.CachedTokens, log.Cost, log.DurationMs, log.StatusCode, log.SessionID))
+			}
+			content = []byte(csv.String())
+		} else {
+			content, _ = json.MarshalIndent(logs, "", "  ")
+		}
+
+		_ = os.WriteFile(filePath, content, 0644)
+		a.AddLog(fmt.Sprintf("📥 [请求日志导出] 成功导出请求日志到: %s", filePath))
 		return marshalResponse(true)
 
 	case "packet:get-all":
@@ -1193,14 +1246,12 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 
 	case "packet:download":
 		markdown := getStringArg(0)
-		filePath, _ := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
-			Title:           "保存 API 接口文档说明",
-			DefaultFilename: "api_documentation.md",
-			Filters: []wailsRuntime.FileFilter{
-				{DisplayName: "Markdown Files", Pattern: "*.md"},
-			},
+		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+			Title:       "保存 API 接口文档说明",
+			DefaultName: "api_documentation.md",
+			Filters:     []dialogs.FileFilter{{DisplayName: "Markdown Files", Pattern: "*.md"}},
 		})
-		if filePath == "" {
+		if !ok {
 			return marshalResponse(false)
 		}
 		_ = os.WriteFile(filePath, []byte(markdown), 0644)
@@ -1210,14 +1261,12 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		markdown := getStringArg(0)
 		exportType := getStringArg(1)
 		defaultName := fmt.Sprintf("api_packets_log_%s.md", strings.ToLower(exportType))
-		filePath, _ := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
-			Title:           "保存接口抓包日志",
-			DefaultFilename: defaultName,
-			Filters: []wailsRuntime.FileFilter{
-				{DisplayName: "Markdown Files", Pattern: "*.md"},
-			},
+		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+			Title:       "保存接口抓包日志",
+			DefaultName: defaultName,
+			Filters:     []dialogs.FileFilter{{DisplayName: "Markdown Files", Pattern: "*.md"}},
 		})
-		if filePath == "" {
+		if !ok {
 			return marshalResponse(false)
 		}
 		_ = os.WriteFile(filePath, []byte(markdown), 0644)
@@ -1240,14 +1289,12 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		}
 		
 		defaultName := fmt.Sprintf("packet_%s_%s.md", strings.ToLower(method), safePath)
-		filePath, _ := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
-			Title:           "保存单条接口抓包日志",
-			DefaultFilename: defaultName,
-			Filters: []wailsRuntime.FileFilter{
-				{DisplayName: "Markdown Files", Pattern: "*.md"},
-			},
+		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+			Title:       "保存单条接口抓包日志",
+			DefaultName: defaultName,
+			Filters:     []dialogs.FileFilter{{DisplayName: "Markdown Files", Pattern: "*.md"}},
 		})
-		if filePath == "" {
+		if !ok {
 			return marshalResponse(false)
 		}
 		_ = os.WriteFile(filePath, []byte(markdown), 0644)

@@ -1,11 +1,13 @@
 package relay
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 )
 
 // TestModelMapping 验证模型名称映射是否正确
@@ -431,5 +433,52 @@ func TestAPIHandlerRoutes(t *testing.T) {
 	// Since we didn't pass a valid token, it should return 401 Unauthorized, NOT 404!
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("expected status 401, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestOpenAIToolCallsCompat(t *testing.T) {
+	gemResp := GeminiResponse{
+		Candidates: []GeminiCandidate{
+			{
+				Content: GeminiCandidateContent{
+					Parts: []GeminiPart{
+						{
+							FunctionCall: &GeminiFunctionCall{
+								Name: "edit_file",
+								Args: map[string]interface{}{"path": "test.go", "content": "package main"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	respBytes, _ := json.Marshal(gemResp)
+
+	handler := NewAPICompatHandler(nil, nil, nil, nil, nil, nil)
+	rr := httptest.NewRecorder()
+	handler.handleNormalResponse(rr, bytes.NewReader(respBytes), nil, "gpt-4o", "openai", time.Now(), "/v1/chat/completions", "req_123")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+
+	var openResp OpenAIResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &openResp); err != nil {
+		t.Fatalf("failed to unmarshal OpenAI response: %v", err)
+	}
+	if len(openResp.Choices) == 0 {
+		t.Fatalf("expected choices in response")
+	}
+	choice := openResp.Choices[0]
+	if choice.FinishReason != "tool_calls" {
+		t.Errorf("expected finish_reason 'tool_calls', got '%s'", choice.FinishReason)
+	}
+	if len(choice.Message.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(choice.Message.ToolCalls))
+	}
+	tc := choice.Message.ToolCalls[0]
+	if tc.Type != "function" || tc.Function.Name != "edit_file" {
+		t.Errorf("unexpected tool call: %+v", tc)
 	}
 }
