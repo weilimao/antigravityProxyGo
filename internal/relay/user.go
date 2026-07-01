@@ -35,14 +35,22 @@ type UserQuotas struct {
 	RateLimit     int    `json:"rateLimit"` // 每分钟请求次数限制，0 表示默认 30
 }
 
+type UserAPIKey struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Key       string    `json:"key"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 type RelayUser struct {
-	ID           string    `json:"id"`
-	Key          string    `json:"key"`
-	PasswordHash string    `json:"passwordHash"`
-	Enabled      bool      `json:"enabled"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	Remark       string     `json:"remark,omitempty"`
-	Quotas       UserQuotas `json:"quotas"`
+	ID           string       `json:"id"`
+	Key          string       `json:"key"`
+	PasswordHash string       `json:"passwordHash"`
+	Enabled      bool         `json:"enabled"`
+	CreatedAt    time.Time    `json:"createdAt"`
+	Remark       string       `json:"remark,omitempty"`
+	Quotas       UserQuotas   `json:"quotas"`
+	APIKeys      []UserAPIKey `json:"apiKeys"`
 }
 
 type UserManager struct {
@@ -185,6 +193,62 @@ func (m *UserManager) ValidateCredentials(key, password string) (*RelayUser, err
 		}
 	}
 	return nil, fmt.Errorf("user %q not found", key)
+}
+
+func (m *UserManager) CreateAPIKey(userID string, name string) (*UserAPIKey, error) {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.ID == userID {
+			newKey := UserAPIKey{
+				ID:        generateID(),
+				Name:      name,
+				Key:       "sk-ant-" + generateID(),
+				CreatedAt: time.Now(),
+			}
+			u.APIKeys = append(u.APIKeys, newKey)
+			m.saveToDiskLocked()
+			return &newKey, nil
+		}
+	}
+	return nil, fmt.Errorf("user not found")
+}
+
+func (m *UserManager) DeleteAPIKey(userID string, keyID string) error {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.ID == userID {
+			for i, k := range u.APIKeys {
+				if k.ID == keyID {
+					u.APIKeys = append(u.APIKeys[:i], u.APIKeys[i+1:]...)
+					m.saveToDiskLocked()
+					return nil
+				}
+			}
+			return fmt.Errorf("api key not found")
+		}
+	}
+	return fmt.Errorf("user not found")
+}
+
+func (m *UserManager) ValidateAPIKey(token string) (*RelayUser, error) {
+	m.RLock()
+	defer m.RUnlock()
+
+	for _, u := range m.users {
+		if !u.Enabled {
+			continue
+		}
+		for _, k := range u.APIKeys {
+			if k.Key == token {
+				return u, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("invalid api key")
 }
 
 func (m *UserManager) saveToDiskLocked() {

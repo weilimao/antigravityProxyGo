@@ -185,6 +185,9 @@ func (a *App) startup(ctx context.Context) {
 			}
 			return a.authMgr.RefreshToken(acc)
 		},
+		func() bool {
+			return a.settingsMgr.GetEnablePacketCapture()
+		},
 	)
 	a.packetCap.Init(activeDir)
 
@@ -291,13 +294,10 @@ func (a *App) startup(ctx context.Context) {
 			}
 
 			if !quota.EnableFixed && !quota.EnableHourly && !quota.EnableDaily {
-				return nil
+				return fmt.Errorf("model series unauthorized")
 			}
 
 			stats := a.relayStatsMgr.GetUserStats(userID)
-			if stats == nil && quota.EnableFixed {
-				return nil // no usage yet
-			}
 
 			familyKeyword := "gemini"
 			if isClaude {
@@ -494,6 +494,7 @@ func (a *App) domReady(ctx context.Context) {
 			"defaultDir": defaultDir,
 		},
 		"settings:get-system-log-enabled": a.settingsMgr.GetEnableSystemLog(),
+		"settings:get-packet-capture-enabled": a.settingsMgr.GetEnablePacketCapture(),
 		"settings:get-startup-options": map[string]bool{
 			"autoStart":   a.settingsMgr.GetAutoStart(),
 			"silentStart": a.settingsMgr.GetSilentStart(),
@@ -712,6 +713,9 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 
 	case "settings:set-system-log-enabled":
 		_ = a.settingsMgr.SetEnableSystemLog(getBoolArg(0))
+
+	case "settings:set-packet-capture-enabled":
+		_ = a.settingsMgr.SetEnablePacketCapture(getBoolArg(0))
 
 	case "settings:set-auto-start":
 		_ = a.settingsMgr.SetAutoStart(getBoolArg(0))

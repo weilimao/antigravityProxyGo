@@ -48,6 +48,7 @@ type Config struct {
 	RelayDomainFilter    bool     `json:"relayDomainFilter"`
 	RelayDomainWhitelist []string `json:"relayDomainWhitelist"`
 	RelayModelMapping    []ModelMappingEntry `json:"relayModelMapping"`
+	EnablePacketCapture  bool   `json:"enablePacketCapture"`
 }
 
 func GetDefaultModelMappings() []ModelMappingEntry {
@@ -146,6 +147,7 @@ func (m *Manager) Init(defaultPath string) {
 		RelayDomainFilter:    false,
 		RelayDomainWhitelist: []string{"*.googleapis.com", "*.google.com", "*.anthropic.com", "*.openai.com"},
 		RelayModelMapping:    GetDefaultModelMappings(),
+		EnablePacketCapture:  true,
 	}
 
 	m.loadConfig()
@@ -162,7 +164,9 @@ func (m *Manager) loadConfig() {
 		return
 	}
 
-	var parsed Config
+	parsed := Config{
+		EnablePacketCapture: true,
+	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return
 	}
@@ -681,6 +685,7 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			RelayDomainFilter:    false,
 			RelayDomainWhitelist: []string{"*.googleapis.com", "*.google.com", "*.anthropic.com", "*.openai.com"},
 			RelayModelMapping:    GetDefaultModelMappings(),
+			EnablePacketCapture:  true,
 		}
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")
 		if err != nil {
@@ -709,6 +714,19 @@ func (m *Manager) SetMaxRetries(retries int) error {
 		retries = 20
 	}
 	m.config.MaxRetries = retries
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetEnablePacketCapture() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.EnablePacketCapture
+}
+
+func (m *Manager) SetEnablePacketCapture(enable bool) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.EnablePacketCapture = enable
 	return m.SaveConfig()
 }
 
@@ -750,6 +768,8 @@ type ManagerInterface interface {
 	SetRelayDomainWhitelist(val []string) error
 	GetRelayModelMapping() []ModelMappingEntry
 	SetRelayModelMapping(val []ModelMappingEntry) error
+	GetEnablePacketCapture() bool
+	SetEnablePacketCapture(enable bool) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,

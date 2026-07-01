@@ -60,27 +60,12 @@ func (a *AuthManager) ValidateToken(token string) (*RelaySession, error) {
 	a.RUnlock()
 
 	if !exists {
-		// 虚拟 Key 防呆放行机制：如果客户端传过来的是标准的官方 Key 格式 (以 "sk-ant-" 或 "sk-" 开头)
-		// 说明客户端（如 Claude Code / ccswitch）透传或硬编码了官方格式的密钥，我们在中继层予以直接放行，并将其动态绑定到系统内首个有效真实用户名下进行计费和会话路由
-		if strings.HasPrefix(token, "sk-ant-") || strings.HasPrefix(token, "sk-") {
-			var targetUserID string
-			a.userMgr.RLock()
-			for _, u := range a.userMgr.users {
-				if u.Enabled {
-					targetUserID = u.ID
-					break
-				}
-			}
-			a.userMgr.RUnlock()
-
-			if targetUserID == "" {
-				return nil, fmt.Errorf("no active user available in system for virtual key bypass")
-			}
-
+		// 校验是否是持久化 API Key
+		if user, err := a.userMgr.ValidateAPIKey(token); err == nil {
 			return &RelaySession{
-				UserID:    targetUserID,
-				UserKey:   "virtual_client",
-				ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+				UserID:    user.ID,
+				UserKey:   user.Key,
+				ExpiresAt: time.Now().Add(5 * time.Minute),
 			}, nil
 		}
 		return nil, fmt.Errorf("invalid token")

@@ -77,10 +77,25 @@ func (s *Scheduler) OnQuotaRefreshed(accountID string) {
 
 		// 检查任务是否关联了该账号
 		hasAccount := false
+		var restoredEmail string
+		if restoredAcc := s.accountMgr.GetAccountByID(accountID); restoredAcc != nil {
+			restoredEmail = restoredAcc.Email
+		}
+
 		for _, accID := range task.AccountIDs {
 			if accID == accountID {
 				hasAccount = true
 				break
+			}
+			
+			// 对于按邮箱去重显示的通道，可能保存的 ID 和实际刷新配额的 ID 不一致（但邮箱一致）
+			if restoredEmail != "" {
+				if taskAcc := s.accountMgr.GetAccountByID(accID); taskAcc != nil {
+					if taskAcc.Email == restoredEmail {
+						hasAccount = true
+						break
+					}
+				}
 			}
 		}
 

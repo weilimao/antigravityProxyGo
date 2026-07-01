@@ -1,5 +1,19 @@
 import { ipcRenderer, shell } from '../shared/ipc';
 
+function updatePacketCaptureVisibility(enabled: boolean) {
+    const navPacketsLink = document.getElementById('navPacketsLink');
+    if (navPacketsLink) {
+        if (enabled) {
+            navPacketsLink.style.setProperty('display', 'flex', 'important');
+        } else {
+            navPacketsLink.style.setProperty('display', 'none', 'important');
+            if (window.location.hash.includes('/packets')) {
+                window.location.hash = '#/dashboard';
+            }
+        }
+    }
+}
+
 export function initSettings() {
     console.log('[SettingsController] Initializing settings controller...');
     try {
@@ -115,6 +129,19 @@ export function initSettings() {
             });
         }
 
+        const chkEnablePacketCapture = document.getElementById('chkEnablePacketCapture') as HTMLInputElement | null;
+        if (chkEnablePacketCapture) {
+            chkEnablePacketCapture.addEventListener('change', (e: any) => {
+                const enabled = e.target.checked;
+                try {
+                    ipcRenderer.send('settings:set-packet-capture-enabled', enabled);
+                    updatePacketCaptureVisibility(enabled);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save packet capture settings:', err);
+                }
+            });
+        }
+
         function updateConsoleVisibility(enabled: boolean) {
             if (systemConsole) {
                 if (enabled) {
@@ -167,6 +194,14 @@ export function refreshSettingsUI() {
                 numMaxRetries.value = '20';
             }
         }
+
+        const chkEnablePacketCapture = document.getElementById('chkEnablePacketCapture') as HTMLInputElement | null;
+        const packetCaptureEnabled = ipcRenderer.sendSync('settings:get-packet-capture-enabled');
+        const isCaptureEnabled = packetCaptureEnabled !== null && packetCaptureEnabled !== undefined ? !!packetCaptureEnabled : true;
+        if (chkEnablePacketCapture) {
+            chkEnablePacketCapture.checked = isCaptureEnabled;
+        }
+        updatePacketCaptureVisibility(isCaptureEnabled);
     } catch (err) {
         console.error('[SettingsController] Failed to refresh settings UI:', err);
     }

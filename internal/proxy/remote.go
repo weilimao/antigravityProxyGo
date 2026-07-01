@@ -223,6 +223,120 @@ func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error
 	return conn, nil
 }
 
+// FetchRemoteKeys fetches the list of API keys from the remote server
+func (rr *RemoteRelay) FetchRemoteKeys() (interface{}, error) {
+	rr.RLock()
+	config := rr.config
+	rr.RUnlock()
+
+	if !config.Connected {
+		return nil, fmt.Errorf("not connected to remote relay")
+	}
+
+	url := fmt.Sprintf("http://%s:%s/api/keys", config.Host, config.Port)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+config.Token)
+
+	resp, err := noProxyClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result["keys"], nil
+}
+
+// CreateRemoteKey creates a new API key on the remote server
+func (rr *RemoteRelay) CreateRemoteKey(name string) (interface{}, error) {
+	rr.RLock()
+	config := rr.config
+	rr.RUnlock()
+
+	if !config.Connected {
+		return nil, fmt.Errorf("not connected to remote relay")
+	}
+
+	url := fmt.Sprintf("http://%s:%s/api/keys", config.Host, config.Port)
+	payload := map[string]string{"name": name}
+	body, _ := json.Marshal(payload)
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+config.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := noProxyClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result["key"], nil
+}
+
+// DeleteRemoteKey deletes an API key on the remote server
+func (rr *RemoteRelay) DeleteRemoteKey(id string) error {
+	rr.RLock()
+	config := rr.config
+	rr.RUnlock()
+
+	if !config.Connected {
+		return fmt.Errorf("not connected to remote relay")
+	}
+
+	url := fmt.Sprintf("http://%s:%s/api/keys/%s", config.Host, config.Port, id)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+config.Token)
+
+	resp, err := noProxyClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	return nil
+}
+
 // FetchRemoteStats retrieves statistics from the remote relay server
 func (rr *RemoteRelay) FetchRemoteStats() (map[string]interface{}, error) {
 	rr.RLock()

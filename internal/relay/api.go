@@ -75,6 +75,12 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleLogDetail(w, r)
 	case path == "/api/cert" && r.Method == http.MethodGet:
 		h.handleCert(w, r)
+	case path == "/api/keys" && r.Method == http.MethodGet:
+		h.handleGetAPIKeys(w, r)
+	case path == "/api/keys" && r.Method == http.MethodPost:
+		h.handleCreateAPIKey(w, r)
+	case strings.HasPrefix(path, "/api/keys/") && r.Method == http.MethodDelete:
+		h.handleDeleteAPIKey(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error": "not found",
@@ -135,6 +141,90 @@ func (h *APIHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *APIHandler) handleGetAPIKeys(w http.ResponseWriter, r *http.Request) {
+	token := extractBearerToken(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing token"})
+		return
+	}
+	session, err := h.authMgr.ValidateToken(token)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	user := h.authMgr.userMgr.GetUserByID(session.UserID)
+	if user == nil {
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{"error": "user not found"})
+		return
+	}
+	keys := user.APIKeys
+	if keys == nil {
+		keys = make([]UserAPIKey, 0)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"keys":    keys,
+	})
+}
+
+func (h *APIHandler) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
+	token := extractBearerToken(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing token"})
+		return
+	}
+	session, err := h.authMgr.ValidateToken(token)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid request"})
+		return
+	}
+	if req.Name == "" {
+		req.Name = "Default Key"
+	}
+	newKey, err := h.authMgr.userMgr.CreateAPIKey(session.UserID, req.Name)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"key":     newKey,
+	})
+}
+
+func (h *APIHandler) handleDeleteAPIKey(w http.ResponseWriter, r *http.Request) {
+	token := extractBearerToken(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing token"})
+		return
+	}
+	session, err := h.authMgr.ValidateToken(token)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	keyID := strings.TrimPrefix(r.URL.Path, "/api/keys/")
+	if keyID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "missing key id"})
+		return
+	}
+	err = h.authMgr.userMgr.DeleteAPIKey(session.UserID, keyID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+	})
+}
+
 func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 	token := extractBearerToken(r)
 	if token == "" {
@@ -169,10 +259,10 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 		statsCopy.Quotas = user.Quotas
 		
 		packageName := "自定义套餐"
-		isGeminiUnlimited := !user.Quotas.Gemini.EnableFixed && !user.Quotas.Gemini.EnableHourly && !user.Quotas.Gemini.EnableDaily
-		isClaudeUnlimited := !user.Quotas.Claude.EnableFixed && !user.Quotas.Claude.EnableHourly && !user.Quotas.Claude.EnableDaily
-		if isGeminiUnlimited && isClaudeUnlimited {
-			packageName = "无限制"
+		isGeminiDisabled := !user.Quotas.Gemini.EnableFixed && !user.Quotas.Gemini.EnableHourly && !user.Quotas.Gemini.EnableDaily
+		isClaudeDisabled := !user.Quotas.Claude.EnableFixed && !user.Quotas.Claude.EnableHourly && !user.Quotas.Claude.EnableDaily
+		if isGeminiDisabled && isClaudeDisabled {
+			packageName = "无访问权限"
 		}
 		if h.packageMgr != nil {
 			pkgs := h.packageMgr.GetPackages()

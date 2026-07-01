@@ -40,7 +40,7 @@
                     <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">2FA AUTH</span>
                     <span class="nav-link-zh text-[13px] font-medium">2FA验证码</span>
                 </router-link>
-                <router-link to="/packets" active-class="text-primary dark:text-primary-fixed-dim border-primary" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap border-b-2 border-transparent">
+                <router-link id="navPacketsLink" to="/packets" active-class="text-primary dark:text-primary-fixed-dim border-primary" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap border-b-2 border-transparent">
                     <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">PACKETS</span>
                     <span class="nav-link-zh text-[13px] font-medium">抓包分析</span>
                 </router-link>
@@ -58,9 +58,9 @@
                 <div id="remoteStatusBadge" class="hidden flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full border whitespace-nowrap flex-shrink-0">
                     <span class="material-symbols-outlined text-[15px]">cloud</span>
                     <span id="remoteStatusText">远程连接中</span>
-                    <button id="btnCopyApiKey" class="hidden ml-2 text-primary dark:text-primary-fixed-dim hover:text-primary/80 text-[11px] font-bold border border-primary/20 rounded px-1.5 py-0.5 flex items-center gap-0.5 bg-primary/5 transition-all" title="复制本地中继 API Key (有效期为 30 天)">
-                        <span class="material-symbols-outlined text-[12px] pointer-events-none">content_copy</span>
-                        复制 Key
+                    <button id="btnManageApiKeys" class="hidden ml-2 text-primary dark:text-primary-fixed-dim hover:text-primary/80 text-[11px] font-bold border border-primary/20 rounded px-1.5 py-0.5 flex items-center gap-0.5 bg-primary/5 transition-all" title="管理持久化 API Keys">
+                        <span class="material-symbols-outlined text-[12px] pointer-events-none">key</span>
+                        管理 Key
                     </button>
                     <button id="btnRemoteEnable" class="hidden ml-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 text-[11px] font-bold" data-i18n="remoteEnable">启用</button>
                     <button id="btnRemoteDisable" class="hidden ml-1 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-[11px] font-bold" data-i18n="remoteDisable">停用</button>
@@ -118,6 +118,7 @@
     <SessionBindingsModal />
     <ExportPacketsModal />
     <RemoteModal />
+    <RemoteKeysModal />
     <RelayUserModal />
     <RelayUserStatsModal />
     <RelayUserQuotaModal />
@@ -142,6 +143,7 @@ import UpdateModal from './components/modals/UpdateModal.vue';
 import SessionBindingsModal from './components/modals/SessionBindingsModal.vue';
 import ExportPacketsModal from './components/modals/ExportPacketsModal.vue';
 import RemoteModal from './components/modals/RemoteModal.vue';
+import RemoteKeysModal from './components/modals/RemoteKeysModal.vue';
 import RelayUserModal from './components/modals/RelayUserModal.vue';
 import RelayUserStatsModal from './components/modals/RelayUserStatsModal.vue';
 import RelayUserQuotaModal from './components/modals/RelayUserQuotaModal.vue';

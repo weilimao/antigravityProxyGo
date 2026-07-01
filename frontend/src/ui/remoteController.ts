@@ -34,9 +34,20 @@ export function initRemoteEvents() {
     if (btnRemoteCancel) {
         btnRemoteCancel.addEventListener('click', closeRemoteModal);
     }
-    const btnCopyApiKey = document.getElementById('btnCopyApiKey');
-    if (btnCopyApiKey) {
-        btnCopyApiKey.addEventListener('click', handleCopyApiKey);
+    const btnManageApiKeys = document.getElementById('btnManageApiKeys');
+    if (btnManageApiKeys) {
+        btnManageApiKeys.addEventListener('click', openRemoteKeysModal);
+    }
+    const btnRemoteKeysClose = document.getElementById('btnRemoteKeysClose');
+    if (btnRemoteKeysClose) {
+        btnRemoteKeysClose.addEventListener('click', () => {
+            const m = document.getElementById('remoteKeysModal');
+            if (m) m.classList.add('hidden');
+        });
+    }
+    const btnRemoteCreateKey = document.getElementById('btnRemoteCreateKey');
+    if (btnRemoteCreateKey) {
+        btnRemoteCreateKey.addEventListener('click', handleCreateRemoteKey);
     }
 
     // Listen for remote state changes
@@ -218,7 +229,7 @@ function updateRemoteStatusUI(status: any) {
         }
         if (btnConnect) btnConnect.classList.add('hidden');
         
-        const btnCopy = document.getElementById('btnCopyApiKey');
+        const btnCopy = document.getElementById('btnManageApiKeys');
         if (btnCopy) btnCopy.classList.remove('hidden');
         
         if (btnRemoteDisable) btnRemoteDisable.classList.remove('hidden');
@@ -240,14 +251,14 @@ function updateRemoteStatusUI(status: any) {
         if (btnRemoteEnable) btnRemoteEnable.classList.remove('hidden');
         if (btnRemoteDisconnect) btnRemoteDisconnect.classList.remove('hidden');
         
-        const btnCopy = document.getElementById('btnCopyApiKey');
+        const btnCopy = document.getElementById('btnManageApiKeys');
         if (btnCopy) btnCopy.classList.add('hidden');
     } else {
         // Not logged in / disconnected completely
         if (badge) badge.classList.add('hidden');
         if (btnConnect) btnConnect.classList.remove('hidden');
         
-        const btnCopy = document.getElementById('btnCopyApiKey');
+        const btnCopy = document.getElementById('btnManageApiKeys');
         if (btnCopy) btnCopy.classList.add('hidden');
     }
     
@@ -306,23 +317,94 @@ async function syncRemoteStats() {
     }
 }
 
-async function handleCopyApiKey() {
-    if (!state.remoteToken) {
-        alert('❌ 未获取到有效的 API Key');
-        return;
-    }
+async function loadRemoteKeys() {
     try {
-        await navigator.clipboard.writeText(state.remoteToken);
-        const btn = document.getElementById('btnCopyApiKey');
-        if (btn) {
-            const originalHtml = btn.innerHTML;
-            btn.innerHTML = `<span class="material-symbols-outlined text-[12px] pointer-events-none">done</span>已复制`;
-            setTimeout(() => {
-                btn.innerHTML = originalHtml;
-            }, 1500);
+        const res = await ipcRenderer.invoke('remote:get-keys');
+        if (!res || !res.success) {
+            console.error('Failed to load keys:', res?.error);
+            return;
+        }
+        
+        const keys = res.keys || [];
+        const tbody = document.getElementById('remoteKeysTableBody');
+        if (!tbody) return;
+        
+        if (keys.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="4" class="text-center py-4 text-outline/60">暂无 API Key，请点击上方创建</td></tr>`;
+            return;
+        }
+        
+        tbody.innerHTML = '';
+        keys.forEach((k: any) => {
+            const tr = document.createElement('tr');
+            tr.className = 'border-b border-outline-variant/10 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors';
+            
+            const displayKey = k.key.substring(0, 10) + '...' + k.key.substring(k.key.length - 4);
+            const date = new Date(k.createdAt).toLocaleString();
+            
+            tr.innerHTML = `
+                <td class="py-2.5 px-2 font-medium">${k.name}</td>
+                <td class="py-2.5 font-mono text-outline/80">${displayKey}</td>
+                <td class="py-2.5 text-outline/60">${date}</td>
+                <td class="py-2.5 text-center">
+                    <button class="btn-copy-remote-key text-primary hover:text-primary/80 mr-2" data-key="${k.key}" title="复制"><span class="material-symbols-outlined text-[16px] align-middle">content_copy</span></button>
+                    <button class="btn-del-remote-key text-red-400 hover:text-red-600" data-id="${k.id}" title="删除"><span class="material-symbols-outlined text-[16px] align-middle">delete</span></button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+        
+        document.querySelectorAll('.btn-copy-remote-key').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const b = e.currentTarget as HTMLButtonElement;
+                const k = b.getAttribute('data-key') || '';
+                await navigator.clipboard.writeText(k);
+                const old = b.innerHTML;
+                b.innerHTML = '<span class="material-symbols-outlined text-[16px] align-middle text-emerald-500">done</span>';
+                setTimeout(() => { b.innerHTML = old; }, 1500);
+            });
+        });
+        
+        document.querySelectorAll('.btn-del-remote-key').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const b = e.currentTarget as HTMLButtonElement;
+                const id = b.getAttribute('data-id') || '';
+                if (confirm('确定要删除这个 Key 吗？客户端使用该 Key 将立即失效！')) {
+                    await ipcRenderer.invoke('remote:delete-key', id);
+                    loadRemoteKeys();
+                }
+            });
+        });
+        
+    } catch (err) {
+        console.error('loadRemoteKeys error:', err);
+    }
+}
+
+async function openRemoteKeysModal() {
+    const modal = document.getElementById('remoteKeysModal');
+    if (modal) modal.classList.remove('hidden');
+    
+    // Clear input
+    const input = document.getElementById('remoteNewKeyName') as HTMLInputElement;
+    if (input) input.value = '';
+    
+    await loadRemoteKeys();
+}
+
+async function handleCreateRemoteKey() {
+    const input = document.getElementById('remoteNewKeyName') as HTMLInputElement;
+    const name = input?.value?.trim() || 'Default Key';
+    
+    try {
+        const res = await ipcRenderer.invoke('remote:create-key', name);
+        if (res && res.success) {
+            if (input) input.value = '';
+            await loadRemoteKeys();
+        } else {
+            alert('创建失败: ' + (res?.error || '未知错误'));
         }
     } catch (err) {
-        console.error('Failed to copy token:', err);
-        alert(`复制失败，请手动在控制台复制:\n${state.remoteToken}`);
+        alert('创建失败: ' + err);
     }
 }

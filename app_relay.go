@@ -483,6 +483,38 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 			return marshalResponse(nil)
 		}
 		return marshalResponse(stats)
+
+	case "remote:get-keys":
+		if a.remoteRelay == nil || !a.remoteRelay.IsConnected() {
+			return marshalResponse(map[string]interface{}{"success": false, "error": "not connected"})
+		}
+		keys, err := a.remoteRelay.FetchRemoteKeys()
+		if err != nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		return marshalResponse(map[string]interface{}{"success": true, "keys": keys})
+
+	case "remote:create-key":
+		if a.remoteRelay == nil || !a.remoteRelay.IsConnected() {
+			return marshalResponse(map[string]interface{}{"success": false, "error": "not connected"})
+		}
+		name := getStringArg(0)
+		key, err := a.remoteRelay.CreateRemoteKey(name)
+		if err != nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		return marshalResponse(map[string]interface{}{"success": true, "key": key})
+
+	case "remote:delete-key":
+		if a.remoteRelay == nil || !a.remoteRelay.IsConnected() {
+			return marshalResponse(map[string]interface{}{"success": false, "error": "not connected"})
+		}
+		id := getStringArg(0)
+		err := a.remoteRelay.DeleteRemoteKey(id)
+		if err != nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		return marshalResponse(map[string]interface{}{"success": true})
 	}
 
 	return "", false, nil

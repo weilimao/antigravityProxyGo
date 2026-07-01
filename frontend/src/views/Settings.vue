@@ -63,6 +63,27 @@
 </label>
 </div>
 </div>
+<!-- 抓包分析设置卡片 -->
+<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">analytics</span>
+<span data-i18n="packetSettingTitle">抓包分析设置</span>
+</h2>
+<p class="text-xs text-outline leading-relaxed" data-i18n="packetSettingTip">
+                配置是否在顶部菜单栏显示“抓包分析”功能。关闭后将隐藏“抓包分析”菜单，同时停止在本地抓取并存储所有的接口数据包。
+            </p>
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex flex-col gap-0.5">
+<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="enablePacketCaptureLabel">显示抓包分析并进行抓包</span>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="enablePacketCaptureDesc">关闭后隐藏菜单栏的抓包分析选项，并不再记录和持久化保存任何接口的请求与响应数据。</span>
+</div>
+<!-- Toggle Switch -->
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="chkEnablePacketCapture" type="checkbox"/>
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
+</div>
 <!-- 代理参数设置卡片 -->
 <div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">

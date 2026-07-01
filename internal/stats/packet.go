@@ -36,20 +36,23 @@ type CapturedPacket struct {
 
 type PacketCapturer struct {
 	sync.RWMutex
-	persistPath      string
-	packets          []*CapturedPacket
-	getAccountTokens func(id string) (string, string, string, error) // returns token, refreshToken, projectId, error
-	refreshAccount   func(id string) (string, error)
+	persistPath         string
+	packets             []*CapturedPacket
+	getAccountTokens    func(id string) (string, string, string, error) // returns token, refreshToken, projectId, error
+	refreshAccount      func(id string) (string, error)
+	enablePacketCapture func() bool
 }
 
 func NewPacketCapturer(
 	getAccountTokens func(id string) (string, string, string, error),
 	refreshAccount func(id string) (string, error),
+	enablePacketCapture func() bool,
 ) *PacketCapturer {
 	return &PacketCapturer{
-		packets:          make([]*CapturedPacket, 0),
-		getAccountTokens: getAccountTokens,
-		refreshAccount:   refreshAccount,
+		packets:             make([]*CapturedPacket, 0),
+		getAccountTokens:    getAccountTokens,
+		refreshAccount:      refreshAccount,
+		enablePacketCapture: enablePacketCapture,
 	}
 }
 
@@ -143,6 +146,10 @@ func (pc *PacketCapturer) IsCaptured(method, host, urlPath string) bool {
 }
 
 func (pc *PacketCapturer) SavePacket(method, host, urlPath string, reqHeaders map[string][]string, reqBody []byte, resHeaders map[string][]string, resBody []byte, statusCode int) *CapturedPacket {
+	if pc.enablePacketCapture != nil && !pc.enablePacketCapture() {
+		return nil
+	}
+
 	pc.Lock()
 	defer pc.Unlock()
 

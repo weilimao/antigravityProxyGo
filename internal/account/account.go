@@ -533,13 +533,21 @@ func (m *Manager) GetTwoFAAccounts() []*Account {
 	defer m.RUnlock()
 
 	var list []*Account
+	seenEmails := make(map[string]bool)
+
 	for _, a := range m.accounts {
 		if a.TwoFASecret != "" {
-			list = append(list, a)
+			if !seenEmails[a.Email] {
+				list = append(list, a)
+				seenEmails[a.Email] = true
+			}
 		}
 	}
 	for _, a := range m.twofaAccounts {
-		list = append(list, a)
+		if !seenEmails[a.Email] {
+			list = append(list, a)
+			seenEmails[a.Email] = true
+		}
 	}
 	return list
 }
@@ -547,25 +555,40 @@ func (m *Manager) GetTwoFAAccounts() []*Account {
 func (m *Manager) UpdateAccount2FASecret(id string, secret string) {
 	m.Lock()
 	changed := false
-	found := false
 
-	// 1. 先在主账号池中查找
+	// 先通过 ID 找到对应的 Email
+	var targetEmail string
 	for _, a := range m.accounts {
 		if a.ID == id {
-			if a.TwoFASecret != secret {
-				a.TwoFASecret = secret
-				changed = true
-			}
-			found = true
+			targetEmail = a.Email
 			break
 		}
 	}
-
-	// 2. 如果主账号池中没找到，在独立的 2FA 账号列表中查找
-	if !found {
-		var new2FAAccounts []*Account
+	if targetEmail == "" {
 		for _, a := range m.twofaAccounts {
 			if a.ID == id {
+				targetEmail = a.Email
+				break
+			}
+		}
+	}
+
+	// 如果找到了对应的 Email，则全量更新
+	if targetEmail != "" {
+		// 1. 更新主账号池中的所有匹配记录
+		for _, a := range m.accounts {
+			if a.Email == targetEmail {
+				if a.TwoFASecret != secret {
+					a.TwoFASecret = secret
+					changed = true
+				}
+			}
+		}
+
+		// 2. 更新独立的 2FA 账号列表中的记录
+		var new2FAAccounts []*Account
+		for _, a := range m.twofaAccounts {
+			if a.Email == targetEmail {
 				if secret != "" {
 					if a.TwoFASecret != secret {
 						a.TwoFASecret = secret
@@ -576,13 +599,16 @@ func (m *Manager) UpdateAccount2FASecret(id string, secret string) {
 					// 密钥被清空且是 2FA-only 账号，直接将其从独立列表中删除
 					changed = true
 				}
-				found = true
 			} else {
 				new2FAAccounts = append(new2FAAccounts, a)
 			}
 		}
-		if changed {
+		
+		// 只有在独立 2FA 列表中有变动，或者原本列表需要过滤时，才替换 slice
+		// 实际上由于全量遍历了，直接覆盖是最安全的做法
+		if changed || len(new2FAAccounts) != len(m.twofaAccounts) {
 			m.twofaAccounts = new2FAAccounts
+			changed = true
 		}
 	}
 	m.Unlock()
