@@ -320,7 +320,8 @@ func (a *App) startup(ctx context.Context) {
 			}
 
 			if quota.EnableHourly && quota.HourlyHours > 0 {
-				since := time.Now().Add(-time.Duration(quota.HourlyHours) * time.Hour).Format(time.RFC3339)
+				windowStart, _ := relay.FixedWindowBounds(quota.HourlyHours)
+				since := windowStart.Format(time.RFC3339)
 				usedTokens, err := db.GetTokensForUserModelFamilySince(userID, familyKeyword, since)
 				if err != nil {
 					return fmt.Errorf("failed to check hourly quota")
@@ -331,7 +332,8 @@ func (a *App) startup(ctx context.Context) {
 			}
 
 			if quota.EnableDaily && quota.DailyDays > 0 {
-				since := time.Now().Add(-time.Duration(quota.DailyDays*24) * time.Hour).Format(time.RFC3339)
+				windowStart, _ := relay.FixedWindowBounds(quota.DailyDays * 24)
+				since := windowStart.Format(time.RFC3339)
 				usedTokens, err := db.GetTokensForUserModelFamilySince(userID, familyKeyword, since)
 				if err != nil {
 					return fmt.Errorf("failed to check daily quota")

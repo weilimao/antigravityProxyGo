@@ -25,6 +25,10 @@ const translations: Translations = {
         certProcessing: "⏳ 处理中...",
         installCert: "安装证书",
         uninstallCert: "卸载证书",
+        navAccounts: "账号池",
+        navUsage: "使用详情",
+        navOtp: "2FA验证码",
+        navPackets: "抓包分析",
         
         totalRequests: "总请求次数",
         totalRetries: "重试次数",
@@ -212,6 +216,10 @@ const translations: Translations = {
         certProcessing: "⏳ Processing...",
         installCert: "Install CA",
         uninstallCert: "Uninstall CA",
+        navAccounts: "Accounts",
+        navUsage: "Usage Details",
+        navOtp: "2FA Auth",
+        navPackets: "Packets",
         
         totalRequests: "Total Requests",
         totalRetries: "Retries",

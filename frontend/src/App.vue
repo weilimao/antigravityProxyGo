@@ -1,10 +1,10 @@
 <template>
   <div class="antialiased min-h-screen flex flex-col font-sans">
-    <header class="bg-white/80 dark:bg-[#1a1f30]/80 backdrop-blur-md border-b border-outline-variant/30 flex justify-between items-center w-full px-4 lg:px-6 z-50 py-3">
-        <!-- 左侧及中间区域：Logo、证书管理和导航链接 -->
-        <div class="flex items-center gap-6 md:gap-8 lg:gap-12 flex-shrink-0">
+    <header ref="headerRef" class="bg-white/80 dark:bg-[#1a1f30]/80 backdrop-blur-md border-b border-outline-variant/30 flex justify-between items-center w-full px-4 lg:px-6 z-50 py-3">
+        <!-- 左侧及中间区域：Logo、证书管理和导航链接/下拉菜单 -->
+        <div class="flex items-center gap-6 md:gap-8 lg:gap-12 flex-grow min-w-0">
             <!-- Logo 和证书管理 -->
-            <div class="flex items-center gap-2 md:gap-4 flex-shrink-0">
+            <div ref="leftSection" class="flex items-center gap-2 md:gap-4 flex-shrink-0">
                 <div class="text-[16px] md:text-[18px] font-bold text-primary dark:text-primary-fixed-dim flex items-center gap-1.5 whitespace-nowrap">
                     <img src="/src/assets/appicon.png" class="w-[18px] h-[18px] md:w-5 md:h-5 rounded-[4px] object-cover shadow-sm shadow-primary/20" />
                     Antigravity <span class="hidden sm:inline">Proxy</span>
@@ -22,37 +22,72 @@
                 </div>
             </div>
 
-            <!-- 顶部导航链接 -->
-            <nav class="flex items-center gap-3 md:gap-6 lg:gap-8">
+            <!-- 顶部导航链接 (展开状态下显示) -->
+            <nav v-show="!isCollapsed" ref="navSection" class="flex items-center gap-3 md:gap-6 lg:gap-8 flex-shrink-0">
                 <router-link to="/dashboard" active-class="text-primary dark:text-primary-fixed-dim border-primary" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap border-b-2 border-transparent">
                     <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">DASHBOARD</span>
                     <span class="nav-link-zh text-[13px] font-medium" data-i18n="title">控制台</span>
                 </router-link>
                 <router-link to="/accounts" active-class="text-primary dark:text-primary-fixed-dim border-primary" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap border-b-2 border-transparent">
                     <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">ACCOUNTS</span>
-                    <span class="nav-link-zh text-[13px] font-medium">账号池</span>
+                    <span class="nav-link-zh text-[13px] font-medium" data-i18n="navAccounts">账号池</span>
                 </router-link>
                 <router-link to="/usage" active-class="text-primary dark:text-primary-fixed-dim border-primary" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap border-b-2 border-transparent">
                     <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">USAGE DETAILS</span>
-                    <span class="nav-link-zh text-[13px] font-medium">使用详情</span>
+                    <span class="nav-link-zh text-[13px] font-medium" data-i18n="navUsage">使用详情</span>
                 </router-link>
                 <router-link to="/otp" active-class="text-primary dark:text-primary-fixed-dim border-primary" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap border-b-2 border-transparent">
                     <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">2FA AUTH</span>
-                    <span class="nav-link-zh text-[13px] font-medium">2FA验证码</span>
+                    <span class="nav-link-zh text-[13px] font-medium" data-i18n="navOtp">2FA验证码</span>
                 </router-link>
                 <router-link id="navPacketsLink" to="/packets" active-class="text-primary dark:text-primary-fixed-dim border-primary" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap border-b-2 border-transparent">
                     <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">PACKETS</span>
-                    <span class="nav-link-zh text-[13px] font-medium">抓包分析</span>
+                    <span class="nav-link-zh text-[13px] font-medium" data-i18n="navPackets">抓包分析</span>
                 </router-link>
                 <router-link to="/settings" active-class="text-primary dark:text-primary-fixed-dim border-primary" class="text-outline hover:text-primary transition-colors pb-0.5 flex flex-col items-center whitespace-nowrap border-b-2 border-transparent">
                     <span class="nav-link-en hidden lg:block text-[9px] font-bold tracking-wider">SETTINGS</span>
                     <span class="nav-link-zh text-[13px] font-medium" data-i18n="navSettings">设置</span>
                 </router-link>
             </nav>
+
+            <!-- 响应式下拉菜单 (折叠状态下显示) -->
+            <div v-show="isCollapsed" ref="dropdownRef" class="relative flex-shrink-0">
+                <button @click.stop="toggleDropdown" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-outline-variant/30 text-outline hover:text-primary dark:hover:text-primary-fixed-dim bg-outline-variant/5 hover:bg-primary/5 transition-all text-[13px] font-medium select-none">
+                    <span class="material-symbols-outlined text-[18px]">menu</span>
+                    <span>{{ currentActiveLabel }}</span>
+                    <span class="material-symbols-outlined text-[16px] transition-transform duration-200" :class="{ 'rotate-180': isDropdownOpen }">keyboard_arrow_down</span>
+                </button>
+                <div v-show="isDropdownOpen" class="absolute left-0 mt-2 w-48 bg-white/95 dark:bg-[#1a1f30]/95 backdrop-blur-md border border-outline-variant/30 rounded-xl shadow-xl py-1.5 z-50">
+                    <router-link to="/dashboard" @click="isDropdownOpen = false" active-class="text-primary dark:text-primary-fixed-dim bg-primary/5 font-semibold" class="flex items-center px-4 py-2.5 text-[13px] text-outline hover:text-primary hover:bg-primary/5 transition-colors">
+                        <span class="material-symbols-outlined text-[18px] mr-2">dashboard</span>
+                        <span class="nav-link-zh" data-i18n="title">控制台</span>
+                    </router-link>
+                    <router-link to="/accounts" @click="isDropdownOpen = false" active-class="text-primary dark:text-primary-fixed-dim bg-primary/5 font-semibold" class="flex items-center px-4 py-2.5 text-[13px] text-outline hover:text-primary hover:bg-primary/5 transition-colors">
+                        <span class="material-symbols-outlined text-[18px] mr-2">supervisor_account</span>
+                        <span class="nav-link-zh" data-i18n="navAccounts">账号池</span>
+                    </router-link>
+                    <router-link to="/usage" @click="isDropdownOpen = false" active-class="text-primary dark:text-primary-fixed-dim bg-primary/5 font-semibold" class="flex items-center px-4 py-2.5 text-[13px] text-outline hover:text-primary hover:bg-primary/5 transition-colors">
+                        <span class="material-symbols-outlined text-[18px] mr-2">monitoring</span>
+                        <span class="nav-link-zh" data-i18n="navUsage">使用详情</span>
+                    </router-link>
+                    <router-link to="/otp" @click="isDropdownOpen = false" active-class="text-primary dark:text-primary-fixed-dim bg-primary/5 font-semibold" class="flex items-center px-4 py-2.5 text-[13px] text-outline hover:text-primary hover:bg-primary/5 transition-colors">
+                        <span class="material-symbols-outlined text-[18px] mr-2">sms</span>
+                        <span class="nav-link-zh" data-i18n="navOtp">2FA验证码</span>
+                    </router-link>
+                    <router-link id="navPacketsLinkDropdown" to="/packets" @click="isDropdownOpen = false" active-class="text-primary dark:text-primary-fixed-dim bg-primary/5 font-semibold" class="flex items-center px-4 py-2.5 text-[13px] text-outline hover:text-primary hover:bg-primary/5 transition-colors">
+                        <span class="material-symbols-outlined text-[18px] mr-2">analytics</span>
+                        <span class="nav-link-zh" data-i18n="navPackets">抓包分析</span>
+                    </router-link>
+                    <router-link to="/settings" @click="isDropdownOpen = false" active-class="text-primary dark:text-primary-fixed-dim bg-primary/5 font-semibold" class="flex items-center px-4 py-2.5 text-[13px] text-outline hover:text-primary hover:bg-primary/5 transition-colors">
+                        <span class="material-symbols-outlined text-[18px] mr-2">settings</span>
+                        <span class="nav-link-zh" data-i18n="navSettings">设置</span>
+                    </router-link>
+                </div>
+            </div>
         </div>
 
         <!-- 顶部右侧控制按钮 -->
-        <div class="flex items-center gap-2 md:gap-4 lg:gap-6 flex-shrink-0">
+        <div ref="rightSection" :class="{ 'remote-collapsed': isCollapsed }" class="flex items-center gap-2 md:gap-4 lg:gap-6 flex-shrink-0 ml-auto">
             <!-- 远程连接 -->
             <div class="flex items-center gap-1.5 md:gap-2 border-r border-outline-variant/30 pr-2 mr-1 md:pr-4 md:mr-2 flex-shrink-0">
                 <div id="remoteStatusBadge" class="hidden flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full border whitespace-nowrap flex-shrink-0">
@@ -83,8 +118,8 @@
             <!-- 多语言及主题 -->
             <div class="flex items-center gap-2 md:gap-3 border-l border-outline-variant/30 pl-2 md:pl-4 flex-shrink-0">
                 <div class="flex items-center bg-outline-variant/20 dark:bg-white/5 rounded-full p-0.5">
-                    <button id="toggleEN" class="px-2 py-0.5 text-[11px] font-medium text-outline rounded-full transition-all">EN</button>
-                    <button id="toggleZH" class="px-2 py-0.5 text-[11px] font-medium bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-full shadow-sm">中</button>
+                    <button id="toggleEN" @click="currentLang = 'en'" class="px-2 py-0.5 text-[11px] font-medium text-outline rounded-full transition-all">EN</button>
+                    <button id="toggleZH" @click="currentLang = 'zh'" class="px-2 py-0.5 text-[11px] font-medium bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-full shadow-sm">中</button>
                 </div>
                 <button id="toggleTheme" class="text-outline hover:text-primary transition-colors flex items-center">
                     <span class="material-symbols-outlined text-[20px]" id="themeIcon">light_mode</span>
@@ -128,7 +163,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import Dashboard from './views/Dashboard.vue';
 import Accounts from './views/Accounts.vue';
@@ -165,12 +200,143 @@ import { initRelayEvents } from './ui/relayController';
 
 const route = useRoute();
 
+// Responsive and dynamic layout states
+const isCollapsed = ref(false);
+const isDropdownOpen = ref(false);
+const currentLang = ref('zh');
+
+const headerRef = ref<HTMLElement | null>(null);
+const leftSection = ref<HTMLElement | null>(null);
+const navSection = ref<HTMLElement | null>(null);
+const rightSection = ref<HTMLElement | null>(null);
+const dropdownRef = ref<HTMLElement | null>(null);
+
+let lastRequiredWidth = 1280;
+let lastLeftHtml = '';
+let lastRightHtml = '';
+let layoutTimer: any = null;
+
+const toggleDropdown = () => {
+  isDropdownOpen.value = !isDropdownOpen.value;
+};
+
+const closeDropdown = (e: MouseEvent) => {
+  if (dropdownRef.value && !dropdownRef.value.contains(e.target as Node)) {
+    isDropdownOpen.value = false;
+  }
+};
+
+const i18nLabels: Record<string, Record<string, string>> = {
+  zh: {
+    title: "控制台",
+    navAccounts: "账号池",
+    navUsage: "使用详情",
+    navOtp: "2FA验证码",
+    navPackets: "抓包分析",
+    navSettings: "设置",
+    menu: "菜单"
+  },
+  en: {
+    title: "Console",
+    navAccounts: "Accounts",
+    navUsage: "Usage Details",
+    navOtp: "2FA Auth",
+    navPackets: "Packets",
+    navSettings: "Settings",
+    menu: "Menu"
+  }
+};
+
+const currentActiveLabel = computed(() => {
+  const path = route.path;
+  const lang = currentLang.value;
+  const dict = i18nLabels[lang] || i18nLabels.zh;
+  
+  if (path === '/' || path === '/dashboard') return dict.title;
+  if (path === '/accounts') return dict.navAccounts;
+  if (path === '/usage') return dict.navUsage;
+  if (path === '/otp') return dict.navOtp;
+  if (path === '/packets') return dict.navPackets;
+  if (path === '/settings') return dict.navSettings;
+  return dict.menu;
+});
+
+const forceMeasure = async () => {
+  const originalState = isCollapsed.value;
+  isCollapsed.value = false;
+  
+  await nextTick();
+  
+  if (headerRef.value && leftSection.value && navSection.value && rightSection.value) {
+    const leftWidth = leftSection.value.scrollWidth;
+    const navWidth = navSection.value.scrollWidth;
+    const rightWidth = rightSection.value.scrollWidth;
+    
+    lastRequiredWidth = leftWidth + navWidth + rightWidth + 50; // 50px safety buffer
+    
+    const headerWidth = headerRef.value.clientWidth;
+    if (headerWidth < lastRequiredWidth) {
+      isCollapsed.value = true;
+    } else {
+      isCollapsed.value = false;
+    }
+  } else {
+    isCollapsed.value = originalState;
+  }
+};
+
+const updateResponsiveLayout = () => {
+  if (!headerRef.value) return;
+  const headerWidth = headerRef.value.clientWidth;
+
+  if (!isCollapsed.value) {
+    const leftWidth = leftSection.value ? leftSection.value.scrollWidth : 0;
+    const navWidth = navSection.value ? navSection.value.scrollWidth : 0;
+    const rightWidth = rightSection.value ? rightSection.value.scrollWidth : 0;
+    
+    const required = leftWidth + navWidth + rightWidth + 50;
+    if (required > 100) {
+      lastRequiredWidth = required;
+    }
+
+    if (headerWidth < lastRequiredWidth) {
+      isCollapsed.value = true;
+    }
+  } else {
+    if (headerWidth >= lastRequiredWidth) {
+      isCollapsed.value = false;
+    }
+  }
+};
+
+const checkDOMChanges = () => {
+  const leftHtml = leftSection.value ? leftSection.value.innerHTML : '';
+  const rightHtml = rightSection.value ? rightSection.value.innerHTML : '';
+  
+  if (leftHtml !== lastLeftHtml || rightHtml !== lastRightHtml) {
+    lastLeftHtml = leftHtml;
+    lastRightHtml = rightHtml;
+    forceMeasure();
+  } else {
+    updateResponsiveLayout();
+  }
+};
+
 watch(() => route.path, (newPath) => {
   const viewName = newPath === '/' ? 'dashboard' : newPath.substring(1);
   switchView(viewName);
+  // Auto-close dropdown on route change
+  isDropdownOpen.value = false;
+});
+
+watch(currentLang, () => {
+  forceMeasure();
 });
 
 onMounted(() => {
+  document.addEventListener('click', closeDropdown);
+  window.addEventListener('resize', updateResponsiveLayout);
+
   setTimeout(() => {
     initDashboardEvents();
     initAccountsEvents();
@@ -185,7 +351,9 @@ onMounted(() => {
     initOtpEvents();
     initRelayEvents();
     initRemoteEvents();
+    
     setLanguage('zh');
+    currentLang.value = 'zh';
 
     // Manually trigger initial switchView to populate settings etc.
     const initialView = route.path === '/' ? 'dashboard' : route.path.substring(1);
@@ -195,6 +363,26 @@ onMounted(() => {
     if ((window as any).initWailsReady) {
         (window as any).initWailsReady();
     }
+    
+    // Set initial measured widths and start DOM change checks
+    setTimeout(() => {
+      forceMeasure();
+      layoutTimer = setInterval(checkDOMChanges, 500);
+    }, 150);
   }, 100);
 });
+
+onUnmounted(() => {
+  document.removeEventListener('click', closeDropdown);
+  window.removeEventListener('resize', updateResponsiveLayout);
+  if (layoutTimer) {
+    clearInterval(layoutTimer);
+  }
+});
 </script>
+
+<style scoped>
+.remote-collapsed #remoteStatusText {
+  display: none !important;
+}
+</style>

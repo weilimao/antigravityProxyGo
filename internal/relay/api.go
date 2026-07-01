@@ -280,28 +280,20 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 		
 		// For Gemini quotas
 		if user.Quotas.Gemini.EnableHourly && user.Quotas.Gemini.HourlyHours > 0 {
-			since := time.Now().Add(-time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour).Format(time.RFC3339)
+			windowStart, windowEnd := FixedWindowBounds(user.Quotas.Gemini.HourlyHours)
+			since := windowStart.Format(time.RFC3339)
 			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "gemini", since); err == nil {
 				usage["gemini_hourly"] = u
 			}
-			t, _ := db.GetOldestRequestTimestampSince(session.UserID, "gemini", since)
-			if t != "" {
-				if oldest, err := time.Parse(time.RFC3339, t); err == nil {
-					resetAt["gemini_hourly"] = oldest.Add(time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour).Format(time.RFC3339)
-				}
-			}
+			resetAt["gemini_hourly"] = windowEnd.Format(time.RFC3339)
 		}
 		if user.Quotas.Gemini.EnableDaily && user.Quotas.Gemini.DailyDays > 0 {
-			since := time.Now().Add(-time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour).Format(time.RFC3339)
+			windowStart, windowEnd := FixedWindowBounds(user.Quotas.Gemini.DailyDays * 24)
+			since := windowStart.Format(time.RFC3339)
 			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "gemini", since); err == nil {
 				usage["gemini_daily"] = u
 			}
-			t, _ := db.GetOldestRequestTimestampSince(session.UserID, "gemini", since)
-			if t != "" {
-				if oldest, err := time.Parse(time.RFC3339, t); err == nil {
-					resetAt["gemini_daily"] = oldest.Add(time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour).Format(time.RFC3339)
-				}
-			}
+			resetAt["gemini_daily"] = windowEnd.Format(time.RFC3339)
 		}
 		if user.Quotas.Gemini.EnableFixed {
 			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "gemini", "1970-01-01T00:00:00Z"); err == nil {
@@ -311,28 +303,20 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 		// For Claude quotas
 		if user.Quotas.Claude.EnableHourly && user.Quotas.Claude.HourlyHours > 0 {
-			since := time.Now().Add(-time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour).Format(time.RFC3339)
+			windowStart, windowEnd := FixedWindowBounds(user.Quotas.Claude.HourlyHours)
+			since := windowStart.Format(time.RFC3339)
 			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "claude", since); err == nil {
 				usage["claude_hourly"] = u
 			}
-			t, _ := db.GetOldestRequestTimestampSince(session.UserID, "claude", since)
-			if t != "" {
-				if oldest, err := time.Parse(time.RFC3339, t); err == nil {
-					resetAt["claude_hourly"] = oldest.Add(time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour).Format(time.RFC3339)
-				}
-			}
+			resetAt["claude_hourly"] = windowEnd.Format(time.RFC3339)
 		}
 		if user.Quotas.Claude.EnableDaily && user.Quotas.Claude.DailyDays > 0 {
-			since := time.Now().Add(-time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour).Format(time.RFC3339)
+			windowStart, windowEnd := FixedWindowBounds(user.Quotas.Claude.DailyDays * 24)
+			since := windowStart.Format(time.RFC3339)
 			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "claude", since); err == nil {
 				usage["claude_daily"] = u
 			}
-			t, _ := db.GetOldestRequestTimestampSince(session.UserID, "claude", since)
-			if t != "" {
-				if oldest, err := time.Parse(time.RFC3339, t); err == nil {
-					resetAt["claude_daily"] = oldest.Add(time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour).Format(time.RFC3339)
-				}
-			}
+			resetAt["claude_daily"] = windowEnd.Format(time.RFC3339)
 		}
 		if user.Quotas.Claude.EnableFixed {
 			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "claude", "1970-01-01T00:00:00Z"); err == nil {

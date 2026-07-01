@@ -120,6 +120,10 @@ func runMigrations(db *sql.DB, dataDir string) error {
 			enabled INTEGER NOT NULL DEFAULT 1,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
+		`CREATE TABLE IF NOT EXISTS schema_meta (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);`,
 	}
 
 	for _, schema := range schemas {
@@ -138,6 +142,43 @@ func runMigrations(db *sql.DB, dataDir string) error {
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN path TEXT NOT NULL DEFAULT '';`)
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN session_id TEXT NOT NULL DEFAULT '';`)
 
+	// --- Versioned Migrations ---
+	migrationVersion := getMigrationVersion(db)
+
+	if migrationVersion < 1 {
+		runMigrationV1(db, dataDir)
+		setMigrationVersion(db, 1)
+	}
+
+	// V2: Repair polluted user_hourly_trends data.
+	// Bug: V1 migrations ran on every startup, causing an accumulation cycle:
+	//   Step 1 merged u.Key → u.ID (additive) → deleted u.Key → Step 3 re-created u.Key from request_logs → next restart repeated.
+	// Fix: Rebuild user_hourly_trends from the authoritative request_logs source.
+	if migrationVersion < 2 {
+		runMigrationV2Repair(db)
+		setMigrationVersion(db, 2)
+	}
+
+	return nil
+}
+
+// getMigrationVersion reads the current migration version from schema_meta.
+func getMigrationVersion(db *sql.DB) int {
+	var version int
+	row := db.QueryRow("SELECT CAST(value AS INTEGER) FROM schema_meta WHERE key = 'migration_version'")
+	if err := row.Scan(&version); err != nil {
+		return 0
+	}
+	return version
+}
+
+// setMigrationVersion persists the migration version to schema_meta.
+func setMigrationVersion(db *sql.DB, version int) {
+	_, _ = db.Exec("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('migration_version', ?)", fmt.Sprintf("%d", version))
+}
+
+// runMigrationV1 performs one-time data migrations: ID mapping, dedup, and request_logs aggregation.
+func runMigrationV1(db *sql.DB, dataDir string) {
 	// 1. Resolve and map client-side raw keys (e.g. "weilimao") to server-side user IDs (e.g. hash)
 	relayUsersPath := filepath.Join(dataDir, "relay_users.json")
 	if bytes, err := os.ReadFile(relayUsersPath); err == nil {
@@ -148,13 +189,10 @@ func runMigrations(db *sql.DB, dataDir string) error {
 		if err := json.Unmarshal(bytes, &users); err == nil {
 			for _, u := range users {
 				if u.ID != "" && u.Key != "" {
-					// The old raw request_logs were actually saved as mode = 'local' and user_id = GoogleAccount email on the server, not mode = 'remote' with UserKey.
-					// The client saves mode = 'remote' and user_id = UserKey. 
-					// Running this update would corrupt the client's local logs by changing their user_id to the server's UUID.
 					// RECOVERY: If any local logs were already corrupted by previous versions, restore them back to the UserKey.
 					_, _ = db.Exec("UPDATE request_logs SET user_id = ? WHERE user_id = ? AND mode = 'remote'", u.Key, u.ID)
-					
-					// Merge existing hourly trends
+
+					// Merge existing hourly trends from old key to new ID
 					_, _ = db.Exec(`
 						INSERT INTO user_hourly_trends (
 							user_id, hour_bucket, requests, in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost
@@ -206,6 +244,35 @@ func runMigrations(db *sql.DB, dataDir string) error {
 
 	// 4. Clean up any invalid formatted trend rows starting with year format e.g. "2026-"
 	_, _ = db.Exec("DELETE FROM user_hourly_trends WHERE hour_bucket LIKE '202%';")
+}
 
-	return nil
+// runMigrationV2Repair rebuilds user_hourly_trends from the authoritative request_logs to fix
+// data polluted by V1 migrations that ran on every startup (additive accumulation bug).
+func runMigrationV2Repair(db *sql.DB) {
+	// Clear all polluted trends data
+	_, _ = db.Exec("DELETE FROM user_hourly_trends")
+
+	// Rebuild from the authoritative request_logs source
+	_, _ = db.Exec(`
+		INSERT INTO user_hourly_trends (
+			user_id, hour_bucket, requests, in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost
+		)
+		SELECT 
+			user_id,
+			substr(timestamp, 6, 2) || '/' || substr(timestamp, 9, 2) || ' ' || substr(timestamp, 12, 2) || ':00' as hour_bucket,
+			count(*),
+			sum(in_tokens),
+			sum(out_tokens),
+			sum(cached_tokens),
+			sum(cost),
+			sum(input_cost),
+			sum(output_cost),
+			sum(cached_cost)
+		FROM request_logs
+		WHERE user_id IS NOT NULL AND timestamp IS NOT NULL AND length(timestamp) >= 19
+		GROUP BY user_id, hour_bucket;
+	`)
+
+	// Clean up any invalid formatted trend rows
+	_, _ = db.Exec("DELETE FROM user_hourly_trends WHERE hour_bucket LIKE '202%';")
 }

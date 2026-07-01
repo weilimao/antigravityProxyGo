@@ -1,16 +1,19 @@
 import { ipcRenderer, shell } from '../shared/ipc';
 
 function updatePacketCaptureVisibility(enabled: boolean) {
-    const navPacketsLink = document.getElementById('navPacketsLink');
-    if (navPacketsLink) {
-        if (enabled) {
-            navPacketsLink.style.setProperty('display', 'flex', 'important');
-        } else {
-            navPacketsLink.style.setProperty('display', 'none', 'important');
-            if (window.location.hash.includes('/packets')) {
-                window.location.hash = '#/dashboard';
+    const ids = ['navPacketsLink', 'navPacketsLinkDropdown'];
+    ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            if (enabled) {
+                el.style.setProperty('display', 'flex', 'important');
+            } else {
+                el.style.setProperty('display', 'none', 'important');
             }
         }
+    });
+    if (!enabled && window.location.hash.includes('/packets')) {
+        window.location.hash = '#/dashboard';
     }
 }
 
