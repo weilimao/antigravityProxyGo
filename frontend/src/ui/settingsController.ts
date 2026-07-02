@@ -30,22 +30,59 @@ export function initSettings() {
         const activeTabClass = 'px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200';
         const inactiveTabClass = 'px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200';
 
+        let networkRefreshTimer: any = null;
+
+        function startNetworkLogsAutoRefresh() {
+            if (networkRefreshTimer) return;
+            networkRefreshTimer = setInterval(() => {
+                try {
+                    ipcRenderer.send('settings:get-network-status');
+                    ipcRenderer.send('settings:get-network-logs');
+                } catch (e) {
+                    console.error('[SettingsController] Failed to auto refresh network logs:', e);
+                }
+            }, 3000);
+        }
+
+        function stopNetworkLogsAutoRefresh() {
+            if (networkRefreshTimer) {
+                clearInterval(networkRefreshTimer);
+                networkRefreshTimer = null;
+            }
+        }
+
         function switchSettingsTab(activePanel: string) {
             const settingsPanelGeneral = document.getElementById('settings-panel-general');
             const settingsPanelAbout = document.getElementById('settings-panel-about');
             const settingsPanelRelay = document.getElementById('settings-panel-relay');
+            const settingsPanelNetwork = document.getElementById('settings-panel-network');
 
             const btnSettingsTabGeneral = document.getElementById('btnSettingsTabGeneral');
             const btnSettingsTabAbout = document.getElementById('btnSettingsTabAbout');
             const btnSettingsTabRelay = document.getElementById('btnSettingsTabRelay');
+            const btnSettingsTabNetwork = document.getElementById('btnSettingsTabNetwork');
 
             if (settingsPanelGeneral) settingsPanelGeneral.style.setProperty('display', activePanel === 'general' ? 'flex' : 'none', 'important');
             if (settingsPanelAbout) settingsPanelAbout.style.setProperty('display', activePanel === 'about' ? 'flex' : 'none', 'important');
             if (settingsPanelRelay) settingsPanelRelay.style.setProperty('display', activePanel === 'relay' ? 'flex' : 'none', 'important');
+            if (settingsPanelNetwork) settingsPanelNetwork.style.setProperty('display', activePanel === 'network' ? 'flex' : 'none', 'important');
 
             if (btnSettingsTabGeneral) btnSettingsTabGeneral.className = activePanel === 'general' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabAbout) btnSettingsTabAbout.className = activePanel === 'about' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabRelay) btnSettingsTabRelay.className = activePanel === 'relay' ? activeTabClass : inactiveTabClass;
+            if (btnSettingsTabNetwork) btnSettingsTabNetwork.className = activePanel === 'network' ? activeTabClass : inactiveTabClass;
+
+            if (activePanel === 'network') {
+                try {
+                    ipcRenderer.send('settings:get-network-status');
+                    ipcRenderer.send('settings:get-network-logs');
+                    startNetworkLogsAutoRefresh();
+                } catch (e) {
+                    console.error('[SettingsController] Failed to load network data:', e);
+                }
+            } else {
+                stopNetworkLogsAutoRefresh();
+            }
         }
 
         (window as any).switchSettingsTab = switchSettingsTab;
@@ -53,10 +90,24 @@ export function initSettings() {
         const btnSettingsTabGeneral = document.getElementById('btnSettingsTabGeneral');
         const btnSettingsTabAbout = document.getElementById('btnSettingsTabAbout');
         const btnSettingsTabRelay = document.getElementById('btnSettingsTabRelay');
+        const btnSettingsTabNetwork = document.getElementById('btnSettingsTabNetwork');
 
         if (btnSettingsTabGeneral) btnSettingsTabGeneral.addEventListener('click', () => switchSettingsTab('general'));
         if (btnSettingsTabAbout) btnSettingsTabAbout.addEventListener('click', () => switchSettingsTab('about'));
         if (btnSettingsTabRelay) btnSettingsTabRelay.addEventListener('click', () => switchSettingsTab('relay'));
+        if (btnSettingsTabNetwork) btnSettingsTabNetwork.addEventListener('click', () => switchSettingsTab('network'));
+
+        const btnRefreshNetLogs = document.getElementById('btnRefreshNetLogs');
+        if (btnRefreshNetLogs) {
+            btnRefreshNetLogs.addEventListener('click', () => {
+                try {
+                    ipcRenderer.send('settings:get-network-status');
+                    ipcRenderer.send('settings:get-network-logs');
+                } catch (e) {
+                    console.error('[SettingsController] Manual refresh failed:', e);
+                }
+            });
+        }
 
         // About Panel External links
         const btnAboutRepo = document.getElementById('btnAboutRepo');
@@ -145,6 +196,71 @@ export function initSettings() {
             });
         }
 
+        const chkCustomSocks5Enabled = document.getElementById('chkCustomSocks5Enabled') as HTMLInputElement | null;
+        const txtCustomSocks5Address = document.getElementById('txtCustomSocks5Address') as HTMLInputElement | null;
+        const txtCustomSocks5Username = document.getElementById('txtCustomSocks5Username') as HTMLInputElement | null;
+        const txtCustomSocks5Password = document.getElementById('txtCustomSocks5Password') as HTMLInputElement | null;
+        const divCustomSocks5Address = document.getElementById('divCustomSocks5Address');
+        const txtFallbackProxyPorts = document.getElementById('txtFallbackProxyPorts') as HTMLInputElement | null;
+
+        if (chkCustomSocks5Enabled) {
+            chkCustomSocks5Enabled.addEventListener('change', (e: any) => {
+                const enabled = e.target.checked;
+                try {
+                    ipcRenderer.send('settings:set-custom-socks5-enabled', enabled);
+                    if (divCustomSocks5Address) {
+                        divCustomSocks5Address.style.display = enabled ? 'flex' : 'none';
+                    }
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save custom socks5 enabled:', err);
+                }
+            });
+        }
+
+        if (txtCustomSocks5Address) {
+            txtCustomSocks5Address.addEventListener('change', (e: any) => {
+                const val = e.target.value.trim();
+                try {
+                    ipcRenderer.send('settings:set-custom-socks5-address', val);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save custom socks5 address:', err);
+                }
+            });
+        }
+
+        if (txtCustomSocks5Username) {
+            txtCustomSocks5Username.addEventListener('change', (e: any) => {
+                const val = e.target.value.trim();
+                try {
+                    ipcRenderer.send('settings:set-custom-socks5-username', val);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save custom socks5 username:', err);
+                }
+            });
+        }
+
+        if (txtCustomSocks5Password) {
+            txtCustomSocks5Password.addEventListener('change', (e: any) => {
+                const val = e.target.value.trim();
+                try {
+                    ipcRenderer.send('settings:set-custom-socks5-password', val);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save custom socks5 password:', err);
+                }
+            });
+        }
+
+        if (txtFallbackProxyPorts) {
+            txtFallbackProxyPorts.addEventListener('change', (e: any) => {
+                const val = e.target.value.trim();
+                try {
+                    ipcRenderer.send('settings:set-fallback-proxy-ports', val);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save fallback proxy ports:', err);
+                }
+            });
+        }
+
         function updateConsoleVisibility(enabled: boolean) {
             if (systemConsole) {
                 if (enabled) {
@@ -205,6 +321,51 @@ export function refreshSettingsUI() {
             chkEnablePacketCapture.checked = isCaptureEnabled;
         }
         updatePacketCaptureVisibility(isCaptureEnabled);
+
+        const chkCustomSocks5Enabled = document.getElementById('chkCustomSocks5Enabled') as HTMLInputElement | null;
+        const txtCustomSocks5Address = document.getElementById('txtCustomSocks5Address') as HTMLInputElement | null;
+        const txtCustomSocks5Username = document.getElementById('txtCustomSocks5Username') as HTMLInputElement | null;
+        const txtCustomSocks5Password = document.getElementById('txtCustomSocks5Password') as HTMLInputElement | null;
+        const divCustomSocks5Address = document.getElementById('divCustomSocks5Address');
+        const txtFallbackProxyPorts = document.getElementById('txtFallbackProxyPorts') as HTMLInputElement | null;
+
+        if (chkCustomSocks5Enabled) {
+            const enabled = ipcRenderer.sendSync('settings:get-custom-socks5-enabled');
+            if (enabled !== null && enabled !== undefined) {
+                chkCustomSocks5Enabled.checked = !!enabled;
+                if (divCustomSocks5Address) {
+                    divCustomSocks5Address.style.display = enabled ? 'flex' : 'none';
+                }
+            }
+        }
+
+        if (txtCustomSocks5Address) {
+            const addr = ipcRenderer.sendSync('settings:get-custom-socks5-address');
+            if (addr !== null && addr !== undefined) {
+                txtCustomSocks5Address.value = String(addr);
+            }
+        }
+
+        if (txtCustomSocks5Username) {
+            const username = ipcRenderer.sendSync('settings:get-custom-socks5-username');
+            if (username !== null && username !== undefined) {
+                txtCustomSocks5Username.value = String(username);
+            }
+        }
+
+        if (txtCustomSocks5Password) {
+            const password = ipcRenderer.sendSync('settings:get-custom-socks5-password');
+            if (password !== null && password !== undefined) {
+                txtCustomSocks5Password.value = String(password);
+            }
+        }
+
+        if (txtFallbackProxyPorts) {
+            const ports = ipcRenderer.sendSync('settings:get-fallback-proxy-ports');
+            if (ports !== null && ports !== undefined) {
+                txtFallbackProxyPorts.value = String(ports);
+            }
+        }
     } catch (err) {
         console.error('[SettingsController] Failed to refresh settings UI:', err);
     }
@@ -212,4 +373,69 @@ export function refreshSettingsUI() {
 
 // Global hook
 (window as any).refreshSettingsUI = refreshSettingsUI;
+
+// Register network status and outband connection logs listeners
+ipcRenderer.on('settings:network-status-res', (event, data: any) => {
+    const lblNetStatusFallback = document.getElementById('lblNetStatusFallback');
+    const lblNetStatusCustomSocks = document.getElementById('lblNetStatusCustomSocks');
+
+    if (lblNetStatusFallback) {
+        lblNetStatusFallback.textContent = data.cachedLocalProxy ? data.cachedLocalProxy : '直连 (无探测代理)';
+        if (data.cachedLocalProxy) {
+            lblNetStatusFallback.className = "text-[13px] font-mono font-bold text-primary dark:text-primary-fixed-dim";
+        } else {
+            lblNetStatusFallback.className = "text-[13px] font-mono font-bold text-outline";
+        }
+    }
+
+    if (lblNetStatusCustomSocks) {
+        if (data.customSocks5Enabled) {
+            lblNetStatusCustomSocks.textContent = `启用 (${data.customSocks5Address})`;
+            lblNetStatusCustomSocks.className = "text-[13px] font-mono font-bold text-green-600 dark:text-green-400";
+        } else {
+            lblNetStatusCustomSocks.textContent = '未启用';
+            lblNetStatusCustomSocks.className = "text-[13px] font-mono font-bold text-outline";
+        }
+    }
+});
+
+ipcRenderer.on('settings:network-logs-res', (event, logs: any[]) => {
+    const tblNetworkLogsBody = document.getElementById('tblNetworkLogsBody');
+    if (!tblNetworkLogsBody) return;
+
+    if (!logs || logs.length === 0) {
+        tblNetworkLogsBody.innerHTML = `
+            <tr>
+                <td colspan="5" class="py-6 text-center text-outline/60">暂无连接记录，正在等待出站网络活动...</td>
+            </tr>
+        `;
+        return;
+    }
+
+    // Newest log on top
+    const sortedLogs = [...logs].reverse();
+
+    let html = '';
+    sortedLogs.forEach((log: any) => {
+        const isSuccess = log.status === 'SUCCESS';
+        const statusClass = isSuccess 
+            ? 'text-green-600 dark:text-green-400 font-bold' 
+            : 'text-red-500 font-bold truncate max-w-[240px] inline-block';
+        const proxyClass = log.proxyUsed === 'DIRECT' 
+            ? 'text-outline font-bold' 
+            : 'text-primary dark:text-primary-fixed-dim font-bold';
+
+        html += `
+            <tr class="border-b border-outline-variant/10 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
+                <td class="py-2 px-3 text-slate-400 font-medium select-none">${log.timestamp}</td>
+                <td class="py-2 px-3 text-on-surface dark:text-slate-200 font-bold font-mono">${log.target}</td>
+                <td class="py-2 px-3 ${proxyClass} font-mono">${log.proxyUsed}</td>
+                <td class="py-2 px-3 text-center text-on-surface dark:text-slate-300 font-bold">${log.duration}</td>
+                <td class="py-2 px-3 ${statusClass}" title="${log.status}">${log.status}</td>
+            </tr>
+        `;
+    });
+
+    tblNetworkLogsBody.innerHTML = html;
+});
 

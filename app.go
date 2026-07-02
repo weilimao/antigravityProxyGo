@@ -346,8 +346,8 @@ func (a *App) startup(ctx context.Context) {
 			}
 
 			if quota.EnableHourly && quota.HourlyHours > 0 {
-				windowStart, _ := relay.FixedWindowBounds(quota.HourlyHours)
-				since := windowStart.Format(time.RFC3339)
+				periodDuration := time.Duration(quota.HourlyHours) * time.Hour
+				since := time.Now().Add(-periodDuration).Format(time.RFC3339)
 				usedTokens, err := db.GetTokensForUserModelFamilySince(userID, familyKeyword, since)
 				if err != nil {
 					return fmt.Errorf("failed to check hourly quota")
@@ -358,8 +358,8 @@ func (a *App) startup(ctx context.Context) {
 			}
 
 			if quota.EnableDaily && quota.DailyDays > 0 {
-				windowStart, _ := relay.FixedWindowBounds(quota.DailyDays * 24)
-				since := windowStart.Format(time.RFC3339)
+				periodDuration := time.Duration(quota.DailyDays*24) * time.Hour
+				since := time.Now().Add(-periodDuration).Format(time.RFC3339)
 				usedTokens, err := db.GetTokensForUserModelFamilySince(userID, familyKeyword, since)
 				if err != nil {
 					return fmt.Errorf("failed to check daily quota")
@@ -533,6 +533,11 @@ func (a *App) domReady(ctx context.Context) {
 			"enabled": a.settingsMgr.GetRelayEnabled(),
 			"port":    a.settingsMgr.GetRelayPort(),
 		},
+		"settings:get-fallback-proxy-ports": a.settingsMgr.GetFallbackProxyPorts(),
+		"settings:get-custom-socks5-address": a.settingsMgr.GetCustomSocks5Address(),
+		"settings:get-custom-socks5-enabled": a.settingsMgr.GetCustomSocks5Enabled(),
+		"settings:get-custom-socks5-username": a.settingsMgr.GetCustomSocks5Username(),
+		"settings:get-custom-socks5-password": a.settingsMgr.GetCustomSocks5Password(),
 	}
 
 	bytesCache, _ := json.Marshal(cache)
@@ -559,6 +564,11 @@ func (a *App) domReady(ctx context.Context) {
 func (a *App) IPCSend(channel string, argsJSON string) {
 	var args []interface{}
 	_ = json.Unmarshal([]byte(argsJSON), &args)
+
+	// 模块化分流：交给设置 IPC 处理器，防止 app.go 持续膨胀
+	if a.handleSettingsIPCSend(channel, args) {
+		return
+	}
 
 	getStringArg := func(idx int) string {
 		if idx < len(args) {

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,25 +32,9 @@ type RemoteConfig struct {
 // This is critical for local testing and health checks to prevent routing loops back into our own proxy port (18443).
 var noProxyClient = &http.Client{
 	Transport: &http.Transport{
-		Proxy: func(req *http.Request) (*url.URL, error) {
-			proxyURL, err := http.ProxyFromEnvironment(req)
-			if err != nil || proxyURL == nil {
-				return nil, err
-			}
-			host := proxyURL.Hostname()
-			port := proxyURL.Port()
-			// 仅当系统代理指向本程序的拦截端口 18443 时，才予以绕过直连，防止本地测试死循环
-			if (host == "127.0.0.1" || host == "localhost" || host == "::1") && port == "18443" {
-				return nil, nil
-			}
-			return proxyURL, nil
-		},
-		DialContext: (&net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
+		Proxy:             netutil.GetSystemProxy, // 使用我们重构的系统代理获取函数（自动规避18443，且具备本地代理探测与专属代理）
+		DialContext:       netutil.DialContext,    // 改用自定义的 DialContext 以支持 SOCKS5 拨号和代理自适应
+		DisableKeepAlives: true,                   // 禁用连接复用与连接池，防止中继代理死连接残留卡死
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	},
@@ -196,7 +179,10 @@ func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error
 	}
 	remoteAddr := net.JoinHostPort(host, port)
 
-	conn, err := net.DialTimeout("tcp", remoteAddr, 10*time.Second)
+	// 改用 netutil.DialContext 代替 net.DialTimeout，使其能走系统/本地检测代理，避免被虚拟网卡黑洞化
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := netutil.DialContext(ctx, "tcp", remoteAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to remote relay %s: %w", remoteAddr, err)
 	}

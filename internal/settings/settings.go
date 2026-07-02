@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"antigravity-proxy/internal/netutil"
 )
 
 const configFileName = "config.json"
@@ -49,6 +51,11 @@ type Config struct {
 	RelayDomainWhitelist []string `json:"relayDomainWhitelist"`
 	RelayModelMapping    []ModelMappingEntry `json:"relayModelMapping"`
 	EnablePacketCapture  bool   `json:"enablePacketCapture"`
+	FallbackProxyPorts   string `json:"fallbackProxyPorts"`
+	CustomSocks5Address  string `json:"customSocks5Address"`
+	CustomSocks5Enabled  bool   `json:"customSocks5Enabled"`
+	CustomSocks5Username string `json:"customSocks5Username"`
+	CustomSocks5Password string `json:"customSocks5Password"`
 }
 
 func GetDefaultModelMappings() []ModelMappingEntry {
@@ -148,9 +155,21 @@ func (m *Manager) Init(defaultPath string) {
 		RelayDomainWhitelist: []string{"*.googleapis.com", "*.google.com", "*.anthropic.com", "*.openai.com"},
 		RelayModelMapping:    GetDefaultModelMappings(),
 		EnablePacketCapture:  true,
+		FallbackProxyPorts:   "",
+		CustomSocks5Address:  "",
+		CustomSocks5Enabled:  false,
+		CustomSocks5Username: "",
+		CustomSocks5Password: "",
 	}
 
 	m.loadConfig()
+	netutil.UpdateConfig(netutil.ProxyConfig{
+		FallbackPorts:        m.config.FallbackProxyPorts,
+		CustomSocks5Address:  m.config.CustomSocks5Address,
+		CustomSocks5Enabled:  m.config.CustomSocks5Enabled,
+		CustomSocks5Username: m.config.CustomSocks5Username,
+		CustomSocks5Password: m.config.CustomSocks5Password,
+	})
 }
 
 func (m *Manager) loadConfig() {
@@ -162,6 +181,11 @@ func (m *Manager) loadConfig() {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return
+	}
+
+	// 自动剥离 Windows 文本编辑器及 PowerShell 写入时可能携带的 UTF-8 BOM 头 (0xEF 0xBB 0xBF)
+	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+		data = data[3:]
 	}
 
 	parsed := Config{
@@ -686,6 +710,9 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			RelayDomainWhitelist: []string{"*.googleapis.com", "*.google.com", "*.anthropic.com", "*.openai.com"},
 			RelayModelMapping:    GetDefaultModelMappings(),
 			EnablePacketCapture:  true,
+			FallbackProxyPorts:   "",
+			CustomSocks5Address:  "",
+			CustomSocks5Enabled:  false,
 		}
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")
 		if err != nil {
@@ -730,6 +757,109 @@ func (m *Manager) SetEnablePacketCapture(enable bool) error {
 	return m.SaveConfig()
 }
 
+func (m *Manager) GetFallbackProxyPorts() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.FallbackProxyPorts
+}
+
+func (m *Manager) SetFallbackProxyPorts(val string) error {
+	m.Lock()
+	m.config.FallbackProxyPorts = val
+	err := m.SaveConfig()
+	m.Unlock()
+	if err == nil {
+		m.updateNetutilConfig()
+	}
+	return err
+}
+
+func (m *Manager) GetCustomSocks5Address() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.CustomSocks5Address
+}
+
+func (m *Manager) SetCustomSocks5Address(val string) error {
+	m.Lock()
+	m.config.CustomSocks5Address = val
+	err := m.SaveConfig()
+	m.Unlock()
+	if err == nil {
+		m.updateNetutilConfig()
+	}
+	return err
+}
+
+func (m *Manager) GetCustomSocks5Enabled() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.CustomSocks5Enabled
+}
+
+func (m *Manager) SetCustomSocks5Enabled(val bool) error {
+	m.Lock()
+	m.config.CustomSocks5Enabled = val
+	err := m.SaveConfig()
+	m.Unlock()
+	if err == nil {
+		m.updateNetutilConfig()
+	}
+	return err
+}
+
+func (m *Manager) GetCustomSocks5Username() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.CustomSocks5Username
+}
+
+func (m *Manager) SetCustomSocks5Username(val string) error {
+	m.Lock()
+	m.config.CustomSocks5Username = val
+	err := m.SaveConfig()
+	m.Unlock()
+	if err == nil {
+		m.updateNetutilConfig()
+	}
+	return err
+}
+
+func (m *Manager) GetCustomSocks5Password() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.CustomSocks5Password
+}
+
+func (m *Manager) SetCustomSocks5Password(val string) error {
+	m.Lock()
+	m.config.CustomSocks5Password = val
+	err := m.SaveConfig()
+	m.Unlock()
+	if err == nil {
+		m.updateNetutilConfig()
+	}
+	return err
+}
+
+func (m *Manager) updateNetutilConfig() {
+	m.RLock()
+	ports := m.config.FallbackProxyPorts
+	socks5Addr := m.config.CustomSocks5Address
+	socks5Enabled := m.config.CustomSocks5Enabled
+	socks5User := m.config.CustomSocks5Username
+	socks5Pass := m.config.CustomSocks5Password
+	m.RUnlock()
+
+	netutil.UpdateConfig(netutil.ProxyConfig{
+		FallbackPorts:        ports,
+		CustomSocks5Address:  socks5Addr,
+		CustomSocks5Enabled:  socks5Enabled,
+		CustomSocks5Username: socks5User,
+		CustomSocks5Password: socks5Pass,
+	})
+}
+
 type ManagerInterface interface {
 	Init(defaultPath string)
 	GetActiveDataDirectory() string
@@ -770,6 +900,16 @@ type ManagerInterface interface {
 	SetRelayModelMapping(val []ModelMappingEntry) error
 	GetEnablePacketCapture() bool
 	SetEnablePacketCapture(enable bool) error
+	GetFallbackProxyPorts() string
+	SetFallbackProxyPorts(val string) error
+	GetCustomSocks5Address() string
+	SetCustomSocks5Address(val string) error
+	GetCustomSocks5Enabled() bool
+	SetCustomSocks5Enabled(val bool) error
+	GetCustomSocks5Username() string
+	SetCustomSocks5Username(val string) error
+	GetCustomSocks5Password() string
+	SetCustomSocks5Password(val string) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,

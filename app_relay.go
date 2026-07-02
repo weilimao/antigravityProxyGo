@@ -348,36 +348,56 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		user := a.relayUserMgr.GetUserByID(userId)
 		if user != nil {
 			if user.Quotas.Gemini.EnableHourly && user.Quotas.Gemini.HourlyHours > 0 {
-				windowStart, windowEnd := relay.FixedWindowBounds(user.Quotas.Gemini.HourlyHours)
-				since := windowStart.Format(time.RFC3339)
+				periodDuration := time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour
+				sinceTime := time.Now().Add(-periodDuration)
+				since := sinceTime.Format(time.RFC3339)
 				geminiHourlyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "gemini", since)
 				if geminiHourlyUsed > 0 {
-					geminiHourlyResetAt = windowEnd.Format(time.RFC3339)
+					if oldestStr, err := db.GetOldestRequestTimestampSince(userId, "gemini", since); err == nil && oldestStr != "" {
+						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
+							geminiHourlyResetAt = oldestTime.Add(periodDuration).Format(time.RFC3339)
+						}
+					}
 				}
 			}
 			if user.Quotas.Gemini.EnableDaily && user.Quotas.Gemini.DailyDays > 0 {
-				windowStart, windowEnd := relay.FixedWindowBounds(user.Quotas.Gemini.DailyDays * 24)
-				since := windowStart.Format(time.RFC3339)
+				periodDuration := time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour
+				sinceTime := time.Now().Add(-periodDuration)
+				since := sinceTime.Format(time.RFC3339)
 				geminiDailyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "gemini", since)
 				if geminiDailyUsed > 0 {
-					geminiDailyResetAt = windowEnd.Format(time.RFC3339)
+					if oldestStr, err := db.GetOldestRequestTimestampSince(userId, "gemini", since); err == nil && oldestStr != "" {
+						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
+							geminiDailyResetAt = oldestTime.Add(periodDuration).Format(time.RFC3339)
+						}
+					}
 				}
 			}
 
 			if user.Quotas.Claude.EnableHourly && user.Quotas.Claude.HourlyHours > 0 {
-				windowStart, windowEnd := relay.FixedWindowBounds(user.Quotas.Claude.HourlyHours)
-				since := windowStart.Format(time.RFC3339)
+				periodDuration := time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour
+				sinceTime := time.Now().Add(-periodDuration)
+				since := sinceTime.Format(time.RFC3339)
 				claudeHourlyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "claude", since)
 				if claudeHourlyUsed > 0 {
-					claudeHourlyResetAt = windowEnd.Format(time.RFC3339)
+					if oldestStr, err := db.GetOldestRequestTimestampSince(userId, "claude", since); err == nil && oldestStr != "" {
+						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
+							claudeHourlyResetAt = oldestTime.Add(periodDuration).Format(time.RFC3339)
+						}
+					}
 				}
 			}
 			if user.Quotas.Claude.EnableDaily && user.Quotas.Claude.DailyDays > 0 {
-				windowStart, windowEnd := relay.FixedWindowBounds(user.Quotas.Claude.DailyDays * 24)
-				since := windowStart.Format(time.RFC3339)
+				periodDuration := time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour
+				sinceTime := time.Now().Add(-periodDuration)
+				since := sinceTime.Format(time.RFC3339)
 				claudeDailyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "claude", since)
 				if claudeDailyUsed > 0 {
-					claudeDailyResetAt = windowEnd.Format(time.RFC3339)
+					if oldestStr, err := db.GetOldestRequestTimestampSince(userId, "claude", since); err == nil && oldestStr != "" {
+						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
+							claudeDailyResetAt = oldestTime.Add(periodDuration).Format(time.RFC3339)
+						}
+					}
 				}
 			}
 		}

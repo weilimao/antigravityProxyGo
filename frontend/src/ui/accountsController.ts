@@ -238,6 +238,10 @@ export async function refreshAllAccountsQuotas() {
 
     try {
         for (const acc of state.currentAccountsList) {
+            // 自动过滤并跳过已停用的灰色账号
+            if (!acc.enabled) {
+                continue;
+            }
             try {
                 const result = await ipcRenderer.invoke('quota:fetch', acc.id);
                 if (result && !result.error) {

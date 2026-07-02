@@ -1077,7 +1077,8 @@ func (m *Manager) StartCooldownMonitor() {
 				var cooldownAccounts []*Account
 				now := time.Now().UnixNano() / int64(time.Millisecond)
 				for _, a := range m.accounts {
-					if a.CooldownUntil > 0 && now >= a.CooldownUntil {
+					// 只有处于启用（Enabled）状态的冷静期到期账号，才被允许自动拉取配额
+					if a.Enabled && a.CooldownUntil > 0 && now >= a.CooldownUntil {
 						cooldownAccounts = append(cooldownAccounts, a)
 					}
 				}
