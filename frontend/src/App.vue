@@ -93,9 +93,9 @@
                 <div id="remoteStatusBadge" class="hidden flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full border whitespace-nowrap flex-shrink-0">
                     <span class="material-symbols-outlined text-[15px]">cloud</span>
                     <span id="remoteStatusText">远程连接中</span>
-                    <button id="btnManageApiKeys" class="hidden ml-2 text-primary dark:text-primary-fixed-dim hover:text-primary/80 text-[11px] font-bold border border-primary/20 rounded px-1.5 py-0.5 flex items-center gap-0.5 bg-primary/5 transition-all" title="管理持久化 API Keys">
+                    <button id="btnManageApiKeys" class="hidden ml-2 text-primary dark:text-primary-fixed-dim hover:text-primary/80 text-[11px] font-bold border border-primary/20 rounded px-1.5 py-0.5 flex items-center gap-0.5 bg-primary/5 transition-all" title="管理持久化 API Keys" data-i18n-title="manageKeysTitle">
                         <span class="material-symbols-outlined text-[12px] pointer-events-none">key</span>
-                        管理 Key
+                        <span data-i18n="manageKeys">管理 Key</span>
                     </button>
                     <button id="btnRemoteEnable" class="hidden ml-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 text-[11px] font-bold" data-i18n="remoteEnable">启用</button>
                     <button id="btnRemoteDisable" class="hidden ml-1 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-[11px] font-bold" data-i18n="remoteDisable">停用</button>
@@ -118,8 +118,8 @@
             <!-- 多语言及主题 -->
             <div class="flex items-center gap-2 md:gap-3 border-l border-outline-variant/30 pl-2 md:pl-4 flex-shrink-0">
                 <div class="flex items-center bg-outline-variant/20 dark:bg-white/5 rounded-full p-0.5">
-                    <button id="toggleEN" @click="currentLang = 'en'" class="px-2 py-0.5 text-[11px] font-medium text-outline rounded-full transition-all">EN</button>
-                    <button id="toggleZH" @click="currentLang = 'zh'" class="px-2 py-0.5 text-[11px] font-medium bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-full shadow-sm">中</button>
+                    <button id="toggleEN" @click="currentLang = 'en'" :class="currentLang === 'en' ? 'bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm' : 'text-outline'" class="px-2 py-0.5 text-[11px] font-medium rounded-full transition-all">EN</button>
+                    <button id="toggleZH" @click="currentLang = 'zh'" :class="currentLang === 'zh' ? 'bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm' : 'text-outline'" class="px-2 py-0.5 text-[11px] font-medium rounded-full transition-all">中</button>
                 </div>
                 <button id="toggleTheme" class="text-outline hover:text-primary transition-colors flex items-center">
                     <span class="material-symbols-outlined text-[20px]" id="themeIcon">light_mode</span>
@@ -186,6 +186,7 @@ import TriggerTestModal from './components/modals/TriggerTestModal.vue';
 import AutoTriggerModal from './components/modals/AutoTriggerModal.vue';
 import { initRemoteEvents } from './ui/remoteController';
 import { setLanguage, switchView, initDashboardEvents } from './ui/dashboard';
+import { ipcRenderer } from './shared/ipc';
 import { initAccountsEvents } from './ui/accountsController';
 import { initPricingEvents } from './ui/pricingController';
 import { initPacketsEvents } from './ui/packetsController';
@@ -322,14 +323,20 @@ const checkDOMChanges = () => {
   }
 };
 
-watch(() => route.path, (newPath) => {
+watch(() => route.path, async (newPath) => {
   const viewName = newPath === '/' ? 'dashboard' : newPath.substring(1);
   switchView(viewName);
   // Auto-close dropdown on route change
   isDropdownOpen.value = false;
+  
+  await nextTick();
+  setLanguage(currentLang.value);
 });
 
-watch(currentLang, () => {
+watch(currentLang, async (newLang) => {
+  await nextTick();
+  setLanguage(newLang);
+  ipcRenderer.send('settings:language-changed', newLang);
   forceMeasure();
 });
 
@@ -352,8 +359,15 @@ onMounted(() => {
     initRelayEvents();
     initRemoteEvents();
     
-    setLanguage('zh');
-    currentLang.value = 'zh';
+    (window as any).refreshLanguageFromBackend = () => {
+      const savedLang = ipcRenderer.sendSync('settings:get-language') || 'zh';
+      setLanguage(savedLang);
+      if (currentLang.value !== savedLang) {
+        currentLang.value = savedLang;
+      }
+    };
+
+    (window as any).refreshLanguageFromBackend();
 
     // Manually trigger initial switchView to populate settings etc.
     const initialView = route.path === '/' ? 'dashboard' : route.path.substring(1);

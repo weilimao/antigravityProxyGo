@@ -9,7 +9,7 @@
 <div class="flex gap-2">
 <button class="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/50 rounded-md text-[13px] font-medium text-primary dark:text-primary-fixed-dim hover:bg-surface-container-low transition-colors" id="btnExportLogs">
 <span class="material-symbols-outlined text-[16px]">download</span>
-                    导出日志
+                    <span data-i18n="btnExportLogs">导出日志</span>
                 </button>
 </div>
 </div>
@@ -17,13 +17,13 @@
 <div class="hidden glass-card rounded-xl p-4 flex-col gap-3 relative overflow-hidden border border-outline-variant/30" id="aggregate-quota-panel">
 <div class="flex justify-between items-center">
 <div class="flex items-center gap-2">
-<span class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider">账号池总额度汇总</span>
-<button class="flex items-center gap-1 text-[10px] font-semibold text-outline hover:text-primary dark:hover:text-primary-fixed-dim bg-outline-variant/10 hover:bg-primary/10 border border-outline-variant/20 hover:border-primary/30 px-2 py-0.5 rounded transition-all duration-200 select-none" id="btnRefreshAggregateQuota" title="刷新账号池所有账号的配额">
+<span class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="aggregateQuotaTitle">账号池总额度汇总</span>
+<button class="flex items-center gap-1 text-[10px] font-semibold text-outline hover:text-primary dark:hover:text-primary-fixed-dim bg-outline-variant/10 hover:bg-primary/10 border border-outline-variant/20 hover:border-primary/30 px-2 py-0.5 rounded transition-all duration-200 select-none" id="btnRefreshAggregateQuota" title="刷新账号池所有账号的配额" data-i18n-title="btnRefreshAllTitle">
 <span class="material-symbols-outlined text-[12px]" id="btnRefreshAggregateIcon">sync</span>
-<span>一键刷新</span>
+<span data-i18n="btnRefreshAll">一键刷新</span>
 </button>
 </div>
-<span class="text-[11px] text-primary dark:text-primary-fixed-dim font-bold" id="aggregate-quota-info">共 0 个账号</span>
+<span class="text-[11px] text-primary dark:text-primary-fixed-dim font-bold" id="aggregate-quota-info" data-i18n="aggregateQuotaInfo">共 0 个账号</span>
 </div>
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" id="aggregate-quota-grid">
 <!-- JS 动态填充 -->
@@ -97,16 +97,16 @@
 <!-- 指标 4: 内存占用 -->
 <div class="glass-card rounded-xl p-5 flex flex-col gap-2 relative">
 <div class="flex items-center gap-1.5">
-<div class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider">系统物理内存</div>
+<div class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="sysMemoryLabel">系统物理内存</div>
 <!-- Tooltip 说明 -->
 <div class="relative group">
 <span class="material-symbols-outlined text-[14px] text-outline/60 cursor-help select-none">help</span>
 <div class="absolute left-0 top-full mt-2 w-64 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50">
 <div class="bg-slate-900 dark:bg-slate-800 text-white text-[11px] leading-relaxed rounded-lg shadow-xl px-3 py-2.5">
 <div class="absolute left-3 bottom-full w-0 h-0 border-x-4 border-x-transparent border-b-4 border-b-slate-900 dark:border-b-slate-800"></div>
-<p class="font-bold text-blue-300 mb-1">📌 关于内存数字说明</p>
-<p class="text-slate-300"><span class="text-emerald-400 font-semibold">系统物理内存</span>：主进程及所有渲染/网络子进程在物理内存 (RAM) 中的实际占用总和，与任务管理器相符。</p>
-<p class="text-slate-300 mt-1.5"><span class="text-blue-400 font-semibold">Go 堆内存</span>：Go 后端运行时当前分配的堆对象大小，反映核心引擎的数据处理开销。</p>
+<p class="font-bold text-blue-300 mb-1" data-i18n="sysMemoryTitle">📌 关于内存数字说明</p>
+<p class="text-slate-300"><span class="text-emerald-400 font-semibold" data-i18n="sysMemoryLabel">系统物理内存</span><span data-i18n="sysMemoryDescPart">：主进程及所有渲染/网络子进程在物理内存 (RAM) 中的实际占用总和，与任务管理器相符。</span></p>
+<p class="text-slate-300 mt-1.5"><span class="text-blue-400 font-semibold" data-i18n="goHeapLabel">Go 堆内存</span><span data-i18n="goHeapDescPart">：Go 后端运行时当前分配的堆对象大小，反映核心引擎的数据处理开销。</span></p>
 </div>
 </div>
 </div>
@@ -118,11 +118,11 @@
 <!-- 辅助信息：Go 后端堆内存 (HeapAlloc) -->
 <span class="text-[13px] text-slate-500 dark:text-slate-400 mt-1.5 flex items-center gap-1">
 <span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-<span>Go 堆内存: </span>
+<span data-i18n="goHeapLabel">Go 堆内存</span>:
 <span class="font-data-mono font-bold text-blue-500 dark:text-blue-400" id="valMemory">0.0 MB</span>
 </span>
 <span class="text-[13px] text-slate-500 dark:text-slate-400 mt-0.5"><span data-i18n="sysProcess">活跃进程:</span> <span class="font-data-mono font-bold text-on-surface dark:text-white" id="valProcessCount">0</span></span>
-<span class="text-[13px] text-slate-500 dark:text-slate-400 mt-0.5"><span>CPU 占用率:</span> <span class="font-data-mono font-bold text-on-surface dark:text-white" id="valCpuUsage">0.0%</span></span>
+<span class="text-[13px] text-slate-500 dark:text-slate-400 mt-0.5"><span data-i18n="cpuUsageLabel">CPU 占用率:</span> <span class="font-data-mono font-bold text-on-surface dark:text-white" id="valCpuUsage">0.0%</span></span>
 </div>
 <!-- 内存占用曲线图 -->
 <div class="w-[200px] h-[45px] relative z-10 mr-1" id="memoryChartContainer">
@@ -169,13 +169,13 @@
 <div class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="usageTrend">使用趋势</div>
 <!-- 快捷选项与筛选 -->
 <div class="flex gap-1 bg-slate-100 dark:bg-white/5 p-0.5 rounded-lg text-[10px]" id="chartRangeSelector">
-<button class="px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold" data-range="24h">近24小时</button>
-<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-range="today">今日</button>
-<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-range="3d">近三天</button>
-<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-range="7d">七天</button>
-<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-range="30d">30天</button>
+<button class="px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold" data-range="24h" data-i18n="range24h">近24小时</button>
+<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-range="today" data-i18n="rangeToday">今日</button>
+<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-range="3d" data-i18n="range3d">近三天</button>
+<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-range="7d" data-i18n="range7d">七天</button>
+<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-range="30d" data-i18n="range30d">30天</button>
 <button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium flex items-center gap-0.5" data-range="filter" id="btnToggleFilterPanel">
-<span>筛选</span>
+<span data-i18n="rangeFilter">筛选</span>
 <span class="material-symbols-outlined text-[12px]">filter_alt</span>
 </button>
 </div>
@@ -183,7 +183,7 @@
 <!-- 趋势图成本汇总统计 -->
 <div class="flex flex-wrap gap-2 pb-2 mb-2" id="trendCostSummary">
 <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
-<span class="font-medium" id="labelSummaryTotal">近24小时总成本:</span>
+<span class="font-medium" id="labelSummaryTotal" data-i18n="summaryTotalCost24h">近24小时总成本:</span>
 <span class="font-data-mono font-bold text-red-600 dark:text-red-400" id="valSummaryTotal">$0.0000</span>
 </span>
 <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
@@ -202,11 +202,11 @@
 <!-- 趋势图统计概览 -->
 <div class="flex flex-wrap gap-2 pb-3 border-b border-outline-variant/10 mb-3" id="trendTokenSummary">
 <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
-<span class="font-medium" id="labelSummaryTotalRequests">今日总请求数:</span>
+<span class="font-medium" id="labelSummaryTotalRequests" data-i18n="summaryTotalRequestsToday">今日总请求数:</span>
 <span class="font-data-mono font-bold text-orange-500" id="valSummaryTotalRequests">0</span>
 </span>
 <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
-<span class="font-medium" id="labelSummaryTotalTokens">近24小时总 Token:</span>
+<span class="font-medium" id="labelSummaryTotalTokens" data-i18n="summaryTotalTokens24h">近24小时总 Token:</span>
 <span class="font-data-mono font-bold text-slate-700 dark:text-slate-300" id="valSummaryTotalTokens">0</span>
 </span>
 <span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
@@ -226,12 +226,12 @@
 <div class="hidden border-b border-outline-variant/30 pb-4 mb-4 mt-1 bg-slate-50/50 dark:bg-white/5 p-4 rounded-xl flex flex-col gap-4 transition-all duration-200" id="chartFilterPanel">
 <div class="text-[12px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
 <span class="material-symbols-outlined text-primary text-[16px]">calendar_month</span>
-<span>支持日期与时间筛选</span>
+<span data-i18n="filterPanelTitle">支持日期与时间筛选</span>
 </div>
 <div class="flex flex-col md:flex-row gap-4 items-end">
 <!-- 开始时间 -->
 <div class="flex-1 flex flex-col gap-1.5 w-full">
-<span class="text-[11px] text-outline font-medium">开始时间</span>
+<span class="text-[11px] text-outline font-medium" data-i18n="filterStart">开始时间</span>
 <div class="flex gap-2 w-full">
 <input class="cursor-pointer flex-grow px-3 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono" id="filterStartDate" onclick="this.showPicker()" type="date"/>
 <input class="cursor-pointer w-24 px-3 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono" id="filterStartTime" onclick="this.showPicker()" type="time"/>
@@ -239,7 +239,7 @@
 </div>
 <!-- 结束时间 -->
 <div class="flex-1 flex flex-col gap-1.5 w-full">
-<span class="text-[11px] text-outline font-medium">结束时间</span>
+<span class="text-[11px] text-outline font-medium" data-i18n="filterEnd">结束时间</span>
 <div class="flex gap-2 w-full">
 <input class="cursor-pointer flex-grow px-3 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono font-bold" id="filterEndDate" onclick="this.showPicker()" type="date"/>
 <input class="cursor-pointer w-24 px-3 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white font-data-mono font-bold" id="filterEndTime" onclick="this.showPicker()" type="time"/>
@@ -247,8 +247,8 @@
 </div>
 <!-- 动作按钮 -->
 <div class="flex gap-2 justify-end w-full md:w-auto">
-<button class="px-4 py-1.5 text-[12px] font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40" id="btnCancelFilter">取消</button>
-<button class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white hover:bg-primary/90 rounded-lg transition-colors shadow-sm" id="btnApplyFilter">确定</button>
+<button class="px-4 py-1.5 text-[12px] font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40" id="btnCancelFilter" data-i18n="btnCancel">取消</button>
+<button class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white hover:bg-primary/90 rounded-lg transition-colors shadow-sm" id="btnApplyFilter" data-i18n="btnApply">确定</button>
 </div>
 </div>
 </div>
@@ -323,28 +323,28 @@
 <div class="flex items-center justify-between gap-4">
 <div class="flex items-center gap-1.5">
 <span class="w-2 h-2 rounded-full bg-[#3b82f6]"></span>
-<span class="text-slate-500 dark:text-slate-400">输入:</span>
+<span class="text-slate-500 dark:text-slate-400" data-i18n="input">输入</span>:
 </div>
 <span class="font-data-mono font-semibold text-slate-800 dark:text-slate-200" id="tooltipInput">0</span>
 </div>
 <div class="flex items-center justify-between gap-4">
 <div class="flex items-center gap-1.5">
 <span class="w-2 h-2 rounded-full bg-[#10b981]"></span>
-<span class="text-slate-500 dark:text-slate-400">输出:</span>
+<span class="text-slate-500 dark:text-slate-400" data-i18n="output">输出</span>:
 </div>
 <span class="font-data-mono font-semibold text-slate-800 dark:text-slate-200" id="tooltipOutput">0</span>
 </div>
 <div class="flex items-center justify-between gap-4">
 <div class="flex items-center gap-1.5">
 <span class="w-2 h-2 rounded-full bg-[#a855f7]"></span>
-<span class="text-slate-500 dark:text-slate-400">缓存命中:</span>
+<span class="text-slate-500 dark:text-slate-400" data-i18n="legendCached">缓存命中</span>:
 </div>
 <span class="font-data-mono font-semibold text-slate-800 dark:text-slate-200" id="tooltipCached">0</span>
 </div>
 <div class="flex items-center justify-between gap-4">
 <div class="flex items-center gap-1.5">
 <span class="w-2 h-2 rounded-full bg-[#ef4444]"></span>
-<span class="text-slate-500 dark:text-slate-400">成本:</span>
+<span class="text-slate-500 dark:text-slate-400" data-i18n="tooltipCostLabel">成本</span>:
 </div>
 <span class="font-data-mono font-semibold text-rose-500" id="tooltipCost">0</span>
 </div>
@@ -377,9 +377,9 @@
 <div class="glass-card rounded-xl flex flex-col flex-1 min-h-[300px]">
 <!-- 页签切换 -->
 <div class="flex border-b border-outline-variant px-5 pt-3">
-<button class="px-4 py-2 text-[13px] font-bold text-outline hover:text-primary transition-colors border-b-2 border-transparent" id="tabModels">模型统计</button>
-<button class="px-4 py-2 text-[13px] font-bold text-primary border-b-2 border-primary" id="tabLogs">请求日志</button>
-<button class="px-4 py-2 text-[13px] font-bold text-outline hover:text-primary transition-colors border-b-2 border-transparent" id="tabPricing">计费配置</button>
+<button class="px-4 py-2 text-[13px] font-bold text-outline hover:text-primary transition-colors border-b-2 border-transparent" id="tabModels" data-i18n="tabModelStats">模型统计</button>
+<button class="px-4 py-2 text-[13px] font-bold text-primary border-b-2 border-primary" id="tabLogs" data-i18n="tabRequestLogs">请求日志</button>
+<button class="px-4 py-2 text-[13px] font-bold text-outline hover:text-primary transition-colors border-b-2 border-transparent" id="tabPricing" data-i18n="tabPricing">计费配置</button>
 </div>
 <!-- 表格搜索控制条 -->
 <div class="p-3.5 border-b border-outline-variant/30 flex justify-between items-center bg-slate-50/50 dark:bg-white/5" id="logSearchRow">
@@ -420,12 +420,12 @@
 <th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[15%]" data-i18n="colPath">API 接口</th>
 <th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[9%]" data-i18n="colSession">会话 ID</th>
 <th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[10%]" data-i18n="colModel">所用模型</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[11%]">Token 消耗</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[11%]" data-i18n="tokenConsumption">Token 消耗</th>
 <th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[7%]" data-i18n="colPrice">价格</th>
 <th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[6%]" data-i18n="colDuration">耗时</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[5%]" data-i18n="colHitRate">缓存</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[5%]" data-i18n="colCacheTitle">缓存</th>
 <th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[5%]" data-i18n="colCacheStatus">状态</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[4%]">操作</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[4%]" data-i18n="colActions">操作</th>
 </tr>
 </thead>
 <tbody class="text-[13px] font-data-mono text-on-surface dark:text-white divide-y divide-outline-variant/20">
@@ -436,26 +436,26 @@
 <!-- 计费配置面板 -->
 <div class="hidden" id="pricingContent">
 <div class="p-3.5 border-b border-outline-variant/30 flex justify-between items-center bg-slate-50/50 dark:bg-white/5">
-<span class="text-[12px] font-bold text-outline dark:text-outline-variant">模型代币单价配置 (单位: USD/每百万 Tokens)</span>
+<span class="text-[12px] font-bold text-outline dark:text-outline-variant" data-i18n="pricingConfigTitle">模型代币单价配置 (单位: USD/每百万 Tokens)</span>
 <div class="flex gap-2">
 <button class="px-3 py-1.5 text-[11px] bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white border border-outline-variant/40 rounded-md transition-colors flex items-center gap-1" id="btnResetPricing">
 <span class="material-symbols-outlined text-[14px]">restart_alt</span>
-                                恢复默认
+                                <span data-i18n="btnResetPricing">恢复默认</span>
                             </button>
 <button class="px-3 py-1.5 text-[11px] bg-primary text-white hover:bg-primary/90 rounded-md transition-colors flex items-center gap-1 shadow-sm font-bold" id="btnAddPricing">
 <span class="material-symbols-outlined text-[14px]">add</span>
-                                新增模型
+                                <span data-i18n="btnAddPricing">新增模型</span>
                             </button>
 </div>
 </div>
 <table class="w-full text-left border-collapse" id="pricingTable">
 <thead>
 <tr class="border-b border-outline-variant/50 bg-slate-50/50 dark:bg-white/5">
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider pl-5">模型匹配名称</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right">输入 Token 单价 (/1M)</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right">输出 Token 单价 (/1M)</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right">缓存 Token 单价 (/1M)</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[15%]">操作</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider pl-5" data-i18n="colModelPattern">模型匹配名称</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right" data-i18n="colInputPrice">输入 Token 单价 (/1M)</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right" data-i18n="colOutputPrice">输出 Token 单价 (/1M)</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right" data-i18n="colCachedPrice">缓存 Token 单价 (/1M)</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[15%]" data-i18n="colActions">操作</th>
 </tr>
 </thead>
 <tbody class="text-[13px] font-data-mono text-on-surface dark:text-white divide-y divide-outline-variant/20">

@@ -76,6 +76,13 @@ export const shell = {
     }
 
     // Refresh UI with latest configurations now that window.wailsConfigCache is populated
+    if ((window as any).refreshLanguageFromBackend) {
+        try {
+            (window as any).refreshLanguageFromBackend();
+        } catch (err) {
+            console.error('[IPC] Failed to run refreshLanguageFromBackend:', err);
+        }
+    }
     if ((window as any).refreshSettingsUI) {
         try {
             (window as any).refreshSettingsUI();

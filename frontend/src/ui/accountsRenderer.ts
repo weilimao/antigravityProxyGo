@@ -1,5 +1,6 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
+import i18n from '../shared/i18n';
 
 // DOM Elements cache
 let accountsList: HTMLElement | null;
@@ -16,32 +17,34 @@ export function initRendererElements() {
 
 // Format reset time relatively
 export function getRelativeResetTime(resetTime: any): string {
+    const dict = i18n[state.currentLanguage] || i18n.zh;
     try {
         const now = Date.now();
         const reset = new Date(resetTime).getTime();
         const diffMs = reset - now;
         if (diffMs <= 0) {
-            return '已重置';
+            return dict.resetStatus || '已重置';
         }
         const diffMins = Math.round(diffMs / 60000);
         if (diffMins < 60) {
-            return `将在 ${diffMins} 分钟后重置`;
+            return (dict.resetTimeMinutes || '将在 {minutes} 分钟后重置').replace('{minutes}', String(diffMins));
         }
         const diffHours = Math.floor(diffMins / 60);
         const remMins = diffMins % 60;
         if (diffHours < 24) {
-            return `将在 ${diffHours} 小时 ${remMins} 分钟后重置`;
+            return (dict.resetTimeHours || '将在 {hours} 小时 {minutes} 分钟后重置').replace('{hours}', String(diffHours)).replace('{minutes}', String(remMins));
         }
         const diffDays = Math.floor(diffHours / 24);
         const remHours = diffHours % 24;
-        return `将在 ${diffDays} 天 ${remHours} 小时后重置`;
+        return (dict.resetTimeDays || '将在 {days} 天 {hours} 小时后重置').replace('{days}', String(diffDays)).replace('{hours}', String(remHours));
     } catch (e) {
-        return `重置时间: ${new Date(resetTime).toLocaleString()}`;
+        return (dict.absoluteResetTime || '重置时间: {time}').replace('{time}', new Date(resetTime).toLocaleString());
     }
 }
 
 // Format cooldown time to absolute text
 export function formatCooldownTime(cooldownTime: any): string {
+    const isZH = state.currentLanguage === 'zh';
     try {
         const now = new Date();
         const target = new Date(cooldownTime);
@@ -49,13 +52,13 @@ export function formatCooldownTime(cooldownTime: any): string {
                         now.getMonth() === target.getMonth() &&
                         now.getDate() === target.getDate();
         
-        const timeStr = target.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
+        const timeStr = target.toLocaleTimeString(isZH ? 'zh-CN' : 'en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
         if (isToday) {
             return timeStr;
         } else {
             const month = target.getMonth() + 1;
             const date = target.getDate();
-            return `${month}月${date}日 ${timeStr}`;
+            return isZH ? `${month}月${date}日 ${timeStr}` : `${month}/${date} ${timeStr}`;
         }
     } catch (e) {
         return new Date(cooldownTime).toLocaleString();
@@ -66,6 +69,8 @@ export function formatCooldownTime(cooldownTime: any): string {
 export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[], cooldowns: any = {}) {
     if (!containerEl) return;
     containerEl.innerHTML = '';
+    const dict = i18n[state.currentLanguage] || i18n.zh;
+    const isZH = state.currentLanguage === 'zh';
 
     // 针对 Project 渠道（API 级别/按量付费项目）进行特殊展示，不显示假周限额进度条
     const accountId = containerEl.id ? containerEl.id.replace('quotaBars-', '') : '';
@@ -74,14 +79,14 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
         containerEl.innerHTML = `
             <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
                 <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">云项目 API (按量付费)，无额度限制</span>
+                <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">${dict.quotaNoLimit || '云项目 API (按量付费)，无额度限制'}</span>
             </div>
         `;
         return;
     }
 
     if (!buckets || buckets.length === 0) {
-        containerEl.innerHTML = '<span class="text-[10px] text-outline/50 italic">暂无配额数据</span>';
+        containerEl.innerHTML = `<span class="text-[10px] text-outline/50 italic">${dict.noQuotaData || '暂无配额数据'}</span>`;
         return;
     }
 
@@ -90,7 +95,7 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
     if (hasGroups) {
         const groups: { [key: string]: any[] } = {};
         buckets.forEach(b => {
-            const groupName = b.group || '其他模型';
+            const groupName = b.group || (dict.otherModels || '其他模型');
             if (!groups[groupName]) {
                 groups[groupName] = [];
             }
@@ -121,7 +126,7 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
             let cooldownBadge = '';
             if (isCategoryCooling) {
                 const dateStr = formatCooldownTime(categoryCooldownUntil);
-                cooldownBadge = `<span class="px-1 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[8px] font-bold border border-amber-500/20">${dateStr} 恢复</span>`;
+                cooldownBadge = `<span class="px-1 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[8px] font-bold border border-amber-500/20">${isZH ? `${dateStr} 恢复` : `Resumes at ${dateStr}`}</span>`;
             }
 
             groupTitle.innerHTML = `
@@ -185,7 +190,7 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
                 <div class="h-1.5 bg-outline-variant/20 dark:bg-white/10 rounded-full overflow-hidden">
                     <div class="h-full ${barColor} rounded-full transition-all duration-700" style="width: ${pct}%"></div>
                 </div>
-                ${resetStr ? `<span class="text-[9px] text-outline/50 mt-0.5">重置于: ${resetStr}</span>` : ''}
+                ${resetStr ? `<span class="text-[9px] text-outline/50 mt-0.5">${isZH ? '重置于: ' : 'Reset at: '}${resetStr}</span>` : ''}
             `;
             containerEl.appendChild(row);
         });
@@ -194,6 +199,7 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
 
 // Fetch and load individual account quota
 export async function loadAccountQuota(accountId: string, containerEl: HTMLElement | null, refreshBtn: HTMLElement | null, force: boolean = false, cooldowns: any = {}) {
+    const isZH = state.currentLanguage === 'zh';
     if (!state.quotaLoadingState) {
         state.quotaLoadingState = {};
     }
@@ -211,10 +217,10 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
             const icon = refreshBtn?.querySelector('.material-symbols-outlined') || refreshBtn;
             if (icon) icon.classList.add('animate-spin');
             const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
-            if (activeContainer) activeContainer.innerHTML = '<span class="text-[10px] text-outline/50">加载中...</span>';
+            if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-outline/50">${isZH ? '加载中...' : 'Loading...'}</span>`;
         } else if (state.quotaLoadingState[accountId] === 'error') {
             const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
-            if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">加载失败</span>`;
+            if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">${isZH ? '加载失败' : 'Failed to load'}</span>`;
         }
         return;
     }
@@ -222,7 +228,7 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
     const icon = refreshBtn?.querySelector('.material-symbols-outlined') || refreshBtn;
     if (icon) icon.classList.add('animate-spin');
     const initContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
-    if (initContainer) initContainer.innerHTML = '<span class="text-[10px] text-outline/50">加载中...</span>';
+    if (initContainer) initContainer.innerHTML = `<span class="text-[10px] text-outline/50">${isZH ? '加载中...' : 'Loading...'}</span>`;
     
     state.quotaLoadingState[accountId] = 'loading';
 
@@ -242,7 +248,7 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
     } catch (e) {
         state.quotaLoadingState[accountId] = 'error';
         const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
-        if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">请求失败</span>`;
+        if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">${isZH ? '请求失败' : 'Request failed'}</span>`;
     } finally {
         const icon = refreshBtn?.querySelector('.material-symbols-outlined') || refreshBtn;
         if (icon) icon.classList.remove('animate-spin');
@@ -300,7 +306,10 @@ export function renderAccounts(accounts: any[]) {
         accountCountBadge = document.getElementById('accountCountBadge');
     }
     if (accountCountBadge) {
-        accountCountBadge.textContent = `共 ${filteredAccounts.length} 个账号`;
+        const isZH = state.currentLanguage === 'zh';
+        accountCountBadge.textContent = isZH 
+            ? `共 ${filteredAccounts.length} 个账号` 
+            : `${filteredAccounts.length} accounts`;
     }
     
     if (!accountsEmptyState) {
@@ -340,15 +349,8 @@ export function renderAccounts(accounts: any[]) {
     const endIndex = Math.min(startIndex + itemsPerPage, totalItems);
     const paginatedAccounts = filteredAccounts.slice(startIndex, endIndex);
 
-    // 3. DOM Pruning: Remove cards of accounts that are no longer in current page
-    const targetIds = new Set(paginatedAccounts.map(a => a.id));
-    const currentCards = Array.from(accountsList.children);
-    currentCards.forEach(child => {
-        const accId = child.getAttribute('data-account-id');
-        if (accId && !targetIds.has(accId)) {
-            accountsList!.removeChild(child);
-        }
-    });
+    // 3. Clear container to force complete redraw for language reactiveness
+    accountsList.innerHTML = '';
 
     // 4. Loop through current page accounts and render/patch cards
     paginatedAccounts.forEach(acc => {
@@ -449,9 +451,10 @@ export function renderAccounts(accounts: any[]) {
                 }
             }
 
+            const dict = i18n[state.currentLanguage] || i18n.zh;
             let projectInfoStr = '';
             if (acc.provider === 'antigravity' && acc.projectId) {
-                projectInfoStr = ` | 绑定项目: ${acc.projectId}`;
+                projectInfoStr = state.currentLanguage === 'zh' ? ` | 绑定项目: ${acc.projectId}` : ` | Project: ${acc.projectId}`;
             }
 
             info.innerHTML = `
@@ -461,7 +464,7 @@ export function renderAccounts(accounts: any[]) {
                     ${projectBadge}
                     ${tierBadge}
                 </div>
-                <span class="text-[11px] text-outline mt-0.5 truncate">添加于: ${new Date(acc.addedAt).toLocaleString()}${projectInfoStr}</span>
+                <span class="text-[11px] text-outline mt-0.5 truncate">${dict.addedAtLabel || '添加于: '}${new Date(acc.addedAt).toLocaleString()}${projectInfoStr}</span>
             `;
             
             const statusBadge = document.createElement('div');
@@ -469,10 +472,10 @@ export function renderAccounts(accounts: any[]) {
             if (isOverallCooling) {
                 statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
                 const dateStr = formatCooldownTime(minCooldownTime);
-                statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> 冷静中 (${dateStr}恢复)`;
+                statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> ${(dict.cooldownText || '冷静中 ({time}恢复)').replace('{time}', dateStr)}`;
             } else {
                 statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
-                statusBadge.innerHTML = '<span class="material-symbols-outlined text-[12px]">check_circle</span> 有效';
+                statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">check_circle</span> ${dict.statusActive || '有效'}`;
             }
             
             leftGroup.appendChild(checkboxEl);
@@ -491,11 +494,11 @@ export function renderAccounts(accounts: any[]) {
                 
                 const creditTitle = document.createElement('span');
                 creditTitle.className = 'text-[11px] font-semibold text-outline dark:text-outline-variant';
-                creditTitle.textContent = 'AI 积分 (AI Credit)';
+                creditTitle.textContent = dict.aiCreditTitle || 'AI 积分 (AI Credit)';
                 
                 const creditValue = document.createElement('span');
                 creditValue.className = 'acc-credit-value text-[11px] font-bold text-on-surface dark:text-white font-data-mono';
-                const creditVal = typeof acc.credits === 'number' ? `$${acc.credits.toFixed(2)}` : '未加载';
+                const creditVal = typeof acc.credits === 'number' ? `$${acc.credits.toFixed(2)}` : (dict.creditNotLoaded || '未加载');
                 creditValue.textContent = creditVal;
                 
                 creditHeader.appendChild(creditTitle);
@@ -509,7 +512,7 @@ export function renderAccounts(accounts: any[]) {
                 const overagesSwitchId = `overagesToggle-${acc.id}`;
                 const isOveragesChecked = acc.enableOverages === true;
                 overagesToggleWrapper.innerHTML = `
-                    <span class="text-outline dark:text-outline-variant">使用积分抵扣超额度部分</span>
+                    <span class="text-outline dark:text-outline-variant">${dict.deductExcessCredit || '使用积分抵扣超额度部分'}</span>
                     <div class="relative inline-block w-8 align-middle transition duration-200 ease-in flex-shrink-0 ml-2">
                         <input class="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out" 
                             id="${overagesSwitchId}" type="checkbox" ${isOveragesChecked ? 'checked' : ''}/>
@@ -552,11 +555,11 @@ export function renderAccounts(accounts: any[]) {
 
             const quotaHeader = document.createElement('div');
             quotaHeader.className = 'flex justify-between items-center';
-            quotaHeader.innerHTML = '<span class="text-[11px] font-semibold text-outline dark:text-outline-variant">剩余配额</span>';
+            quotaHeader.innerHTML = `<span class="text-[11px] font-semibold text-outline dark:text-outline-variant">${dict.remainingQuota || '剩余配额'}</span>`;
 
             refreshBtn = document.createElement('button');
             refreshBtn.className = 'text-outline hover:text-primary transition-colors z-10';
-            refreshBtn.title = '刷新配额';
+            refreshBtn.title = dict.refreshQuota || '刷新配额';
             refreshBtn.setAttribute('data-quota-refresh-btn', '');
             refreshBtn.innerHTML = '<span class="material-symbols-outlined text-[14px]">refresh</span>';
 
@@ -586,7 +589,7 @@ export function renderAccounts(accounts: any[]) {
                         id="${switchId}" type="checkbox" ${isChecked ? 'checked' : ''}/>
                     <label class="toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer" for="${switchId}"></label>
                 </div>
-                <span class="text-[11px] font-bold ${isChecked ? 'text-emerald-500' : 'text-outline'} acc-toggle-label-text">${isChecked ? '启用中' : '已停用'}</span>
+                <span class="text-[11px] font-bold ${isChecked ? 'text-emerald-500' : 'text-outline'} acc-toggle-label-text">${isChecked ? (dict.statusEnabledAccount || '启用中') : (dict.statusDisabledAccount || '已停用')}</span>
             `;
             
             const checkbox = toggleWrapper.querySelector('input') as HTMLInputElement;
@@ -601,13 +604,13 @@ export function renderAccounts(accounts: any[]) {
                     checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
                     accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-primary cursor-pointer';
                     labelText.className = 'text-[11px] font-bold text-emerald-500 acc-toggle-label-text';
-                    labelText.textContent = '启用中';
+                    labelText.textContent = dict.statusEnabledAccount || '启用中';
                     card!.classList.remove('opacity-60');
                 } else {
                     checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
                     accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
                     labelText.className = 'text-[11px] font-bold text-outline acc-toggle-label-text';
-                    labelText.textContent = '已停用';
+                    labelText.textContent = dict.statusDisabledAccount || '已停用';
                     card!.classList.add('opacity-60');
                 }
                 updateAggregateQuotaUI();
@@ -624,17 +627,17 @@ export function renderAccounts(accounts: any[]) {
             
             const btnDownload = document.createElement('button');
             btnDownload.className = 'text-[11px] font-medium text-primary hover:text-primary/80 hover:bg-primary/5 dark:hover:bg-primary/10 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 mr-1';
-            btnDownload.innerHTML = '<span class="material-symbols-outlined text-[14px]">download</span> 导出';
-            btnDownload.title = '导出该账号文件';
+            btnDownload.innerHTML = `<span class="material-symbols-outlined text-[14px]">download</span> ${dict.btnExport || '导出'}`;
+            btnDownload.title = dict.exportAccountTitle || '导出该账号文件';
             btnDownload.onclick = () => {
                 ipcRenderer.send('accounts:export-single', acc.id);
             };
 
             const btnDelete = document.createElement('button');
             btnDelete.className = 'text-[11px] font-medium text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10';
-            btnDelete.innerHTML = '<span class="material-symbols-outlined text-[14px]">delete</span> 移除';
+            btnDelete.innerHTML = `<span class="material-symbols-outlined text-[14px]">delete</span> ${dict.btnRemove || '移除'}`;
             btnDelete.onclick = async () => {
-                if (await $confirm(`确定要移除账号 ${acc.email} 吗？`)) {
+                if (await $confirm((dict.removeAccountConfirm || '确定要移除账号 {email} 吗？').replace('{email}', acc.email))) {
                     ipcRenderer.send('accounts:remove', acc.id);
                 }
             };
@@ -681,9 +684,10 @@ export function renderAccounts(accounts: any[]) {
                     }
                 }
 
+                const dict = i18n[state.currentLanguage] || i18n.zh;
                 let projectInfoStr = '';
                 if (acc.provider === 'antigravity' && acc.projectId) {
-                    projectInfoStr = ` | 绑定项目: ${acc.projectId}`;
+                    projectInfoStr = state.currentLanguage === 'zh' ? ` | 绑定项目: ${acc.projectId}` : ` | Project: ${acc.projectId}`;
                 }
 
                 infoHeader.innerHTML = `
@@ -693,20 +697,21 @@ export function renderAccounts(accounts: any[]) {
                         ${projectBadge}
                         ${tierBadge}
                     </div>
-                    <span class="text-[11px] text-outline mt-0.5 truncate">添加于: ${new Date(acc.addedAt).toLocaleString()}${projectInfoStr}</span>
+                    <span class="text-[11px] text-outline mt-0.5 truncate">${dict.addedAtLabel || '添加于: '}${new Date(acc.addedAt).toLocaleString()}${projectInfoStr}</span>
                 `;
             }
 
             // 1. Update cooldown status
             const statusBadge = card.querySelector('.acc-status-badge') as HTMLElement;
+            const dict = i18n[state.currentLanguage] || i18n.zh;
             if (statusBadge) {
                 if (isOverallCooling) {
                     statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
                     const dateStr = formatCooldownTime(minCooldownTime);
-                    statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> 冷静中 (${dateStr}恢复)`;
+                    statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> ${(dict.cooldownText || '冷静中 ({time}恢复)').replace('{time}', dateStr)}`;
                 } else {
                     statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
-                    statusBadge.innerHTML = '<span class="material-symbols-outlined text-[12px]">check_circle</span> 有效';
+                    statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">check_circle</span> ${dict.statusActive || '有效'}`;
                 }
             }
 
@@ -714,7 +719,7 @@ export function renderAccounts(accounts: any[]) {
             if (acc.provider === 'antigravity') {
                 const creditValue = card.querySelector('.acc-credit-value') as HTMLElement;
                 if (creditValue) {
-                    const creditVal = typeof acc.credits === 'number' ? `$${acc.credits.toFixed(2)}` : '未加载';
+                    const creditVal = typeof acc.credits === 'number' ? `$${acc.credits.toFixed(2)}` : (dict.creditNotLoaded || '未加载');
                     creditValue.textContent = creditVal;
                 }
 
@@ -747,13 +752,13 @@ export function renderAccounts(accounts: any[]) {
                         checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
                         accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-primary cursor-pointer';
                         labelText.className = 'text-[11px] font-bold text-emerald-500 acc-toggle-label-text';
-                        labelText.textContent = '启用中';
+                        labelText.textContent = dict.statusEnabledAccount || '启用中';
                         card.classList.remove('opacity-60');
                     } else {
                         checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
                         accLabel.className = 'toggle-label block overflow-hidden h-4 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
                         labelText.className = 'text-[11px] font-bold text-outline acc-toggle-label-text';
-                        labelText.textContent = '已停用';
+                        labelText.textContent = dict.statusDisabledAccount || '已停用';
                         card.classList.add('opacity-60');
                     }
                 }
@@ -788,11 +793,18 @@ function renderPaginationUI(totalItems: number, startIndex: number, endIndex: nu
     const btnNext = document.getElementById('btnNextAccountPage') as HTMLButtonElement | null;
     const numbersContainer = document.getElementById('accountPageNumbers');
 
+    const dict = i18n[state.currentLanguage] || i18n.zh;
     if (info) {
         if (totalItems === 0) {
-            info.textContent = '显示 0 - 0 条，共 0 条';
+            info.textContent = (dict.showingAccountsRange || '显示 {start} - {end} 条，共 {total} 条')
+                .replace('{start}', '0')
+                .replace('{end}', '0')
+                .replace('{total}', '0');
         } else {
-            info.textContent = `显示 ${startIndex + 1} - ${endIndex} 条，共 ${totalItems} 条`;
+            info.textContent = (dict.showingAccountsRange || '显示 {start} - {end} 条，共 {total} 条')
+                .replace('{start}', String(startIndex + 1))
+                .replace('{end}', String(endIndex))
+                .replace('{total}', String(totalItems));
         }
     }
 
@@ -843,6 +855,8 @@ export function updateAggregateQuotaUI() {
     const info = document.getElementById('aggregate-quota-info');
     if (!panel || !grid || !info) return;
 
+    const dict = i18n[state.currentLanguage] || i18n.zh;
+
     const isPool = poolModeToggle ? poolModeToggle.checked : false;
     const isRemote = !!state.isRemoteMode;
     const hasRemoteStats = !!(state.remoteStats && state.remoteStats.quotas);
@@ -871,6 +885,7 @@ export function updateAggregateQuotaUI() {
         const usage = state.remoteStats.currentUsage || {};
         const resetAt = state.remoteStats.resetAt || {};
         const isZH = state.currentLanguage === 'zh';
+        const dict = i18n[state.currentLanguage] || {};
         
         const pkgName = state.remoteStats.packageName || (isZH ? '自定义配置' : 'Custom');
         info.textContent = isZH ? `远程中继套餐: ${pkgName}` : `Remote Plan: ${pkgName}`;
@@ -930,38 +945,34 @@ export function updateAggregateQuotaUI() {
         
         if (q.gemini) {
             if (q.gemini.enableFixed) {
-                const label = isZH ? '远端 Gemini 总额度' : 'Remote Gemini Total';
+                const label = dict.remoteGeminiTotal || (state.currentLanguage === 'zh' ? '远端 Gemini 总额度' : 'Remote Gemini Total');
                 renderRemoteQuotaBar(label, q.gemini.fixedTokens, getFamilyLifetimeTokens(state.remoteStats, true));
             }
             if (q.gemini.enableHourly) {
-                const label = isZH 
-                    ? `远端 Gemini ${q.gemini.hourlyHours}小时限额` 
-                    : `Remote Gemini ${q.gemini.hourlyHours}-Hour`;
+                const label = (dict.remoteGeminiHourly || (state.currentLanguage === 'zh' ? '远端 Gemini {hours}小时限额' : 'Remote Gemini {hours}-Hour'))
+                    .replace('{hours}', String(q.gemini.hourlyHours));
                 renderRemoteQuotaBar(label, q.gemini.hourlyTokens, usage.gemini_hourly || 0, resetAt.gemini_hourly, false);
             }
             if (q.gemini.enableDaily) {
-                const label = isZH 
-                    ? `远端 Gemini ${q.gemini.dailyDays}天限额` 
-                    : `Remote Gemini ${q.gemini.dailyDays}-Day`;
+                const label = (dict.remoteGeminiDaily || (state.currentLanguage === 'zh' ? '远端 Gemini {days}天限额' : 'Remote Gemini {days}-Day'))
+                    .replace('{days}', String(q.gemini.dailyDays));
                 renderRemoteQuotaBar(label, q.gemini.dailyTokens, usage.gemini_daily || 0, resetAt.gemini_daily, true);
             }
         }
         
         if (q.claude) {
             if (q.claude.enableFixed) {
-                const label = isZH ? '远端 Claude 总额度' : 'Remote Claude Total';
+                const label = dict.remoteClaudeTotal || (state.currentLanguage === 'zh' ? '远端 Claude 总额度' : 'Remote Claude Total');
                 renderRemoteQuotaBar(label, q.claude.fixedTokens, getFamilyLifetimeTokens(state.remoteStats, false));
             }
             if (q.claude.enableHourly) {
-                const label = isZH 
-                    ? `远端 Claude ${q.claude.hourlyHours}小时限额` 
-                    : `Remote Claude ${q.claude.hourlyHours}-Hour`;
+                const label = (dict.remoteClaudeHourly || (state.currentLanguage === 'zh' ? '远端 Claude {hours}小时限额' : 'Remote Claude {hours}-Hour'))
+                    .replace('{hours}', String(q.claude.hourlyHours));
                 renderRemoteQuotaBar(label, q.claude.hourlyTokens, usage.claude_hourly || 0, resetAt.claude_hourly, false);
             }
             if (q.claude.enableDaily) {
-                const label = isZH 
-                    ? `远端 Claude ${q.claude.dailyDays}天限额` 
-                    : `Remote Claude ${q.claude.dailyDays}-Day`;
+                const label = (dict.remoteClaudeDaily || (state.currentLanguage === 'zh' ? '远端 Claude {days}天限额' : 'Remote Claude {days}-Day'))
+                    .replace('{days}', String(q.claude.dailyDays));
                 renderRemoteQuotaBar(label, q.claude.dailyTokens, usage.claude_daily || 0, resetAt.claude_daily, true);
             }
         }
@@ -1036,12 +1047,22 @@ export function updateAggregateQuotaUI() {
         }
     });
     
-    info.textContent = `汇总 ${totalAccountsWithQuota}/${enabledAccounts.length} 个账号的额度`;
+    info.textContent = (state.currentLanguage === 'zh' ? '汇总 {count}/{total} 个账号的额度' : 'Aggregated quota of {count}/{total} accounts')
+        .replace('{count}', String(totalAccountsWithQuota))
+        .replace('{total}', String(enabledAccounts.length));
 
     categories.forEach(cat => {
         const data = sums[cat.key];
         const cell = document.createElement('div');
         cell.className = 'flex flex-col gap-1 bg-slate-50/50 dark:bg-white/5 p-2 rounded-lg border border-outline-variant/20 flex-1 min-w-0';
+
+        let displayLabel = cat.label;
+        if (state.currentLanguage === 'zh') {
+            if (cat.key === 'gemini_weekly') displayLabel = 'Gemini 周限额';
+            else if (cat.key === 'gemini_5hour') displayLabel = 'Gemini 5小时限额';
+            else if (cat.key === 'claude_weekly') displayLabel = 'Claude 周限额';
+            else if (cat.key === 'claude_5hour') displayLabel = 'Claude 5小时限额';
+        }
 
         if (data.count > 0) {
             const avgPercent = Math.round(data.sum / data.count);
@@ -1058,7 +1079,7 @@ export function updateAggregateQuotaUI() {
 
             cell.innerHTML = `
                 <div class="flex justify-between text-[11px] font-semibold items-center">
-                    <span class="text-on-surface dark:text-white truncate pr-1" title="${cat.group} - ${cat.modelId}">${cat.label}</span>
+                    <span class="text-on-surface dark:text-white truncate pr-1" title="${cat.group} - ${cat.modelId}">${displayLabel}</span>
                     <span class="${textClass} font-bold">${avgPercent}%</span>
                 </div>
                 <div class="w-full h-1 bg-outline-variant/20 dark:bg-white/5 rounded-full overflow-hidden">
@@ -1068,7 +1089,7 @@ export function updateAggregateQuotaUI() {
         } else {
             cell.innerHTML = `
                 <div class="flex justify-between text-[11px] font-semibold items-center">
-                    <span class="text-on-surface dark:text-white truncate" title="${cat.group} - ${cat.modelId}">${cat.label}</span>
+                    <span class="text-on-surface dark:text-white truncate" title="${cat.group} - ${cat.modelId}">${displayLabel}</span>
                     <span class="text-outline/40 font-bold">-</span>
                 </div>
                 <div class="w-full h-1 bg-outline-variant/20 dark:bg-white/5 rounded-full overflow-hidden flex items-center justify-center">

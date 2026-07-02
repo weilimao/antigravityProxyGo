@@ -7,10 +7,10 @@
 </div>
 <!-- Sub Tab Menu -->
 <div class="flex gap-1 bg-slate-100 dark:bg-white/5 p-1 rounded-lg text-[12px]">
-<button class="px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200" id="btnSettingsTabGeneral">参数配置</button>
+<button class="px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200" id="btnSettingsTabGeneral" data-i18n="settingsTabGeneral">参数配置</button>
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" data-i18n="settingsTabRelay" id="btnSettingsTabRelay">中继服务器</button>
-<button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabNetwork">网络监控</button>
-<button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabAbout">关于</button>
+<button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabNetwork" data-i18n="settingsTabNetwork">网络监控</button>
+<button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabAbout" data-i18n="settingsTabAbout">关于</button>
 </div>
 </div>
 <!-- 参数配置面板 -->
@@ -108,16 +108,16 @@
 <div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
 <span class="material-symbols-outlined text-primary text-[20px]">dns</span>
-<span>本地代理与 Fallback 中转设置</span>
+<span data-i18n="fallbackSettingTitle">本地代理与 Fallback 中转设置</span>
 </h2>
-<p class="text-xs text-outline leading-relaxed">
+<p class="text-xs text-outline leading-relaxed" data-i18n="fallbackSettingTip">
 配置当系统代理为空（如仅开启 Clash TUN 虚拟网卡模式）时的本地 Fallback 代理探测，或指定全局专属 SOCKS5 代理。
 </p>
 <div class="flex flex-col gap-3 border-t border-outline-variant/20 pt-4 mt-2">
 <div class="flex items-center justify-between">
 <div class="flex flex-col gap-0.5">
-<label class="text-[13px] font-bold text-on-surface dark:text-white">启用专属出站代理 (支持 HTTP/SOCKS5)</label>
-<span class="text-[11px] text-outline text-wrap max-w-[80%]">开启后将强行且仅通过此代理访问外网，完全不走 Windows 系统代理。支持 HTTP 和 SOCKS5 协议。</span>
+<label class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="customSocks5EnabledLabel">启用专属出站代理 (支持 HTTP/SOCKS5)</label>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="customSocks5EnabledDesc">开启后将强行且仅通过此代理访问外网，完全不走 Windows 系统代理。支持 HTTP 和 SOCKS5 协议。</span>
 </div>
 <label class="relative inline-flex items-center cursor-pointer">
 <input class="sr-only peer" id="chkCustomSocks5Enabled" type="checkbox"/>
@@ -126,27 +126,27 @@
 </div>
 <div class="flex flex-col gap-3 mt-1" id="divCustomSocks5Address">
 <div class="flex flex-col gap-1.5">
-<label class="text-[12px] font-bold text-outline">专属代理地址 (协议必须显式配置，如 http:// 或 socks5://)</label>
-<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomSocks5Address" placeholder="例如：http://127.0.0.1:8080 或 socks5://127.0.0.1:1080" type="text"/>
+<label class="text-[12px] font-bold text-outline" data-i18n="customSocks5AddressLabel">专属代理地址 (协议必须显式配置，如 http:// 或 socks5://)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomSocks5Address" placeholder="例如：http://127.0.0.1:8080 或 socks5://127.0.0.1:1080" data-i18n-placeholder="customSocks5AddressPlaceholder" type="text"/>
 </div>
 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 <div class="flex flex-col gap-1.5">
-<label class="text-[12px] font-bold text-outline">专属 SOCKS5 用户名 (可选)</label>
-<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomSocks5Username" placeholder="无" type="text"/>
+<label class="text-[12px] font-bold text-outline" data-i18n="customSocks5UsernameLabel">专属 SOCKS5 用户名 (可选)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomSocks5Username" placeholder="无" data-i18n-placeholder="optionalPlaceholder" type="text"/>
 </div>
 <div class="flex flex-col gap-1.5">
-<label class="text-[12px] font-bold text-outline">专属 SOCKS5 密码 (可选)</label>
-<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomSocks5Password" placeholder="无" type="password"/>
+<label class="text-[12px] font-bold text-outline" data-i18n="customSocks5PasswordLabel">专属 SOCKS5 密码 (可选)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomSocks5Password" placeholder="无" data-i18n-placeholder="optionalPlaceholder" type="password"/>
 </div>
 </div>
 </div>
 </div>
 <div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
 <div class="flex flex-col gap-0.5">
-<span class="text-[13px] font-bold text-on-surface dark:text-white">Fallback 自定义探测端口</span>
-<span class="text-[11px] text-outline text-wrap">当系统没有配置代理时（只开 TUN 模式），除了默认扫描常用端口（7890/7897等），还会扫描此处的端口做代理回退。多个端口用英文逗号分隔。</span>
+<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="fallbackPortsLabel">Fallback 自定义探测端口</span>
+<span class="text-[11px] text-outline text-wrap" data-i18n="fallbackPortsDesc">当系统没有配置代理时（只开 TUN 模式），除了默认扫描常用端口（7890/7897等），还会扫描此处的端口做代理回退。多个端口用英文逗号分隔。</span>
 </div>
-<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white mt-1" id="txtFallbackProxyPorts" placeholder="例如：8888, 9999" type="text"/>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white mt-1" id="txtFallbackProxyPorts" placeholder="例如：8888, 9999" data-i18n-placeholder="fallbackPortsPlaceholder" type="text"/>
 </div>
 </div>
 
@@ -191,20 +191,20 @@
     <div class="glass-card rounded-xl p-6 flex flex-col gap-4">
         <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
             <span class="material-symbols-outlined text-primary text-[20px]">lan</span>
-            <span>当前本地代理状态</span>
+            <span data-i18n="netStatusTitle">当前本地代理状态</span>
         </h2>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
             <div class="bg-slate-50 dark:bg-white/5 p-4 rounded-lg border border-outline-variant/20 flex flex-col gap-1">
-                <span class="text-[11px] text-outline font-bold">Fallback 探测代理</span>
-                <span class="text-[13px] font-mono font-bold text-on-surface dark:text-white" id="lblNetStatusFallback">正在检测...</span>
+                <span class="text-[11px] text-outline font-bold" data-i18n="netStatusFallbackLabel">Fallback 探测代理</span>
+                <span class="text-[13px] font-mono font-bold text-on-surface dark:text-white" id="lblNetStatusFallback" data-i18n="netStatusDetecting">正在检测...</span>
             </div>
             <div class="bg-slate-50 dark:bg-white/5 p-4 rounded-lg border border-outline-variant/20 flex flex-col gap-1">
-                <span class="text-[11px] text-outline font-bold">专属 SOCKS5 代理</span>
-                <span class="text-[13px] font-mono font-bold text-on-surface dark:text-white" id="lblNetStatusCustomSocks">未启用</span>
+                <span class="text-[11px] text-outline font-bold" data-i18n="netStatusCustomSocksLabel">专属 SOCKS5 代理</span>
+                <span class="text-[13px] font-mono font-bold text-on-surface dark:text-white" id="lblNetStatusCustomSocks" data-i18n="netStatusDisabled">未启用</span>
             </div>
             <div class="bg-slate-50 dark:bg-white/5 p-4 rounded-lg border border-outline-variant/20 flex flex-col gap-1">
-                <span class="text-[11px] text-outline font-bold">后台探测周期</span>
-                <span class="text-[13px] font-medium text-on-surface dark:text-white">每 15 秒轮询</span>
+                <span class="text-[11px] text-outline font-bold" data-i18n="netStatusPeriodLabel">后台探测周期</span>
+                <span class="text-[13px] font-medium text-on-surface dark:text-white" data-i18n="netStatusPeriodValue">每 15 秒轮询</span>
             </div>
         </div>
     </div>
@@ -214,30 +214,30 @@
         <div class="flex items-center justify-between">
             <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
                 <span class="material-symbols-outlined text-primary text-[20px]">list_alt</span>
-                <span>出站路由跟踪日志 (最近 100 条)</span>
+                <span data-i18n="netLogsTitle">出站路由跟踪日志 (最近 100 条)</span>
             </h2>
             <button class="px-3 py-1 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1" id="btnRefreshNetLogs">
                 <span class="material-symbols-outlined text-[14px]">refresh</span>
-                <span>手动刷新</span>
+                <span data-i18n="btnManualRefresh">手动刷新</span>
             </button>
         </div>
-        <p class="text-xs text-outline leading-relaxed">
+        <p class="text-xs text-outline leading-relaxed" data-i18n="netLogsDesc">
             实时捕获本客户端发往谷歌等上游服务的每一次底层 TCP/HTTPS 拨号细节，包括实际选用的代理端口、网络建连耗时以及建连结果状态。
         </p>
         <div class="overflow-x-auto w-full border border-outline-variant/20 rounded-lg max-h-[360px] overflow-y-auto">
             <table class="w-full text-left text-[11px] font-medium">
                 <thead class="bg-slate-50 dark:bg-[#1a1f30] text-outline/80 border-b border-outline-variant/20 font-bold sticky top-0 z-10">
                     <tr>
-                        <th class="py-2.5 px-3">时间</th>
-                        <th class="py-2.5 px-3">拨号目标 (Target)</th>
-                        <th class="py-2.5 px-3">出站路由 (Via Proxy)</th>
-                        <th class="py-2.5 px-3 text-center">建连耗时</th>
-                        <th class="py-2.5 px-3">状态 (Status)</th>
+                        <th class="py-2.5 px-3" data-i18n="netLogTime">时间</th>
+                        <th class="py-2.5 px-3" data-i18n="netLogTarget">拨号目标 (Target)</th>
+                        <th class="py-2.5 px-3" data-i18n="netLogRoute">出站路由 (Via Proxy)</th>
+                        <th class="py-2.5 px-3 text-center" data-i18n="netLogDuration">建连耗时</th>
+                        <th class="py-2.5 px-3" data-i18n="netLogStatus">状态 (Status)</th>
                     </tr>
                 </thead>
                 <tbody id="tblNetworkLogsBody" class="font-data-mono">
                     <tr>
-                        <td colspan="5" class="py-6 text-center text-outline/60">暂无连接记录，正在等待出站网络活动...</td>
+                        <td colspan="5" class="py-6 text-center text-outline/60" data-i18n="netLogsEmpty">暂无连接记录，正在等待出站网络活动...</td>
                     </tr>
                 </tbody>
             </table>
@@ -260,7 +260,7 @@
 </button>
 <button class="px-2.5 py-0.5 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white border border-outline-variant/30 rounded-full text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer" id="btnAboutChangelog">
 <span class="material-symbols-outlined text-[12px]">description</span>
-<span>更新记录</span>
+<span data-i18n="btnReleaseNotes">更新记录</span>
 </button>
 </div>
 <p class="text-[12px] text-outline max-w-md mt-1" data-i18n="aboutDesc">基于大模型的智能代理与多账号调度流量管理解决方案</p>
@@ -269,7 +269,7 @@
 <!-- Card 1: 主作者 -->
 <div class="glass-card hover:border-primary/30 hover:bg-primary/5 transition-all duration-300 rounded-xl p-4 flex flex-col items-center justify-center text-center gap-1.5 border border-outline-variant/20">
 <span class="material-symbols-outlined text-primary/80 text-[20px]">person</span>
-<span class="text-[12px] font-bold text-on-surface dark:text-white">主作者</span>
+<span class="text-[12px] font-bold text-on-surface dark:text-white" data-i18n="aboutAuthorLabel">主作者</span>
 <span class="text-[11px] text-outline font-data-mono">weilimao</span>
 </div>
 <!-- Card 2: 开源仓库 -->
@@ -277,20 +277,20 @@
 <svg class="w-5 h-5 text-primary/80 fill-current" viewBox="0 0 24 24">
 <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path>
 </svg>
-<span class="text-[12px] font-bold text-on-surface dark:text-white">开源仓库</span>
+<span class="text-[12px] font-bold text-on-surface dark:text-white" data-i18n="aboutRepoLabel">开源仓库</span>
 <span class="text-[11px] text-outline font-data-mono">antigravityProxyGo</span>
 </button>
 <!-- Card 3: 赞助支持 -->
 <div class="glass-card hover:border-primary/30 hover:bg-primary/5 transition-all duration-300 rounded-xl p-4 flex flex-col items-center justify-center text-center gap-1.5 border border-outline-variant/20">
 <span class="material-symbols-outlined text-primary/80 text-[20px]">favorite</span>
-<span class="text-[12px] font-bold text-on-surface dark:text-white">赞助支持</span>
-<span class="text-[11px] text-outline">支持项目持续开发</span>
+<span class="text-[12px] font-bold text-on-surface dark:text-white" data-i18n="aboutSponsorLabel">赞助支持</span>
+<span class="text-[11px] text-outline" data-i18n="aboutSponsorDesc">支持项目持续开发</span>
 </div>
 <!-- Card 4: 意见反馈 -->
 <button class="glass-card hover:border-primary/30 hover:bg-primary/5 transition-all duration-300 rounded-xl p-4 flex flex-col items-center justify-center text-center gap-1.5 border border-outline-variant/20 cursor-pointer" id="btnAboutFeedback">
 <span class="material-symbols-outlined text-primary/80 text-[20px]">sms</span>
-<span class="text-[12px] font-bold text-on-surface dark:text-white">意见反馈</span>
-<span class="text-[11px] text-outline">报告问题或提交建议</span>
+<span class="text-[12px] font-bold text-on-surface dark:text-white" data-i18n="aboutFeedbackLabel">意见反馈</span>
+<span class="text-[11px] text-outline" data-i18n="aboutFeedbackDesc">报告问题或提交建议</span>
 </button>
 </div>
 <!-- 版权声明 -->
@@ -352,16 +352,16 @@
             <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-outline/50">
                 <span class="material-symbols-outlined text-[18px]">search</span>
             </span>
-            <input type="text" id="relayUserSearchInput" placeholder="按账户名搜索..." 
+            <input type="text" id="relayUserSearchInput" placeholder="按账户名搜索..." data-i18n-placeholder="relayUserSearchPlaceholder"
                 class="w-full pl-9 pr-3 py-1.5 text-[12px] rounded-lg border border-outline-variant/30 bg-slate-50 dark:bg-white/5 text-on-surface dark:text-white focus:outline-none focus:border-primary/60" />
         </div>
         <!-- 套餐类型筛选 -->
         <div class="relative w-[180px]">
             <select id="relayUserPackageFilter" 
                 class="w-full px-3 py-1.5 text-[12px] rounded-lg border border-outline-variant/30 bg-slate-50 dark:bg-white/5 text-on-surface dark:text-white focus:outline-none focus:border-primary/60 appearance-none cursor-pointer">
-                <option value="all">所有套餐类型</option>
-                <option value="unlimited">无限制</option>
-                <option value="custom">自定义限额</option>
+                <option value="all" data-i18n="relayUserFilterAll">所有套餐类型</option>
+                <option value="unlimited" data-i18n="relayUserFilterUnlimited">无限制</option>
+                <option value="custom" data-i18n="relayUserFilterCustom">自定义限额</option>
             </select>
             <span class="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-outline/50">
                 <span class="material-symbols-outlined text-[16px]">keyboard_arrow_down</span>
@@ -375,11 +375,11 @@
         <div class="flex items-center gap-1">
             <button id="btnRelayUserPrevPage" class="px-2.5 py-1 text-[11px] font-medium border border-outline-variant/30 rounded-md hover:bg-slate-50 dark:hover:bg-white/5 text-on-surface dark:text-white disabled:opacity-50 disabled:pointer-events-none flex items-center gap-0.5 cursor-pointer">
                 <span class="material-symbols-outlined text-[14px]">chevron_left</span>
-                <span>上一页</span>
+                <span data-i18n="btnPrevPage">上一页</span>
             </button>
             <span class="text-[11px] px-2 text-on-surface dark:text-white font-bold" id="relayUserCurrentPage">1</span>
             <button id="btnRelayUserNextPage" class="px-2.5 py-1 text-[11px] font-medium border border-outline-variant/30 rounded-md hover:bg-slate-50 dark:hover:bg-white/5 text-on-surface dark:text-white disabled:opacity-50 disabled:pointer-events-none flex items-center gap-0.5 cursor-pointer">
-                <span>下一页</span>
+                <span data-i18n="btnNextPage">下一页</span>
                 <span class="material-symbols-outlined text-[14px]">chevron_right</span>
             </button>
         </div>
@@ -394,11 +394,11 @@
     <div class="flex items-center justify-between mb-4">
     <h3 class="text-[14px] font-bold text-on-surface dark:text-white flex items-center gap-2">
     <span class="material-symbols-outlined text-[18px] text-primary">view_quilt</span>
-    <span>限额套餐模板</span>
+    <span data-i18n="relayPackagesTitle">限额套餐模板</span>
     </h3>
     <button class="flex items-center gap-1 text-[12px] font-medium text-primary hover:text-primary/80 transition-colors" onclick="window._relayOpenPackageSettings('')">
     <span class="material-symbols-outlined text-[16px]">add</span>
-    <span>新建套餐</span>
+    <span data-i18n="relayNewPackage">新建套餐</span>
     </button>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3" id="relayPackagesList"></div>
@@ -458,7 +458,7 @@
                 <div class="text-[13px] font-medium text-on-surface dark:text-white" data-i18n="relayDomainWhitelistLabel">代理域名白名单 (每行一个，支持通配符如 *.google.com)</div>
                 <textarea id="txtRelayDomainWhitelist" rows="6" 
                     class="w-full p-3 text-[12px] font-mono rounded-lg border border-outline-variant/30 bg-slate-50 dark:bg-white/5 text-on-surface dark:text-white focus:outline-none focus:border-primary/60 placeholder-slate-400"
-                    placeholder="输入允许的域名列表，例如：&#10;*.googleapis.com&#10;*.google.com&#10;*.anthropic.com"></textarea>
+                    placeholder="输入允许的域名列表，例如：&#10;*.googleapis.com&#10;*.google.com&#10;*.anthropic.com" data-i18n-placeholder="relayDomainWhitelistPlaceholder"></textarea>
                 <div class="flex justify-end mt-1">
                     <button id="btnSaveRelaySecurity" class="px-4 py-1.5 text-[12px] font-medium bg-primary text-white hover:bg-primary/90 rounded-lg cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm">
                         <span class="material-symbols-outlined text-[16px]">save</span>
@@ -476,11 +476,11 @@
         <div class="flex items-center justify-between mb-5">
             <h3 class="text-[14px] font-bold text-on-surface dark:text-white flex items-center gap-2">
                 <span class="material-symbols-outlined text-[18px] text-primary">alt_route</span>
-                <span>自定义中继模型映射</span>
+                <span data-i18n="relayModelMappingTitle">自定义中继模型映射</span>
             </h3>
             <button class="flex items-center gap-1 text-[12px] font-medium text-primary hover:text-primary/80 transition-colors cursor-pointer" id="btnAddModelMapping">
                 <span class="material-symbols-outlined text-[16px]">add</span>
-                <span>添加映射</span>
+                <span data-i18n="relayAddMapping">添加映射</span>
             </button>
         </div>
         
@@ -488,10 +488,10 @@
             <table class="w-full text-left text-[12px]">
                 <thead>
                     <tr class="border-b border-outline-variant/25 text-outline/80">
-                        <th class="py-2.5 font-bold pl-2">客户端请求模型 (Client Model)</th>
-                        <th class="py-2.5 font-bold pl-2">真实目标模型 (Target Model)</th>
-                        <th class="py-2.5 font-bold text-center w-[120px]">是否公开 (Expose)</th>
-                        <th class="py-2.5 font-bold text-center w-[80px]">操作</th>
+                        <th class="py-2.5 font-bold pl-2" data-i18n="relayMappingClientModel">客户端请求模型 (Client Model)</th>
+                        <th class="py-2.5 font-bold pl-2" data-i18n="relayMappingTargetModel">真实目标模型 (Target Model)</th>
+                        <th class="py-2.5 font-bold text-center w-[120px]" data-i18n="relayMappingExpose">是否公开 (Expose)</th>
+                        <th class="py-2.5 font-bold text-center w-[80px]" data-i18n="autoTriggerColAction">操作</th>
                     </tr>
                 </thead>
                 <tbody id="modelMappingTableBody">
@@ -503,7 +503,7 @@
         <div class="flex justify-end gap-3 mt-6 border-t border-outline-variant/20 pt-4">
             <button class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white rounded-lg hover:bg-primary/90 transition-all duration-200 cursor-pointer shadow-md shadow-primary/20 flex items-center gap-1" id="btnSaveModelMapping">
                 <span class="material-symbols-outlined text-[16px]">save</span>
-                <span>保存映射配置</span>
+                <span data-i18n="relaySaveMapping">保存映射配置</span>
             </button>
         </div>
     </div>

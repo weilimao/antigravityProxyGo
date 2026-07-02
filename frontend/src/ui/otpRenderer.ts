@@ -1,3 +1,6 @@
+import state from './dashboardState';
+import i18n from '../shared/i18n';
+
 // DOM Cache
 let otpTable: HTMLElement | null = null;
 let otpTableBody: HTMLElement | null = null;
@@ -43,7 +46,9 @@ export function renderOtpTable(
 
     if (!body || !table || !empty || !badge) return;
 
-    badge.textContent = `共 ${totalFilteredCount} 个账号`;
+    const dict = i18n[state.currentLanguage] || i18n.zh;
+
+    badge.textContent = (dict.otp_countBadgeText || '共 {count} 个账号').replace('{count}', String(totalFilteredCount));
 
     // Calculate total pages
     const totalPages = Math.max(1, Math.ceil(totalFilteredCount / pageSize));
@@ -52,7 +57,7 @@ export function renderOtpTable(
     if (otpPaginationContainer && otpPaginationInfo && btnOtpPrevPage && btnOtpNextPage && otpPageIndicator) {
         if (totalFilteredCount === 0) {
             otpPaginationContainer.classList.add('hidden');
-            otpPaginationInfo.textContent = '显示第 0-0 条，共 0 条';
+            otpPaginationInfo.textContent = dict.otp_showingEmpty || '显示第 0-0 条，共 0 条';
             btnOtpPrevPage.disabled = true;
             btnOtpNextPage.disabled = true;
             otpPageIndicator.textContent = '1 / 1';
@@ -60,7 +65,10 @@ export function renderOtpTable(
             otpPaginationContainer.classList.remove('hidden');
             const startItem = (currentPage - 1) * pageSize + 1;
             const endItem = Math.min(currentPage * pageSize, totalFilteredCount);
-            otpPaginationInfo.textContent = `显示第 ${startItem}-${endItem} 条，共 ${totalFilteredCount} 条`;
+            otpPaginationInfo.textContent = (dict.otp_showingEntries || '显示第 {start}-{end} 条，共 {total} 条')
+                .replace('{start}', String(startItem))
+                .replace('{end}', String(endItem))
+                .replace('{total}', String(totalFilteredCount));
             btnOtpPrevPage.disabled = currentPage === 1;
             btnOtpNextPage.disabled = currentPage === totalPages;
             otpPageIndicator.textContent = `${currentPage} / ${totalPages}`;
@@ -130,14 +138,14 @@ export function renderOtpTable(
             tdStatus.innerHTML = `
                 <div class="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
                     <span class="material-symbols-outlined text-[16px]">check_circle</span>
-                    <span>已启用 2FA 保护</span>
+                    <span>${dict.otp_protected || '已启用 2FA 保护'}</span>
                 </div>
             `;
         } else {
             tdStatus.innerHTML = `
                 <div class="flex items-center gap-1.5 text-outline dark:text-outline-variant">
                     <span class="material-symbols-outlined text-[16px]">info</span>
-                    <span>未配置密钥</span>
+                    <span>${dict.otp_notConfigured || '未配置密钥'}</span>
                 </div>
             `;
         }
@@ -151,11 +159,11 @@ export function renderOtpTable(
             const displayErr = item.error;
 
             if (displayErr) {
-                tdCode.innerHTML = `<span class="text-red-500 text-[11px]" title="${displayErr}">密钥无效/错误</span>`;
+                tdCode.innerHTML = `<span class="text-red-500 text-[11px]" title="${displayErr}">${dict.otp_invalidOrError || '密钥无效/错误'}</span>`;
             } else {
                 const codeWrapper = document.createElement('div');
                 codeWrapper.className = 'inline-flex items-center justify-center gap-2 bg-primary/5 dark:bg-primary-fixed-dim/5 border border-primary/20 dark:border-primary-fixed-dim/20 rounded-xl px-4 py-1.5 hover:bg-primary/10 dark:hover:bg-primary-fixed-dim/10 transition-all cursor-pointer select-none group';
-                codeWrapper.title = '点击直接复制验证码';
+                codeWrapper.title = dict.otp_copyTooltip || '点击直接复制验证码';
                 
                 // Color countdown dynamic initial state
                 let countdownClass = 'otp-code-remaining text-[11px] text-primary/60 dark:text-primary-fixed-dim/60 font-mono';
@@ -190,14 +198,14 @@ export function renderOtpTable(
         if (item.hasSecret) {
             const btnEdit = document.createElement('button');
             btnEdit.className = 'px-3 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg text-[12px] font-medium border border-outline-variant/30 transition-colors cursor-pointer';
-            btnEdit.textContent = '修改';
+            btnEdit.textContent = dict.otp_btnEdit || '修改';
             btnEdit.addEventListener('click', () => {
                 onEditSecret(item.accountId, item.email, item.accountId);
             });
 
             const btnClear = document.createElement('button');
             btnClear.className = 'px-3 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg text-[12px] font-medium border border-red-500/20 hover:border-red-500/30 transition-colors cursor-pointer';
-            btnClear.textContent = '清除';
+            btnClear.textContent = dict.otp_btnClear || '清除';
             btnClear.addEventListener('click', () => {
                 onClearSecret(item.accountId, item.email);
             });
@@ -207,7 +215,7 @@ export function renderOtpTable(
         } else {
             const btnConfig = document.createElement('button');
             btnConfig.className = 'px-4 py-1 bg-primary text-white hover:bg-primary/95 rounded-lg text-[12px] font-bold shadow-sm transition-colors cursor-pointer';
-            btnConfig.textContent = '配置';
+            btnConfig.textContent = dict.otp_btnConfig || '配置';
             btnConfig.addEventListener('click', () => {
                 onEditSecret(item.accountId, item.email, '');
             });
@@ -247,29 +255,34 @@ export function show2FAKeyModal(
         const card = document.createElement('div');
         card.className = 'bg-white dark:bg-[#1e2538] w-[460px] max-w-[90vw] rounded-2xl border border-outline-variant/60 shadow-2xl p-6 flex flex-col gap-4 transform scale-95 transition-transform duration-200';
 
+        const dict = i18n[state.currentLanguage] || i18n.zh;
+        const modalTitle = currentSecret 
+            ? (dict.otp_editModalTitle || '修改 2FA 密钥') 
+            : (dict.otp_configModalTitle || '配置 2FA 密钥');
+
         card.innerHTML = `
             <div class="flex items-center gap-2 text-primary dark:text-primary-fixed-dim">
                 <span class="material-symbols-outlined text-[20px]">vpn_key</span>
-                <h3 class="text-base font-bold text-on-surface dark:text-white">${currentSecret ? '修改' : '配置'} 2FA 密钥</h3>
+                <h3 class="text-base font-bold text-on-surface dark:text-white">${modalTitle}</h3>
             </div>
             
             <div class="flex flex-col gap-3.5 my-1 text-[13px] text-on-surface dark:text-white">
                 <div class="text-[11px] text-outline leading-relaxed bg-slate-50 dark:bg-white/5 p-3 rounded-xl border border-outline-variant/20">
-                    账号: <strong class="text-slate-800 dark:text-slate-200">${email}</strong>
+                    ${dict.otp_emailLabel || '账号: '} <strong class="text-slate-800 dark:text-slate-200">${email}</strong>
                 </div>
 
                 <div class="flex flex-col gap-1.5">
-                    <label class="text-[11px] text-outline font-medium">输入 2FA 密钥 (Base32 编码，支持空格):</label>
-                    <input type="text" id="otpSecretInput" placeholder="例如: JBSWY3DPEHPK3PXP" value="${currentSecret || ''}" class="w-full px-3 py-2 text-[13px] bg-slate-50 dark:bg-white/5 border border-outline-variant/30 rounded-xl focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary text-on-surface dark:text-white placeholder-outline/40 font-mono" autofocus />
-                    <p class="text-[10px] text-outline leading-normal mt-0.5">提示: 谷歌两步验证密钥通常是由 16 位或 32 位英文字母和数字组成。</p>
+                    <label class="text-[11px] text-outline font-medium">${dict.otp_inputSecretLabel || '输入 2FA 密钥 (Base32 编码，支持空格):'}</label>
+                    <input type="text" id="otpSecretInput" placeholder="${dict.otp_inputSecretPlaceholder || '例如: JBSWY3DPEHPK3PXP'}" value="${currentSecret || ''}" class="w-full px-3 py-2 text-[13px] bg-slate-50 dark:bg-white/5 border border-outline-variant/30 rounded-xl focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary text-on-surface dark:text-white placeholder-outline/40 font-mono" autofocus />
+                    <p class="text-[10px] text-outline leading-normal mt-0.5">${dict.otp_modalTips || '提示: 谷歌两步验证密钥通常是由 16 位或 32 位英文字母和数字组成。'}</p>
                 </div>
                 
                 <div id="otpError" class="text-[11px] text-red-500 bg-red-500/10 p-2.5 rounded-lg border border-red-500/20 hidden break-all leading-normal"></div>
             </div>
             
             <div class="flex justify-end gap-2 mt-2">
-                <button id="otpCancel" type="button" class="px-4 py-1.5 text-[12px] font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40 cursor-pointer">取消</button>
-                <button id="otpConfirm" type="button" class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white hover:bg-primary/90 rounded-lg transition-colors shadow-sm flex items-center justify-center gap-1 cursor-pointer">保存并验证</button>
+                <button id="otpCancel" type="button" class="px-4 py-1.5 text-[12px] font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40 cursor-pointer">${dict.otp_btnCancel || '取消'}</button>
+                <button id="otpConfirm" type="button" class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white hover:bg-primary/90 rounded-lg transition-colors shadow-sm flex items-center justify-center gap-1 cursor-pointer">${dict.otp_btnSaveAndVerify || '保存并验证'}</button>
             </div>
         `;
 
@@ -313,11 +326,13 @@ export function show2FAKeyModal(
                 if (res.success) {
                     cleanup(true);
                 } else {
-                    divError.textContent = res.error || '保存失败';
+                    const dict = i18n[state.currentLanguage] || i18n.zh;
+                    divError.textContent = res.error || dict.otp_clearFailed || '保存失败';
                     divError.classList.remove('hidden');
                 }
             } catch (err: any) {
-                divError.textContent = '请求出错: ' + err.message;
+                const dict = i18n[state.currentLanguage] || i18n.zh;
+                divError.textContent = (dict.otp_requestError || '请求出错: ') + err.message;
                 divError.classList.remove('hidden');
             } finally {
                 btnConfirm.disabled = false;
@@ -344,29 +359,30 @@ export function showAdd2FAModal(
         const card = document.createElement('div');
         card.className = 'bg-white dark:bg-[#1e2538] w-[460px] max-w-[90vw] rounded-2xl border border-outline-variant/60 shadow-2xl p-6 flex flex-col gap-4 transform scale-95 transition-transform duration-200';
 
+        const dict = i18n[state.currentLanguage] || i18n.zh;
         card.innerHTML = `
             <div class="flex items-center gap-2 text-primary dark:text-primary-fixed-dim">
                 <span class="material-symbols-outlined text-[20px]">add_circle</span>
-                <h3 class="text-base font-bold text-on-surface dark:text-white">新增 2FA 账号</h3>
+                <h3 class="text-base font-bold text-on-surface dark:text-white">${dict.otp_addModalTitle || '新增 2FA 账号'}</h3>
             </div>
             
             <div class="flex flex-col gap-3.5 my-1 text-[13px] text-on-surface dark:text-white">
                 <div class="flex flex-col gap-1.5">
-                    <label class="text-[11px] text-outline font-medium">账号邮箱 / 名称:</label>
-                    <input type="text" id="addOtpEmailInput" placeholder="例如: my-account@gmail.com" class="w-full px-3 py-2 text-[13px] bg-slate-50 dark:bg-white/5 border border-outline-variant/30 rounded-xl focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary text-on-surface dark:text-white placeholder-outline/60" autofocus />
+                    <label class="text-[11px] text-outline font-medium">${dict.otp_emailNameLabel || '账号邮箱 / 名称:'}</label>
+                    <input type="text" id="addOtpEmailInput" placeholder="${dict.otp_emailPlaceholder || '例如: my-account@gmail.com'}" class="w-full px-3 py-2 text-[13px] bg-slate-50 dark:bg-white/5 border border-outline-variant/30 rounded-xl focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary text-on-surface dark:text-white placeholder-outline/60" autofocus />
                 </div>
 
                 <div class="flex flex-col gap-1.5">
-                    <label class="text-[11px] text-outline font-medium">2FA 密钥 (Base32 编码，支持空格):</label>
-                    <input type="text" id="addOtpSecretInput" placeholder="例如: JBSWY3DPEHPK3PXP" class="w-full px-3 py-2 text-[13px] bg-slate-50 dark:bg-white/5 border border-outline-variant/30 rounded-xl focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary text-on-surface dark:text-white placeholder-outline/40 font-mono" />
+                    <label class="text-[11px] text-outline font-medium">${dict.otp_inputSecretLabel || '输入 2FA 密钥 (Base32 编码，支持空格):'}</label>
+                    <input type="text" id="addOtpSecretInput" placeholder="${dict.otp_inputSecretPlaceholder || '例如: JBSWY3DPEHPK3PXP'}" class="w-full px-3 py-2 text-[13px] bg-slate-50 dark:bg-white/5 border border-outline-variant/30 rounded-xl focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary text-on-surface dark:text-white placeholder-outline/40 font-mono" />
                 </div>
                 
                 <div id="addOtpError" class="text-[11px] text-red-500 bg-red-500/10 p-2.5 rounded-lg border border-red-500/20 hidden break-all leading-normal"></div>
             </div>
             
             <div class="flex justify-end gap-2 mt-2">
-                <button id="addOtpCancel" type="button" class="px-4 py-1.5 text-[12px] font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40 cursor-pointer">取消</button>
-                <button id="addOtpConfirm" type="button" class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white hover:bg-primary/90 rounded-lg transition-colors shadow-sm flex items-center justify-center gap-1 cursor-pointer">添加</button>
+                <button id="addOtpCancel" type="button" class="px-4 py-1.5 text-[12px] font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40 cursor-pointer">${dict.otp_btnCancel || '取消'}</button>
+                <button id="addOtpConfirm" type="button" class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white hover:bg-primary/90 rounded-lg transition-colors shadow-sm flex items-center justify-center gap-1 cursor-pointer">${dict.otp_btnAdd || '添加'}</button>
             </div>
         `;
 
@@ -401,8 +417,9 @@ export function showAdd2FAModal(
             const email = inputEmail.value.trim();
             const secret = inputSecret.value.trim();
 
+            const dict = i18n[state.currentLanguage] || i18n.zh;
             if (!email) {
-                divError.textContent = '请输入账号邮箱 / 名称';
+                divError.textContent = dict.otp_emailRequired || '请输入账号邮箱 / 名称';
                 divError.classList.remove('hidden');
                 inputEmail.focus();
                 return;
@@ -417,11 +434,11 @@ export function showAdd2FAModal(
                 if (res.success) {
                     cleanup(true);
                 } else {
-                    divError.textContent = res.error || '添加失败';
+                    divError.textContent = res.error || dict.otp_addFailed || '添加失败';
                     divError.classList.remove('hidden');
                 }
             } catch (err: any) {
-                divError.textContent = '请求出错: ' + err.message;
+                divError.textContent = (dict.otp_requestError || '请求出错: ') + err.message;
                 divError.classList.remove('hidden');
             } finally {
                 btnConfirm.disabled = false;

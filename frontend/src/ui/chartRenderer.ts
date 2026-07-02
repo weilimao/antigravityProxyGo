@@ -655,8 +655,9 @@ export function initChartFilters() {
         const endD = filterEndDate.value;
         const endT = filterEndTime.value || '23:59';
         
+        const isZH = state.currentLanguage === 'zh';
         if (!startD || !endD) {
-            alert('请选择完整的开始与结束日期');
+            alert(isZH ? '请选择完整的开始与结束日期' : 'Please select both start and end dates');
             return;
         }
         
@@ -664,7 +665,7 @@ export function initChartFilters() {
         state.customEndDate = new Date(`${endD}T${endT}`).getTime();
         
         if (state.customStartDate > state.customEndDate) {
-            alert('开始时间不能晚于结束时间');
+            alert(isZH ? '开始时间不能晚于结束时间' : 'Start time cannot be later than end time');
             return;
         }
         

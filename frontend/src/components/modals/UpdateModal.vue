@@ -17,11 +17,11 @@
 <div class="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center shadow-inner" id="updateModalIconContainer">
 <span class="material-symbols-outlined text-[36px] text-primary" id="updateModalIcon">sync</span>
 </div>
-<h3 class="text-base font-bold text-on-surface dark:text-white" id="updateModalStatusTitle">正在检查更新...</h3>
+<h3 class="text-base font-bold text-on-surface dark:text-white" id="updateModalStatusTitle" data-i18n="checkingUpdates">正在检查更新...</h3>
 <p class="text-[12px] text-outline leading-relaxed break-all max-w-md" id="updateModalStatusMsg"></p>
 <!-- 新版本日志 (只在有更新时显示) -->
 <div class="hidden w-full flex flex-col gap-2 text-left" id="updateModalChangelogContainer">
-<div class="text-[11px] font-bold text-outline uppercase tracking-wider">更新日志:</div>
+<div class="text-[11px] font-bold text-outline uppercase tracking-wider" data-i18n="releaseNotesLabel">更新日志:</div>
 <div class="p-3.5 bg-slate-50 dark:bg-slate-900/60 rounded-xl text-[12px] text-on-surface dark:text-slate-300 border border-outline-variant/20 max-h-[220px] overflow-y-auto whitespace-pre-wrap leading-relaxed select-text" id="updateModalChangelog"></div>
 </div>
 <!-- 进度条 -->

@@ -57,9 +57,9 @@
 <div class="px-6 py-3.5 border-t border-outline-variant/30 bg-slate-50/50 dark:bg-white/5 flex justify-between items-center rounded-b-2xl">
 <button class="px-4 py-1.5 text-[12px] font-medium bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-950/20 dark:text-rose-400 dark:hover:bg-rose-950/40 rounded-lg transition-colors border border-rose-200/40 dark:border-rose-900/40" data-i18n="btnClearLogs" id="btnClearRetryErrorLogs">清空日志</button>
 <div class="flex gap-3">
-<button class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white hover:bg-primary/90 rounded-lg transition-colors shadow-sm flex items-center gap-1" data-i18n="btnExportLogs" id="btnExportRetryErrorLogs">
+<button class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white hover:bg-primary/90 rounded-lg transition-colors shadow-sm flex items-center gap-1" id="btnExportRetryErrorLogs">
 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
-                        导出日志
+                        <span data-i18n="btnExportLogs">导出日志</span>
                     </button>
 <button class="px-4 py-1.5 text-[12px] font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40" data-i18n="btnClose" id="retryErrorLogsModalCloseBtnSecondary">关闭</button>
 </div>

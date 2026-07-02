@@ -62,6 +62,7 @@ export interface DashboardState {
         updateStatusLabel: () => void;
         refreshPacketsList: () => void;
         updateAnalyzeAccountSelect: () => void;
+        updateRemoteStatus: () => void;
     };
 }
 
@@ -119,13 +120,14 @@ const state: DashboardState = {
     // Shared Callbacks for Cross-Module Communication
     callbacks: {
         renderLogsTable: () => {},
-        renderAccounts: () => {},
+        renderAccounts: (accounts?: any) => {},
         updateAggregateQuotaUI: () => {},
         fetchPricing: () => {},
         setLanguage: () => {},
         updateStatusLabel: () => {},
         refreshPacketsList: () => {},
-        updateAnalyzeAccountSelect: () => {}
+        updateAnalyzeAccountSelect: () => {},
+        updateRemoteStatus: () => {}
     }
 };
 

@@ -56,6 +56,7 @@ type Config struct {
 	CustomSocks5Enabled  bool   `json:"customSocks5Enabled"`
 	CustomSocks5Username string `json:"customSocks5Username"`
 	CustomSocks5Password string `json:"customSocks5Password"`
+	Language             string `json:"language"`
 }
 
 func GetDefaultModelMappings() []ModelMappingEntry {
@@ -160,6 +161,7 @@ func (m *Manager) Init(defaultPath string) {
 		CustomSocks5Enabled:  false,
 		CustomSocks5Username: "",
 		CustomSocks5Password: "",
+		Language:             "zh",
 	}
 
 	m.loadConfig()
@@ -860,6 +862,23 @@ func (m *Manager) updateNetutilConfig() {
 	})
 }
 
+func (m *Manager) GetLanguage() string {
+	m.RLock()
+	defer m.RUnlock()
+	if m.config.Language == "" {
+		return "zh"
+	}
+	return m.config.Language
+}
+
+func (m *Manager) SetLanguage(lang string) error {
+	m.Lock()
+	m.config.Language = lang
+	err := m.SaveConfig()
+	m.Unlock()
+	return err
+}
+
 type ManagerInterface interface {
 	Init(defaultPath string)
 	GetActiveDataDirectory() string
@@ -910,6 +929,8 @@ type ManagerInterface interface {
 	SetCustomSocks5Username(val string) error
 	GetCustomSocks5Password() string
 	SetCustomSocks5Password(val string) error
+	GetLanguage() string
+	SetLanguage(lang string) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,

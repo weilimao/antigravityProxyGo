@@ -20,7 +20,8 @@ export function fetchPricing() {
     ipcRenderer.send('get-pricing');
 }
 
-export function renderPricingTable() {
+export function renderPricingTable() {
+    const isZH = state.currentLanguage === 'zh';
     pricingTableBody = document.querySelector('#pricingTable tbody');
     if (!pricingTableBody) return;
     pricingTableBody.innerHTML = '';
@@ -28,7 +29,7 @@ export function renderPricingTable() {
     const list = Object.entries(state.pricingConfig);
     
     if (list.length === 0) {
-        pricingTableBody.innerHTML = `<tr><td colspan="5" class="p-6 text-center text-outline font-bold">暂无模型配置</td></tr>`;
+        pricingTableBody.innerHTML = `<tr><td colspan="5" class="p-6 text-center text-outline font-bold">${isZH ? '暂无模型配置' : 'No model configurations'}</td></tr>`;
         return;
     }
     
@@ -37,7 +38,7 @@ export function renderPricingTable() {
         tr.className = 'hover:bg-slate-50/50 dark:hover:bg-white/5 transition-colors border-b border-outline-variant/10';
         
         const isUnknown = key === 'unknown';
-        const modelLabel = isUnknown ? '<span class="text-outline">默认回退模型 (unknown)</span>' : key;
+        const modelLabel = isUnknown ? isZH ? '<span class="text-outline">默认回退模型 (unknown)</span>' : '<span class="text-outline">Default fallback model (unknown)</span>' : key;
         
         tr.innerHTML = `
             <td class="p-3 pl-5 font-bold text-on-surface dark:text-white flex items-center gap-2 h-12">
@@ -49,8 +50,8 @@ export function renderPricingTable() {
             <td class="p-3 text-right text-slate-600 dark:text-slate-300 font-data-mono">$${val.cached.toFixed(6)}</td>
             <td class="p-3 text-center">
                 <div class="flex justify-center gap-2">
-                    <button class="btn-edit-pricing text-primary hover:underline text-[12px] font-bold" data-key="${key}">编辑</button>
-                    ${isUnknown ? '' : `<button class="btn-delete-pricing text-red-500 hover:underline text-[12px] font-bold" data-key="${key}">删除</button>`}
+                    <button class="btn-edit-pricing text-primary hover:underline text-[12px] font-bold" data-key="${key}">${isZH ? '编辑' : 'Edit'}</button>
+                    ${isUnknown ? '' : `<button class="btn-delete-pricing text-red-500 hover:underline text-[12px] font-bold" data-key="${key}">${isZH ? '删除' : 'Delete'}</button>`}
                 </div>
             </td>
         `;
@@ -71,7 +72,7 @@ export function renderPricingTable() {
         btn.addEventListener('click', async () => {
             const key = btn.getAttribute('data-key');
             if (key) {
-                if (await $confirm(`确定要删除模型 "${key}" 的自定义计费配置吗？`)) {
+                if (await $confirm(isZH ? `确定要删除模型 "${key}" 的自定义计费配置吗？` : `Are you sure you want to delete custom pricing for model "${key}"?`)) {
                     ipcRenderer.send('delete-pricing', key);
                 }
             }
@@ -79,7 +80,8 @@ export function renderPricingTable() {
     });
 }
 
-export function showPricingModal(modelKey = '', pricingData: any = null) {
+export function showPricingModal(modelKey = '', pricingData: any = null) {
+    const isZH = state.currentLanguage === 'zh';
     pricingModal = document.getElementById('pricingModal');
     pricingModalContainer = document.getElementById('pricingModalContainer');
     pricingModalTitle = document.getElementById('pricingModalTitle');
@@ -92,7 +94,7 @@ export function showPricingModal(modelKey = '', pricingData: any = null) {
     if (!pricingModal || !pricingModalContainer || !pricingModalTitle || !pricingOrigKey || !pricingModelName || !pricingInputVal || !pricingOutputVal || !pricingCachedVal) return;
 
     if (modelKey) {
-        pricingModalTitle.textContent = '编辑模型计费配置';
+        pricingModalTitle.textContent = isZH ? '编辑模型计费配置' : 'Edit Model Pricing Config';
         pricingOrigKey.value = modelKey;
         pricingModelName.value = modelKey;
         if (modelKey === 'unknown') {
@@ -105,7 +107,7 @@ export function showPricingModal(modelKey = '', pricingData: any = null) {
         pricingOutputVal.value = pricingData.output;
         pricingCachedVal.value = pricingData.cached;
     } else {
-        pricingModalTitle.textContent = '新增模型计费配置';
+        pricingModalTitle.textContent = isZH ? '新增模型计费配置' : 'Add Model Pricing Config';
         pricingOrigKey.value = '';
         pricingModelName.value = '';
         pricingModelName.disabled = false;
@@ -129,7 +131,8 @@ export function hidePricingModal() {
     pricingModalContainer.classList.remove('scale-100');
 }
 
-export function initPricingEvents() {
+export function initPricingEvents() {
+    const isZH = state.currentLanguage === 'zh';
     const btnResetPricing = document.getElementById('btnResetPricing');
     const btnAddPricing = document.getElementById('btnAddPricing');
     pricingModalCloseBtn = document.getElementById('pricingModalCloseBtn');
@@ -148,7 +151,7 @@ export function initPricingEvents() {
     
     if (btnResetPricing) {
         btnResetPricing.addEventListener('click', async () => {
-            if (await $confirm('确定要恢复默认的模型计费配置吗？这会清除所有自定义修改！')) {
+            if (await $confirm(isZH ? '确定要恢复默认的模型计费配置吗？这会清除所有自定义修改！' : 'Are you sure you want to restore default model pricing config? This will clear all custom modifications!')) {
                 ipcRenderer.send('reset-pricing');
             }
         });
@@ -165,7 +168,7 @@ export function initPricingEvents() {
             
             const modelName = pricingModelName.value.trim().toLowerCase();
             if (!modelName) {
-                alert('请输入模型匹配名称');
+                alert(isZH ? '请输入模型匹配名称' : 'Please enter model match name');
                 return;
             }
             
@@ -174,7 +177,7 @@ export function initPricingEvents() {
             const cachedVal = parseFloat(pricingCachedVal.value);
             
             if (isNaN(inputVal) || isNaN(outputVal) || isNaN(cachedVal) || inputVal < 0 || outputVal < 0 || cachedVal < 0) {
-                alert('请输入有效的正数价格');
+                alert(isZH ? '请输入有效的正数价格' : 'Please enter a valid positive price');
                 return;
             }
             

@@ -1,6 +1,8 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import { generateSinglePacketMarkdown, formatJsonText } from './packetFormatter';
+import i18n from '../shared/i18n';
+
 
 let packetsList: any[] = [];
 let selectedPacket: any = null;
@@ -48,18 +50,18 @@ export function copyElementText(elementId: string) {
     if (!el) return;
     const text = el.textContent || el.value;
     if (!text) {
-        alert('没有可以复制的内容');
+        alert(state.currentLanguage === 'zh' ? '没有可以复制的内容' : 'No content to copy');
         return;
     }
     navigator.clipboard.writeText(text).then(() => {
-        alert('复制成功！');
+        alert(state.currentLanguage === 'zh' ? '复制成功！' : 'Copied successfully!');
     }).catch(() => {
         try {
             el.select();
             document.execCommand('copy');
-            alert('复制成功！');
-        } catch (e) {
-            alert('复制失败，请手动选择复制。');
+            alert(state.currentLanguage === 'zh' ? '复制成功！' : 'Copied successfully!');
+        } catch (err) {
+            alert(state.currentLanguage === 'zh' ? '复制失败，请手动选择复制。' : 'Copy failed, please copy manually.');
         }
     });
 }
@@ -127,11 +129,11 @@ export async function refreshPacketsList() {
     }
 
     if (packetCountBadge) {
-        packetCountBadge.textContent = `${filteredList.length} 个接口`;
+        packetCountBadge.textContent = state.currentLanguage === 'zh' ? `${filteredList.length} 个接口` : `${filteredList.length} packets`;
     }
 
     if (filteredList.length === 0) {
-        packetListContainer.innerHTML = `<div class="text-center py-12 text-outline text-[13px]">暂无符合过滤条件的接口包</div>`;
+        packetListContainer.innerHTML = `<div class="text-center py-12 text-outline text-[13px]">${state.currentLanguage === 'zh' ? '暂无符合过滤条件的接口包' : 'No packets matching the filter.'}</div>`;
         if (packetDetailsPlaceholder) packetDetailsPlaceholder.classList.remove('hidden');
         if (packetDetailsContainer) packetDetailsContainer.classList.add('hidden');
         if (btnExportSinglePacket) btnExportSinglePacket.classList.add('hidden');
@@ -148,6 +150,7 @@ export async function refreshPacketsList() {
         // Client source badge
         let sourceBadge = '';
         const source = p._resolvedSource || '未知';
+        const displaySource = source === '未知' ? (state.currentLanguage === 'zh' ? '未知' : 'Unknown') : source;
         if (source === 'CLI') {
             sourceBadge = `<span class="px-1 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:bg-blue-400/10 dark:text-blue-400 text-[9px] font-bold border border-blue-500/20">CLI</span>`;
         } else if (source === 'IDE') {
@@ -155,7 +158,7 @@ export async function refreshPacketsList() {
         } else if (source === 'Agent') {
             sourceBadge = `<span class="px-1 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:bg-purple-400/10 dark:text-purple-400 text-[9px] font-bold border border-purple-500/20">Agent</span>`;
         } else {
-            sourceBadge = `<span class="px-1 py-0.5 rounded bg-slate-500/10 text-slate-600 dark:bg-slate-400/10 dark:text-slate-400 text-[9px] font-bold border border-slate-500/20">${source}</span>`;
+            sourceBadge = `<span class="px-1 py-0.5 rounded bg-slate-500/10 text-slate-600 dark:bg-slate-400/10 dark:text-slate-400 text-[9px] font-bold border border-slate-500/20">${displaySource}</span>`;
         }
 
         return `
@@ -232,10 +235,11 @@ export function updateAnalyzeAccountSelect() {
     if (!packetAnalyzeAccountSelect) return;
     
     const enabledAccounts = (state.currentAccountsList || []).filter(a => a.enabled);
-    const placeholder = `<option value="">请选择分析账号...</option>`;
+    const placeholder = `<option value="" data-i18n="packetSelectAccountPlaceholder">${state.currentLanguage === 'zh' ? '请选择分析账号...' : 'Please select an account for analysis...'}</option>`;
     
     if (enabledAccounts.length === 0) {
-        packetAnalyzeAccountSelect.innerHTML = placeholder + `<option value="" disabled>无可用账号 (请先在账号池登录/启用账号)</option>`;
+        const noAccText = state.currentLanguage === 'zh' ? '无可用账号 (请先在账号池登录/启用账号)' : 'No accounts available (Please login/enable accounts in pool first)';
+        packetAnalyzeAccountSelect.innerHTML = placeholder + `<option value="" disabled>${noAccText}</option>`;
         return;
     }
 
@@ -263,17 +267,17 @@ export function initPacketsEvents() {
     if (btnExportSinglePacket) {
         btnExportSinglePacket.addEventListener('click', async () => {
             if (!selectedPacket) {
-                alert('请先选择一条接口数据包进行导出');
+                alert(state.currentLanguage === 'zh' ? '请先选择一条接口数据包进行导出' : 'Please select a packet to export first.');
                 return;
             }
             try {
                 const md = generateSinglePacketMarkdown(selectedPacket);
                 const success = await ipcRenderer.invoke('packet:export-single', md, selectedPacket.method, selectedPacket.path);
                 if (success) {
-                    alert('接口数据包已成功导出为 Markdown 文件！');
+                    alert(state.currentLanguage === 'zh' ? '接口数据包已成功导出为 Markdown 文件！' : 'Packet successfully exported as Markdown!');
                 }
             } catch (err: any) {
-                alert(`导出失败: ${err.message}`);
+                alert((state.currentLanguage === 'zh' ? '导出失败: ' : 'Export failed: ') + err.message);
             }
         });
     }
@@ -282,9 +286,9 @@ export function initPacketsEvents() {
         btnCopyGeneratedDoc.addEventListener('click', () => {
             if (generatedDocContent) {
                 navigator.clipboard.writeText(generatedDocContent).then(() => {
-                    alert('文档内容已复制到剪贴板！');
+                    alert(state.currentLanguage === 'zh' ? '文档内容已复制到剪贴板！' : 'Document copied to clipboard!');
                 }).catch(() => {
-                    alert('复制失败，请在文本框内手动全选复制。');
+                    alert(state.currentLanguage === 'zh' ? '复制失败，请在文本框内手动全选复制。' : 'Copy failed, please copy manually.');
                 });
             }
         });
@@ -299,7 +303,8 @@ export function initPacketsEvents() {
 
     if (btnClearPackets) {
         btnClearPackets.addEventListener('click', async () => {
-            if (await $confirm('确定要清空所有已抓取的包吗？这不可恢复！')) {
+            const confirmMsg = state.currentLanguage === 'zh' ? '确定要清空所有已抓取的包吗？这不可恢复！' : 'Are you sure you want to clear all captured packets? This cannot be undone!';
+            if (await $confirm(confirmMsg)) {
                 ipcRenderer.send('packet:clear');
                 selectedPacket = null;
                 generatedDocContent = '';
@@ -354,30 +359,36 @@ export function initPacketsEvents() {
             }
 
             if (filteredList.length === 0) {
-                const filterNames: Record<string, string> = {
+                const filterNames: Record<string, string> = state.currentLanguage === 'zh' ? {
                     'ALL': '全部',
                     'CLI': 'CLI',
                     'IDE': 'IDE',
                     'Agent': 'Agent',
                     'UNKNOWN': '未知'
+                } : {
+                    'ALL': 'All',
+                    'CLI': 'CLI',
+                    'IDE': 'IDE',
+                    'Agent': 'Agent',
+                    'UNKNOWN': 'Unknown'
                 };
                 const filterLabel = filterNames[currentFilter] || currentFilter;
-                alert(`当前筛选的 [${filterLabel}] 分类下没有已抓取的接口包！`);
+                alert(state.currentLanguage === 'zh' ? `当前筛选的 [${filterLabel}] 分类下没有已抓取的接口包！` : `No captured packets found under the selected category [${filterLabel}]!`);
                 return;
             }
 
             if (!packetAnalyzeAccountSelect) return;
             const accId = packetAnalyzeAccountSelect.value;
             if (!accId) {
-                alert('请先选择一个用于分析的 AI 账号！');
+                alert(state.currentLanguage === 'zh' ? '请先选择一个用于分析的 AI 账号！' : 'Please select an AI account for analysis first!');
                 return;
             }
 
             if (packetAnalyzeLoading) packetAnalyzeLoading.classList.remove('hidden');
-            if (packetAnalyzeProgressMsg) packetAnalyzeProgressMsg.textContent = '正在连接 Gemini API 服务端...';
+            if (packetAnalyzeProgressMsg) packetAnalyzeProgressMsg.textContent = state.currentLanguage === 'zh' ? '正在连接 Gemini API 服务端...' : 'Connecting to Gemini API server...';
 
             try {
-                if (packetAnalyzeProgressMsg) packetAnalyzeProgressMsg.textContent = '正在组织报文并调用 Gemini-2.5-Flash-Lite...';
+                if (packetAnalyzeProgressMsg) packetAnalyzeProgressMsg.textContent = state.currentLanguage === 'zh' ? '正在组织报文并调用 Gemini-2.5-Flash-Lite...' : 'Organizing packets and calling Gemini-2.5-Flash-Lite...';
                 
                 const markdown = await ipcRenderer.invoke('packet:analyze', accId, currentFilter);
                 generatedDocContent = markdown;
@@ -400,7 +411,7 @@ export function initPacketsEvents() {
 
             } catch (err: any) {
                 if (packetAnalyzeLoading) packetAnalyzeLoading.classList.add('hidden');
-                alert(`分析失败: ${err.message}`);
+                alert((state.currentLanguage === 'zh' ? '分析失败: ' : 'Analysis failed: ') + err.message);
             }
         });
     }
@@ -408,13 +419,13 @@ export function initPacketsEvents() {
     if (btnDownloadPacketDoc) {
         btnDownloadPacketDoc.addEventListener('click', async () => {
             if (!generatedDocContent) {
-                alert('没有生成的文档可供下载');
+                alert(state.currentLanguage === 'zh' ? '没有生成的文档可供下载' : 'No generated documentation to download.');
                 return;
             }
 
             const success = await ipcRenderer.invoke('packet:download', generatedDocContent);
             if (success) {
-                alert('接口文档成功保存！');
+                alert(state.currentLanguage === 'zh' ? '接口文档成功保存！' : 'API documentation saved successfully!');
             }
         });
     }
@@ -444,7 +455,7 @@ export function initPacketsEvents() {
 
     const hideExportPacketsModal = () => {
         if (!exportPacketsModal) return;
-        exportPacketsModal.classList.add('opacity-0', 'pointer-events-none');
+        exportPacketsModal.classList.add('pointer-events-none', 'opacity-0');
         exportPacketsModal.classList.remove('opacity-100');
         const container = exportPacketsModal.querySelector('#exportPacketsModalContainer');
         if (container) {
@@ -456,7 +467,7 @@ export function initPacketsEvents() {
     if (btnExportPacketLog) {
         btnExportPacketLog.addEventListener('click', () => {
             if (packetsList.length === 0) {
-                alert('当前没有已抓取的接口包，无法导出！');
+                alert(state.currentLanguage === 'zh' ? '当前没有已抓取的接口包，无法导出！' : 'No captured packets available, cannot export!');
                 return;
             }
             showExportPacketsModal();
@@ -525,57 +536,68 @@ export function initPacketsEvents() {
             }
 
             if (filtered.length === 0) {
-                const typeNames: Record<string, string> = {
+                const typeNames: Record<string, string> = state.currentLanguage === 'zh' ? {
                     'ALL': '全部',
                     'CLI': 'CLI',
                     'IDE': 'IDE',
                     'Agent': 'Agent',
                     'UNKNOWN': '未知'
+                } : {
+                    'ALL': 'All',
+                    'CLI': 'CLI',
+                    'IDE': 'IDE',
+                    'Agent': 'Agent',
+                    'UNKNOWN': 'Unknown'
                 };
-                alert(`当前选择的 [${typeNames[exportType] || exportType}] 分类下暂无抓取的接口包！`);
+                alert(state.currentLanguage === 'zh' ? `当前选择的 [${typeNames[exportType] || exportType}] 分类下暂无抓取的接口包！` : `No captured packets found under the selected category [${typeNames[exportType] || exportType}]!`);
                 return;
             }
 
+            const dict = i18n[state.currentLanguage] || {};
+            const isZH = state.currentLanguage === 'zh';
+
             // Generate Markdown document
-            let md = `# Antigravity Proxy 接口抓包日志 (${exportType})\n\n`;
-            md += `> **导出时间**: ${new Date().toLocaleString()}\n`;
-            md += `> **数据包总数**: ${filtered.length} 个\n\n`;
+            let md = `# ${dict.packetLogDocTitle || 'Antigravity Proxy 接口抓包日志'} (${exportType})\n\n`;
+            md += `> **${dict.packetLogDocTime || '导出时间'}**: ${new Date().toLocaleString()}\n`;
+            md += `> **${dict.packetLogDocTotal || '数据包总数'}**: ${filtered.length} ${isZH ? '个' : ''}\n\n`;
             
-            md += `## 接口列表概览\n\n`;
-            md += `| 序号 | 来源 | 方法 | 状态码 | 主机 | 路径 | 捕获时间 |\n`;
+            md += `## ${dict.packetLogDocOverview || '接口列表概览'}\n\n`;
+            md += `| ${isZH ? '序号' : 'No.'} | ${dict.packetLogDocSource || '来源'} | ${isZH ? '方法' : 'Method'} | ${dict.packetLogDocStatus || '状态码'} | ${isZH ? '主机' : 'Host'} | ${isZH ? '路径' : 'Path'} | ${dict.packetLogDocCaptured || '捕获时间'} |\n`;
             md += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
             filtered.forEach((p, idx) => {
-                md += `| ${idx + 1} | \`${p._resolvedSource}\` | **${p.method}** | ${p.statusCode} | \`${p.host}\` | \`${p.path}\` | *${p.timestamp}* |\n`;
+                const src = p._resolvedSource === '未知' ? (isZH ? '未知' : 'Unknown') : p._resolvedSource;
+                md += `| ${idx + 1} | \`${src}\` | **${p.method}** | ${p.statusCode} | \`${p.host}\` | \`${p.path}\` | *${p.timestamp}* |\n`;
             });
             md += `\n---\n\n`;
             
-            md += `## 详细报文日志\n\n`;
+            md += `## ${dict.packetLogDocDetails || '详细报文日志'}\n\n`;
             filtered.forEach((p, idx) => {
-                md += `### [接口 #${idx + 1}] ${p.method} ${p.path}\n\n`;
+                md += `### [${isZH ? '接口' : 'Packet'} #${idx + 1}] ${p.method} ${p.path}\n\n`;
                 md += `- **URL**: ${p.url}\n`;
-                md += `- **主机 (Host)**: \`${p.host}\`\n`;
-                md += `- **来源 (Source)**: \`${p._resolvedSource}\`\n`;
-                md += `- **状态码 (Status)**: \`${p.statusCode}\`\n`;
-                md += `- **捕获时间**: *${p.timestamp}*\n\n`;
+                md += `- **${dict.packetLogDocHost || '主机 (Host)'}**: \`${p.host}\`\n`;
+                const src = p._resolvedSource === '未知' ? (isZH ? '未知' : 'Unknown') : p._resolvedSource;
+                md += `- **${dict.packetLogDocSource || '来源 (Source)'}**: \`${src}\`\n`;
+                md += `- **${dict.packetLogDocStatus || '状态码 (Status)'}**: \`${p.statusCode}\`\n`;
+                md += `- **${dict.packetLogDocCaptured || '捕获时间'}**: *${p.timestamp}*\n\n`;
                 
-                md += `#### 请求 Headers\n`;
+                md += `#### ${isZH ? '请求 Headers' : 'Request Headers'}\n`;
                 md += `\`\`\`json\n${JSON.stringify(p.reqHeaders, null, 2)}\n\`\`\`\n\n`;
                 
-                md += `#### 请求 Body\n`;
+                md += `#### ${isZH ? '请求 Body' : 'Request Body'}\n`;
                 if (p.reqBody) {
                     md += `\`\`\`json\n${formatJsonText(p.reqBody)}\n\`\`\`\n\n`;
                 } else {
-                    md += `*无请求 Body*\n\n`;
+                    md += `*${dict.packetLogDocNoBody || '无请求 Body'}*\n\n`;
                 }
                 
-                md += `#### 响应 Headers\n`;
+                md += `#### ${isZH ? '响应 Headers' : 'Response Headers'}\n`;
                 md += `\`\`\`json\n${JSON.stringify(p.resHeaders, null, 2)}\n\`\`\`\n\n`;
                 
-                md += `#### 响应 Body\n`;
+                md += `#### ${isZH ? '响应 Body' : 'Response Body'}\n`;
                 if (p.resBody) {
                     md += `\`\`\`json\n${formatJsonText(p.resBody)}\n\`\`\`\n\n`;
                 } else {
-                    md += `*无响应 Body*\n\n`;
+                    md += `*${dict.packetLogDocNoResBody || '无响应 Body'}*\n\n`;
                 }
                 md += `\n---\n\n`;
             });
@@ -584,11 +606,11 @@ export function initPacketsEvents() {
                 // Invoke backend download log
                 const success = await ipcRenderer.invoke('packet:export-log', md, exportType);
                 if (success) {
-                    alert('接口日志成功导出并保存！');
+                    alert(state.currentLanguage === 'zh' ? '接口日志成功导出并保存！' : 'Interface logs exported and saved successfully!');
                     hideExportPacketsModal();
                 }
             } catch (err: any) {
-                alert(`导出失败: ${err.message}`);
+                alert((state.currentLanguage === 'zh' ? '导出失败: ' : 'Export failed: ') + err.message);
             }
         });
     }

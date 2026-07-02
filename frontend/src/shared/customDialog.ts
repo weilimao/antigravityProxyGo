@@ -1,5 +1,8 @@
 // Custom dialog system to replace native alert and confirm with polished frosted glass UI
 
+import state from '../ui/dashboardState';
+import i18n from './i18n';
+
 declare global {
     interface Window {
         $confirm: (message: string) => Promise<boolean>;
@@ -90,22 +93,29 @@ function showDialog(options: DialogOptions): Promise<boolean> {
         const icon = isConfirm ? 'help' : 'info';
         const iconColorClass = isConfirm ? 'text-primary dark:text-primary-fixed-dim' : 'text-amber-500';
 
+        const dict = i18n[state.currentLanguage] || i18n.zh;
+        const confirmTitle = isConfirm 
+            ? (dict.otp_dialogConfirmTitle || '确认提示') 
+            : (dict.otp_dialogSystemTitle || '系统提示');
+        const dialogOkText = dict.confirm || '确定';
+        const dialogCancelText = dict.cancel || '取消';
+
         dialog.innerHTML = `
             <div class="flex items-start gap-4">
                 <span class="material-symbols-outlined text-[24px] ${iconColorClass} shrink-0 mt-0.5 select-none">${icon}</span>
                 <div class="flex flex-col gap-1.5 min-w-0 flex-1">
-                    <h3 class="text-[15px] font-bold tracking-wide select-none">${isConfirm ? '确认提示' : '系统提示'}</h3>
+                    <h3 class="text-[15px] font-bold tracking-wide select-none">${confirmTitle}</h3>
                     <p class="text-[13.5px] leading-relaxed text-slate-600 dark:text-slate-300 break-words whitespace-pre-wrap select-text">${options.message}</p>
                 </div>
             </div>
             <div class="flex justify-end gap-3.5 mt-2">
                 ${isConfirm ? `
                     <button id="custom-dialog-cancel" class="px-4 py-2 rounded-xl text-slate-600 dark:text-slate-400 bg-slate-100/80 hover:bg-slate-200/80 dark:bg-white/5 dark:hover:bg-white/10 border border-slate-200/60 dark:border-white/5 active:scale-[0.98] transition-all text-[13px] font-medium select-none">
-                        取消
+                        ${dialogCancelText}
                     </button>
                 ` : ''}
                 <button id="custom-dialog-ok" class="px-5 py-2 rounded-xl bg-primary text-white hover:bg-primary/90 active:bg-primary/95 active:scale-[0.98] shadow-md shadow-primary/10 transition-all text-[13px] font-medium select-none">
-                  确定
+                  ${dialogOkText}
                 </button>
             </div>
         `;

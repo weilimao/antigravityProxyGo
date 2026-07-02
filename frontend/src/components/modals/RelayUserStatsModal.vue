@@ -4,7 +4,7 @@
 <div class="flex items-center justify-between mb-5">
 <div class="flex items-center gap-2">
 <span class="material-symbols-outlined text-[22px] text-primary">bar_chart</span>
-<h3 class="text-[16px] font-bold text-on-surface dark:text-white">用户数据统计</h3>
+<h3 class="text-[16px] font-bold text-on-surface dark:text-white" data-i18n="userStatsTitle">用户数据统计</h3>
 </div>
 <button class="text-outline hover:text-on-surface transition-colors" onclick="document.getElementById('relayUserStatsModal').classList.add('hidden')">
 <span class="material-symbols-outlined text-[20px]">close</span>
@@ -14,7 +14,7 @@
 <!-- Data will be populated here -->
 </div>
 <div class="flex gap-2 mt-5 justify-end">
-<button class="px-4 py-2 text-[12px] font-medium text-outline hover:text-on-surface border border-outline-variant/30 rounded-lg transition-colors" onclick="document.getElementById('relayUserStatsModal').classList.add('hidden')">关闭</button>
+<button class="px-4 py-2 text-[12px] font-medium text-outline hover:text-on-surface border border-outline-variant/30 rounded-lg transition-colors" onclick="document.getElementById('relayUserStatsModal').classList.add('hidden')" data-i18n="close">关闭</button>
 </div>
 </div>
 </div>

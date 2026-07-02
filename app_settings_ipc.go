@@ -92,6 +92,14 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 	case "settings:get-network-logs":
 		wailsRuntime.EventsEmit(a.ctx, "settings:network-logs-res", netutil.GetNetworkLogs())
 		return true
+
+	case "settings:language-changed":
+		lang := getStringArg(0)
+		if lang != "" {
+			_ = a.settingsMgr.SetLanguage(lang)
+			a.AddLog(fmt.Sprintf("⚙️ 系统语言已更改为: %s", lang))
+		}
+		return true
 	}
 	return false
 }

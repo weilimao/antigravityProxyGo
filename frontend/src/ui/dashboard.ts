@@ -166,7 +166,7 @@ export function renderLogsTable() {
                 <td class="p-3 font-sans font-medium text-on-surface dark:text-white truncate" title="${log.model}">
                     <div class="flex flex-col min-w-0">
                         <span class="font-semibold text-on-surface dark:text-white truncate">${log.model}</span>
-                        ${log.account ? `<span class="text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5" title="${log.account}">${log.account}</span>` : '<span class="text-[10px] text-slate-400 dark:text-slate-500 font-data-mono truncate mt-0.5">直连</span>'}
+                        ${log.account ? `<span class="text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5" title="${log.account}">${log.account}</span>` : `<span class="text-[10px] text-slate-400 dark:text-slate-500 font-data-mono truncate mt-0.5">${state.currentLanguage === 'zh' ? '直连' : 'Direct'}</span>`}
                     </div>
                 </td>
                 <td class="p-3 text-right font-data-mono">
@@ -184,7 +184,7 @@ export function renderLogsTable() {
                 </td>
                 <td class="p-3 text-center">
                     <button class="px-2 py-1 text-[11px] bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-fixed-dim rounded font-medium transition-all view-details-btn">
-                        查看
+                        ${state.currentLanguage === 'zh' ? '查看' : 'View'}
                     </button>
                 </td>
             `;
@@ -277,13 +277,43 @@ export function setLanguage(lang: string) {
         }
     });
 
+    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        const key = el.getAttribute('data-i18n-title');
+        if (key && dict[key]) {
+            el.setAttribute('title', dict[key]);
+        }
+    });
+
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        if (key && dict[key]) {
+            (el as HTMLInputElement).placeholder = dict[key];
+        }
+    });
+
     if (logSearchInput) {
         logSearchInput.placeholder = lang === 'zh' ? '搜索日志...' : 'Search logs...';
     }
 
     updateStatusLabel();
     ipcRenderer.send('get-state');
-    ipcRenderer.send('settings:language-changed', lang);
+
+    // Trigger re-rendering of dynamic UI components with the new language
+    if (state.callbacks.renderAccounts && state.currentAccountsList) {
+        state.callbacks.renderAccounts(state.currentAccountsList);
+    }
+    if (state.callbacks.updateAggregateQuotaUI) {
+        state.callbacks.updateAggregateQuotaUI();
+    }
+    if (state.callbacks.updateAnalyzeAccountSelect) {
+        state.callbacks.updateAnalyzeAccountSelect();
+    }
+    if (state.callbacks.updateRemoteStatus) {
+        state.callbacks.updateRemoteStatus();
+    }
+    if (state.callbacks.renderLogsTable && state.lastBackendData && state.lastBackendData.logs) {
+        state.callbacks.renderLogsTable();
+    }
 }
 
 export function updateStatusLabel() {
@@ -905,7 +935,7 @@ export function showModal(log: any) {
             formattedJson = String(log.requestBody);
         }
     } else {
-        formattedJson = '{\n  "message": "无请求参数"\n}';
+        formattedJson = state.currentLanguage === 'zh' ? '{\n  "message": "无请求参数"\n}' : '{\n  "message": "No request parameters"\n}';
     }
     if (modalJsonArea) modalJsonArea.textContent = formattedJson;
 
@@ -917,7 +947,7 @@ export function showModal(log: any) {
             formattedHeaders = String(log.requestHeaders);
         }
     } else {
-        formattedHeaders = '{\n  "message": "无请求头数据"\n}';
+        formattedHeaders = state.currentLanguage === 'zh' ? '{\n  "message": "无请求头数据"\n}' : '{\n  "message": "No request headers"\n}';
     }
     if (modalHeaderArea) modalHeaderArea.textContent = formattedHeaders;
 

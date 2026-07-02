@@ -1,3 +1,6 @@
+import state from './dashboardState';
+import i18n from '../shared/i18n';
+
 const PANEL_ID = 'usageStatsPanel';
 const openAccounts = new Set<string>();
 
@@ -84,9 +87,10 @@ export function renderSummaryChip(label: string, value: string, tone = 'slate'):
 }
 
 export function renderModelRows(models: any): string {
+    const dict = i18n[state.currentLanguage] || i18n.zh;
     const sorted = sortModelsByTokens(Object.values(models || {}));
     if (sorted.length === 0) {
-        return '<tr><td colspan="10" class="px-3 py-3 text-center text-[12px] text-outline dark:text-outline-variant">暂无模型用量</td></tr>';
+        return `<tr><td colspan="10" class="px-3 py-3 text-center text-[12px] text-outline dark:text-outline-variant">${dict.usage_noModelUsage || '暂无模型用量'}</td></tr>`;
     }
 
     return sorted.map(model => {
@@ -108,6 +112,7 @@ export function renderModelRows(models: any): string {
 }
 
 export function renderAccountBlock(account: any): string {
+    const dict = i18n[state.currentLanguage] || i18n.zh;
     const tokens = (Number(account.inputTokens) || 0) + (Number(account.outputTokens) || 0);
     const provider = account.provider || 'direct';
     const badgeClass = provider === 'antigravity'
@@ -128,7 +133,7 @@ export function renderAccountBlock(account: any): string {
                 </div>
                 <div class="flex flex-wrap justify-end gap-3 text-right text-[11px] min-w-0">
                     <div class="flex flex-col">
-                        <span class="text-outline dark:text-outline-variant">调用</span>
+                        <span class="text-outline dark:text-outline-variant">${dict.usage_calls || '调用'}</span>
                         <span class="font-bold text-on-surface dark:text-white">${formatNumber(account.requestCount)}</span>
                     </div>
                     <div class="flex flex-col">
@@ -136,27 +141,27 @@ export function renderAccountBlock(account: any): string {
                         <span class="font-bold text-on-surface dark:text-white">${formatNumber(tokens)}</span>
                     </div>
                     <div class="flex flex-col">
-                        <span class="text-outline dark:text-outline-variant">缓存</span>
+                        <span class="text-outline dark:text-outline-variant">${dict.usage_cache || '缓存'}</span>
                         <span class="font-bold text-on-surface dark:text-white">${formatNumber(account.cachedTokens)}</span>
                     </div>
                     <div class="flex flex-col">
-                        <span class="text-outline dark:text-outline-variant">命中率</span>
+                        <span class="text-outline dark:text-outline-variant">${dict.usage_hitRate || '命中率'}</span>
                         <span class="font-bold text-on-surface dark:text-white">${formatHitRate(account.inputTokens || 0, account.cachedTokens || 0, account.requestCount || 0, account.cacheHitRequests || 0)}</span>
                     </div>
                     <div class="flex flex-col">
-                        <span class="text-outline dark:text-outline-variant">输入成本</span>
+                        <span class="text-outline dark:text-outline-variant">${dict.usage_inputCost || '输入成本'}</span>
                         <span class="font-bold text-amber-600 dark:text-amber-400">${formatMoney(account.inputCost)}</span>
                     </div>
                     <div class="flex flex-col">
-                        <span class="text-outline dark:text-outline-variant">输出成本</span>
+                        <span class="text-outline dark:text-outline-variant">${dict.usage_outputCost || '输出成本'}</span>
                         <span class="font-bold text-sky-600 dark:text-sky-400">${formatMoney(account.outputCost)}</span>
                     </div>
                     <div class="flex flex-col">
-                        <span class="text-outline dark:text-outline-variant">缓存成本</span>
+                        <span class="text-outline dark:text-outline-variant">${dict.usage_cacheCost || '缓存成本'}</span>
                         <span class="font-bold text-violet-600 dark:text-violet-400">${formatMoney(account.cachedCost)}</span>
                     </div>
                     <div class="flex flex-col">
-                        <span class="text-outline dark:text-outline-variant">总成本</span>
+                        <span class="text-outline dark:text-outline-variant">${dict.usage_totalCost || '总成本'}</span>
                         <span class="font-bold text-primary dark:text-primary-fixed-dim">${formatMoney(account.totalCost)}</span>
                     </div>
                 </div>
@@ -166,16 +171,16 @@ export function renderAccountBlock(account: any): string {
                     <table class="w-full text-left table-fixed border-collapse">
                         <thead>
                             <tr class="border-b border-outline-variant/40">
-                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider">模型</th>
-                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">调用</th>
-                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">输入</th>
-                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">输出</th>
-                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">缓存</th>
-                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">命中率</th>
-                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">输入成本</th>
-                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">输出成本</th>
-                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">缓存成本</th>
-                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">总成本</th>
+                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider">${dict.usage_model || '模型'}</th>
+                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">${dict.usage_calls || '调用'}</th>
+                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">${dict.usage_input || '输入'}</th>
+                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">${dict.usage_output || '输出'}</th>
+                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">${dict.usage_cache || '缓存'}</th>
+                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">${dict.usage_hitRate || '命中率'}</th>
+                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">${dict.usage_inputCost || '输入成本'}</th>
+                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">${dict.usage_outputCost || '输出成本'}</th>
+                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">${dict.usage_cacheCost || '缓存成本'}</th>
+                                <th class="px-3 py-2 text-[10px] font-bold text-outline uppercase tracking-wider text-right">${dict.usage_totalCost || '总成本'}</th>
                             </tr>
                         </thead>
                         <tbody class="text-[12px] font-data-mono text-on-surface dark:text-white">
@@ -210,12 +215,13 @@ export function render(usage?: any) {
     if (!panel) return;
 
     const allAccounts = currentUsageData && currentUsageData.accounts ? Object.values(currentUsageData.accounts) : [];
+    const dict = i18n[state.currentLanguage] || i18n.zh;
     if (allAccounts.length === 0) {
         panel.classList.remove('hidden');
         panel.innerHTML = `
             <div class="glass-card rounded-xl p-8 flex flex-col items-center justify-center text-outline/50 border border-outline-variant/30">
                 <span class="material-symbols-outlined text-[48px] mb-2">analytics</span>
-                <span class="text-[13px]">暂无账号用量统计数据</span>
+                <span class="text-[13px]">${dict.usage_noAccountUsage || '暂无账号用量统计数据'}</span>
             </div>
         `;
         return;
@@ -251,6 +257,12 @@ export function render(usage?: any) {
     // 绘制整体结构（如果结构已存在，只需更新内容与绑定，避免重新构建整个DOM导致input失去焦点）
     const containerExists = document.getElementById('usageContainerCard') !== null;
 
+    const showingTemplate = dict.usage_showingEntries || "显示 {start} - {end} 条，共 {total} 条";
+    const showingText = showingTemplate
+        .replace('{start}', String(startItem))
+        .replace('{end}', String(endItem))
+        .replace('{total}', String(totalItems));
+
     if (!containerExists) {
         panel.classList.remove('hidden');
         panel.innerHTML = `
@@ -260,14 +272,14 @@ export function render(usage?: any) {
                     <div class="flex items-center gap-3">
                         <div class="relative flex items-center">
                             <span class="material-symbols-outlined absolute left-2.5 text-[16px] text-outline pointer-events-none">search</span>
-                            <input type="text" id="inputUsageSearch" value="${escapeHtml(searchQuery)}" placeholder="按账号名称/邮箱查询..." class="pl-8 pr-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary w-56 sm:w-64 transition-all" />
+                            <input type="text" id="inputUsageSearch" value="${escapeHtml(searchQuery)}" placeholder="${dict.usage_searchPlaceholder || '按账号名称/邮箱查询...'}" class="pl-8 pr-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary w-56 sm:w-64 transition-all" />
                         </div>
                     </div>
                     <div class="flex items-center gap-4 text-right" id="usageSummaryChips">
-                        ${renderSummaryChip('账号数', String(totalItems), 'primary')}
-                        ${renderSummaryChip('调用次数', formatNumber(totals.requestCount), 'slate')}
-                        ${renderSummaryChip('总成本', formatMoney(totals.totalCost), 'emerald')}
-                        ${renderSummaryChip('命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
+                        ${renderSummaryChip(dict.usage_accounts || '账号数', String(totalItems), 'primary')}
+                        ${renderSummaryChip(dict.usage_callsCount || '调用次数', formatNumber(totals.requestCount), 'slate')}
+                        ${renderSummaryChip(dict.usage_totalCost || '总成本', formatMoney(totals.totalCost), 'emerald')}
+                        ${renderSummaryChip(dict.usage_hitRate || '命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
                     </div>
                 </div>
                 
@@ -277,23 +289,23 @@ export function render(usage?: any) {
                         ? pageAccounts.map(renderAccountBlock).join('')
                         : `<div class="flex flex-col items-center justify-center py-12 text-outline/50">
                              <span class="material-symbols-outlined text-[48px] mb-2">search_off</span>
-                             <span class="text-[13px]">未找到符合条件的账号用量数据</span>
+                             <span class="text-[13px]">${dict.usage_noMatchingData || '未找到符合条件的账号用量数据'}</span>
                            </div>`
                     }
                 </div>
 
                 <!-- 底部分页栏 -->
                 <div class="flex flex-wrap items-center justify-between px-4 py-3 border-t border-outline-variant/20 text-[12px]" id="usagePaginationFooter">
-                    <span class="text-outline text-[11px]" id="usagePaginationInfo">显示 ${startItem} - ${endItem} 条，共 ${totalItems} 条</span>
+                    <span class="text-outline text-[11px]" id="usagePaginationInfo">${showingText}</span>
                     <div class="flex items-center gap-1.5">
                         <button id="btnPrevUsagePage" ${currentPage <= 1 ? 'disabled' : ''} class="px-2 py-1 rounded border border-outline-variant/30 text-outline hover:text-primary hover:bg-primary/5 disabled:opacity-40 disabled:pointer-events-none transition-colors text-[11px] flex items-center gap-0.5">
-                            <span class="material-symbols-outlined text-[14px]">chevron_left</span> 上一页
+                            <span class="material-symbols-outlined text-[14px]">chevron_left</span> ${dict.usage_prevPage || '上一页'}
                         </button>
                         <div id="usagePageNumbers" class="flex items-center gap-1">
                             ${renderPageButtons(totalPages, currentPage)}
                         </div>
                         <button id="btnNextUsagePage" ${currentPage >= totalPages ? 'disabled' : ''} class="px-2 py-1 rounded border border-outline-variant/30 text-outline hover:text-primary hover:bg-primary/5 disabled:opacity-40 disabled:pointer-events-none transition-colors text-[11px] flex items-center gap-0.5">
-                            下一页 <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+                            ${dict.usage_nextPage || '下一页'} <span class="material-symbols-outlined text-[14px]">chevron_right</span>
                         </button>
                     </div>
                 </div>
@@ -314,10 +326,10 @@ export function render(usage?: any) {
         const chipsEl = document.getElementById('usageSummaryChips');
         if (chipsEl) {
             chipsEl.innerHTML = `
-                ${renderSummaryChip('账号数', String(totalItems), 'primary')}
-                ${renderSummaryChip('调用次数', formatNumber(totals.requestCount), 'slate')}
-                ${renderSummaryChip('总成本', formatMoney(totals.totalCost), 'emerald')}
-                ${renderSummaryChip('命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
+                ${renderSummaryChip(dict.usage_accounts || '账号数', String(totalItems), 'primary')}
+                ${renderSummaryChip(dict.usage_callsCount || '调用次数', formatNumber(totals.requestCount), 'slate')}
+                ${renderSummaryChip(dict.usage_totalCost || '总成本', formatMoney(totals.totalCost), 'emerald')}
+                ${renderSummaryChip(dict.usage_hitRate || '命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
             `;
         }
 
@@ -328,14 +340,14 @@ export function render(usage?: any) {
                 ? pageAccounts.map(renderAccountBlock).join('')
                 : `<div class="flex flex-col items-center justify-center py-12 text-outline/50">
                      <span class="material-symbols-outlined text-[48px] mb-2">search_off</span>
-                     <span class="text-[13px]">未找到符合条件的账号用量数据</span>
+                     <span class="text-[13px]">${dict.usage_noMatchingData || '未找到符合条件的账号用量数据'}</span>
                    </div>`;
         }
 
         // 更新分页栏
         const infoEl = document.getElementById('usagePaginationInfo');
         if (infoEl) {
-            infoEl.textContent = `显示 ${startItem} - ${endItem} 条，共 ${totalItems} 条`;
+            infoEl.textContent = showingText;
         }
 
         const pageNumsEl = document.getElementById('usagePageNumbers');

@@ -1,5 +1,6 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
+import i18n from '../shared/i18n';
 import { showOneStopAuthModal } from './accountsAuthModal';
 import { 
     initRendererElements, 
@@ -97,6 +98,7 @@ export function updateViewTabUI() {
     if (btnChannelAntigravity && btnChannelProject) {
         const activeClass = 'px-4 py-1.5 rounded-md font-bold cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm';
         const inactiveClass = 'px-4 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200';
+        const dict = i18n[state.currentLanguage] || i18n.zh;
 
         if (state.currentViewTab === 'antigravity') {
             btnChannelAntigravity.className = activeClass;
@@ -104,7 +106,7 @@ export function updateViewTabUI() {
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
             
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
-            if (lblPoolMode) lblPoolMode.innerText = '账号负载均衡';
+            if (lblPoolMode) lblPoolMode.innerText = dict.poolLoadBalance || '账号负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.poolMode;
             }
@@ -124,7 +126,7 @@ export function updateViewTabUI() {
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
             
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
-            if (lblPoolMode) lblPoolMode.innerText = '项目负载均衡';
+            if (lblPoolMode) lblPoolMode.innerText = dict.projectLoadBalancing || '项目负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.projectPoolMode;
             }
@@ -274,12 +276,13 @@ export async function startLogin(provider: any) {
 
     if (btnAddAccount) {
         const origText = btnAddAccount.innerHTML;
-        btnAddAccount.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span> 登录中...';
+        const dict = i18n[state.currentLanguage] || i18n.zh;
+        btnAddAccount.innerHTML = `<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span> ${dict.btnLoggingIn || (state.currentLanguage === 'zh' ? '登录中...' : 'Logging in...')}`;
         btnAddAccount.classList.add('opacity-70');
 
         const handleMouseEnter = () => {
             if (state.isLoadingAuth && btnAddAccount) {
-                btnAddAccount.innerHTML = '<span class="material-symbols-outlined text-[16px]">cancel</span> 取消登录';
+                btnAddAccount.innerHTML = `<span class="material-symbols-outlined text-[16px]">cancel</span> ${dict.btnCancelLogin || (state.currentLanguage === 'zh' ? '取消登录' : 'Cancel Login')}`;
                 btnAddAccount.classList.remove('bg-primary', 'hover:bg-primary/90');
                 btnAddAccount.classList.add('bg-red-500', 'hover:bg-red-600');
             }
@@ -287,7 +290,7 @@ export async function startLogin(provider: any) {
 
         const handleMouseLeave = () => {
             if (state.isLoadingAuth && btnAddAccount) {
-                btnAddAccount.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span> 登录中...';
+                btnAddAccount.innerHTML = `<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span> ${dict.btnLoggingIn || (state.currentLanguage === 'zh' ? '登录中...' : 'Logging in...')}`;
                 btnAddAccount.classList.remove('bg-red-500', 'hover:bg-red-600');
                 btnAddAccount.classList.add('bg-primary', 'hover:bg-primary/90');
             }
@@ -694,12 +697,13 @@ export function initAccountsEvents() {
 }
 
 async function loadSessionBindings() {
+    const dict = i18n[state.currentLanguage] || {};
     const tableBody = sessionBindingsTableBody;
     if (!tableBody) return;
     tableBody.innerHTML = `
         <tr>
             <td colspan="4" class="p-8 text-center text-outline dark:text-outline-variant italic">
-                <span class="inline-block animate-spin mr-2">⏳</span>正在加载会话绑定数据...
+                <span class="inline-block animate-spin mr-2">⏳</span>${dict.sessionBindingsLoading || '正在加载会话绑定数据...'}
             </td>
         </tr>
     `;
@@ -713,14 +717,15 @@ async function loadSessionBindings() {
         }>;
         
         if (sessionBindingsCount) {
-            sessionBindingsCount.textContent = `共 ${list.length} 条记录`;
+            const totalText = (dict.sessionBindingsTotal || '共 {count} 条记录').replace('{count}', list.length.toString());
+            sessionBindingsCount.textContent = totalText;
         }
         
         if (list.length === 0) {
             tableBody.innerHTML = `
                 <tr>
                     <td colspan="4" class="p-8 text-center text-outline dark:text-outline-variant italic">
-                        📭 当前暂无会话路由绑定关系
+                        📭 ${dict.sessionBindingsEmpty || '当前暂无会话路由绑定关系'}
                     </td>
                 </tr>
             `;
@@ -749,21 +754,25 @@ async function loadSessionBindings() {
             let keyBadge = '';
             let channelBadge = '';
             let keyText = item.sessionKey;
+            
+            const projectLbText = dict.projectLoadBalancing || '项目负载均衡';
+            const accountLbText = dict.poolLoadBalance || '账号负载均衡';
+            
             if (item.sessionKey.startsWith('auth:prj:')) {
                 keyBadge = '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary dark:text-primary-fixed-dim text-[10px] font-bold mr-1.5">Bearer</span>';
-                channelBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[10px] font-bold mr-1.5">项目负载均衡</span>';
+                channelBadge = `<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[10px] font-bold mr-1.5">${projectLbText}</span>`;
                 keyText = item.sessionKey.substring(9);
             } else if (item.sessionKey.startsWith('auth:acc:')) {
                 keyBadge = '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary dark:text-primary-fixed-dim text-[10px] font-bold mr-1.5">Bearer</span>';
-                channelBadge = '<span class="px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300 text-[10px] font-bold mr-1.5">账号负载均衡</span>';
+                channelBadge = `<span class="px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300 text-[10px] font-bold mr-1.5">${accountLbText}</span>`;
                 keyText = item.sessionKey.substring(9);
             } else if (item.sessionKey.startsWith('sock:prj:')) {
                 keyBadge = '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[10px] font-bold mr-1.5">Socket</span>';
-                channelBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[10px] font-bold mr-1.5">项目负载均衡</span>';
+                channelBadge = `<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[10px] font-bold mr-1.5">${projectLbText}</span>`;
                 keyText = item.sessionKey.substring(9);
             } else if (item.sessionKey.startsWith('sock:acc:')) {
                 keyBadge = '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[10px] font-bold mr-1.5">Socket</span>';
-                channelBadge = '<span class="px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300 text-[10px] font-bold mr-1.5">账号负载均衡</span>';
+                channelBadge = `<span class="px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-300 text-[10px] font-bold mr-1.5">${accountLbText}</span>`;
                 keyText = item.sessionKey.substring(9);
             } else if (item.sessionKey.startsWith('auth:')) {
                 keyBadge = '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary dark:text-primary-fixed-dim text-[10px] font-bold mr-1.5">Bearer</span>';
@@ -785,7 +794,7 @@ async function loadSessionBindings() {
                 <td class="p-3 text-outline/80 dark:text-outline-variant/80 font-data-mono">${timeStr}</td>
                 <td class="p-3 text-center">
                     <button class="unbind-btn text-red-500 hover:text-white hover:bg-red-500 active:bg-red-600 px-2 py-1 rounded transition-all text-[11px] font-bold border border-red-500/20" data-key="${item.sessionKey}">
-                        解绑
+                        ${dict.btnUnbind || '解绑'}
                     </button>
                 </td>
             `;
@@ -798,22 +807,22 @@ async function loadSessionBindings() {
                     if (!key) return;
                     
                     (e.currentTarget as HTMLButtonElement).disabled = true;
-                    (e.currentTarget as HTMLButtonElement).textContent = '处理中...';
+                    (e.currentTarget as HTMLButtonElement).textContent = dict.btnUnbindProcessing || '处理中...';
                     
                     try {
                         const res = await ipcRenderer.invoke('sessions:unbind', key);
                         if (res && res.success) {
                             loadSessionBindings();
                         } else {
-                            alert('解绑失败，请重试');
+                            alert(dict.unbindFailed || '解绑失败，请重试');
                             (e.currentTarget as HTMLButtonElement).disabled = false;
-                            (e.currentTarget as HTMLButtonElement).textContent = '解绑';
+                            (e.currentTarget as HTMLButtonElement).textContent = dict.btnUnbind || '解绑';
                         }
                     } catch (err) {
                         console.error('Failed to unbind session:', err);
-                        alert('解绑请求失败');
+                        alert(dict.unbindRequestFailed || '解绑请求失败');
                         (e.currentTarget as HTMLButtonElement).disabled = false;
-                        (e.currentTarget as HTMLButtonElement).textContent = '解绑';
+                        (e.currentTarget as HTMLButtonElement).textContent = dict.btnUnbind || '解绑';
                     }
                 });
             }
@@ -823,10 +832,11 @@ async function loadSessionBindings() {
         
     } catch (err) {
         console.error('Failed to load session bindings:', err);
+        const errMsg = (dict.loadBindingsFailed || '获取绑定关系失败: {error}').replace('{error}', (err as Error).message);
         tableBody.innerHTML = `
             <tr>
                 <td colspan="4" class="p-8 text-center text-red-500 italic">
-                    ❌ 获取绑定关系失败：${(err as Error).message}
+                    ❌ ${errMsg}
                 </td>
             </tr>
         `;
@@ -857,13 +867,15 @@ function hideSessionBindings() {
 }
 
 async function clearAllSessionBindings() {
-    if (!await $confirm('您确定要清空所有的会话路由绑定关系吗？这将会使后续客户端的请求重新在可用账号池中进行轮询或一致性哈希分配。')) {
+    const dict = i18n[state.currentLanguage] || {};
+    const confirmMsg = dict.btnClearAllBindingsConfirm || '您确定要清空所有的会话路由绑定关系吗？这将会使后续客户端的请求重新在可用账号池中进行轮询或一致性哈希分配。';
+    if (!await $confirm(confirmMsg)) {
         return;
     }
     if (sessionBindingsModalClearAllBtn) {
         sessionBindingsModalClearAllBtn.disabled = true;
         const span = sessionBindingsModalClearAllBtn.querySelector('span:last-child');
-        if (span) span.textContent = '清空中...';
+        if (span) span.textContent = dict.btnClearAllBindingsProcessing || '清空中...';
     }
     try {
         const res = await ipcRenderer.invoke('pool:clear-sessions');
@@ -876,7 +888,7 @@ async function clearAllSessionBindings() {
         if (sessionBindingsModalClearAllBtn) {
             sessionBindingsModalClearAllBtn.disabled = false;
             const span = sessionBindingsModalClearAllBtn.querySelector('span:last-child');
-            if (span) span.textContent = '清空所有绑定';
+            if (span) span.textContent = dict.btnClearAllBindings || '清空所有绑定';
         }
     }
 }
@@ -892,11 +904,13 @@ export function updateBatchActionBarUI() {
     const chkAll = document.getElementById('chkSelectAllAccounts') as HTMLInputElement | null;
     if (!bar || !lbl) return;
 
+    const dict = i18n[state.currentLanguage] || i18n.zh;
+    
     const count = state.selectedAccountIds.length;
     if (count > 0) {
         bar.classList.remove('hidden');
         bar.classList.add('flex');
-        lbl.textContent = `已选择 ${count} 个账号`;
+        lbl.textContent = (dict.selectedAccountsCount || `已选择 {count} 个账号`).replace('{count}', String(count));
     } else {
         bar.classList.remove('flex');
         bar.classList.add('hidden');
@@ -1076,6 +1090,7 @@ function renderTriggerResultsTable(results: Array<{
 }>) {
     const tableBody = triggerResultsTableBody;
     if (!tableBody || !triggerResultsContainer) return;
+    const dict = i18n[state.currentLanguage] || i18n.zh;
 
     tableBody.innerHTML = '';
     
@@ -1088,9 +1103,9 @@ function renderTriggerResultsTable(results: Array<{
                 <td class="p-2.5 font-medium truncate" title="${email}">${email}</td>
                 <td class="p-2.5 text-outline">-</td>
                 <td class="p-2.5 text-center">
-                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 dark:bg-red-950/40 text-red-500">失败</span>
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 dark:bg-red-950/40 text-red-500">${state.currentLanguage === 'zh' ? '失败' : 'Failed'}</span>
                 </td>
-                <td class="p-2.5 text-red-400 truncate" title="未返回模型结果">未返回模型结果</td>
+                <td class="p-2.5 text-red-400 truncate" title="${state.currentLanguage === 'zh' ? '未返回模型结果' : 'No response returned'}">${state.currentLanguage === 'zh' ? '未返回模型结果' : 'No response'}</td>
             `;
             tableBody.appendChild(tr);
             return;
@@ -1101,16 +1116,16 @@ function renderTriggerResultsTable(results: Array<{
             tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors border-b border-outline-variant/10';
             
             const statusBadge = modelRes.success 
-                ? '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/40 text-emerald-500">成功</span>'
-                : '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 dark:bg-red-950/40 text-red-500">失败</span>';
+                ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/40 text-emerald-500">${state.currentLanguage === 'zh' ? '成功' : 'Success'}</span>`
+                : `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 dark:bg-red-950/40 text-red-500">${state.currentLanguage === 'zh' ? '失败' : 'Failed'}</span>`;
             
             let detailText = '-';
             let detailClass = 'text-outline';
             if (modelRes.success) {
-                detailText = modelRes.response || '(无内容)';
+                detailText = modelRes.response || (state.currentLanguage === 'zh' ? '(无内容)' : '(No content)');
                 detailClass = 'text-emerald-500 dark:text-emerald-400 truncate font-mono';
             } else {
-                detailText = modelRes.error || '未知错误';
+                detailText = modelRes.error || (state.currentLanguage === 'zh' ? '未知错误' : 'Unknown error');
                 detailClass = 'text-red-400 truncate';
             }
 
@@ -1120,7 +1135,7 @@ function renderTriggerResultsTable(results: Array<{
                 <td class="p-2.5 font-medium truncate" title="${email}">${email}</td>
                 <td class="p-2.5 font-mono text-[11px]">${modelRes.model}</td>
                 <td class="p-2.5 text-center">${statusBadge}</td>
-                <td class="p-2.5 ${detailClass} ${cursorClass}" title="${detailText !== '-' ? '点击可在上方进程日志区查看格式化 JSON' : ''}">${detailText}</td>
+                <td class="p-2.5 ${detailClass} ${cursorClass}" title="${detailText !== '-' ? (state.currentLanguage === 'zh' ? '点击可在上方进程日志区查看格式化 JSON' : 'Click to view formatted JSON in the log area above') : ''}">${detailText}</td>
             `;
 
             const detailTd = tr.querySelector('.detail-cell');
@@ -1142,7 +1157,9 @@ function renderTriggerResultsTable(results: Array<{
 
                         const div = document.createElement('div');
                         div.className = 'mt-3 p-3 bg-slate-900 border border-primary/20 rounded-lg text-emerald-400 font-mono text-[11px] whitespace-pre-wrap leading-relaxed animate-fadeIn';
-                        div.innerHTML = `<span class="text-amber-400 font-bold">📋 [详情查看] 账号 ${email} - 模型 ${modelRes.model} 的响应 JSON:</span>\n${formattedText}`;
+                        div.innerHTML = state.currentLanguage === 'zh'
+                            ? `<span class="text-amber-400 font-bold">📋 [详情查看] 账号 ${email} - 模型 ${modelRes.model} 的响应 JSON:</span>\n${formattedText}`
+                            : `<span class="text-amber-400 font-bold">📋 [Details View] Account ${email} - Model ${modelRes.model} Response JSON:</span>\n${formattedText}`;
 
                         logArea.appendChild(div);
                         logArea.scrollTop = logArea.scrollHeight;
@@ -1314,7 +1331,7 @@ async function loadAutoTriggerTasks() {
     autoTriggerTasksTableBody.innerHTML = `
         <tr>
             <td class="p-8 text-center text-outline dark:text-outline-variant italic" colspan="6">
-                ⏳ 正在加载定时任务列表...
+                ${state.currentLanguage === 'zh' ? '⏳ 正在加载定时任务列表...' : '⏳ Loading task list...'}
             </td>
         </tr>
     `;
@@ -1327,7 +1344,7 @@ async function loadAutoTriggerTasks() {
             autoTriggerTasksTableBody.innerHTML = `
                 <tr>
                     <td class="p-8 text-center text-red-400" colspan="6">
-                        ❌ 加载失败: ${res?.error || '未知错误'}
+                        ❌ ${state.currentLanguage === 'zh' ? '加载失败: ' : 'Load failed: '}${res?.error || (state.currentLanguage === 'zh' ? '未知错误' : 'Unknown error')}
                     </td>
                 </tr>
             `;
@@ -1336,7 +1353,7 @@ async function loadAutoTriggerTasks() {
         autoTriggerTasksTableBody.innerHTML = `
             <tr>
                 <td class="p-8 text-center text-red-400" colspan="6">
-                    ❌ 加载发生异常: ${err.message}
+                    ❌ ${state.currentLanguage === 'zh' ? '加载发生异常: ' : 'Exception during loading: '}${err.message}
                 </td>
             </tr>
         `;
@@ -1352,7 +1369,7 @@ function renderAutoTriggerTasksTable(tasks: Array<any>) {
         tableBody.innerHTML = `
             <tr>
                 <td class="p-8 text-center text-outline dark:text-outline-variant italic" colspan="6">
-                    暂无配置好的自动化任务包，点击上方“新建任务包”添加。
+                    ${state.currentLanguage === 'zh' ? '暂无配置好的自动化任务包，点击上方“新建任务包”添加。' : 'No automated tasks configured, click "New Task Package" above to add.'}
                 </td>
             </tr>
         `;
@@ -1366,11 +1383,11 @@ function renderAutoTriggerTasksTable(tasks: Array<any>) {
         const triggerTypeBadge = task.triggerType === 'timer'
             ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 dark:bg-blue-950/40 text-blue-500">
                 <span class="material-symbols-outlined text-[12px]">schedule</span>
-                定时 (${Math.round(task.intervalSeconds / 60)}分钟)
+                ${state.currentLanguage === 'zh' ? `定时 (${Math.round(task.intervalSeconds / 60)}分钟)` : `Timer (${Math.round(task.intervalSeconds / 60)}m)`}
                </span>`
             : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-purple-100 dark:bg-purple-950/40 text-purple-400">
                 <span class="material-symbols-outlined text-[12px]">sync</span>
-                到达重置时间
+                ${state.currentLanguage === 'zh' ? '到达重置时间' : 'Quota Reset Time'}
                </span>`;
 
         const accCount = task.accountIds ? task.accountIds.length : 0;
@@ -1381,8 +1398,8 @@ function renderAutoTriggerTasksTable(tasks: Array<any>) {
         tr.innerHTML = `
             <td class="p-3 font-bold text-on-surface dark:text-white truncate" title="${task.name}">${task.name}</td>
             <td class="p-3">${triggerTypeBadge}</td>
-            <td class="p-3 font-mono text-[11px]">${accCount} 个账号</td>
-            <td class="p-3 font-mono text-[11px]">${modelCount} 个模型</td>
+            <td class="p-3 font-mono text-[11px]">${state.currentLanguage === 'zh' ? `${accCount} 个账号` : `${accCount} accounts`}</td>
+            <td class="p-3 font-mono text-[11px]">${state.currentLanguage === 'zh' ? `${modelCount} 个模型` : `${modelCount} models`}</td>
             <td class="p-3 text-center">
                 <label class="switch">
                     <input type="checkbox" class="task-toggle-cb" data-task-id="${task.id}" ${isChecked}>
@@ -1391,9 +1408,9 @@ function renderAutoTriggerTasksTable(tasks: Array<any>) {
             </td>
             <td class="p-3 text-center">
                 <div class="flex items-center justify-center gap-2">
-                    <button class="btn-task-edit text-primary dark:text-primary-fixed-dim hover:underline font-bold" data-task-id="${task.id}">编辑</button>
+                    <button class="btn-task-edit text-primary dark:text-primary-fixed-dim hover:underline font-bold" data-task-id="${task.id}">${state.currentLanguage === 'zh' ? '编辑' : 'Edit'}</button>
                     <span class="text-outline/30">|</span>
-                    <button class="btn-task-delete text-red-400 hover:underline font-bold" data-task-id="${task.id}">删除</button>
+                    <button class="btn-task-delete text-red-400 hover:underline font-bold" data-task-id="${task.id}">${state.currentLanguage === 'zh' ? '删除' : 'Delete'}</button>
                 </div>
             </td>
         `;
@@ -1409,7 +1426,7 @@ function renderAutoTriggerTasksTable(tasks: Array<any>) {
             try {
                 await ipcRenderer.invoke('autotrigger:toggle', { id, enabled });
             } catch (err: any) {
-                alert('切换状态失败: ' + err.message);
+                alert((state.currentLanguage === 'zh' ? '切换状态失败: ' : 'Failed to toggle status: ') + err.message);
                 cb.checked = !enabled;
             }
         });
@@ -1431,12 +1448,12 @@ function renderAutoTriggerTasksTable(tasks: Array<any>) {
     deleteBtns.forEach(btn => {
         btn.addEventListener('click', async () => {
             const id = parseInt(btn.getAttribute('data-task-id') || '0', 10);
-            if (await $confirm('确定要删除该自动化触发任务包吗？')) {
+            if (await $confirm(state.currentLanguage === 'zh' ? '确定要删除该自动化触发任务包吗？' : 'Are you sure you want to delete this automated task package?')) {
                 try {
                     await ipcRenderer.invoke('autotrigger:delete', { id });
                     loadAutoTriggerTasks();
                 } catch (err: any) {
-                    alert('删除失败: ' + err.message);
+                    alert((state.currentLanguage === 'zh' ? '删除失败: ' : 'Failed to delete: ') + err.message);
                 }
             }
         });
@@ -1481,13 +1498,13 @@ function prepareTaskEditForm(task?: any) {
     }
 
     if (currentAccs.length === 0) {
-        accGrid.innerHTML = `<div class="col-span-2 text-outline italic">当前通道无可用账号</div>`;
+        accGrid.innerHTML = `<div class="col-span-2 text-outline italic">${state.currentLanguage === 'zh' ? '当前通道无可用账号' : 'No available accounts in this channel'}</div>`;
     } else {
         currentAccs.forEach((acc: any) => {
             // 新建时默认不勾选任何账号
             const isChecked = task && task.accountIds ? task.accountIds.includes(acc.id) : false;
             const displayName = acc.provider === 'project' && acc.projectId
-                ? `${acc.email} (项目: ${acc.projectId})`
+                ? `${acc.email} (${state.currentLanguage === 'zh' ? '项目' : 'Project'}: ${acc.projectId})`
                 : acc.email;
 
             const div = document.createElement('div');
@@ -1525,7 +1542,7 @@ async function saveAutoTriggerTask() {
 
     const name = editTaskName.value.trim();
     if (!name) {
-        alert('请输入任务包名称！');
+        alert(state.currentLanguage === 'zh' ? '请输入任务包名称！' : 'Please enter a task package name!');
         return;
     }
 
@@ -1539,7 +1556,7 @@ async function saveAutoTriggerTask() {
     accCbs?.forEach(cb => selectedAccountIDs.push(cb.value));
 
     if (selectedAccountIDs.length === 0) {
-        alert('请至少选择一个关联账号！');
+        alert(state.currentLanguage === 'zh' ? '请至少选择一个关联账号！' : 'Please select at least one associated account!');
         return;
     }
 
@@ -1548,7 +1565,7 @@ async function saveAutoTriggerTask() {
     modelCbs?.forEach(cb => selectedModelNames.push(cb.value));
 
     if (selectedModelNames.length === 0) {
-        alert('请至少选择一个触发测试模型！');
+        alert(state.currentLanguage === 'zh' ? '请至少选择一个触发测试模型！' : 'Please select at least one trigger test model!');
         return;
     }
 
@@ -1571,9 +1588,9 @@ async function saveAutoTriggerTask() {
             switchAutoTriggerPanel('list');
             loadAutoTriggerTasks();
         } else {
-            alert('保存失败: ' + (res?.error || '未知错误'));
+            alert((state.currentLanguage === 'zh' ? '保存失败: ' : 'Save failed: ') + (res?.error || (state.currentLanguage === 'zh' ? '未知错误' : 'Unknown error')));
         }
     } catch (err: any) {
-        alert('保存引发异常: ' + err.message);
+        alert((state.currentLanguage === 'zh' ? '保存引发异常: ' : 'Exception during saving: ') + err.message);
     }
 }

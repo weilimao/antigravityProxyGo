@@ -1,5 +1,6 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
+import i18n from '../shared/i18n';
 import { 
     initRendererElements, 
     renderOtpTable, 
@@ -153,6 +154,7 @@ export function stopOtpTimer() {
 }
 
 async function handleEditSecret(accountId: string, email: string, currentSecretId: string) {
+    const dict = i18n[state.currentLanguage] || i18n.zh;
     let currentSecretVal = '';
     const otpItem = lastOtpList.find(item => item.accountId === accountId);
     if (otpItem && otpItem.secret) {
@@ -168,7 +170,7 @@ async function handleEditSecret(accountId: string, email: string, currentSecretI
                 const res = await ipcRenderer.invoke('accounts:update-2fa', accountId, secret);
                 return res;
             } catch (err: any) {
-                return { success: false, error: err.message || '未知错误' };
+                return { success: false, error: err.message || dict.otp_unknownError || '未知错误' };
             }
         }
     );
@@ -180,7 +182,9 @@ async function handleEditSecret(accountId: string, email: string, currentSecretI
 }
 
 async function handleClearSecret(accountId: string, email: string) {
-    if (!await $confirm(`确定要清除账号 ${email} 的 2FA 密匙吗？`)) {
+    const dict = i18n[state.currentLanguage] || i18n.zh;
+    const confirmMsg = (dict.otp_clearConfirm || '确定要清除账号 {email} 的 2FA 密钥吗？').replace('{email}', email);
+    if (!await $confirm(confirmMsg)) {
         return;
     }
 
@@ -190,10 +194,10 @@ async function handleClearSecret(accountId: string, email: string) {
             ipcRenderer.send('accounts:get');
             refreshOtpList();
         } else {
-            alert('清除失败: ' + (res.error || '未知错误'));
+            alert((dict.otp_clearFailed || '清除失败: ') + (res.error || dict.otp_unknownError || '未知错误'));
         }
     } catch (err: any) {
-        alert('清除出错: ' + err.message);
+        alert((dict.otp_clearError || '清除出错: ') + err.message);
     }
 }
 
@@ -216,12 +220,13 @@ function handleCopyCode(code: string, btnEl: HTMLElement) {
 }
 
 async function handleAddNewOtp() {
+    const dict = i18n[state.currentLanguage] || i18n.zh;
     const saved = await showAdd2FAModal(async (email: string, secret: string) => {
         try {
             const res = await ipcRenderer.invoke('totp:add-account', email, secret);
             return res;
         } catch (err: any) {
-            return { success: false, error: err.message || '未知错误' };
+            return { success: false, error: err.message || dict.otp_unknownError || '未知错误' };
         }
     });
 
@@ -269,7 +274,8 @@ async function refreshInstantOtp() {
             resultContainer?.classList.add('hidden');
             resultContainer?.classList.remove('flex');
             if (errorEl) {
-                errorEl.textContent = res.error || '密钥格式无效';
+                const dict = i18n[state.currentLanguage] || i18n.zh;
+                errorEl.textContent = res.error || dict.otp_invalidSecretFormat || '密钥格式无效';
                 errorEl.classList.remove('hidden');
             }
         }
@@ -277,7 +283,8 @@ async function refreshInstantOtp() {
         resultContainer?.classList.add('hidden');
         resultContainer?.classList.remove('flex');
         if (errorEl) {
-            errorEl.textContent = '计算失败';
+            const dict = i18n[state.currentLanguage] || i18n.zh;
+            errorEl.textContent = dict.otp_calculationFailed || '计算失败';
             errorEl.classList.remove('hidden');
         }
     }

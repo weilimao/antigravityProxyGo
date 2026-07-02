@@ -1,4 +1,6 @@
 import { ipcRenderer, shell } from '../shared/ipc';
+import state from './dashboardState';
+import i18n from '../shared/i18n';
 
 function updatePacketCaptureVisibility(enabled: boolean) {
     const ids = ['navPacketsLink', 'navPacketsLinkDropdown'];
@@ -380,7 +382,7 @@ ipcRenderer.on('settings:network-status-res', (event, data: any) => {
     const lblNetStatusCustomSocks = document.getElementById('lblNetStatusCustomSocks');
 
     if (lblNetStatusFallback) {
-        lblNetStatusFallback.textContent = data.cachedLocalProxy ? data.cachedLocalProxy : '直连 (无探测代理)';
+        lblNetStatusFallback.textContent = data.cachedLocalProxy ? data.cachedLocalProxy : (state.currentLanguage === 'zh' ? '直连 (无探测代理)' : 'DIRECT (No scan proxy)');
         if (data.cachedLocalProxy) {
             lblNetStatusFallback.className = "text-[13px] font-mono font-bold text-primary dark:text-primary-fixed-dim";
         } else {
@@ -390,10 +392,10 @@ ipcRenderer.on('settings:network-status-res', (event, data: any) => {
 
     if (lblNetStatusCustomSocks) {
         if (data.customSocks5Enabled) {
-            lblNetStatusCustomSocks.textContent = `启用 (${data.customSocks5Address})`;
+            lblNetStatusCustomSocks.textContent = (state.currentLanguage === 'zh' ? '启用' : 'Enabled') + ` (${data.customSocks5Address})`;
             lblNetStatusCustomSocks.className = "text-[13px] font-mono font-bold text-green-600 dark:text-green-400";
         } else {
-            lblNetStatusCustomSocks.textContent = '未启用';
+            lblNetStatusCustomSocks.textContent = state.currentLanguage === 'zh' ? '未启用' : 'Disabled';
             lblNetStatusCustomSocks.className = "text-[13px] font-mono font-bold text-outline";
         }
     }
@@ -404,9 +406,10 @@ ipcRenderer.on('settings:network-logs-res', (event, logs: any[]) => {
     if (!tblNetworkLogsBody) return;
 
     if (!logs || logs.length === 0) {
+        const emptyMsg = state.currentLanguage === 'zh' ? '暂无连接记录，正在等待出站网络活动...' : 'No connection logs. Waiting for outbound network activity...';
         tblNetworkLogsBody.innerHTML = `
             <tr>
-                <td colspan="5" class="py-6 text-center text-outline/60">暂无连接记录，正在等待出站网络活动...</td>
+                <td colspan="5" class="py-6 text-center text-outline/60">${emptyMsg}</td>
             </tr>
         `;
         return;
