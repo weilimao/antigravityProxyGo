@@ -69,7 +69,7 @@
                     <label class="block text-[11px] font-bold text-outline dark:text-outline-variant mb-1">触发方式选择</label>
                     <select id="editTaskTriggerType" class="w-full px-3 py-1.5 bg-slate-50 dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all cursor-pointer">
                         <option value="timer">定时触发 (Timer)</option>
-                        <option value="quota_refreshed">配额刷新后触发 (Quota Refreshed)</option>
+                        <option value="quota_refreshed">到达配额重置时间触发 (Quota Reset Time)</option>
                     </select>
                 </div>
                 <div id="containerTaskInterval">

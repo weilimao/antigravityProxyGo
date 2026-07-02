@@ -1366,7 +1366,7 @@ function renderAutoTriggerTasksTable(tasks: Array<any>) {
                </span>`
             : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-purple-100 dark:bg-purple-950/40 text-purple-400">
                 <span class="material-symbols-outlined text-[12px]">sync</span>
-                配额刷新后
+                到达重置时间
                </span>`;
 
         const accCount = task.accountIds ? task.accountIds.length : 0;

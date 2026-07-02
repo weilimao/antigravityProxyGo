@@ -143,9 +143,7 @@ func (a *App) startup(ctx context.Context) {
 			email = acc.Email
 		}
 		a.AddLog(fmt.Sprintf("🔄 [自动触发] 检测到账号 %s 的配额限制已恢复 (%s)，触发自动化任务...", email, strings.Join(categories, ", ")))
-		if a.autoTriggerScheduler != nil {
-			go a.autoTriggerScheduler.OnQuotaRefreshed(accountId)
-		}
+
 	}
 
 	a.authMgr = quota.NewAuthManager(a.accountMgr)

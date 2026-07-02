@@ -21,6 +21,7 @@ type Scheduler struct {
 	wg          sync.WaitGroup
 	runningMu   sync.Mutex
 	runningJobs map[int64]bool // 避免同个任务并发执行重叠
+	lastQuotaResetTrigger map[string]int64 // accountID -> cooldownUntil
 }
 
 func NewScheduler(accountMgr *account.Manager, quotaSvc *quota.QuotaService, authMgr *quota.AuthManager, addLog func(string)) *Scheduler {
@@ -29,8 +30,9 @@ func NewScheduler(accountMgr *account.Manager, quotaSvc *quota.QuotaService, aut
 		quotaSvc:    quotaSvc,
 		authMgr:     authMgr,
 		addLog:      addLog,
-		quit:        make(chan struct{}),
-		runningJobs: make(map[int64]bool),
+		quit:                  make(chan struct{}),
+		runningJobs:           make(map[int64]bool),
+		lastQuotaResetTrigger: make(map[string]int64),
 	}
 }
 
@@ -46,6 +48,7 @@ func (s *Scheduler) Start() {
 			select {
 			case <-s.ticker.C:
 				s.checkTimerTasks()
+				s.checkQuotaResetTasks()
 			case <-s.quit:
 				return
 			}
@@ -63,45 +66,39 @@ func (s *Scheduler) Stop() {
 	s.addLog("⏰ [任务调度器] 定时触发任务调度器已安全关闭。")
 }
 
-// OnQuotaRefreshed handles event when an account quota has been successfully refreshed
-func (s *Scheduler) OnQuotaRefreshed(accountID string) {
+// checkQuotaResetTasks checks if any account has reached its CooldownUntil and triggers quota_refreshed tasks.
+func (s *Scheduler) checkQuotaResetTasks() {
 	tasks, err := db.ListAutoTriggerTasks()
 	if err != nil {
 		return
 	}
+
+	nowMs := time.Now().UnixNano() / int64(time.Millisecond)
 
 	for _, task := range tasks {
 		if !task.Enabled || task.TriggerType != "quota_refreshed" {
 			continue
 		}
 
-		// 检查任务是否关联了该账号
-		hasAccount := false
-		var restoredEmail string
-		if restoredAcc := s.accountMgr.GetAccountByID(accountID); restoredAcc != nil {
-			restoredEmail = restoredAcc.Email
-		}
-
 		for _, accID := range task.AccountIDs {
-			if accID == accountID {
-				hasAccount = true
-				break
+			acc := s.accountMgr.GetAccountByID(accID)
+			if acc == nil || !acc.Enabled || acc.CooldownUntil == 0 {
+				continue
 			}
-			
-			// 对于按邮箱去重显示的通道，可能保存的 ID 和实际刷新配额的 ID 不一致（但邮箱一致）
-			if restoredEmail != "" {
-				if taskAcc := s.accountMgr.GetAccountByID(accID); taskAcc != nil {
-					if taskAcc.Email == restoredEmail {
-						hasAccount = true
-						break
-					}
-				}
-			}
-		}
 
-		if hasAccount {
-			s.addLog(fmt.Sprintf("⚡ [自动测试] 检测到账号配额刷新，开始触发自动化任务 [%s]...", task.Name))
-			go s.runTask(task, accountID)
+			if nowMs >= acc.CooldownUntil {
+				s.runningMu.Lock()
+				lastTriggerTime := s.lastQuotaResetTrigger[acc.ID]
+				if lastTriggerTime == acc.CooldownUntil {
+					s.runningMu.Unlock()
+					continue // Already triggered for this specific reset time
+				}
+				s.lastQuotaResetTrigger[acc.ID] = acc.CooldownUntil
+				s.runningMu.Unlock()
+
+				s.addLog(fmt.Sprintf("⚡ [自动测试] 检测到账号 %s 到达配额重置时间，开始触发自动化任务 [%s]...", acc.Email, task.Name))
+				go s.runTask(task, acc.ID)
+			}
 		}
 	}
 }
