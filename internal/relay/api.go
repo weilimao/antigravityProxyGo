@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"antigravity-proxy/internal/db"
 )
@@ -316,32 +315,18 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 		
 		// For Gemini quotas
 		if user.Quotas.Gemini.EnableHourly && user.Quotas.Gemini.HourlyHours > 0 {
-			periodDuration := time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour
-			sinceTime := time.Now().Add(-periodDuration)
-			since := sinceTime.Format(time.RFC3339)
-			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "gemini", since); err == nil {
+			if u, resetStr, err := GetActiveWindow(session.UserID, "gemini", "gemini_hourly", user.Quotas.Gemini.HourlyHours, false); err == nil {
 				usage["gemini_hourly"] = u
-				if u > 0 {
-					if oldestStr, err := db.GetOldestRequestTimestampSince(session.UserID, "gemini", since); err == nil && oldestStr != "" {
-						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
-							resetAt["gemini_hourly"] = oldestTime.Add(periodDuration).Format(time.RFC3339)
-						}
-					}
+				if resetStr != "" {
+					resetAt["gemini_hourly"] = resetStr
 				}
 			}
 		}
 		if user.Quotas.Gemini.EnableDaily && user.Quotas.Gemini.DailyDays > 0 {
-			periodDuration := time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour
-			sinceTime := time.Now().Add(-periodDuration)
-			since := sinceTime.Format(time.RFC3339)
-			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "gemini", since); err == nil {
+			if u, resetStr, err := GetActiveWindow(session.UserID, "gemini", "gemini_daily", user.Quotas.Gemini.DailyDays*24, false); err == nil {
 				usage["gemini_daily"] = u
-				if u > 0 {
-					if oldestStr, err := db.GetOldestRequestTimestampSince(session.UserID, "gemini", since); err == nil && oldestStr != "" {
-						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
-							resetAt["gemini_daily"] = oldestTime.Add(periodDuration).Format(time.RFC3339)
-						}
-					}
+				if resetStr != "" {
+					resetAt["gemini_daily"] = resetStr
 				}
 			}
 		}
@@ -353,32 +338,18 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 		// For Claude quotas
 		if user.Quotas.Claude.EnableHourly && user.Quotas.Claude.HourlyHours > 0 {
-			periodDuration := time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour
-			sinceTime := time.Now().Add(-periodDuration)
-			since := sinceTime.Format(time.RFC3339)
-			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "claude", since); err == nil {
+			if u, resetStr, err := GetActiveWindow(session.UserID, "claude", "claude_hourly", user.Quotas.Claude.HourlyHours, false); err == nil {
 				usage["claude_hourly"] = u
-				if u > 0 {
-					if oldestStr, err := db.GetOldestRequestTimestampSince(session.UserID, "claude", since); err == nil && oldestStr != "" {
-						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
-							resetAt["claude_hourly"] = oldestTime.Add(periodDuration).Format(time.RFC3339)
-						}
-					}
+				if resetStr != "" {
+					resetAt["claude_hourly"] = resetStr
 				}
 			}
 		}
 		if user.Quotas.Claude.EnableDaily && user.Quotas.Claude.DailyDays > 0 {
-			periodDuration := time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour
-			sinceTime := time.Now().Add(-periodDuration)
-			since := sinceTime.Format(time.RFC3339)
-			if u, err := db.GetTokensForUserModelFamilySince(session.UserID, "claude", since); err == nil {
+			if u, resetStr, err := GetActiveWindow(session.UserID, "claude", "claude_daily", user.Quotas.Claude.DailyDays*24, false); err == nil {
 				usage["claude_daily"] = u
-				if u > 0 {
-					if oldestStr, err := db.GetOldestRequestTimestampSince(session.UserID, "claude", since); err == nil && oldestStr != "" {
-						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
-							resetAt["claude_daily"] = oldestTime.Add(periodDuration).Format(time.RFC3339)
-						}
-					}
+				if resetStr != "" {
+					resetAt["claude_daily"] = resetStr
 				}
 			}
 		}

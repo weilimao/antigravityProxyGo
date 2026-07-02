@@ -58,7 +58,7 @@
 <input class="text-primary focus:ring-primary rounded" id="geminiEnableHourly" type="checkbox"/> 短期滚动周期限额 (小时级)
                             </label>
 <div class="pl-6 flex gap-2">
-<input class="w-1/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="geminiHourlyHours" placeholder="小时数" type="number"/>
+<input class="w-1/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="geminiHourlyHours" placeholder="小时数" type="number" step="any"/>
 <input class="w-2/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="geminiHourlyTokens" placeholder="该时段 Token 上限" type="number"/>
 </div>
 </div>
@@ -68,7 +68,7 @@
 <input class="text-primary focus:ring-primary rounded" id="geminiEnableDaily" type="checkbox"/> 长期滚动周期限额 (天级)
                             </label>
 <div class="pl-6 flex gap-2">
-<input class="w-1/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="geminiDailyDays" placeholder="天数" type="number"/>
+<input class="w-1/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="geminiDailyDays" placeholder="天数" type="number" step="any"/>
 <input class="w-2/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="geminiDailyTokens" placeholder="该时段 Token 上限" type="number"/>
 </div>
 </div>
@@ -93,7 +93,7 @@
 <input class="text-primary focus:ring-primary rounded" id="claudeEnableHourly" type="checkbox"/> 短期滚动周期限额 (小时级)
                             </label>
 <div class="pl-6 flex gap-2">
-<input class="w-1/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="claudeHourlyHours" placeholder="小时数" type="number"/>
+<input class="w-1/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="claudeHourlyHours" placeholder="小时数" type="number" step="any"/>
 <input class="w-2/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="claudeHourlyTokens" placeholder="该时段 Token 上限" type="number"/>
 </div>
 </div>
@@ -103,7 +103,7 @@
 <input class="text-primary focus:ring-primary rounded" id="claudeEnableDaily" type="checkbox"/> 长期滚动周期限额 (天级)
                             </label>
 <div class="pl-6 flex gap-2">
-<input class="w-1/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="claudeDailyDays" placeholder="天数" type="number"/>
+<input class="w-1/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="claudeDailyDays" placeholder="天数" type="number" step="any"/>
 <input class="w-2/3 px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white" id="claudeDailyTokens" placeholder="该时段 Token 上限" type="number"/>
 </div>
 </div>

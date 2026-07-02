@@ -189,3 +189,32 @@ func HasServerLogID(userID string, serverLogID int64, mode string) bool {
 }
 
 
+
+
+// GetQuotaWindowStart retrieves the window_start time for a quota type.
+func GetQuotaWindowStart(userID string, quotaType string) (string, error) {
+	if GlobalDB == nil {
+		return "", fmt.Errorf("database not initialized")
+	}
+	var windowStart string
+	err := GlobalDB.QueryRow(`SELECT window_start FROM quota_windows WHERE user_id = ? AND quota_type = ?`, userID, quotaType).Scan(&windowStart)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return windowStart, nil
+}
+
+// SetQuotaWindowStart sets the window_start time for a quota type.
+func SetQuotaWindowStart(userID string, quotaType string, windowStart string) error {
+	if GlobalDB == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	_, err := GlobalDB.Exec(`
+		REPLACE INTO quota_windows (user_id, quota_type, window_start) 
+		VALUES (?, ?, ?)
+	`, userID, quotaType, windowStart)
+	return err
+}

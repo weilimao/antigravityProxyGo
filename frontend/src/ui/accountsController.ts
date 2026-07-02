@@ -857,7 +857,7 @@ function hideSessionBindings() {
 }
 
 async function clearAllSessionBindings() {
-    if (!confirm('您确定要清空所有的会话路由绑定关系吗？这将会使后续客户端的请求重新在可用账号池中进行轮询或一致性哈希分配。')) {
+    if (!await $confirm('您确定要清空所有的会话路由绑定关系吗？这将会使后续客户端的请求重新在可用账号池中进行轮询或一致性哈希分配。')) {
         return;
     }
     if (sessionBindingsModalClearAllBtn) {
@@ -1431,7 +1431,7 @@ function renderAutoTriggerTasksTable(tasks: Array<any>) {
     deleteBtns.forEach(btn => {
         btn.addEventListener('click', async () => {
             const id = parseInt(btn.getAttribute('data-task-id') || '0', 10);
-            if (confirm('确定要删除该自动化触发任务包吗？')) {
+            if (await $confirm('确定要删除该自动化触发任务包吗？')) {
                 try {
                     await ipcRenderer.invoke('autotrigger:delete', { id });
                     loadAutoTriggerTasks();

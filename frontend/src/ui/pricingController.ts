@@ -68,10 +68,10 @@ export function renderPricingTable() {
     });
     
     pricingTableBody.querySelectorAll('.btn-delete-pricing').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
             const key = btn.getAttribute('data-key');
             if (key) {
-                if (confirm(`确定要删除模型 "${key}" 的自定义计费配置吗？`)) {
+                if (await $confirm(`确定要删除模型 "${key}" 的自定义计费配置吗？`)) {
                     ipcRenderer.send('delete-pricing', key);
                 }
             }
@@ -147,8 +147,8 @@ export function initPricingEvents() {
     }
     
     if (btnResetPricing) {
-        btnResetPricing.addEventListener('click', () => {
-            if (confirm('确定要恢复默认的模型计费配置吗？这会清除所有自定义修改！')) {
+        btnResetPricing.addEventListener('click', async () => {
+            if (await $confirm('确定要恢复默认的模型计费配置吗？这会清除所有自定义修改！')) {
                 ipcRenderer.send('reset-pricing');
             }
         });

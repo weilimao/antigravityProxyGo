@@ -427,7 +427,7 @@ async function loadRemoteKeys() {
             btn.addEventListener('click', async (e) => {
                 const b = e.currentTarget as HTMLButtonElement;
                 const id = b.getAttribute('data-id') || '';
-                if (confirm('确定要删除这个 Key 吗？客户端使用该 Key 将立即失效！')) {
+                if (await $confirm('确定要删除这个 Key 吗？客户端使用该 Key 将立即失效！')) {
                     await ipcRenderer.invoke('remote:delete-key', id);
                     loadRemoteKeys();
                 }

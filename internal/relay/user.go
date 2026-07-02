@@ -17,13 +17,13 @@ type ModelQuota struct {
 	EnableFixed  bool  `json:"enableFixed"`
 	FixedTokens  int64 `json:"fixedTokens"`
 
-	EnableHourly bool  `json:"enableHourly"`
-	HourlyHours  int   `json:"hourlyHours"`
-	HourlyTokens int64 `json:"hourlyTokens"`
+	EnableHourly bool    `json:"enableHourly"`
+	HourlyHours  float64 `json:"hourlyHours"`
+	HourlyTokens int64   `json:"hourlyTokens"`
 
-	EnableDaily  bool  `json:"enableDaily"`
-	DailyDays    int   `json:"dailyDays"`
-	DailyTokens  int64 `json:"dailyTokens"`
+	EnableDaily  bool    `json:"enableDaily"`
+	DailyDays    float64 `json:"dailyDays"`
+	DailyTokens  int64   `json:"dailyTokens"`
 }
 
 type UserQuotas struct {

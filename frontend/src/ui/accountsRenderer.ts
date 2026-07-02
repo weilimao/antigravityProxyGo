@@ -633,8 +633,8 @@ export function renderAccounts(accounts: any[]) {
             const btnDelete = document.createElement('button');
             btnDelete.className = 'text-[11px] font-medium text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10';
             btnDelete.innerHTML = '<span class="material-symbols-outlined text-[14px]">delete</span> 移除';
-            btnDelete.onclick = () => {
-                if (confirm(`确定要移除账号 ${acc.email} 吗？`)) {
+            btnDelete.onclick = async () => {
+                if (await $confirm(`确定要移除账号 ${acc.email} 吗？`)) {
                     ipcRenderer.send('accounts:remove', acc.id);
                 }
             };

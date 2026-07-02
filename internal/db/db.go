@@ -124,6 +124,12 @@ func runMigrations(db *sql.DB, dataDir string) error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS quota_windows (
+			user_id TEXT NOT NULL,
+			quota_type TEXT NOT NULL,
+			window_start TEXT NOT NULL,
+			PRIMARY KEY (user_id, quota_type)
+		);`,
 	}
 
 	for _, schema := range schemas {

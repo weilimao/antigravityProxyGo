@@ -98,7 +98,7 @@ export function initRetryErrorLogsEvents() {
             const filterValue = logTypeFilter ? logTypeFilter.value : 'ALL';
             const confirmMsg = dict.clearConfirm || '确定要清空这些日志吗？';
             
-            if (confirm(confirmMsg)) {
+            if (await $confirm(confirmMsg)) {
                 try {
                     await ipcRenderer.invoke('retry-error-logs:clear', filterValue);
                     retryErrorCurrentPage = 1;

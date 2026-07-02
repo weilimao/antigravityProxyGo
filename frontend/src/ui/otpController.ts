@@ -180,7 +180,7 @@ async function handleEditSecret(accountId: string, email: string, currentSecretI
 }
 
 async function handleClearSecret(accountId: string, email: string) {
-    if (!confirm(`确定要清除账号 ${email} 的 2FA 密匙吗？`)) {
+    if (!await $confirm(`确定要清除账号 ${email} 的 2FA 密匙吗？`)) {
         return;
     }
 

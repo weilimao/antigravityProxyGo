@@ -298,8 +298,8 @@ export function initPacketsEvents() {
     }
 
     if (btnClearPackets) {
-        btnClearPackets.addEventListener('click', () => {
-            if (confirm('确定要清空所有已抓取的包吗？这不可恢复！')) {
+        btnClearPackets.addEventListener('click', async () => {
+            if (await $confirm('确定要清空所有已抓取的包吗？这不可恢复！')) {
                 ipcRenderer.send('packet:clear');
                 selectedPacket = null;
                 generatedDocContent = '';

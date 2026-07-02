@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/cert"
-	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/patch"
 	"antigravity-proxy/internal/proxy"
 	"antigravity-proxy/internal/relay"
@@ -348,56 +347,32 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		user := a.relayUserMgr.GetUserByID(userId)
 		if user != nil {
 			if user.Quotas.Gemini.EnableHourly && user.Quotas.Gemini.HourlyHours > 0 {
-				periodDuration := time.Duration(user.Quotas.Gemini.HourlyHours) * time.Hour
-				sinceTime := time.Now().Add(-periodDuration)
-				since := sinceTime.Format(time.RFC3339)
-				geminiHourlyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "gemini", since)
-				if geminiHourlyUsed > 0 {
-					if oldestStr, err := db.GetOldestRequestTimestampSince(userId, "gemini", since); err == nil && oldestStr != "" {
-						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
-							geminiHourlyResetAt = oldestTime.Add(periodDuration).Format(time.RFC3339)
-						}
-					}
+				var resetStr string
+				geminiHourlyUsed, resetStr, _ = relay.GetActiveWindow(userId, "gemini", "gemini_hourly", user.Quotas.Gemini.HourlyHours, false)
+				if resetStr != "" {
+					geminiHourlyResetAt = resetStr
 				}
 			}
 			if user.Quotas.Gemini.EnableDaily && user.Quotas.Gemini.DailyDays > 0 {
-				periodDuration := time.Duration(user.Quotas.Gemini.DailyDays*24) * time.Hour
-				sinceTime := time.Now().Add(-periodDuration)
-				since := sinceTime.Format(time.RFC3339)
-				geminiDailyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "gemini", since)
-				if geminiDailyUsed > 0 {
-					if oldestStr, err := db.GetOldestRequestTimestampSince(userId, "gemini", since); err == nil && oldestStr != "" {
-						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
-							geminiDailyResetAt = oldestTime.Add(periodDuration).Format(time.RFC3339)
-						}
-					}
+				var resetStr string
+				geminiDailyUsed, resetStr, _ = relay.GetActiveWindow(userId, "gemini", "gemini_daily", user.Quotas.Gemini.DailyDays*24, false)
+				if resetStr != "" {
+					geminiDailyResetAt = resetStr
 				}
 			}
 
 			if user.Quotas.Claude.EnableHourly && user.Quotas.Claude.HourlyHours > 0 {
-				periodDuration := time.Duration(user.Quotas.Claude.HourlyHours) * time.Hour
-				sinceTime := time.Now().Add(-periodDuration)
-				since := sinceTime.Format(time.RFC3339)
-				claudeHourlyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "claude", since)
-				if claudeHourlyUsed > 0 {
-					if oldestStr, err := db.GetOldestRequestTimestampSince(userId, "claude", since); err == nil && oldestStr != "" {
-						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
-							claudeHourlyResetAt = oldestTime.Add(periodDuration).Format(time.RFC3339)
-						}
-					}
+				var resetStr string
+				claudeHourlyUsed, resetStr, _ = relay.GetActiveWindow(userId, "claude", "claude_hourly", user.Quotas.Claude.HourlyHours, false)
+				if resetStr != "" {
+					claudeHourlyResetAt = resetStr
 				}
 			}
 			if user.Quotas.Claude.EnableDaily && user.Quotas.Claude.DailyDays > 0 {
-				periodDuration := time.Duration(user.Quotas.Claude.DailyDays*24) * time.Hour
-				sinceTime := time.Now().Add(-periodDuration)
-				since := sinceTime.Format(time.RFC3339)
-				claudeDailyUsed, _ = db.GetTokensForUserModelFamilySince(userId, "claude", since)
-				if claudeDailyUsed > 0 {
-					if oldestStr, err := db.GetOldestRequestTimestampSince(userId, "claude", since); err == nil && oldestStr != "" {
-						if oldestTime, err := time.Parse(time.RFC3339, oldestStr); err == nil {
-							claudeDailyResetAt = oldestTime.Add(periodDuration).Format(time.RFC3339)
-						}
-					}
+				var resetStr string
+				claudeDailyUsed, resetStr, _ = relay.GetActiveWindow(userId, "claude", "claude_daily", user.Quotas.Claude.DailyDays*24, false)
+				if resetStr != "" {
+					claudeDailyResetAt = resetStr
 				}
 			}
 		}

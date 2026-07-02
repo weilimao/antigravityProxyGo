@@ -580,7 +580,7 @@ function renderRelayUsers() {
 };
 
 (window as any)._relayRemoveUser = async (id: string) => {
-    if (!confirm('确定要删除该中继用户吗？')) return;
+    if (!await $confirm('确定要删除该中继用户吗？')) return;
     try {
         await ipcRenderer.invoke('relay:remove-user', id);
         await refreshRelayUsers();
@@ -795,7 +795,7 @@ function renderRelayUsers() {
 };
 
 (window as any)._relayDeletePackage = async (id: string) => {
-    if (!confirm('确定要删除该套餐模板吗？')) return;
+    if (!await $confirm('确定要删除该套餐模板吗？')) return;
     try {
         await ipcRenderer.invoke('relay:delete-package', id);
         await refreshRelayPackages();
@@ -816,11 +816,11 @@ function renderRelayUsers() {
             fixedTokens: parseInt((document.getElementById(`${family}FixedTokens`) as HTMLInputElement).value) || 0,
             
             enableHourly: (document.getElementById(`${family}EnableHourly`) as HTMLInputElement).checked,
-            hourlyHours: parseInt((document.getElementById(`${family}HourlyHours`) as HTMLInputElement).value) || 0,
+            hourlyHours: parseFloat((document.getElementById(`${family}HourlyHours`) as HTMLInputElement).value) || 0,
             hourlyTokens: parseInt((document.getElementById(`${family}HourlyTokens`) as HTMLInputElement).value) || 0,
             
             enableDaily: (document.getElementById(`${family}EnableDaily`) as HTMLInputElement).checked,
-            dailyDays: parseInt((document.getElementById(`${family}DailyDays`) as HTMLInputElement).value) || 0,
+            dailyDays: parseFloat((document.getElementById(`${family}DailyDays`) as HTMLInputElement).value) || 0,
             dailyTokens: parseInt((document.getElementById(`${family}DailyTokens`) as HTMLInputElement).value) || 0
         };
     };
