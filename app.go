@@ -405,12 +405,19 @@ func (a *App) startup(ctx context.Context) {
 	if a.settingsMgr.GetRemoteEnabled() {
 		host := a.settingsMgr.GetRemoteHost()
 		port := a.settingsMgr.GetRemotePort()
+		if port == "" {
+			port = a.settingsMgr.GetRelayPort()
+			if port == "" {
+				port = "18444"
+			}
+		}
 		key := a.settingsMgr.GetRemoteKey()
 		pwd := a.settingsMgr.GetRemotePassword()
 		if host != "" && key != "" {
-			a.AddLog(fmt.Sprintf("🔄 正在自动连接远程中继 %s:%s...", host, port))
+			path := a.settingsMgr.GetRemotePath()
+			a.AddLog(fmt.Sprintf("🔄 正在自动连接远程中继 %s:%s%s...", host, port, path))
 			go func() {
-				if err := a.connectRemote(host, port, key, pwd); err != nil {
+				if err := a.connectRemote(host, port, path, key, pwd); err != nil {
 					a.AddLog(fmt.Sprintf("❌ 自动连接远程中继失败: %v", err))
 				} else {
 					a.AddLog("🌐 远程中继自动连接成功")

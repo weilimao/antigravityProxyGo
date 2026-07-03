@@ -399,23 +399,23 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		port := getStringArg(1)
 		key := getStringArg(2)
 		password := getStringArg(3)
+		path := getStringArg(4)
 
-		if port == "" {
-			port = "18444"
-		}
+		portArg := port
 
-		if err := a.connectRemote(host, port, key, password); err != nil {
+		if err := a.connectRemote(host, port, path, key, password); err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
 
 		// Save config to settings
 		_ = a.settingsMgr.SetRemoteHost(host)
-		_ = a.settingsMgr.SetRemotePort(port)
+		_ = a.settingsMgr.SetRemotePort(portArg)
+		_ = a.settingsMgr.SetRemotePath(path)
 		_ = a.settingsMgr.SetRemoteKey(key)
 		_ = a.settingsMgr.SetRemotePassword(password)
 		_ = a.settingsMgr.SetRemoteEnabled(true)
 
-		a.AddLog(fmt.Sprintf("🌐 Remote connected to %s:%s as %s", host, port, key))
+		a.AddLog(fmt.Sprintf("🌐 Remote connected to %s:%s%s as %s", host, port, path, key))
 		a.emitRemoteState()
 
 		return marshalResponse(map[string]interface{}{"success": true})
@@ -424,6 +424,7 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		a.disconnectRemote()
 		_ = a.settingsMgr.SetRemoteHost("")
 		_ = a.settingsMgr.SetRemotePort("")
+		_ = a.settingsMgr.SetRemotePath("")
 		_ = a.settingsMgr.SetRemoteKey("")
 		_ = a.settingsMgr.SetRemotePassword("")
 		_ = a.settingsMgr.SetRemoteEnabled(false)
@@ -439,16 +440,17 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 	case "remote:enable":
 		host := a.settingsMgr.GetRemoteHost()
 		port := a.settingsMgr.GetRemotePort()
+		path := a.settingsMgr.GetRemotePath()
 		key := a.settingsMgr.GetRemoteKey()
 		pwd := a.settingsMgr.GetRemotePassword()
 		if host == "" || key == "" {
 			return marshalResponse(map[string]interface{}{"success": false, "error": "没有已保存的远程连接凭据"})
 		}
-		if err := a.connectRemote(host, port, key, pwd); err != nil {
+		if err := a.connectRemote(host, port, path, key, pwd); err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
 		_ = a.settingsMgr.SetRemoteEnabled(true)
-		a.AddLog(fmt.Sprintf("🌐 Remote re-connected to %s:%s as %s", host, port, key))
+		a.AddLog(fmt.Sprintf("🌐 Remote re-connected to %s:%s%s as %s", host, port, path, key))
 		a.emitRemoteState()
 		return marshalResponse(map[string]interface{}{"success": true})
 
@@ -458,13 +460,11 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 	case "remote:test":
 		host := getStringArg(0)
 		port := getStringArg(1)
-		if port == "" {
-			port = "18444"
-		}
+		path := getStringArg(2)
 
 		testRelay := proxy.NewRemoteRelay(nil)
 		start := time.Now()
-		if err := testRelay.TestConnection(host, port); err != nil {
+		if err := testRelay.TestConnection(host, port, path); err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
 		latency := time.Since(start).Milliseconds()
@@ -614,12 +614,12 @@ func (a *App) ensureRelayInitialized() {
 }
 
 // connectRemote 核心远程中继登录连接逻辑
-func (a *App) connectRemote(host, port, key, password string) error {
+func (a *App) connectRemote(host, port, path, key, password string) error {
 	if a.remoteRelay == nil {
 		a.remoteRelay = proxy.NewRemoteRelay(a.AddLog)
 	}
 
-	if err := a.remoteRelay.Login(host, port, key, password); err != nil {
+	if err := a.remoteRelay.Login(host, port, path, key, password); err != nil {
 		return err
 	}
 
@@ -720,10 +720,12 @@ func (a *App) getRemoteStatusPayload() map[string]interface{} {
 		"hasSavedCredentials": hasSaved,
 		"savedHost":           a.settingsMgr.GetRemoteHost(),
 		"savedPort":           a.settingsMgr.GetRemotePort(),
+		"savedPath":           a.settingsMgr.GetRemotePath(),
 		"savedKey":            a.settingsMgr.GetRemoteKey(),
 		"remoteEnabled":       a.settingsMgr.GetRemoteEnabled(),
 		"host":                remoteConfig.Host,
 		"port":                remoteConfig.Port,
+		"path":                remoteConfig.Path,
 		"userKey":             remoteConfig.UserKey,
 		"token":               remoteConfig.Token,
 	}

@@ -205,10 +205,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			isLocalRelayLoop := false
 			incomingRelayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
 			if incomingRelayUserID != "" {
-				conf := rr.GetConfig()
-				if conf.IsLocal {
-					isLocalRelayLoop = true
-				}
+				isLocalRelayLoop = true
 			}
 			if !isLocalRelayLoop {
 				h.forwardThroughRemote(w, r, bodyBytes, targetHost, targetPath, rr)

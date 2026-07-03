@@ -136,6 +136,47 @@ func (a *App) handleAutoTriggerIPC(channel string, args []interface{}) (string, 
 
 		data, _ := marshalResponse(map[string]interface{}{"success": true})
 		return data, true, nil
+
+	case "autotrigger:history:list":
+		var payload struct {
+			Page     int `json:"page"`
+			PageSize int `json:"pageSize"`
+		}
+		if len(args) > 0 {
+			bytesPayload, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(bytesPayload, &payload)
+		}
+		if payload.Page <= 0 {
+			payload.Page = 1
+		}
+		if payload.PageSize <= 0 {
+			payload.PageSize = 10
+		}
+		offset := (payload.Page - 1) * payload.PageSize
+
+		histories, total, err := db.ListTriggerHistory(payload.PageSize, offset)
+		if err != nil {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+			return data, true, nil
+		}
+		data, _ := marshalResponse(map[string]interface{}{
+			"success":   true,
+			"histories": histories,
+			"total":     total,
+			"page":      payload.Page,
+			"pageSize":  payload.PageSize,
+		})
+		return data, true, nil
+
+	case "autotrigger:history:clear":
+		err := db.ClearTriggerHistory()
+		if err != nil {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+			return data, true, nil
+		}
+		a.AddLog("⏰ [任务配置] 成功清空了自动化触发历史记录")
+		data, _ := marshalResponse(map[string]interface{}{"success": true})
+		return data, true, nil
 	}
 
 	return "", false, nil

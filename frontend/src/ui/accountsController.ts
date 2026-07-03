@@ -492,11 +492,12 @@ export function initAccountsEvents() {
         projectLoginButton.id = 'btnProjectLogin';
         projectLoginButton.className = 'w-full text-left px-4 py-2 text-[13px] text-on-surface dark:text-white hover:bg-slate-50 dark:hover:bg-white/5 transition-colors flex items-center gap-2 border-t border-outline-variant/10 mt-1 pt-3';
         projectLoginButton.type = 'button';
+        const dict = i18n[state.currentLanguage] || i18n.zh;
         projectLoginButton.innerHTML = `
             <span class="material-symbols-outlined text-emerald-500 text-[16px]">cloud</span>
             <div>
-                <div class="font-bold">Use a Google Cloud project</div>
-                <div class="text-[10px] text-outline">先选项目，再登录并绑定到该项目</div>
+                <div class="font-bold" data-i18n="useGcpProjectTitle">${dict.useGcpProjectTitle || 'Use a Google Cloud project'}</div>
+                <div class="text-[10px] text-outline" data-i18n="useGcpProjectDesc">${dict.useGcpProjectDesc || '风控原因，需要提供带账单项目'}</div>
             </div>
         `;
         projectLoginButton.addEventListener('click', () => startProjectLogin());
@@ -1311,18 +1312,25 @@ function closeAutoTriggerModal() {
     autoTriggerModal.classList.add('opacity-0', 'pointer-events-none');
 }
 
-function switchAutoTriggerPanel(panel: 'list' | 'edit') {
+export function switchAutoTriggerPanel(panel: 'list' | 'edit' | 'history') {
     if (!panelTaskList || !panelTaskEdit || !footerTaskList || !footerTaskEdit) return;
+    const panelTaskHistory = document.getElementById('panelTaskHistory');
+
+    // Hide all panels
+    panelTaskList.classList.add('hidden');
+    footerTaskList.classList.add('hidden');
+    panelTaskEdit.classList.add('hidden');
+    footerTaskEdit.classList.add('hidden');
+    if (panelTaskHistory) panelTaskHistory.classList.add('hidden');
+
     if (panel === 'list') {
         panelTaskList.classList.remove('hidden');
         footerTaskList.classList.remove('hidden');
-        panelTaskEdit.classList.add('hidden');
-        footerTaskEdit.classList.add('hidden');
-    } else {
-        panelTaskList.classList.add('hidden');
-        footerTaskList.classList.add('hidden');
+    } else if (panel === 'edit') {
         panelTaskEdit.classList.remove('hidden');
         footerTaskEdit.classList.remove('hidden');
+    } else if (panel === 'history') {
+        if (panelTaskHistory) panelTaskHistory.classList.remove('hidden');
     }
 }
 

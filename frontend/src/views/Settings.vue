@@ -478,7 +478,7 @@
                 <span class="material-symbols-outlined text-[18px] text-primary">alt_route</span>
                 <span data-i18n="relayModelMappingTitle">自定义中继模型映射</span>
             </h3>
-            <button class="flex items-center gap-1 text-[12px] font-medium text-primary hover:text-primary/80 transition-colors cursor-pointer" id="btnAddModelMapping">
+            <button class="flex items-center gap-1 text-[12px] font-medium text-primary hover:text-primary/80 transition-colors cursor-pointer" onclick="window._relayAddModelMapping()">
                 <span class="material-symbols-outlined text-[16px]">add</span>
                 <span data-i18n="relayAddMapping">添加映射</span>
             </button>
@@ -501,7 +501,7 @@
         </div>
         
         <div class="flex justify-end gap-3 mt-6 border-t border-outline-variant/20 pt-4">
-            <button class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white rounded-lg hover:bg-primary/90 transition-all duration-200 cursor-pointer shadow-md shadow-primary/20 flex items-center gap-1" id="btnSaveModelMapping">
+            <button class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white rounded-lg hover:bg-primary/90 transition-all duration-200 cursor-pointer shadow-md shadow-primary/20 flex items-center gap-1" onclick="window._relaySaveModelMapping()" id="btnSaveModelMapping">
                 <span class="material-symbols-outlined text-[16px]">save</span>
                 <span data-i18n="relaySaveMapping">保存映射配置</span>
             </button>

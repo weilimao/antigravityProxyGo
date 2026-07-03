@@ -39,6 +39,7 @@ export const useAppStore = defineStore('app', {
     isRemoteMode: false,
     remoteHost: '',
     remotePort: '',
+    remotePath: '',
     remoteUserKey: '',
     remoteStats: null as any,
   }),

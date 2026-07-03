@@ -48,6 +48,7 @@ export interface DashboardState {
     isRemoteMode: boolean;
     remoteHost: string;
     remotePort: string;
+    remotePath: string;
     remoteUserKey: string;
     remoteToken: string;
     remoteStats: any | null;
@@ -113,6 +114,7 @@ const state: DashboardState = {
     isRemoteMode: false,
     remoteHost: '',
     remotePort: '',
+    remotePath: '',
     remoteUserKey: '',
     remoteToken: '',
     remoteStats: null,

@@ -15,13 +15,19 @@
         <!-- 任务列表面板 -->
         <div id="panelTaskList" class="p-6 overflow-y-auto flex-grow flex flex-col max-h-[65vh]">
             <div class="flex justify-between items-center mb-4">
-                <div class="text-[11px] text-outline leading-relaxed max-w-[70%]" data-i18n="autoTriggerDesc">
+                <div class="text-[11px] text-outline leading-relaxed max-w-[55%]" data-i18n="autoTriggerDesc">
                     配置自动刷新机制，在定时到达或配额刷新完成后执行指定的测试回复，从而保持账号冷静期和额度可用性。
                 </div>
-                <button class="flex items-center gap-1 px-3.5 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-lg text-[12px] font-bold transition-all cursor-pointer select-none" id="btnCreateNewTask">
-                    <span class="material-symbols-outlined text-[15px]">add</span>
-                    <span data-i18n="btnCreateNewTask">新建任务包</span>
-                </button>
+                <div class="flex gap-2">
+                    <button class="flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg text-[12px] font-bold transition-all cursor-pointer select-none border border-outline-variant/40" id="btnViewTriggerHistory">
+                        <span class="material-symbols-outlined text-[15px]">history</span>
+                        <span data-i18n="btnViewHistory">查看历史记录</span>
+                    </button>
+                    <button class="flex items-center gap-1 px-3.5 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-lg text-[12px] font-bold transition-all cursor-pointer select-none" id="btnCreateNewTask">
+                        <span class="material-symbols-outlined text-[15px]">add</span>
+                        <span data-i18n="btnCreateNewTask">新建任务包</span>
+                    </button>
+                </div>
             </div>
 
             <!-- 表格列表 -->
@@ -46,6 +52,61 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- 历史记录面板 -->
+        <div id="panelTaskHistory" class="hidden p-6 overflow-y-auto flex-grow flex flex-col max-h-[65vh]">
+            <div class="flex justify-between items-center mb-4">
+                <div class="flex items-center gap-2">
+                    <button class="flex items-center justify-center p-1 rounded-full hover:bg-slate-100 dark:hover:bg-white/5 text-outline hover:text-primary transition-colors cursor-pointer" id="btnHistoryBackToList">
+                        <span class="material-symbols-outlined text-[18px]">arrow_back</span>
+                    </button>
+                    <span class="text-sm font-bold text-on-surface dark:text-white" data-i18n="historyModalTitle">任务触发历史记录</span>
+                </div>
+                <button class="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg text-[12px] font-bold transition-all cursor-pointer select-none border border-red-500/20" id="btnClearTriggerHistory">
+                    <span class="material-symbols-outlined text-[15px]">delete_sweep</span>
+                    <span data-i18n="btnClearHistory">清空历史</span>
+                </button>
+            </div>
+
+            <!-- 历史表格列表 -->
+            <div class="overflow-x-auto rounded-xl border border-outline-variant/30 bg-slate-50/30 dark:bg-slate-950/20 max-h-[330px] overflow-y-auto flex-grow">
+                <table class="w-full text-left border-collapse table-fixed text-[11px]">
+                    <thead>
+                        <tr class="bg-slate-50 dark:bg-[#1a1f30] text-outline border-b border-outline-variant/30 sticky top-0 z-10">
+                            <th class="p-3 font-bold w-[19%]" data-i18n="thTriggerTime">触发时间</th>
+                            <th class="p-3 font-bold w-[19%]" data-i18n="thTaskName">任务名称</th>
+                            <th class="p-3 font-bold w-[14%]" data-i18n="thTriggerType">触发方式</th>
+                            <th class="p-3 font-bold w-[18%]" data-i18n="thResultAccount">账号</th>
+                            <th class="p-3 font-bold w-[12%]" data-i18n="thResultModel">模型</th>
+                            <th class="p-3 font-bold text-center w-[10%]" data-i18n="thResultStatus">状态</th>
+                            <th class="p-3 font-bold w-[18%]" data-i18n="thResultDetail">详情/错误</th>
+                        </tr>
+                    </thead>
+                    <tbody id="autoTriggerHistoryTableBody" class="divide-y divide-outline-variant/10 text-on-surface dark:text-slate-200">
+                        <tr>
+                            <td class="p-8 text-center text-outline dark:text-outline-variant italic" colspan="7" data-i18n="loadingHistory">
+                                ⏳ 正在加载触发历史记录...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 分页栏 -->
+            <div class="flex justify-between items-center mt-4 text-[11px] text-outline select-none">
+                <div id="historyPageStatus">
+                    <!-- 动态渲染 -->
+                </div>
+                <div class="flex gap-2">
+                    <button class="px-3 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded border border-outline-variant/30 cursor-pointer disabled:opacity-50 disabled:pointer-events-none transition-all" id="btnHistoryPrevPage">
+                        <span data-i18n="usage_prevPage">上一页</span>
+                    </button>
+                    <button class="px-3 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded border border-outline-variant/30 cursor-pointer disabled:opacity-50 disabled:pointer-events-none transition-all" id="btnHistoryNextPage">
+                        <span data-i18n="usage_nextPage">下一页</span>
+                    </button>
+                </div>
             </div>
         </div>
 

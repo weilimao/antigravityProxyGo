@@ -49,8 +49,9 @@ func NewRelayServer(
 }
 
 func (s *RelayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Route API requests
-	if strings.HasPrefix(r.URL.Path, "/api/") {
+	// Route API requests (auto-strip custom proxy/path prefixes before /api/)
+	if idx := strings.Index(r.URL.Path, "/api/"); idx != -1 {
+		r.URL.Path = r.URL.Path[idx:]
 		s.apiHandler.ServeHTTP(w, r)
 		return
 	}

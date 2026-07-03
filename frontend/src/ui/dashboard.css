@@ -79,7 +79,49 @@ body {
     border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 #systemConsole.expanded {
-    height: 180px;
+    height: 30vh;
+    min-height: 180px;
+    max-height: 45vh;
+}
+
+/* Floating status style */
+#systemConsole.floating {
+    position: fixed !important;
+    border-radius: 12px;
+    box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.25), 0 8px 10px -6px rgb(0 0 0 / 0.25);
+    border: 1px solid #cbd5e1;
+    background: rgba(241, 245, 249, 0.95);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    transition: none !important; /* Disable transition during drag and resize to ensure 60fps performance */
+    z-index: 999;
+}
+.dark #systemConsole.floating {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(11, 14, 23, 0.96);
+}
+#systemConsole.floating .console-header {
+    cursor: move;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+.dark #systemConsole.floating .console-header {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Resize handle style */
+.console-resize-handle {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 14px;
+    height: 14px;
+    cursor: se-resize;
+    z-index: 10;
+    border-bottom-right-radius: 12px;
+    background: linear-gradient(135deg, transparent 70%, #94a3b8 70%);
+}
+.dark .console-resize-handle {
+    background: linear-gradient(135deg, transparent 70%, #475569 70%);
 }
 
 .console-header {
@@ -188,6 +230,25 @@ body {
 /* Account Pool Tooltip Hover Rule */
 .group:hover .account-pool-tooltip {
     display: flex !important;
+}
+
+/* Global Modal Transition Styles */
+.modal-backdrop-animate {
+    transition: opacity 0.2s ease-out;
+    opacity: 0;
+}
+.modal-backdrop-animate.show {
+    opacity: 1;
+}
+
+.modal-content-animate {
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease-out;
+    transform: scale(0.95);
+    opacity: 0;
+}
+.modal-backdrop-animate.show .modal-content-animate {
+    transform: scale(1);
+    opacity: 1;
 }
 
 

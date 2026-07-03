@@ -1,6 +1,6 @@
 <template>
-<div class="hidden fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center" id="relayUserModal">
-<div class="bg-white dark:bg-[#1e2538] rounded-xl shadow-2xl w-[400px] p-6 border border-outline-variant/20">
+<div class="hidden fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center modal-backdrop-animate" id="relayUserModal">
+<div class="bg-white dark:bg-[#1e2538] rounded-xl shadow-2xl w-[400px] p-6 border border-outline-variant/20 modal-content-animate">
 <div class="flex items-center gap-2 mb-5">
 <span class="material-symbols-outlined text-[22px] text-primary">person_add</span>
 <h3 class="text-[16px] font-bold text-on-surface dark:text-white" data-i18n="relayAddUserTitle">添加中继用户</h3>

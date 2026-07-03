@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -406,15 +407,21 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if !shouldDecrypt {
 		// 远程模式优先级最高：所有无需解密的请求通过远程代理中继
 		if pe.remoteRelay != nil && pe.remoteRelay.IsConnected() {
-			isLocalRelayLoop := false
-			if relayUserID != "" {
-				conf := pe.remoteRelay.GetConfig()
-				if conf.IsLocal {
-					isLocalRelayLoop = true
+			conf := pe.remoteRelay.GetConfig()
+			relayHost := conf.Host
+			if strings.Contains(relayHost, "://") {
+				if u, err := url.Parse(relayHost); err == nil {
+					relayHost = u.Hostname()
 				}
 			}
+			isRemoteRelaySelf := (host == relayHost)
 
-			if !isLocalRelayLoop {
+			isLocalRelayLoop := false
+			if relayUserID != "" {
+				isLocalRelayLoop = true
+			}
+
+			if !isLocalRelayLoop && !isRemoteRelaySelf {
 				remoteConn, errDial := pe.remoteRelay.DialThroughRemote(hostAndPort)
 				if errDial != nil {
 					pe.logFn(fmt.Sprintf("❌ Remote relay failed for %s: %v", hostAndPort, errDial))

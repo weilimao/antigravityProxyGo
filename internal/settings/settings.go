@@ -42,6 +42,7 @@ type Config struct {
 	RelayPort       string `json:"relayPort"`
 	RemoteHost      string `json:"remoteHost"`
 	RemotePort      string `json:"remotePort"`
+	RemotePath      string `json:"remotePath"`
 	RemoteKey       string `json:"remoteKey"`
 	RemotePassword       string   `json:"remotePassword"`
 	RemoteEnabled        bool     `json:"remoteEnabled"`
@@ -350,6 +351,19 @@ func (m *Manager) SetRemoteHost(host string) error {
 	m.Lock()
 	defer m.Unlock()
 	m.config.RemoteHost = host
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetRemotePath() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.RemotePath
+}
+
+func (m *Manager) SetRemotePath(path string) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.RemotePath = path
 	return m.SaveConfig()
 }
 
@@ -703,6 +717,7 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			RelayPort:       "18444",
 			RemoteHost:      "",
 			RemotePort:      "",
+			RemotePath:      "",
 			RemoteKey:       "",
 			RemotePassword:  "",
 			RemoteEnabled:        false,
@@ -899,6 +914,8 @@ type ManagerInterface interface {
 	SetRelayPort(port string) error
 	GetRemoteHost() string
 	SetRemoteHost(host string) error
+	GetRemotePath() string
+	SetRemotePath(path string) error
 	GetRemotePort() string
 	SetRemotePort(port string) error
 	GetRemoteKey() string

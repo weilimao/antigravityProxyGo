@@ -95,7 +95,7 @@ func ListAutoTriggerTasks() ([]AutoTriggerTask, error) {
 	}
 	defer rows.Close()
 
-	var tasks []AutoTriggerTask
+	tasks := []AutoTriggerTask{}
 	for rows.Next() {
 		var task AutoTriggerTask
 		var accIDsStr, modNamesStr, createdAtStr string

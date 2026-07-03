@@ -84,6 +84,24 @@ let consoleBody: HTMLElement | null;
 let isConsoleScrollScheduled = false;
 let lastStatsUpdatedSig = '';
 
+let consoleFloatBtn: HTMLElement | null = null;
+let consoleToggleBtn: HTMLElement | null = null;
+let consoleResizeHandle: HTMLElement | null = null;
+
+let isConsoleDragging = false;
+let consoleDragStartX = 0;
+let consoleDragStartY = 0;
+let consoleDragInitialLeft = 0;
+let consoleDragInitialTop = 0;
+
+let isConsoleResizing = false;
+let consoleResizeStartX = 0;
+let consoleResizeStartY = 0;
+let consoleResizeInitialWidth = 0;
+let consoleResizeInitialHeight = 0;
+
+let isMouseOverConsole = false;
+
 // Toggles in Header
 let toggleZH: HTMLElement | null;
 let toggleEN: HTMLElement | null;
@@ -314,6 +332,9 @@ export function setLanguage(lang: string) {
     if (state.callbacks.renderLogsTable && state.lastBackendData && state.lastBackendData.logs) {
         state.callbacks.renderLogsTable();
     }
+    if ((state.callbacks as any).refreshRelayUI) {
+        (state.callbacks as any).refreshRelayUI();
+    }
 }
 
 export function updateStatusLabel() {
@@ -535,6 +556,9 @@ export function initDashboardEvents() {
     consoleHeader = document.getElementById('consoleHeader');
     systemConsole = document.getElementById('systemConsole');
     consoleBody = document.getElementById('consoleBody');
+    consoleFloatBtn = document.getElementById('consoleFloatBtn');
+    consoleToggleBtn = document.getElementById('consoleToggleBtn');
+    consoleResizeHandle = document.getElementById('consoleResizeHandle');
     toggleZH = document.getElementById('toggleZH');
     toggleEN = document.getElementById('toggleEN');
     toggleTheme = document.getElementById('toggleTheme');
@@ -596,21 +620,272 @@ export function initDashboardEvents() {
         });
     }
 
-    // Collapsible console logs
-    console.log('consoleHeader:', consoleHeader, 'systemConsole:', systemConsole); if (consoleHeader && systemConsole) {
-        consoleHeader.addEventListener('click', () => {
+    // Collapsible console logs & Float/Dock window handlers
+    if (consoleHeader && systemConsole) {
+        // Track mouse hover state
+        systemConsole.addEventListener('mouseenter', () => {
+            isMouseOverConsole = true;
+        });
+        systemConsole.addEventListener('mouseleave', () => {
+            isMouseOverConsole = false;
+        });
+
+        // Toggle console log drawer (only when NOT floating)
+        const toggleConsole = () => {
+            if (systemConsole!.classList.contains('floating')) return;
             const isExpanded = systemConsole!.classList.contains('expanded');
             if (isExpanded) {
                 systemConsole!.classList.remove('expanded');
                 systemConsole!.style.height = '36px';
                 if (consoleBody) consoleBody.style.display = 'none';
-                consoleHeader!.querySelector('.material-symbols-outlined')!.textContent = 'keyboard_double_arrow_up';
+                if (consoleToggleBtn) consoleToggleBtn.textContent = 'keyboard_double_arrow_up';
             } else {
                 systemConsole!.classList.add('expanded');
-                systemConsole!.style.height = '180px';
+                systemConsole!.style.height = '30vh';
                 if (consoleBody) consoleBody.style.display = 'block';
-                consoleHeader!.querySelector('.material-symbols-outlined')!.textContent = 'keyboard_double_arrow_down';
+                if (consoleToggleBtn) consoleToggleBtn.textContent = 'keyboard_double_arrow_down';
                 if (consoleBody) consoleBody.scrollTop = consoleBody.scrollHeight;
+            }
+        };
+
+        consoleHeader.addEventListener('click', (e: MouseEvent) => {
+            // Ignore click events on action buttons to prevent drawer folding/unfolding
+            if ((e.target as HTMLElement).closest('#consoleFloatBtn') || (e.target as HTMLElement).closest('#consoleToggleBtn')) {
+                return;
+            }
+            toggleConsole();
+        });
+
+        if (consoleToggleBtn) {
+            consoleToggleBtn.addEventListener('click', (e: MouseEvent) => {
+                e.stopPropagation();
+                toggleConsole();
+            });
+        }
+
+        // Handle Float/Dock mode switching
+        if (consoleFloatBtn) {
+            consoleFloatBtn.addEventListener('click', (e: MouseEvent) => {
+                e.stopPropagation();
+                const isFloating = systemConsole!.classList.contains('floating');
+                if (!isFloating) {
+                    // Switch to FLOAT mode
+                    systemConsole!.classList.add('floating');
+                    systemConsole!.classList.remove('expanded');
+                    
+                    // Show resize handle, hide toggle drawer button
+                    if (consoleResizeHandle) consoleResizeHandle.classList.remove('hidden');
+                    if (consoleToggleBtn) consoleToggleBtn.style.display = 'none';
+                    
+                    // Recover dimensions/position from localStorage, fallback to responsive viewport-based sizes
+                    const defaultWidth = Math.min(900, Math.max(400, window.innerWidth * 0.7));
+                    const defaultHeight = Math.min(600, Math.max(300, window.innerHeight * 0.6));
+                    const savedWidth = localStorage.getItem('console_float_width') || String(defaultWidth);
+                    const savedHeight = localStorage.getItem('console_float_height') || String(defaultHeight);
+                    
+                    systemConsole!.style.width = `${savedWidth}px`;
+                    systemConsole!.style.height = `${savedHeight}px`;
+                    
+                    const savedLeft = localStorage.getItem('console_float_left');
+                    const savedTop = localStorage.getItem('console_float_top');
+                    if (savedLeft && savedTop) {
+                        systemConsole!.style.left = `${savedLeft}px`;
+                        systemConsole!.style.top = `${savedTop}px`;
+                    } else {
+                        // Default position: center dynamically
+                        systemConsole!.style.left = `${(window.innerWidth - parseFloat(savedWidth)) / 2}px`;
+                        systemConsole!.style.top = `${(window.innerHeight - parseFloat(savedHeight)) / 2}px`;
+                    }
+                    systemConsole!.style.bottom = 'auto';
+                    systemConsole!.style.right = 'auto';
+                    
+                    if (consoleBody) {
+                        consoleBody.style.display = 'block';
+                        consoleBody.scrollTop = consoleBody.scrollHeight;
+                    }
+                    
+                    consoleFloatBtn!.textContent = 'vertical_align_bottom';
+                    consoleFloatBtn!.setAttribute('data-i18n-title', 'consoleDockTitle');
+                    consoleFloatBtn!.title = state.currentLanguage === 'zh' ? '贴回底部' : 'Dock to bottom';
+                } else {
+                    // Switch back to DOCKED mode
+                    systemConsole!.classList.remove('floating');
+                    
+                    // Hide resize handle, show toggle drawer button
+                    if (consoleResizeHandle) consoleResizeHandle.classList.add('hidden');
+                    if (consoleToggleBtn) {
+                        consoleToggleBtn.style.display = 'block';
+                        consoleToggleBtn.textContent = 'keyboard_double_arrow_down';
+                    }
+                    
+                    // Reset styling
+                    systemConsole!.style.width = '';
+                    systemConsole!.style.left = '';
+                    systemConsole!.style.top = '';
+                    systemConsole!.style.bottom = '';
+                    systemConsole!.style.right = '';
+                    
+                    // Auto-expand in docked mode
+                    systemConsole!.classList.add('expanded');
+                    systemConsole!.style.height = '30vh';
+                    if (consoleBody) {
+                        consoleBody.style.display = 'block';
+                        consoleBody.scrollTop = consoleBody.scrollHeight;
+                    }
+                    
+                    consoleFloatBtn!.textContent = 'open_in_new';
+                    consoleFloatBtn!.setAttribute('data-i18n-title', 'consoleFloatTitle');
+                    consoleFloatBtn!.title = state.currentLanguage === 'zh' ? '脱离为浮窗' : 'Detach to floating window';
+                }
+            });
+        }
+
+        // Dragging Logic
+        consoleHeader.addEventListener('mousedown', (e: MouseEvent) => {
+            if (!systemConsole!.classList.contains('floating')) return;
+            // Ignore button clicks
+            if ((e.target as HTMLElement).closest('.material-symbols-outlined')) return;
+            
+            isConsoleDragging = true;
+            consoleDragStartX = e.clientX;
+            consoleDragStartY = e.clientY;
+            
+            const rect = systemConsole!.getBoundingClientRect();
+            consoleDragInitialLeft = rect.left;
+            consoleDragInitialTop = rect.top;
+            
+            document.body.style.userSelect = 'none';
+            systemConsole!.style.transition = 'none';
+        });
+
+        // Resizing Logic
+        if (consoleResizeHandle) {
+            consoleResizeHandle.addEventListener('mousedown', (e: MouseEvent) => {
+                e.stopPropagation();
+                e.preventDefault();
+                isConsoleResizing = true;
+                consoleResizeStartX = e.clientX;
+                consoleResizeStartY = e.clientY;
+                
+                const rect = systemConsole!.getBoundingClientRect();
+                consoleResizeInitialWidth = rect.width;
+                consoleResizeInitialHeight = rect.height;
+                
+                document.body.style.userSelect = 'none';
+                systemConsole!.style.transition = 'none';
+            });
+        }
+
+        // Document-level Mousemove & Mouseup
+        document.addEventListener('mousemove', (e: MouseEvent) => {
+            if (isConsoleDragging && systemConsole!.classList.contains('floating')) {
+                const dx = e.clientX - consoleDragStartX;
+                const dy = e.clientY - consoleDragStartY;
+                
+                let newLeft = consoleDragInitialLeft + dx;
+                let newTop = consoleDragInitialTop + dy;
+                
+                const rect = systemConsole!.getBoundingClientRect();
+                const maxLeft = window.innerWidth - rect.width;
+                const maxTop = window.innerHeight - rect.height;
+                
+                // Boundary protection
+                newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+                newTop = Math.max(0, Math.min(newTop, maxTop));
+                
+                systemConsole!.style.left = `${newLeft}px`;
+                systemConsole!.style.top = `${newTop}px`;
+            }
+            
+            if (isConsoleResizing && systemConsole!.classList.contains('floating')) {
+                const dx = e.clientX - consoleResizeStartX;
+                const dy = e.clientY - consoleResizeStartY;
+                
+                let newWidth = consoleResizeInitialWidth + dx;
+                let newHeight = consoleResizeInitialHeight + dy;
+                
+                // Limit minimum sizes
+                newWidth = Math.max(300, newWidth);
+                newHeight = Math.max(150, newHeight);
+                
+                // Limit maximum sizes to screen
+                newWidth = Math.min(window.innerWidth - 20, newWidth);
+                newHeight = Math.min(window.innerHeight - 20, newHeight);
+                
+                systemConsole!.style.width = `${newWidth}px`;
+                systemConsole!.style.height = `${newHeight}px`;
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isConsoleDragging) {
+                isConsoleDragging = false;
+                document.body.style.userSelect = '';
+                systemConsole!.style.transition = '';
+                
+                // Persist coordinates
+                const rect = systemConsole!.getBoundingClientRect();
+                localStorage.setItem('console_float_left', String(rect.left));
+                localStorage.setItem('console_float_top', String(rect.top));
+            }
+            
+            if (isConsoleResizing) {
+                isConsoleResizing = false;
+                document.body.style.userSelect = '';
+                systemConsole!.style.transition = '';
+                
+                // Persist size
+                const rect = systemConsole!.getBoundingClientRect();
+                localStorage.setItem('console_float_width', String(rect.width));
+                localStorage.setItem('console_float_height', String(rect.height));
+            }
+        });
+        
+        // Window resize boundary self-correction
+        window.addEventListener('resize', () => {
+            if (systemConsole!.classList.contains('floating')) {
+                const rect = systemConsole!.getBoundingClientRect();
+                let left = rect.left;
+                let top = rect.top;
+                let width = rect.width;
+                let height = rect.height;
+                
+                let sizeChanged = false;
+                let posChanged = false;
+                
+                if (width > window.innerWidth - 20) {
+                    width = window.innerWidth - 20;
+                    systemConsole!.style.width = `${width}px`;
+                    sizeChanged = true;
+                }
+                if (height > window.innerHeight - 20) {
+                    height = window.innerHeight - 20;
+                    systemConsole!.style.height = `${height}px`;
+                    sizeChanged = true;
+                }
+                
+                const maxLeft = window.innerWidth - width;
+                const maxTop = window.innerHeight - height;
+                
+                if (left > maxLeft) {
+                    left = Math.max(0, maxLeft);
+                    systemConsole!.style.left = `${left}px`;
+                    posChanged = true;
+                }
+                if (top > maxTop) {
+                    top = Math.max(0, maxTop);
+                    systemConsole!.style.top = `${top}px`;
+                    posChanged = true;
+                }
+                
+                if (posChanged) {
+                    localStorage.setItem('console_float_left', String(left));
+                    localStorage.setItem('console_float_top', String(top));
+                }
+                if (sizeChanged) {
+                    localStorage.setItem('console_float_width', String(width));
+                    localStorage.setItem('console_float_height', String(height));
+                }
             }
         });
     }
@@ -746,8 +1021,9 @@ export function initDashboardEvents() {
             }
         }
 
-        // Scroll to bottom only if console pane is expanded, using rAF throttling to prevent layout thrashing
-        if (systemConsole && systemConsole.classList.contains('expanded')) {
+        // Scroll to bottom only if console is expanded or floating, and mouse is NOT hovering over it
+        const isVisible = systemConsole && (systemConsole.classList.contains('expanded') || systemConsole.classList.contains('floating'));
+        if (isVisible && !isMouseOverConsole) {
             if (!isConsoleScrollScheduled) {
                 isConsoleScrollScheduled = true;
                 requestAnimationFrame(() => {

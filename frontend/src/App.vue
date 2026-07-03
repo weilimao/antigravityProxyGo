@@ -141,9 +141,13 @@
     <div id="systemConsole" class="fixed bottom-0 left-0 right-0 z-[100] bg-slate-100 dark:bg-[#0b0e17] border-t border-slate-200 dark:border-white/10 flex flex-col transition-all duration-300" style="height: 36px;">
         <div class="console-header h-[36px] px-6 flex items-center justify-between cursor-pointer select-none text-[12px] font-semibold text-slate-600 dark:text-[#988d9f] hover:bg-slate-500/5 transition-colors" id="consoleHeader">
             <span data-i18n="logBufferTitle">控制台系统日志</span>
-            <span class="material-symbols-outlined text-[16px]">keyboard_double_arrow_up</span>
+            <div class="flex items-center gap-2">
+                <span class="material-symbols-outlined text-[16px] hover:text-primary transition-colors p-0.5 rounded hover:bg-slate-500/10" id="consoleFloatBtn" title="脱离为浮窗">open_in_new</span>
+                <span class="material-symbols-outlined text-[16px] hover:text-primary transition-colors p-0.5 rounded hover:bg-slate-500/10" id="consoleToggleBtn">keyboard_double_arrow_up</span>
+            </div>
         </div>
         <div class="console-body flex-1 overflow-y-auto px-6 py-2 text-[11px] font-mono leading-relaxed" id="consoleBody" style="display: none;"></div>
+        <div class="console-resize-handle hidden" id="consoleResizeHandle"></div>
     </div>
 
     <DetailsModal />
@@ -188,6 +192,7 @@ import { initRemoteEvents } from './ui/remoteController';
 import { setLanguage, switchView, initDashboardEvents } from './ui/dashboard';
 import { ipcRenderer } from './shared/ipc';
 import { initAccountsEvents } from './ui/accountsController';
+import { initAutotriggerHistoryEvents } from './ui/autotriggerHistoryController';
 import { initPricingEvents } from './ui/pricingController';
 import { initPacketsEvents } from './ui/packetsController';
 import { initSettings } from './ui/settingsController';
@@ -347,6 +352,7 @@ onMounted(() => {
   setTimeout(() => {
     initDashboardEvents();
     initAccountsEvents();
+    initAutotriggerHistoryEvents();
     initPricingEvents();
     initPacketsEvents();
     initSettings();

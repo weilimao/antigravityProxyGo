@@ -182,10 +182,29 @@ func (s *Scheduler) runTask(task db.AutoTriggerTask, filterAccountID string) {
 				)
 				cancel()
 
+				status := "success"
+				message := respText
 				if err != nil {
+					status = "failed"
+					message = err.Error()
 					s.addLog(fmt.Sprintf("❌ [自动测试] 任务 [%s] 账号 %s 触发模型 %s 失败: %v", task.Name, targetAcc.Email, model, err))
 				} else {
 					s.addLog(fmt.Sprintf("✅ [自动测试] 任务 [%s] 账号 %s 触发模型 %s 成功！响应: %s", task.Name, targetAcc.Email, model, respText))
+				}
+
+				// 保存历史记录到数据库
+				history := &db.TriggerHistory{
+					TaskID:       task.ID,
+					TaskName:     task.Name,
+					TriggerType:  task.TriggerType,
+					AccountEmail: targetAcc.Email,
+					ModelName:    model,
+					Status:       status,
+					Message:      message,
+					TriggerTime:  time.Now(),
+				}
+				if dbErr := db.SaveTriggerHistory(history); dbErr != nil {
+					s.addLog(fmt.Sprintf("⚠️ [自动测试] 保存触发历史失败: %v", dbErr))
 				}
 			}
 		}(acc)

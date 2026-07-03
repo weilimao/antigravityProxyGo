@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 type RemoteConfig struct {
 	Host      string `json:"host"`
 	Port      string `json:"port"`
+	Path      string `json:"path"`
 	UserKey   string `json:"userKey"`
 	Token     string `json:"token"`
 	Connected bool   `json:"connected"`
@@ -37,6 +39,9 @@ var noProxyClient = &http.Client{
 		DisableKeepAlives: true,                   // 禁用连接复用与连接池，防止中继代理死连接残留卡死
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // 忽略自签名证书校验，用于内网穿透自签 TLS 端口
+		},
 	},
 }
 
@@ -54,16 +59,53 @@ func NewRemoteRelay(logFn func(string)) *RemoteRelay {
 	}
 }
 
+func (rr *RemoteRelay) buildURL(endpoint string) string {
+	rr.RLock()
+	config := rr.config
+	rr.RUnlock()
+	return buildURLWithConfig(config.Host, config.Port, config.Path, endpoint)
+}
+
+func buildURLWithConfig(host, port, path, endpoint string) string {
+	host = strings.TrimSpace(host)
+	host = strings.TrimSuffix(host, "/")
+	scheme := "http"
+	// 若传入的 host 含有协议前缀，则提取协议并剥除前缀，保证拼接 URL 的规范性
+	if strings.HasPrefix(host, "https://") {
+		scheme = "https"
+		host = strings.TrimPrefix(host, "https://")
+	} else if strings.HasPrefix(host, "http://") {
+		scheme = "http"
+		host = strings.TrimPrefix(host, "http://")
+	}
+
+	path = strings.TrimSpace(path)
+	if path != "" {
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		path = strings.TrimSuffix(path, "/")
+	}
+	if !strings.HasPrefix(endpoint, "/") {
+		endpoint = "/" + endpoint
+	}
+	hostPort := host
+	if port != "" {
+		hostPort = host + ":" + port
+	}
+	return fmt.Sprintf("%s://%s%s%s", scheme, hostPort, path, endpoint)
+}
+
 // Login authenticates with the remote relay server and stores the session token
-func (rr *RemoteRelay) Login(host, port, key, password string) error {
+func (rr *RemoteRelay) Login(host, port, path, key, password string) error {
 	if host == "localhost" {
 		host = "127.0.0.1"
 	}
-	if err := rr.TestConnection(host, port); err != nil {
+	if err := rr.TestConnection(host, port, path); err != nil {
 		return fmt.Errorf("connection test failed: %w", err)
 	}
 
-	loginURL := fmt.Sprintf("http://%s:%s/api/auth/login", host, port)
+	loginURL := buildURLWithConfig(host, port, path, "/api/auth/login")
 	payload := map[string]string{
 		"key":      key,
 		"password": password,
@@ -111,6 +153,7 @@ func (rr *RemoteRelay) Login(host, port, key, password string) error {
 	rr.config = RemoteConfig{
 		Host:      host,
 		Port:      port,
+		Path:      path,
 		UserKey:   key,
 		Token:     result.Token,
 		Connected: true,
@@ -119,7 +162,7 @@ func (rr *RemoteRelay) Login(host, port, key, password string) error {
 	rr.Unlock()
 
 	if rr.logFn != nil {
-		rr.logFn(fmt.Sprintf("✅ Remote relay connected to %s:%s", host, port))
+		rr.logFn(fmt.Sprintf("✅ Remote relay connected to %s:%s%s", host, port, path))
 	}
 	return nil
 }
@@ -130,13 +173,14 @@ func (rr *RemoteRelay) Disconnect() {
 	wasConnected := rr.config.Connected
 	host := rr.config.Host
 	port := rr.config.Port
+	path := rr.config.Path
 	token := rr.config.Token
 	rr.config = RemoteConfig{}
 	rr.Unlock()
 
 	if wasConnected && host != "" && token != "" {
 		// Best-effort logout
-		logoutURL := fmt.Sprintf("http://%s:%s/api/auth/logout", host, port)
+		logoutURL := buildURLWithConfig(host, port, path, "/api/auth/logout")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -174,8 +218,25 @@ func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error
 	token := rr.config.Token
 	rr.RUnlock()
 
+	// 剥离协议前缀以进行纯 TCP 物理拨号
+	isHTTPS := false
+	host = strings.TrimSpace(host)
+	host = strings.TrimSuffix(host, "/")
+	if strings.HasPrefix(host, "https://") {
+		isHTTPS = true
+		host = strings.TrimPrefix(host, "https://")
+	} else if strings.HasPrefix(host, "http://") {
+		host = strings.TrimPrefix(host, "http://")
+	}
+
 	if port == "" {
-		port = "18444"
+		if isHTTPS {
+			port = "443"
+		} else if strings.HasPrefix(rr.config.Host, "http://") {
+			port = "80"
+		} else {
+			port = "18444"
+		}
 	}
 	remoteAddr := net.JoinHostPort(host, port)
 
@@ -185,6 +246,20 @@ func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error
 	conn, err := netutil.DialContext(ctx, "tcp", remoteAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to remote relay %s: %w", remoteAddr, err)
+	}
+
+	// 若远程中继使用 HTTPS，则在发送明文 CONNECT 前先完成 TLS 握手升级
+	if isHTTPS {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         host,
+		}
+		tlsConn := tls.Client(conn, tlsConfig)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("failed remote relay TLS handshake: %w", err)
+		}
+		conn = tlsConn
 	}
 
 	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Bearer %s\r\n\r\n", targetHostPort, targetHostPort, token)
@@ -219,7 +294,7 @@ func (rr *RemoteRelay) FetchRemoteKeys() (interface{}, error) {
 		return nil, fmt.Errorf("not connected to remote relay")
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/keys", config.Host, config.Port)
+	url := rr.buildURL("/api/keys")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -257,7 +332,7 @@ func (rr *RemoteRelay) CreateRemoteKey(name string) (interface{}, error) {
 		return nil, fmt.Errorf("not connected to remote relay")
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/keys", config.Host, config.Port)
+	url := rr.buildURL("/api/keys")
 	payload := map[string]string{"name": name}
 	body, _ := json.Marshal(payload)
 	
@@ -299,7 +374,7 @@ func (rr *RemoteRelay) DeleteRemoteKey(id string) error {
 		return fmt.Errorf("not connected to remote relay")
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/keys/%s", config.Host, config.Port, id)
+	url := rr.buildURL("/api/keys/" + id)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -333,7 +408,7 @@ func (rr *RemoteRelay) UpdateRemoteKeyQuota(id string, limitGemini, limitClaude 
 		return fmt.Errorf("not connected to remote relay")
 	}
 
-	url := fmt.Sprintf("http://%s:%s/api/keys/update-quota", config.Host, config.Port)
+	url := rr.buildURL("/api/keys/update-quota")
 	payload := map[string]interface{}{
 		"id":                 id,
 		"limitGeminiTokens":  limitGemini,
@@ -368,12 +443,10 @@ func (rr *RemoteRelay) UpdateRemoteKeyQuota(id string, limitGemini, limitClaude 
 // FetchRemoteStats retrieves statistics from the remote relay server
 func (rr *RemoteRelay) FetchRemoteStats() (map[string]interface{}, error) {
 	rr.RLock()
-	host := rr.config.Host
-	port := rr.config.Port
 	token := rr.config.Token
 	rr.RUnlock()
 
-	statsURL := fmt.Sprintf("http://%s:%s/api/stats", host, port)
+	statsURL := rr.buildURL("/api/stats")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -414,12 +487,10 @@ func (rr *RemoteRelay) FetchAndSyncRemoteLogs(userKey string) error {
 // FetchRemoteTrends retrieves hourly trends from the remote relay server
 func (rr *RemoteRelay) FetchRemoteTrends() ([]*db.HourlyTrendSummary, error) {
 	rr.RLock()
-	host := rr.config.Host
-	port := rr.config.Port
 	token := rr.config.Token
 	rr.RUnlock()
 
-	trendsURL := fmt.Sprintf("http://%s:%s/api/trends", host, port)
+	trendsURL := rr.buildURL("/api/trends")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -455,11 +526,11 @@ func (rr *RemoteRelay) FetchRemoteTrends() ([]*db.HourlyTrendSummary, error) {
 }
 
 // TestConnection verifies connectivity to the remote relay server's health endpoint
-func (rr *RemoteRelay) TestConnection(host, port string) error {
+func (rr *RemoteRelay) TestConnection(host, port, path string) error {
 	if host == "localhost" {
 		host = "127.0.0.1"
 	}
-	healthURL := fmt.Sprintf("http://%s:%s/api/health", host, port)
+	healthURL := buildURLWithConfig(host, port, path, "/api/health")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -485,13 +556,20 @@ func (rr *RemoteRelay) DownloadCACert(savePath string) error {
 	rr.RLock()
 	host := rr.config.Host
 	port := rr.config.Port
+	path := rr.config.Path
 	rr.RUnlock()
 
 	if port == "" {
-		port = "18444"
+		if strings.HasPrefix(host, "https://") {
+			port = "443"
+		} else if strings.HasPrefix(host, "http://") {
+			port = "80"
+		} else {
+			port = "18444"
+		}
 	}
 
-	certURL := fmt.Sprintf("http://%s:%s/api/cert", host, port)
+	certURL := buildURLWithConfig(host, port, path, "/api/cert")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -541,10 +619,11 @@ func (rr *RemoteRelay) FetchAndSaveRemoteLogDetail(reqID string, userKey string)
 	rr.RLock()
 	host := rr.config.Host
 	port := rr.config.Port
+	path := rr.config.Path
 	token := rr.config.Token
 	rr.RUnlock()
 
-	detailURL := fmt.Sprintf("http://%s:%s/api/logs/detail?req_id=%s", host, port, reqID)
+	detailURL := buildURLWithConfig(host, port, path, "/api/logs/detail?req_id="+reqID)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

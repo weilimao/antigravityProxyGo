@@ -120,6 +120,18 @@ func runMigrations(db *sql.DB, dataDir string) error {
 			enabled INTEGER NOT NULL DEFAULT 1,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
+		`CREATE TABLE IF NOT EXISTS auto_trigger_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL,
+			task_name TEXT NOT NULL,
+			trigger_type TEXT NOT NULL,
+			account_email TEXT NOT NULL,
+			model_name TEXT NOT NULL,
+			status TEXT NOT NULL,
+			message TEXT,
+			trigger_time TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_auto_trigger_history_task ON auto_trigger_history(task_id);`,
 		`CREATE TABLE IF NOT EXISTS schema_meta (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL

@@ -1,8 +1,8 @@
 <template>
 <div>
   <!-- 一级弹窗：管理 API Keys -->
-  <div class="hidden fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center" id="remoteKeysModal">
-    <div class="bg-white dark:bg-[#1e2538] rounded-xl shadow-2xl w-[640px] p-6 border border-outline-variant/20 flex flex-col max-h-[80vh]">
+  <div class="hidden fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center modal-backdrop-animate" id="remoteKeysModal">
+    <div class="bg-white dark:bg-[#1e2538] rounded-xl shadow-2xl w-[640px] p-6 border border-outline-variant/20 flex flex-col max-h-[80vh] modal-content-animate">
       <div class="flex items-center gap-2 mb-5 flex-shrink-0">
         <span class="material-symbols-outlined text-[22px] text-primary">key</span>
         <h3 class="text-[16px] font-bold text-on-surface dark:text-white" data-i18n="manageApiKeys">管理 API Keys</h3>
@@ -38,14 +38,14 @@
   </div>
 
   <!-- 二级弹窗：设置限额 -->
-  <div class="hidden fixed inset-0 bg-black/50 z-[99999] flex items-center justify-center" id="remoteKeyQuotaModal">
-    <div class="bg-white dark:bg-[#1e2538] rounded-xl shadow-2xl w-[360px] p-5 border border-outline-variant/20 flex flex-col animate-in fade-in zoom-in-95 duration-150">
+  <div class="hidden fixed inset-0 bg-black/50 z-[99999] flex items-center justify-center modal-backdrop-animate" id="remoteKeyQuotaModal">
+    <div class="bg-white dark:bg-[#1e2538] rounded-xl shadow-2xl w-[360px] p-5 border border-outline-variant/20 flex flex-col modal-content-animate">
       <div class="flex items-center gap-2 mb-4 justify-between flex-shrink-0">
         <div class="flex items-center gap-1.5">
           <span class="material-symbols-outlined text-[20px] text-primary">settings</span>
           <h3 class="text-[14px] font-bold text-on-surface dark:text-white" id="remoteQuotaEditTitle" data-i18n="modifyKeyQuota">修改 Key 限额</h3>
         </div>
-        <button id="btnRemoteQuotaClose" class="text-outline hover:text-on-surface dark:hover:text-white transition-colors" onclick="document.getElementById('remoteKeyQuotaModal').classList.add('hidden')">
+        <button id="btnRemoteQuotaClose" class="text-outline hover:text-on-surface dark:hover:text-white transition-colors" onclick="window._relayCloseModal('remoteKeyQuotaModal')">
           <span class="material-symbols-outlined text-[18px]">close</span>
         </button>
       </div>
@@ -66,7 +66,7 @@
         <button class="px-4 py-2 text-[11px] font-medium text-white bg-primary hover:bg-primary/90 rounded-lg transition-colors flex items-center gap-1 shadow-sm" id="btnRemoteQuotaSave">
           <span data-i18n="btnSave">保存</span>
         </button>
-        <button class="px-4 py-2 text-[11px] font-medium text-outline hover:text-on-surface border border-outline-variant/30 rounded-lg transition-colors" id="btnRemoteQuotaCancel" onclick="document.getElementById('remoteKeyQuotaModal').classList.add('hidden')">
+        <button class="px-4 py-2 text-[11px] font-medium text-outline hover:text-on-surface border border-outline-variant/30 rounded-lg transition-colors" id="btnRemoteQuotaCancel" onclick="window._relayCloseModal('remoteKeyQuotaModal')">
           <span data-i18n="btnCancel">取消</span>
         </button>
       </div>
