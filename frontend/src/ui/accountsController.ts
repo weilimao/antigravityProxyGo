@@ -25,6 +25,8 @@ let btnChannelProject: HTMLButtonElement | null;
 let btnChannelGeminiCli: HTMLButtonElement | null;
 let btnExportAccounts: HTMLButtonElement | null;
 let btnImportAccounts: HTMLButtonElement | null;
+let btnLayoutGrid: HTMLButtonElement | null;
+let btnLayoutList: HTMLButtonElement | null;
 
 // 触发测试回复 Modal 变量定义
 let triggerTestModal: HTMLDivElement | null;
@@ -91,6 +93,41 @@ export function updatePoolModeUI() {
     } else {
         poolModeToggle.className = 'toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
         label.className = 'toggle-label block overflow-hidden h-5 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
+    }
+}
+
+export function updateLayoutUI() {
+    const gridBtn = btnLayoutGrid || (document.getElementById('btnLayoutGrid') as HTMLButtonElement | null);
+    const listBtn = btnLayoutList || (document.getElementById('btnLayoutList') as HTMLButtonElement | null);
+    const selectGridColumns = document.getElementById('selectGridColumns') as HTMLSelectElement | null;
+    const accountsListEl = document.getElementById('accountsList');
+    
+    const activeClass = 'p-1 rounded-md cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm flex items-center justify-center';
+    const inactiveClass = 'p-1 rounded-md cursor-pointer transition-all duration-200 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 flex items-center justify-center';
+    
+    if (state.accountLayout === 'grid') {
+        if (gridBtn) gridBtn.className = activeClass;
+        if (listBtn) listBtn.className = inactiveClass;
+        if (selectGridColumns) {
+            selectGridColumns.classList.remove('hidden');
+            selectGridColumns.value = String(state.accountGridColumns);
+        }
+        if (accountsListEl) {
+            accountsListEl.classList.remove('layout-list');
+            accountsListEl.classList.add('layout-grid');
+            accountsListEl.classList.remove('cols-3', 'cols-4', 'cols-5');
+            accountsListEl.classList.add(`cols-${state.accountGridColumns}`);
+        }
+    } else {
+        if (gridBtn) gridBtn.className = inactiveClass;
+        if (listBtn) listBtn.className = activeClass;
+        if (selectGridColumns) {
+            selectGridColumns.classList.add('hidden');
+        }
+        if (accountsListEl) {
+            accountsListEl.classList.remove('layout-grid', 'cols-3', 'cols-4', 'cols-5');
+            accountsListEl.classList.add('layout-list');
+        }
     }
 }
 
@@ -438,6 +475,41 @@ export function initAccountsEvents() {
             renderAccounts(state.currentAccountsList);
         });
     }
+
+    btnLayoutGrid = document.getElementById('btnLayoutGrid') as HTMLButtonElement | null;
+    btnLayoutList = document.getElementById('btnLayoutList') as HTMLButtonElement | null;
+
+    if (btnLayoutGrid) {
+        btnLayoutGrid.addEventListener('click', () => {
+            if (state.accountLayout === 'grid') return;
+            state.accountLayout = 'grid';
+            localStorage.setItem('accounts_layout', 'grid');
+            updateLayoutUI();
+            renderAccounts(state.currentAccountsList);
+        });
+    }
+    if (btnLayoutList) {
+        btnLayoutList.addEventListener('click', () => {
+            if (state.accountLayout === 'list') return;
+            state.accountLayout = 'list';
+            localStorage.setItem('accounts_layout', 'list');
+            updateLayoutUI();
+            renderAccounts(state.currentAccountsList);
+        });
+    }
+
+    const selectGridColumns = document.getElementById('selectGridColumns') as HTMLSelectElement | null;
+    if (selectGridColumns) {
+        selectGridColumns.addEventListener('change', (e: any) => {
+            const cols = Number(e.target.value);
+            state.accountGridColumns = cols;
+            localStorage.setItem('accounts_grid_columns', String(cols));
+            updateLayoutUI();
+            renderAccounts(state.currentAccountsList);
+        });
+    }
+
+    updateLayoutUI();
 
     if (btnClearSessions) {
         btnClearSessions.addEventListener('click', async () => {

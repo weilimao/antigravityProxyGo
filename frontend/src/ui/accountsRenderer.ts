@@ -250,7 +250,10 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
         const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
         if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">${isZH ? '请求失败' : 'Request failed'}</span>`;
     } finally {
-        const icon = refreshBtn?.querySelector('.material-symbols-outlined') || refreshBtn;
+        // 实时从当前最新的 DOM 中获取按钮元素，防止因为页面重绘导致闭包内的旧 DOM 节点已被销毁而无法清除旋转动画的问题
+        const currentCard = document.querySelector(`[data-account-id="${accountId}"]`);
+        const currentBtn = currentCard?.querySelector('[data-quota-refresh-btn]') as HTMLElement | null;
+        const icon = currentBtn?.querySelector('.material-symbols-outlined') || currentBtn;
         if (icon) icon.classList.remove('animate-spin');
     }
 }
@@ -398,7 +401,7 @@ export function renderAccounts(accounts: any[]) {
             
             // ---- Header ----
             const header = document.createElement('div');
-            header.className = 'flex items-start justify-between gap-1.5';
+            header.className = 'flex items-start justify-between gap-1.5 acc-card-header';
 
             const leftGroup = document.createElement('div');
             leftGroup.className = 'flex items-start gap-2 min-w-0 flex-1';
@@ -485,10 +488,10 @@ export function renderAccounts(accounts: any[]) {
             card.appendChild(header);
             
             // ---- AI Credit Section ----
+            const creditSection = document.createElement('div');
+            creditSection.className = 'flex flex-col gap-1 border-t border-outline-variant/20 pt-2 acc-card-credit';
+            
             if (acc.provider === 'antigravity') {
-                const creditSection = document.createElement('div');
-                creditSection.className = 'flex flex-col gap-1 border-t border-outline-variant/20 pt-2';
-                
                 const creditHeader = document.createElement('div');
                 creditHeader.className = 'flex justify-between items-center';
                 
@@ -546,12 +549,14 @@ export function renderAccounts(accounts: any[]) {
                 }
                 
                 creditSection.appendChild(overagesToggleWrapper);
-                card.appendChild(creditSection);
+            } else {
+                creditSection.classList.add('hidden-grid-placeholder');
             }
+            card.appendChild(creditSection);
 
             // ---- Quota Section ----
             const quotaSection = document.createElement('div');
-            quotaSection.className = 'flex flex-col gap-1.5 border-t border-outline-variant/20 pt-2';
+            quotaSection.className = 'flex flex-col gap-1.5 border-t border-outline-variant/20 pt-2 acc-card-quota';
 
             const quotaHeader = document.createElement('div');
             quotaHeader.className = 'flex justify-between items-center';
@@ -576,7 +581,7 @@ export function renderAccounts(accounts: any[]) {
 
             // ---- Footer ----
             const footer = document.createElement('div');
-            footer.className = 'flex justify-between items-center pt-3 border-t border-outline-variant/20 mt-auto';
+            footer.className = 'flex justify-between items-center pt-3 border-t border-outline-variant/20 mt-auto acc-card-footer';
             
             const toggleWrapper = document.createElement('div');
             toggleWrapper.className = 'flex items-center gap-1.5 select-none cursor-pointer';

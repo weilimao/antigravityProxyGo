@@ -207,7 +207,7 @@ body {
     stroke: rgba(255, 255, 255, 0.06);
 }
 
-/* Responsive Grid for Account Pool (Max 5 columns) */
+/* Responsive Grid for Account Pool (Configurable Columns) */
 #accountsList {
     grid-template-columns: repeat(1, minmax(0, 1fr));
 }
@@ -225,6 +225,140 @@ body {
     #accountsList {
         grid-template-columns: repeat(5, minmax(0, 1fr));
     }
+}
+
+/* 3列响应式 */
+#accountsList.layout-grid.cols-3 {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+@media (min-width: 640px) {
+    #accountsList.layout-grid.cols-3 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+@media (min-width: 900px) {
+    #accountsList.layout-grid.cols-3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    }
+}
+
+/* 4列响应式 */
+#accountsList.layout-grid.cols-4 {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+@media (min-width: 640px) {
+    #accountsList.layout-grid.cols-4 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+@media (min-width: 900px) {
+    #accountsList.layout-grid.cols-4 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+@media (min-width: 1200px) {
+    #accountsList.layout-grid.cols-4 {
+        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    }
+}
+
+/* 5列响应式 */
+#accountsList.layout-grid.cols-5 {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+@media (min-width: 640px) {
+    #accountsList.layout-grid.cols-5 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+@media (min-width: 900px) {
+    #accountsList.layout-grid.cols-5 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+@media (min-width: 1200px) {
+    #accountsList.layout-grid.cols-5 {
+        grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    }
+}
+
+/* 列表与网格切换布局规则 */
+#accountsList.layout-list {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+    gap: 12px !important;
+}
+
+#accountsList.layout-list > div {
+    display: flex;
+    flex-direction: column;
+    padding: 10px 16px;
+    min-height: auto;
+}
+
+/* 去除装饰图标 */
+#accountsList.layout-list > div > div.absolute {
+    display: none !important;
+}
+
+/* 在网格布局下，隐藏占位 div */
+#accountsList.layout-grid > div .acc-card-credit.hidden-grid-placeholder {
+    display: none !important;
+}
+
+/* 覆盖卡片子部分的纵向对齐与分割线样式 */
+#accountsList.layout-list > div .acc-card-header,
+#accountsList.layout-list > div .acc-card-credit,
+#accountsList.layout-list > div .acc-card-quota,
+#accountsList.layout-list > div .acc-card-footer {
+    border-top: none !important;
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    background: transparent !important;
+    border-bottom: none !important;
+}
+
+/* 大屏下升级为更舒展、更合理的 Grid 弹性对齐 */
+@media (min-width: 1024px) {
+    #accountsList.layout-list > div {
+        display: grid !important;
+        /* 第一列(邮箱)起步 440px，第三列(进度条)起步 360px，均弹性分配多余宽度，消除右侧大空白 */
+        grid-template-columns: minmax(440px, 1.2fr) 180px minmax(360px, 1.8fr) 220px !important;
+        align-items: center;
+        gap: 24px;
+    }
+}
+
+/* 大屏各列排版微调 */
+#accountsList.layout-list > div .acc-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start !important; /* 居左靠拢，引导内容横向展现 */
+    gap: 12px;
+    width: 100%;
+}
+
+/* 取消邮箱名容器的 flex-1，防止它强行把状态标签推到最右侧 */
+#accountsList.layout-list > div .acc-card-header .acc-info-header {
+    flex: 0 1 auto !important;
+}
+
+#accountsList.layout-list > div .acc-card-credit {
+    width: 100%;
+}
+
+#accountsList.layout-list > div .acc-card-quota {
+    width: 100%;
+}
+
+#accountsList.layout-list > div .acc-card-footer {
+    width: 100%;
+    margin-top: 0 !important;
+}
+
+/* 在列表模式下配额进度条组微调，使其更加紧凑 */
+#accountsList.layout-list > div .acc-card-quota > div {
+    margin-top: 0 !important;
 }
 
 /* Account Pool Tooltip Hover Rule */

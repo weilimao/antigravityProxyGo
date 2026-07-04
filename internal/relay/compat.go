@@ -25,6 +25,7 @@ type APICompatHandler struct {
 	statsTracker  *StatsTracker
 	logFn         func(string)
 	client        *http.Client
+	streamClient  *http.Client // 流式请求专用，不设全局超时，避免长生成被截断
 	settingsMgr   settings.ManagerInterface
 	rateLimiter   *RateLimiter
 }
@@ -45,6 +46,7 @@ func NewAPICompatHandler(
 		settingsMgr:   settingsMgr,
 		logFn:         logFn,
 		client:        netutil.NewClient(5 * time.Minute),
+		streamClient:  &http.Client{Transport: netutil.NewTransport(), Timeout: 0},
 		rateLimiter:   NewRateLimiter(),
 	}
 }
@@ -429,7 +431,12 @@ func (h *APICompatHandler) dispatchToGemini(
 	req.Header.Set("X-Antigravity-Original-Method", r.Method)
 	h.log("Forwarding translated request to local proxy (18443) | Model: %s | Stream: %v", geminiModel, stream)
 
-	resp, err := h.client.Do(req)
+	// 流式请求使用无超时 Client，避免长时间生成（>5min）被 http.Client.Timeout 截断
+	httpClient := h.client
+	if stream {
+		httpClient = h.streamClient
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		h.log("❌ Failed to query local proxy: %v", err)
 		writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "failed to query local proxy: " + err.Error()})
@@ -664,6 +671,7 @@ func (h *APICompatHandler) handleStreamResponse(
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK) // 显式发送 200 + SSE 响应头，确保客户端立即收到
 	flusher.Flush()
 
 	scanner := bufio.NewScanner(respBody)

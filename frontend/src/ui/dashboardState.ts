@@ -35,6 +35,8 @@ export interface DashboardState {
     accountCurrentPage: number;
     accountItemsPerPage: number;
     selectedAccountIds: string[];
+    accountLayout: 'grid' | 'list';
+    accountGridColumns: number;
 
     // Pricing Config Cache
     pricingConfig: { [modelName: string]: any };
@@ -101,6 +103,8 @@ const state: DashboardState = {
     accountCurrentPage: 1,
     accountItemsPerPage: 10,
     selectedAccountIds: [],
+    accountLayout: (localStorage.getItem('accounts_layout') as 'grid' | 'list') || 'grid',
+    accountGridColumns: Number(localStorage.getItem('accounts_grid_columns')) || 5,
 
     // Pricing Config Cache
     pricingConfig: {},

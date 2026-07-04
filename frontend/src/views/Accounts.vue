@@ -84,6 +84,21 @@
                     <option value="standard">Standard</option>
                     <option value="free">Free</option>
                 </select>
+                <!-- 布局切换按钮组 -->
+                <div class="flex items-center bg-slate-100 dark:bg-white/5 p-0.5 rounded-lg border border-outline-variant/10 ml-1 flex-shrink-0">
+                    <button id="btnLayoutGrid" class="p-1 rounded-md cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm flex items-center justify-center" title="网格布局" data-i18n-title="layoutGridTitle" type="button">
+                        <span class="material-symbols-outlined text-[16px]">grid_view</span>
+                    </button>
+                    <button id="btnLayoutList" class="p-1 rounded-md cursor-pointer transition-all duration-200 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 flex items-center justify-center" title="列表布局" data-i18n-title="layoutListTitle" type="button">
+                        <span class="material-symbols-outlined text-[16px]">view_list</span>
+                    </button>
+                </div>
+                <!-- 网格列数选择器 -->
+                <select id="selectGridColumns" class="px-2 py-1 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all cursor-pointer ml-1 flex-shrink-0">
+                    <option value="3" data-i18n="cols3">3 列</option>
+                    <option value="4" data-i18n="cols4">4 列</option>
+                    <option value="5" data-i18n="cols5">5 列</option>
+                </select>
             </div>
             <div class="flex flex-wrap items-center gap-2">
                 <span class="text-[12px] font-medium text-primary dark:text-primary-fixed-dim bg-primary/10 px-2 py-0.5 rounded-md" id="accountCountBadge" data-i18n="aggregateQuotaInfo">共 0 个账号</span>
