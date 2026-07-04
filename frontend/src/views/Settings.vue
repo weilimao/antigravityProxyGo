@@ -103,7 +103,26 @@
 <input class="w-20 px-3 py-1 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-bold text-center" id="numMaxRetries" max="100" min="1" type="number">
 </input></div>
 </div>
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex flex-col gap-0.5">
+<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="maxRetryDelayLabel">最大重试延迟上限 (秒)</span>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="maxRetryDelayDesc">连续多次重试时的最大等待退避时间（默认 10 秒）。</span>
 </div>
+<div class="flex items-center gap-2">
+<input class="w-20 px-3 py-1 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-bold text-center" id="numMaxRetryDelay" max="300" min="1" type="number">
+</input></div>
+</div>
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex flex-col gap-0.5">
+<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="maxRequestBodyLabel">请求体大小限制 (MB)</span>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="maxRequestBodyDesc">单次请求体的最大字节数（默认 50 MB）。设为 0 表示不限制。</span>
+</div>
+<div class="flex items-center gap-2">
+<input class="w-20 px-3 py-1 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-bold text-center" id="numMaxRequestBodyMB" max="500" min="1" type="number">
+</input></div>
+</div>
+</div>
+
 <!-- 本地代理与 Fallback 中转设置卡片 -->
 <div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">

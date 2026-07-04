@@ -16,19 +16,24 @@ import (
 	"time"
 )
 
-const maxCertCacheSize = 50
+const maxCertCacheSize = 200
+
+type certCacheEntry struct {
+	cert     *tls.Certificate
+	lastUsed time.Time
+}
 
 type CertManager struct {
 	sync.RWMutex
 	caCert        *x509.Certificate
 	caPrivateKey  interface{}
 	leafPrivateKey *rsa.PrivateKey
-	certCache     map[string]*tls.Certificate
+	certCache     map[string]*certCacheEntry
 }
 
 func NewCertManager() *CertManager {
 	return &CertManager{
-		certCache: make(map[string]*tls.Certificate),
+		certCache: make(map[string]*certCacheEntry),
 	}
 }
 
@@ -105,7 +110,7 @@ func (cm *CertManager) Init(caCertPath, caKeyPath string) error {
 		return fmt.Errorf("生成叶子私钥失败: %v", err)
 	}
 	cm.leafPrivateKey = leafPrivKey
-	cm.certCache = make(map[string]*tls.Certificate)
+	cm.certCache = make(map[string]*certCacheEntry)
 
 	return nil
 }
@@ -174,9 +179,13 @@ func GenerateCA(caCertPath, caKeyPath string) error {
 
 func (cm *CertManager) GetCertificate(host string) (*tls.Certificate, error) {
 	cm.RLock()
-	if cert, exists := cm.certCache[host]; exists {
+	if entry, exists := cm.certCache[host]; exists {
 		cm.RUnlock()
-		return cert, nil
+		// 更新 lastUsed 时间戳
+		cm.Lock()
+		entry.lastUsed = time.Now()
+		cm.Unlock()
+		return entry.cert, nil
 	}
 	cm.RUnlock()
 
@@ -184,8 +193,9 @@ func (cm *CertManager) GetCertificate(host string) (*tls.Certificate, error) {
 	defer cm.Unlock()
 
 	// Double check cache
-	if cert, exists := cm.certCache[host]; exists {
-		return cert, nil
+	if entry, exists := cm.certCache[host]; exists {
+		entry.lastUsed = time.Now()
+		return entry.cert, nil
 	}
 
 	if cm.caCert == nil || cm.caPrivateKey == nil || cm.leafPrivateKey == nil {
@@ -223,10 +233,35 @@ func (cm *CertManager) GetCertificate(host string) (*tls.Certificate, error) {
 		PrivateKey:  cm.leafPrivateKey,
 	}
 
-	// 超过上限时清空缓存，防止 certCache 无限增长
+	// LRU 驱逐：超过上限时清理最旧的一半条目
 	if len(cm.certCache) >= maxCertCacheSize {
-		cm.certCache = make(map[string]*tls.Certificate)
+		cm.evictOldest()
 	}
-	cm.certCache[host] = tlsCert
+	cm.certCache[host] = &certCacheEntry{cert: tlsCert, lastUsed: time.Now()}
 	return tlsCert, nil
+}
+
+// evictOldest 清理缓存中最旧的一半条目，避免全量清空导致所有域名重新生成证书
+func (cm *CertManager) evictOldest() {
+	type hostTime struct {
+		host string
+		t    time.Time
+	}
+	entries := make([]hostTime, 0, len(cm.certCache))
+	for h, e := range cm.certCache {
+		entries = append(entries, hostTime{host: h, t: e.lastUsed})
+	}
+	// 按 lastUsed 升序排列
+	for i := 0; i < len(entries); i++ {
+		for j := i + 1; j < len(entries); j++ {
+			if entries[j].t.Before(entries[i].t) {
+				entries[i], entries[j] = entries[j], entries[i]
+			}
+		}
+	}
+	// 删除最旧的一半
+	half := len(entries) / 2
+	for i := 0; i < half; i++ {
+		delete(cm.certCache, entries[i].host)
+	}
 }

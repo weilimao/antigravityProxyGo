@@ -1,0 +1,19 @@
+# Antigravity Proxy 项目智能体协作规范 (Agent Rules)
+
+身为 AI 编程助手，在协助开发本网关代理与前端控制台项目时，你必须严格遵守以下硬性准则：
+
+## 1. 国际化与前端文案约束 (i18n Strictness)
+- 严禁在 `frontend/src/views/` 下的任何 `.vue` 文件或 `HTML` 元素中直接**硬编码中文字符串**。
+- 凡是新增向用户展示的文本（如 Label、Tip、Description 等），**必须且只能**通过 `data-i18n="xxx"` 进行绑定。
+- 在绑定属性后，**强制要求**立即在 `frontend/src/shared/i18n.ts` 的 `zh`（中文）与 `en`（英文）两个语种节点中同步补充完全对应的键值对。
+
+## 2. 修改前置安全规范 (Checkpoint Mandate)
+- 在执行核心 Go 代码（`internal/`）或前端组件（`frontend/`）的写入/修改操作前，**必须首先**调用 `conversation_memory` 技能，为你即将修改的几个文件打下安全快照（Checkpoint）。
+- 绝不充当“未经确认就暴走修改全盘”的危险操作者。
+
+## 3. 全局变更完整性自检 (Completeness Check)
+- 如果修改了后端的 `settings.go` 等配置结构，必须自检：
+  1. 是否提供了回落兜底默认值？
+  2. 是否在 `app.go` 暴露了前后端绑定的事件名称？
+  3. 是否在前端补充了界面交互与 ipcRenderer 数据通信？
+- 切忌“管杀不管埋”，任何全栈维度的修改必须闭环。

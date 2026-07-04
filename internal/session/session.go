@@ -23,6 +23,13 @@ const (
 	saveDelaySeconds = 3
 )
 
+// 包级预编译正则：避免每次请求重复编译，消除 GC 压力
+var (
+	reSessionID   = regexp.MustCompile(`"sessionId"\s*:\s*"?([a-fA-F0-9-]+|-?\d+)"?`)
+	reConvID      = regexp.MustCompile(`"conversationId"\s*:\s*"([a-fA-F0-9-]+)"`)
+	reAgentReqID  = regexp.MustCompile(`"requestId"\s*:\s*"(?:agent|trajectory|flow)\/([a-fA-F0-9-]+)`)
+)
+
 type SessionEntry struct {
 	AccountID  string `json:"accountId"`
 	LastActive int64  `json:"lastActive"`
@@ -88,8 +95,7 @@ func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 		bodyStr := string(reqBody)
 
 		// 1. 优先提取显式会话 sessionId (支持带或不带双引号的 UUID 或大整数 ID)
-		reSession := regexp.MustCompile(`"sessionId"\s*:\s*"?(a-fA-F0-9-]+|-?\d+)"?`)
-		matchSession := reSession.FindStringSubmatch(bodyStr)
+		matchSession := reSessionID.FindStringSubmatch(bodyStr)
 		if len(matchSession) > 1 {
 			val := strings.ReplaceAll(matchSession[1], "-", "")
 			if len(val) >= 8 {
@@ -99,8 +105,7 @@ func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 		}
 
 		// 2. 次优先提取 conversationId 会话 ID
-		reConv := regexp.MustCompile(`"conversationId"\s*:\s*"([a-fA-F0-9-]+)"`)
-		matchConv := reConv.FindStringSubmatch(bodyStr)
+		matchConv := reConvID.FindStringSubmatch(bodyStr)
 		if len(matchConv) > 1 {
 			val := strings.ReplaceAll(matchConv[1], "-", "")
 			if len(val) >= 8 {
@@ -110,8 +115,7 @@ func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 		}
 
 		// 3. 仅在含有特定前缀 (agent/ 或 trajectory/ 或 flow/) 时，才提取轨迹级稳定的 requestId
-		reAgentReq := regexp.MustCompile(`"requestId"\s*:\s*"(?:agent|trajectory|flow)\/([a-fA-F0-9-]+)`)
-		matchAgent := reAgentReq.FindStringSubmatch(bodyStr)
+		matchAgent := reAgentReqID.FindStringSubmatch(bodyStr)
 		if len(matchAgent) > 1 {
 			val := strings.ReplaceAll(matchAgent[1], "-", "")
 			if len(val) >= 8 {

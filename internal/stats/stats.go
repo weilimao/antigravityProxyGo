@@ -196,6 +196,13 @@ func (t *Tracker) TrackError(count int) {
 	t.scheduleSave()
 }
 
+// GetTotalRetries 轻量级读取，避免 GetPayload 的全量深拷贝
+func (t *Tracker) GetTotalRetries() int {
+	t.RLock()
+	defer t.RUnlock()
+	return t.stats.TotalRetries
+}
+
 func (t *Tracker) updateTrends(inTokens, outTokens, cachedTokens int, cost, inputCost, outputCost, cachedCost float64) {
 	now := time.Now()
 	hourLabel := fmt.Sprintf("%02d:00", now.Hour())
@@ -498,7 +505,7 @@ func (t *Tracker) SaveToDisk() {
 		Requests: reqsCopy,
 	}
 
-	bytesData, err := json.MarshalIndent(data, "", "  ")
+	bytesData, err := json.Marshal(data)
 	if err != nil {
 		fmt.Printf("[StatsTracker] Failed to marshal stats: %v\n", err)
 		return
@@ -554,25 +561,6 @@ func (t *Tracker) LoadFromDisk() {
 
 func (t *Tracker) seedEmptyTrends() {
 	t.trends = make([]*HourlyTrend, 0)
-	now := time.Now()
-	// Generate 30 days of hourly data (720 points)
-	for i := 719; i >= 0; i-- {
-		targetTime := now.Add(time.Duration(-i) * time.Hour)
-		hourLabel := fmt.Sprintf("%02d:00", targetTime.Hour())
-		dateLabel := fmt.Sprintf("%02d/%02d", targetTime.Month(), targetTime.Day())
-
-		t.trends = append(t.trends, &HourlyTrend{
-			Time:       dateLabel + " " + hourLabel,
-			Input:      0,
-			Output:     0,
-			Cached:     0,
-			Requests:   0,
-			Cost:       0.0,
-			InputCost:  0.0,
-			OutputCost: 0.0,
-			CachedCost: 0.0,
-		})
-	}
 }
 
 // TruncateRequestBody structure and string truncation to prevent OOM

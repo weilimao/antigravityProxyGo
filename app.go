@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -221,11 +220,9 @@ func (a *App) startup(ctx context.Context) {
 		a.quotaSvc.SetCapturedProject,
 		a.quotaSvc.GetStoredProject,
 		a.settingsMgr.GetMaxRetries,
+		a.settingsMgr.GetMaxRetryDelay,
+		func() int64 { return int64(a.settingsMgr.GetMaxRequestBodyMB()) * 1024 * 1024 },
 		func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string) {
-			if f, err := os.OpenFile(`B:\antigravityProxy\data\debug.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-				f.WriteString(fmt.Sprintf("[%s] relayStatsCallback: UserID=%s, ReqID=%s, Model=%s\n", time.Now().Format(time.RFC3339), userID, reqID, modelName))
-				f.Close()
-			}
 			if a.relayStatsMgr != nil {
 				rate := a.statsTracker.GetPricingMgr().GetPricingForModel(modelName)
 				nonCachedIn := inTokens - cachedTokens
@@ -531,6 +528,8 @@ func (a *App) domReady(ctx context.Context) {
 			"silentStart": a.settingsMgr.GetSilentStart(),
 		},
 		"settings:get-max-retries": a.settingsMgr.GetMaxRetries(),
+		"settings:get-max-retry-delay": a.settingsMgr.GetMaxRetryDelay(),
+		"settings:get-max-request-body-mb": a.settingsMgr.GetMaxRequestBodyMB(),
 		"get-userdata-path":        defaultDir,
 		"relay:get-config": map[string]interface{}{
 			"enabled": a.settingsMgr.GetRelayEnabled(),
@@ -761,6 +760,12 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 
 	case "settings:set-max-retries":
 		_ = a.settingsMgr.SetMaxRetries(getIntArg(0))
+
+	case "settings:set-max-retry-delay":
+		_ = a.settingsMgr.SetMaxRetryDelay(getIntArg(0))
+
+	case "settings:set-max-request-body-mb":
+		_ = a.settingsMgr.SetMaxRequestBodyMB(getIntArg(0))
 
 	case "cert-status":
 		activeDir := a.settingsMgr.GetActiveDataDirectory()
@@ -1329,8 +1334,6 @@ func (a *App) startMemoryMonitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runtime.GC()
-			debug.FreeOSMemory()
 			if a.IsWindowVisibleAndActive() {
 				a.emitMemoryStats()
 			}

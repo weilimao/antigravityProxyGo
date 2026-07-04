@@ -38,6 +38,7 @@ type Config struct {
 	AutoStart       bool   `json:"autoStart"`
 	SilentStart     bool   `json:"silentStart"`
 	MaxRetries      int    `json:"maxRetries"`
+	MaxRetryDelay   int    `json:"maxRetryDelay"`
 	RelayEnabled    bool   `json:"relayEnabled"`
 	RelayPort       string `json:"relayPort"`
 	RemoteHost      string `json:"remoteHost"`
@@ -58,6 +59,7 @@ type Config struct {
 	CustomSocks5Username string `json:"customSocks5Username"`
 	CustomSocks5Password string `json:"customSocks5Password"`
 	Language             string `json:"language"`
+	MaxRequestBodyMB     int    `json:"maxRequestBodyMB"`
 }
 
 func GetDefaultModelMappings() []ModelMappingEntry {
@@ -151,6 +153,7 @@ func (m *Manager) Init(defaultPath string) {
 		AutoStart:            false,
 		SilentStart:          false,
 		MaxRetries:           20,
+		MaxRetryDelay:        10,
 		RelaySSRFBlock:       true,
 		RelayPortBlock:       true,
 		RelayDomainFilter:    false,
@@ -200,6 +203,10 @@ func (m *Manager) loadConfig() {
 
 	if parsed.MaxRetries <= 0 {
 		parsed.MaxRetries = 20
+	}
+
+	if parsed.MaxRetryDelay <= 0 {
+		parsed.MaxRetryDelay = 10
 	}
 
 	m.config = parsed
@@ -761,6 +768,25 @@ func (m *Manager) SetMaxRetries(retries int) error {
 	return m.SaveConfig()
 }
 
+func (m *Manager) GetMaxRetryDelay() int {
+	m.RLock()
+	defer m.RUnlock()
+	if m.config.MaxRetryDelay <= 0 {
+		return 10
+	}
+	return m.config.MaxRetryDelay
+}
+
+func (m *Manager) SetMaxRetryDelay(delay int) error {
+	m.Lock()
+	defer m.Unlock()
+	if delay <= 0 {
+		delay = 10
+	}
+	m.config.MaxRetryDelay = delay
+	return m.SaveConfig()
+}
+
 func (m *Manager) GetEnablePacketCapture() bool {
 	m.RLock()
 	defer m.RUnlock()
@@ -894,6 +920,26 @@ func (m *Manager) SetLanguage(lang string) error {
 	return err
 }
 
+// GetMaxRequestBodyMB 返回请求体大小限制（MB），默认 50MB
+func (m *Manager) GetMaxRequestBodyMB() int {
+	m.RLock()
+	defer m.RUnlock()
+	if m.config.MaxRequestBodyMB <= 0 {
+		return 50
+	}
+	return m.config.MaxRequestBodyMB
+}
+
+func (m *Manager) SetMaxRequestBodyMB(mb int) error {
+	m.Lock()
+	defer m.Unlock()
+	if mb <= 0 {
+		mb = 50
+	}
+	m.config.MaxRequestBodyMB = mb
+	return m.SaveConfig()
+}
+
 type ManagerInterface interface {
 	Init(defaultPath string)
 	GetActiveDataDirectory() string
@@ -908,6 +954,8 @@ type ManagerInterface interface {
 	SetSilentStart(enabled bool) error
 	GetMaxRetries() int
 	SetMaxRetries(retries int) error
+	GetMaxRetryDelay() int
+	SetMaxRetryDelay(delay int) error
 	GetRelayEnabled() bool
 	SetRelayEnabled(enabled bool) error
 	GetRelayPort() string

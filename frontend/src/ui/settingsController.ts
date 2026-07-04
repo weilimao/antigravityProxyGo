@@ -27,6 +27,8 @@ export function initSettings() {
         const chkEnableAutoStart = document.getElementById('chkEnableAutoStart') as HTMLInputElement | null;
         const chkEnableSilentStart = document.getElementById('chkEnableSilentStart') as HTMLInputElement | null;
         const numMaxRetries = document.getElementById('numMaxRetries') as HTMLInputElement | null;
+        const numMaxRetryDelay = document.getElementById('numMaxRetryDelay') as HTMLInputElement | null;
+        const numMaxRequestBodyMB = document.getElementById('numMaxRequestBodyMB') as HTMLInputElement | null;
 
         // Tab switching
         const activeTabClass = 'px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200';
@@ -185,6 +187,32 @@ export function initSettings() {
             });
         }
 
+        if (numMaxRetryDelay) {
+            numMaxRetryDelay.addEventListener('change', (e: any) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val) && val > 0) {
+                    try {
+                        ipcRenderer.send('settings:set-max-retry-delay', val);
+                    } catch (err) {
+                        console.error('[SettingsController] Failed to save max retry delay:', err);
+                    }
+                }
+            });
+        }
+
+        if (numMaxRequestBodyMB) {
+            numMaxRequestBodyMB.addEventListener('change', (e: any) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val) && val > 0) {
+                    try {
+                        ipcRenderer.send('settings:set-max-request-body-mb', val);
+                    } catch (err) {
+                        console.error('[SettingsController] Failed to save max request body MB:', err);
+                    }
+                }
+            });
+        }
+
         const chkEnablePacketCapture = document.getElementById('chkEnablePacketCapture') as HTMLInputElement | null;
         if (chkEnablePacketCapture) {
             chkEnablePacketCapture.addEventListener('change', (e: any) => {
@@ -288,6 +316,7 @@ export function refreshSettingsUI() {
         const chkEnableAutoStart = document.getElementById('chkEnableAutoStart') as HTMLInputElement | null;
         const chkEnableSilentStart = document.getElementById('chkEnableSilentStart') as HTMLInputElement | null;
         const numMaxRetries = document.getElementById('numMaxRetries') as HTMLInputElement | null;
+        const numMaxRetryDelay = document.getElementById('numMaxRetryDelay') as HTMLInputElement | null;
 
         if (chkEnableSystemLog) {
             const enabled = ipcRenderer.sendSync('settings:get-system-log-enabled');
@@ -313,6 +342,25 @@ export function refreshSettingsUI() {
                 numMaxRetries.value = String(retries);
             } else {
                 numMaxRetries.value = '20';
+            }
+        }
+
+        if (numMaxRetryDelay) {
+            const delay = ipcRenderer.sendSync('settings:get-max-retry-delay');
+            if (delay !== null && delay !== undefined) {
+                numMaxRetryDelay.value = String(delay);
+            } else {
+                numMaxRetryDelay.value = '10';
+            }
+        }
+
+        const numMaxRequestBodyMB = document.getElementById('numMaxRequestBodyMB') as HTMLInputElement | null;
+        if (numMaxRequestBodyMB) {
+            const bodyMB = ipcRenderer.sendSync('settings:get-max-request-body-mb');
+            if (bodyMB !== null && bodyMB !== undefined) {
+                numMaxRequestBodyMB.value = String(bodyMB);
+            } else {
+                numMaxRequestBodyMB.value = '50';
             }
         }
 

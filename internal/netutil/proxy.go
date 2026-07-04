@@ -22,9 +22,11 @@ import (
 // and insecure skip verification (since we are doing local proxy and decrypting traffic).
 func NewTransport() *http.Transport {
 	return &http.Transport{
-		Proxy:             GetSystemProxy,
-		DialContext:       DialContext, // 绑定自定义的 DialContext，实现对 SOCKS5 专属代理的完美底层拨号支持
-		DisableKeepAlives: true,        // 彻底禁用连接复用与连接池，防止死连接残留卡死，强迫每次连接均动态加载最新代理配置
+		Proxy:                 GetSystemProxy,
+		DialContext:           DialContext, // 绑定自定义的 DialContext，实现对 SOCKS5 专属代理的完美底层拨号支持
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		TLSClientConfig: &tls.Config{
@@ -65,7 +67,7 @@ func UpdateConfig(cfg ProxyConfig) {
 func startLocalVPNProxyDetector() {
 	triggerLocalProxyDetection()
 
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(60 * time.Second) // 降低探测频率以减少后台 I/O 开销
 	defer ticker.Stop()
 	for {
 		select {

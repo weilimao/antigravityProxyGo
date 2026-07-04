@@ -165,6 +165,10 @@ const translations: Translations = {
         proxySettingTip: "配置代理在遭遇服务器临时算力不足等错误时的最大重试次数。",
         maxRetriesLabel: "最大重试次数",
         maxRetriesDesc: "请求失败时的重试上限（默认 20 次）。",
+        maxRetryDelayLabel: "最大重试延迟上限 (秒)",
+        maxRetryDelayDesc: "连续多次重试时的最大等待退避时间（默认 10 秒）。",
+        maxRequestBodyLabel: "请求体大小限制 (MB)",
+        maxRequestBodyDesc: "单次请求体的最大字节数（默认 50 MB）。设为 0 表示不限制。",
 
         // Remote Connection
         remoteConnect: "远程连接",
@@ -811,6 +815,10 @@ const translations: Translations = {
         proxySettingTip: "Configure the maximum retry limit when the proxy encounters temporary server capacity issues.",
         maxRetriesLabel: "Maximum Retry Count",
         maxRetriesDesc: "The upper limit of retries when a request fails (default is 20 times).",
+        maxRetryDelayLabel: "Max Retry Delay (Seconds)",
+        maxRetryDelayDesc: "The maximum backoff wait time when retrying multiple times (default 10s).",
+        maxRequestBodyLabel: "Max Request Body Size (MB)",
+        maxRequestBodyDesc: "The maximum byte size for a single request body (default 50 MB). Set to 0 for unlimited.",
 
         // Remote Connection
         remoteConnect: "Remote",

@@ -12,7 +12,6 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,21 +25,23 @@ import (
 )
 
 type ProxyHandler struct {
-	accountMgr         *account.Manager
-	sessionRouter      *session.Router
-	statsTracker       *stats.Tracker
-	usageTracker       *stats.UsageTracker
-	errLogger          *stats.RetryErrorLogger
-	packetCap          *stats.PacketCapturer
-	logFn              func(string)
-	quotaFetch         func(*account.Account) (*account.QuotaResult, error)
-	tokenRefresh       func(*account.Account) (string, error)
-	setCapturedProject func(string, string)
-	getStoredProject   func(string) string
-	getMaxRetries      func() int
-	relayStatsCallback func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string)
-	relayQuotaCheck    func(userID, apiKeyID, modelName string) error
-	client             *http.Client
+	accountMgr             *account.Manager
+	sessionRouter          *session.Router
+	statsTracker           *stats.Tracker
+	usageTracker           *stats.UsageTracker
+	errLogger              *stats.RetryErrorLogger
+	packetCap              *stats.PacketCapturer
+	logFn                  func(string)
+	quotaFetch             func(*account.Account) (*account.QuotaResult, error)
+	tokenRefresh           func(*account.Account) (string, error)
+	setCapturedProject     func(string, string)
+	getStoredProject       func(string) string
+	getMaxRetries          func() int
+	getMaxRetryDelay       func() int
+	getMaxRequestBodyBytes func() int64
+	relayStatsCallback     func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string)
+	relayQuotaCheck        func(userID, apiKeyID, modelName string) error
+	client                 *http.Client
 
 	// 远程中继转发相关
 	getRemoteRelay     func() RemoteRelayInterface
@@ -61,6 +62,8 @@ func NewProxyHandler(
 	setCapturedProject func(string, string),
 	getStoredProject func(string) string,
 	getMaxRetries func() int,
+	getMaxRetryDelay func() int,
+	getMaxRequestBodyBytes func() int64,
 	relayStatsCallback func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string),
 	relayQuotaCheck func(userID, apiKeyID, modelName string) error,
 ) *ProxyHandler {
@@ -76,7 +79,9 @@ func NewProxyHandler(
 		tokenRefresh:       tokenRefresh,
 		setCapturedProject: setCapturedProject,
 		getStoredProject:   getStoredProject,
-		getMaxRetries:      getMaxRetries,
+		getMaxRetries:          getMaxRetries,
+		getMaxRetryDelay:       getMaxRetryDelay,
+		getMaxRequestBodyBytes: getMaxRequestBodyBytes,
 		relayStatsCallback: relayStatsCallback,
 		relayQuotaCheck:    relayQuotaCheck,
 		client:             netutil.NewClient(5 * time.Minute),
@@ -99,7 +104,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bodyBytes, err := io.ReadAll(r.Body)
+	// 使用可配置的请求体大小限制，防止异常大请求体导致内存暴涨
+	maxBodyBytes := int64(50 * 1024 * 1024) // 默认 50MB
+	if h.getMaxRequestBodyBytes != nil {
+		if configured := h.getMaxRequestBodyBytes(); configured > 0 {
+			maxBodyBytes = configured
+		}
+	}
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
 		return
@@ -747,7 +759,16 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							clientDisconnected = true
 							break
 						}
-						sentBytes = append(sentBytes, chunk...)
+						// 仅在未超出 1MB 上限时追踪 sentBytes，避免流式传输内存无限增长
+						const maxSentBytesTrack = 1 * 1024 * 1024 // 1MB
+						if len(sentBytes) < maxSentBytesTrack {
+							remaining := maxSentBytesTrack - len(sentBytes)
+							if len(chunk) <= remaining {
+								sentBytes = append(sentBytes, chunk...)
+							} else {
+								sentBytes = append(sentBytes, chunk[:remaining]...)
+							}
+						}
 						if hasFlusher {
 							flusher.Flush()
 						}
@@ -888,10 +909,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					for k := range r.Header {
 						headerKeys = append(headerKeys, fmt.Sprintf("%s=%v", k, r.Header.Values(k)))
 					}
-					if f, err := os.OpenFile(`B:\antigravityProxy\data\debug.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-						f.WriteString(fmt.Sprintf("[%s] ServeHTTP headers: %s\n", time.Now().Format(time.RFC3339), strings.Join(headerKeys, " | ")))
-						f.Close()
-					}
+
 					h.relayStatsCallback(relayUserID, relayAPIKeyID, currentModel, inTokens, outTokens, cachedTokens,
 						r.Method, r.Host, r.URL.Path, sessionKey, time.Since(startTime).Milliseconds(), resp.StatusCode, reqID)
 				}
@@ -1151,7 +1169,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if shouldRetry {
 			jitter := rand.Float64() * 500.0
-			delay := math.Min(float64(h.statsTracker.GetPayload(nil)["stats"].(stats.GlobalStats).TotalRetries*1000), 10000.0) + jitter
+			maxDelayMs := float64(h.getMaxRetryDelay() * 1000)
+			delay := math.Min(float64(h.statsTracker.GetTotalRetries()*1000), maxDelayMs) + jitter
 			h.logFn(fmt.Sprintf("%s ⚠️ 请求失败 (%s)。将在 %dms 后自动切换账号重试...", logPrefix, errAttempt.Error(), int(delay)))
 
 			h.errLogger.Log("RETRY", targetPath, currentModel, allocatedAccount, attempt+1, errAttempt.Error())
@@ -1282,8 +1301,8 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			if isFlusher {
 				flusher.Flush()
 			}
-			// 仅在数据量较小时记录响应体，避免过量占用内存
-			if respBodyBuf.Len() < 5*1024*1024 {
+			// 仅在数据量较小时记录响应体，降低并发内存占用
+			if respBodyBuf.Len() < 512*1024 {
 				respBodyBuf.Write(chunk)
 			}
 		}
