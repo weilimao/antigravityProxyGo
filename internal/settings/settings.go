@@ -60,6 +60,7 @@ type Config struct {
 	CustomSocks5Password string `json:"customSocks5Password"`
 	Language             string `json:"language"`
 	MaxRequestBodyMB     int    `json:"maxRequestBodyMB"`
+	RequestTimeout       int    `json:"requestTimeout"`
 }
 
 func GetDefaultModelMappings() []ModelMappingEntry {
@@ -166,6 +167,7 @@ func (m *Manager) Init(defaultPath string) {
 		CustomSocks5Username: "",
 		CustomSocks5Password: "",
 		Language:             "zh",
+		RequestTimeout:       300,
 	}
 
 	m.loadConfig()
@@ -207,6 +209,10 @@ func (m *Manager) loadConfig() {
 
 	if parsed.MaxRetryDelay <= 0 {
 		parsed.MaxRetryDelay = 10
+	}
+
+	if parsed.RequestTimeout <= 0 {
+		parsed.RequestTimeout = 300
 	}
 
 	m.config = parsed
@@ -737,6 +743,7 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			FallbackProxyPorts:   "",
 			CustomSocks5Address:  "",
 			CustomSocks5Enabled:  false,
+			RequestTimeout:       300,
 		}
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")
 		if err != nil {
@@ -940,6 +947,25 @@ func (m *Manager) SetMaxRequestBodyMB(mb int) error {
 	return m.SaveConfig()
 }
 
+func (m *Manager) GetRequestTimeout() int {
+	m.RLock()
+	defer m.RUnlock()
+	if m.config.RequestTimeout <= 0 {
+		return 300
+	}
+	return m.config.RequestTimeout
+}
+
+func (m *Manager) SetRequestTimeout(timeout int) error {
+	m.Lock()
+	defer m.Unlock()
+	if timeout <= 0 {
+		timeout = 300
+	}
+	m.config.RequestTimeout = timeout
+	return m.SaveConfig()
+}
+
 type ManagerInterface interface {
 	Init(defaultPath string)
 	GetActiveDataDirectory() string
@@ -996,6 +1022,8 @@ type ManagerInterface interface {
 	SetCustomSocks5Password(val string) error
 	GetLanguage() string
 	SetLanguage(lang string) error
+	GetRequestTimeout() int
+	SetRequestTimeout(timeout int) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,

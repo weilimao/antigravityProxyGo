@@ -39,6 +39,7 @@ type ProxyHandler struct {
 	getMaxRetries          func() int
 	getMaxRetryDelay       func() int
 	getMaxRequestBodyBytes func() int64
+	getRequestTimeout      func() int
 	relayStatsCallback     func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string)
 	relayQuotaCheck        func(userID, apiKeyID, modelName string) error
 	client                 *http.Client
@@ -64,6 +65,7 @@ func NewProxyHandler(
 	getMaxRetries func() int,
 	getMaxRetryDelay func() int,
 	getMaxRequestBodyBytes func() int64,
+	getRequestTimeout func() int,
 	relayStatsCallback func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string),
 	relayQuotaCheck func(userID, apiKeyID, modelName string) error,
 ) *ProxyHandler {
@@ -82,9 +84,10 @@ func NewProxyHandler(
 		getMaxRetries:          getMaxRetries,
 		getMaxRetryDelay:       getMaxRetryDelay,
 		getMaxRequestBodyBytes: getMaxRequestBodyBytes,
+		getRequestTimeout:      getRequestTimeout,
 		relayStatsCallback: relayStatsCallback,
 		relayQuotaCheck:    relayQuotaCheck,
-		client:             netutil.NewClient(5 * time.Minute),
+		client:             netutil.NewClient(0),
 	}
 }
 
@@ -682,7 +685,15 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Forward request
 		targetUrl := "https://" + localTargetHost + localTargetPath
-		proxyReq, errReq := http.NewRequestWithContext(r.Context(), r.Method, targetUrl, bytes.NewReader(finalReqBody))
+		timeoutSec := 300
+		if h.getRequestTimeout != nil {
+			if val := h.getRequestTimeout(); val > 0 {
+				timeoutSec = val
+			}
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(timeoutSec)*time.Second)
+		defer cancel()
+		proxyReq, errReq := http.NewRequestWithContext(ctx, r.Method, targetUrl, bytes.NewReader(finalReqBody))
 		if errReq != nil {
 			return 0, nil, nil, false, errReq
 		}
@@ -1030,7 +1041,11 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						w.Header().Add(k, v)
 					}
 				}
-				w.WriteHeader(status)
+				statusCode := status
+				if statusCode <= 0 {
+					statusCode = http.StatusBadGateway
+				}
+				w.WriteHeader(statusCode)
 				w.Write(body)
 			}
 			return
@@ -1230,7 +1245,7 @@ func (h *ProxyHandler) getRemoteClient() *http.Client {
 
 	h.remoteClient = &http.Client{
 		Transport: transport,
-		Timeout:   5 * time.Minute,
+		Timeout:   0,
 	}
 	return h.remoteClient
 }
@@ -1249,7 +1264,15 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 
 	// 1. 构造发往公网目标的 HTTPS 请求，使得中继服务器接收时能执行 MITM 解密
 	targetUrl := "https://" + targetHost + targetPath
-	proxyReq, errReq := http.NewRequestWithContext(r.Context(), r.Method, targetUrl, bytes.NewReader(bodyBytes))
+	timeoutSec := 300
+	if h.getRequestTimeout != nil {
+		if val := h.getRequestTimeout(); val > 0 {
+			timeoutSec = val
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+	proxyReq, errReq := http.NewRequestWithContext(ctx, r.Method, targetUrl, bytes.NewReader(bodyBytes))
 	if errReq != nil {
 		h.logFn(fmt.Sprintf("❌ Failed to create remote forward request: %v", errReq))
 		http.Error(w, errReq.Error(), http.StatusInternalServerError)

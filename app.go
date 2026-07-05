@@ -222,6 +222,7 @@ func (a *App) startup(ctx context.Context) {
 		a.settingsMgr.GetMaxRetries,
 		a.settingsMgr.GetMaxRetryDelay,
 		func() int64 { return int64(a.settingsMgr.GetMaxRequestBodyMB()) * 1024 * 1024 },
+		a.settingsMgr.GetRequestTimeout,
 		func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string) {
 			if a.relayStatsMgr != nil {
 				rate := a.statsTracker.GetPricingMgr().GetPricingForModel(modelName)
@@ -521,26 +522,27 @@ func (a *App) domReady(ctx context.Context) {
 			"activeDir":  activeDir,
 			"defaultDir": defaultDir,
 		},
-		"settings:get-system-log-enabled": a.settingsMgr.GetEnableSystemLog(),
+		"settings:get-system-log-enabled":     a.settingsMgr.GetEnableSystemLog(),
 		"settings:get-packet-capture-enabled": a.settingsMgr.GetEnablePacketCapture(),
 		"settings:get-startup-options": map[string]bool{
 			"autoStart":   a.settingsMgr.GetAutoStart(),
 			"silentStart": a.settingsMgr.GetSilentStart(),
 		},
-		"settings:get-max-retries": a.settingsMgr.GetMaxRetries(),
-		"settings:get-max-retry-delay": a.settingsMgr.GetMaxRetryDelay(),
-		"settings:get-max-request-body-mb": a.settingsMgr.GetMaxRequestBodyMB(),
-		"get-userdata-path":        defaultDir,
+		"settings:get-max-retries":            a.settingsMgr.GetMaxRetries(),
+		"settings:get-max-retry-delay":        a.settingsMgr.GetMaxRetryDelay(),
+		"settings:get-max-request-body-mb":    a.settingsMgr.GetMaxRequestBodyMB(),
+		"settings:get-request-timeout":         a.settingsMgr.GetRequestTimeout(),
+		"get-userdata-path":                  defaultDir,
 		"relay:get-config": map[string]interface{}{
 			"enabled": a.settingsMgr.GetRelayEnabled(),
 			"port":    a.settingsMgr.GetRelayPort(),
 		},
-		"settings:get-fallback-proxy-ports": a.settingsMgr.GetFallbackProxyPorts(),
-		"settings:get-custom-socks5-address": a.settingsMgr.GetCustomSocks5Address(),
-		"settings:get-custom-socks5-enabled": a.settingsMgr.GetCustomSocks5Enabled(),
+		"settings:get-fallback-proxy-ports":   a.settingsMgr.GetFallbackProxyPorts(),
+		"settings:get-custom-socks5-address":  a.settingsMgr.GetCustomSocks5Address(),
+		"settings:get-custom-socks5-enabled":  a.settingsMgr.GetCustomSocks5Enabled(),
 		"settings:get-custom-socks5-username": a.settingsMgr.GetCustomSocks5Username(),
 		"settings:get-custom-socks5-password": a.settingsMgr.GetCustomSocks5Password(),
-		"settings:get-language":             a.settingsMgr.GetLanguage(),
+		"settings:get-language":               a.settingsMgr.GetLanguage(),
 	}
 
 	bytesCache, _ := json.Marshal(cache)
@@ -766,6 +768,9 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 
 	case "settings:set-max-request-body-mb":
 		_ = a.settingsMgr.SetMaxRequestBodyMB(getIntArg(0))
+
+	case "settings:set-request-timeout":
+		_ = a.settingsMgr.SetRequestTimeout(getIntArg(0))
 
 	case "cert-status":
 		activeDir := a.settingsMgr.GetActiveDataDirectory()

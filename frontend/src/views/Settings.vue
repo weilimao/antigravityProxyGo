@@ -121,6 +121,15 @@
 <input class="w-20 px-3 py-1 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-bold text-center" id="numMaxRequestBodyMB" max="500" min="1" type="number">
 </input></div>
 </div>
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex flex-col gap-0.5">
+<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="requestTimeoutLabel">请求超时时间 (秒)</span>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="requestTimeoutDesc">代理处理单次请求的最长等待时间（默认 300 秒）。</span>
+</div>
+<div class="flex items-center gap-2">
+<input class="w-20 px-3 py-1 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-bold text-center" id="numRequestTimeout" max="1800" min="1" type="number">
+</input></div>
+</div>
 </div>
 
 <!-- 本地代理与 Fallback 中转设置卡片 -->

@@ -29,6 +29,7 @@ export function initSettings() {
         const numMaxRetries = document.getElementById('numMaxRetries') as HTMLInputElement | null;
         const numMaxRetryDelay = document.getElementById('numMaxRetryDelay') as HTMLInputElement | null;
         const numMaxRequestBodyMB = document.getElementById('numMaxRequestBodyMB') as HTMLInputElement | null;
+        const numRequestTimeout = document.getElementById('numRequestTimeout') as HTMLInputElement | null;
 
         // Tab switching
         const activeTabClass = 'px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200';
@@ -213,6 +214,19 @@ export function initSettings() {
             });
         }
 
+        if (numRequestTimeout) {
+            numRequestTimeout.addEventListener('change', (e: any) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val) && val > 0) {
+                    try {
+                        ipcRenderer.send('settings:set-request-timeout', val);
+                    } catch (err) {
+                        console.error('[SettingsController] Failed to save request timeout:', err);
+                    }
+                }
+            });
+        }
+
         const chkEnablePacketCapture = document.getElementById('chkEnablePacketCapture') as HTMLInputElement | null;
         if (chkEnablePacketCapture) {
             chkEnablePacketCapture.addEventListener('change', (e: any) => {
@@ -361,6 +375,16 @@ export function refreshSettingsUI() {
                 numMaxRequestBodyMB.value = String(bodyMB);
             } else {
                 numMaxRequestBodyMB.value = '50';
+            }
+        }
+
+        const numRequestTimeout = document.getElementById('numRequestTimeout') as HTMLInputElement | null;
+        if (numRequestTimeout) {
+            const timeout = ipcRenderer.sendSync('settings:get-request-timeout');
+            if (timeout !== null && timeout !== undefined) {
+                numRequestTimeout.value = String(timeout);
+            } else {
+                numRequestTimeout.value = '300';
             }
         }
 

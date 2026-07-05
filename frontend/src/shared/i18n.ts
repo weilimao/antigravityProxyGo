@@ -169,6 +169,8 @@ const translations: Translations = {
         maxRetryDelayDesc: "连续多次重试时的最大等待退避时间（默认 10 秒）。",
         maxRequestBodyLabel: "请求体大小限制 (MB)",
         maxRequestBodyDesc: "单次请求体的最大字节数（默认 50 MB）。设为 0 表示不限制。",
+        requestTimeoutLabel: "请求超时时间 (秒)",
+        requestTimeoutDesc: "代理处理单次请求的最长等待时间（默认 300 秒）。",
 
         // Remote Connection
         remoteConnect: "远程连接",
@@ -824,6 +826,8 @@ const translations: Translations = {
         maxRetryDelayDesc: "The maximum backoff wait time when retrying multiple times (default 10s).",
         maxRequestBodyLabel: "Max Request Body Size (MB)",
         maxRequestBodyDesc: "The maximum byte size for a single request body (default 50 MB). Set to 0 for unlimited.",
+        requestTimeoutLabel: "Request Timeout (Seconds)",
+        requestTimeoutDesc: "The maximum wait time for a single request (default 300s).",
 
         // Remote Connection
         remoteConnect: "Remote",
