@@ -542,8 +542,9 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue';
+import { initSettings } from '../ui/settingsController';
 
 onMounted(() => {
-  // Logic from settings controller will go here
+  initSettings();
 });
 </script>

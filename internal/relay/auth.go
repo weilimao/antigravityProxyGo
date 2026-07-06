@@ -45,7 +45,7 @@ func (a *AuthManager) Login(key, password string) (*RelaySession, error) {
 		UserID:    user.ID,
 		UserKey:   user.Key,
 		CreatedAt: now,
-		ExpiresAt: now.Add(30 * 24 * time.Hour),
+		ExpiresAt: now.Add(7 * 24 * time.Hour), // 7 days (reduced from 30 for security)
 	}
 
 	a.Lock()

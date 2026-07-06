@@ -188,7 +188,7 @@ func (m *UserManager) ValidateCredentials(key, password string) (*RelayUser, err
 	for _, u := range m.users {
 		if u.Key == key {
 			if !checkPassword(u.PasswordHash, password) {
-				return nil, fmt.Errorf("invalid password")
+				return nil, fmt.Errorf("invalid credentials")
 			}
 			if !u.Enabled {
 				return nil, fmt.Errorf("user %q is disabled", key)
@@ -196,7 +196,7 @@ func (m *UserManager) ValidateCredentials(key, password string) (*RelayUser, err
 			return u, nil
 		}
 	}
-	return nil, fmt.Errorf("user %q not found", key)
+	return nil, fmt.Errorf("invalid credentials")
 }
 
 func (m *UserManager) CreateAPIKey(userID string, name string) (*UserAPIKey, error) {
@@ -306,7 +306,7 @@ func (m *UserManager) saveToDiskLocked() {
 		fmt.Printf("[UserManager] Failed to marshal users: %v\n", err)
 		return
 	}
-	if err := os.WriteFile(m.persistPath, data, 0644); err != nil {
+	if err := os.WriteFile(m.persistPath, data, 0600); err != nil {
 		fmt.Printf("[UserManager] Failed to write users: %v\n", err)
 	}
 }

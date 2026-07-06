@@ -14,8 +14,9 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue';
+import { init as initUsageDetails } from '../ui/usageDetails';
 
 onMounted(() => {
-    // 页面挂载完成
+    initUsageDetails();
 });
 </script>

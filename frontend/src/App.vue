@@ -130,11 +130,11 @@
 
     <main class="flex-grow px-container-padding py-6 pb-[50px] w-full flex flex-col gap-6 overflow-y-auto relative">
       <Dashboard v-show="$route.path === '/' || $route.path === '/dashboard'" />
-      <Accounts v-show="$route.path === '/accounts'" />
-      <UsageDetails v-show="$route.path === '/usage'" />
-      <OTP v-show="$route.path === '/otp'" />
-      <Packets v-show="$route.path === '/packets'" />
-      <Settings v-show="$route.path === '/settings'" />
+      <Accounts v-if="visited.accounts" v-show="$route.path === '/accounts'" />
+      <UsageDetails v-if="visited.usage" v-show="$route.path === '/usage'" />
+      <OTP v-if="visited.otp" v-show="$route.path === '/otp'" />
+      <Packets v-if="visited.packets" v-show="$route.path === '/packets'" />
+      <Settings v-if="visited.settings" v-show="$route.path === '/settings'" />
     </main>
 
     <!-- 抽屉式控制台日志 -->
@@ -191,17 +191,12 @@ import AutoTriggerModal from './components/modals/AutoTriggerModal.vue';
 import { initRemoteEvents } from './ui/remoteController';
 import { setLanguage, switchView, initDashboardEvents } from './ui/dashboard';
 import { ipcRenderer } from './shared/ipc';
-import { initAccountsEvents } from './ui/accountsController';
 import { initAutotriggerHistoryEvents } from './ui/autotriggerHistoryController';
 import { initPricingEvents } from './ui/pricingController';
-import { initPacketsEvents } from './ui/packetsController';
-import { initSettings } from './ui/settingsController';
 import { initChartFilters } from './ui/chartRenderer';
-import { init as initUsageDetails } from './ui/usageDetails';
 import { initMigrationEvents } from './ui/migrationController';
 import { initUpdaterEvents } from './ui/updaterController';
 import { initRetryErrorLogsEvents } from './ui/retryErrorLogsController';
-import { initOtpEvents } from './ui/otpController';
 import { initRelayEvents } from './ui/relayController';
 
 const route = useRoute();
@@ -209,6 +204,15 @@ const route = useRoute();
 // Responsive and dynamic layout states
 const isCollapsed = ref(false);
 const isDropdownOpen = ref(false);
+
+// Lazy mount: pages are only created on first visit, then kept alive with v-show
+const visited = ref<Record<string, boolean>>({
+  accounts: false,
+  usage: false,
+  otp: false,
+  packets: false,
+  settings: false,
+});
 const currentLang = ref('zh');
 
 const headerRef = ref<HTMLElement | null>(null);
@@ -330,11 +334,18 @@ const checkDOMChanges = () => {
 
 watch(() => route.path, async (newPath) => {
   const viewName = newPath === '/' ? 'dashboard' : newPath.substring(1);
-  switchView(viewName);
+
+  // Mark page as visited to trigger lazy v-if mount
+  if (viewName in visited.value) {
+    visited.value[viewName] = true;
+  }
+
   // Auto-close dropdown on route change
   isDropdownOpen.value = false;
-  
+
+  // Wait for v-if DOM to mount before switching view and setting language
   await nextTick();
+  switchView(viewName);
   setLanguage(currentLang.value);
 });
 
@@ -350,21 +361,20 @@ onMounted(() => {
   window.addEventListener('resize', updateResponsiveLayout);
 
   setTimeout(() => {
+    // Only init controllers whose DOM is always present (Dashboard + global modules)
     initDashboardEvents();
-    initAccountsEvents();
-    initAutotriggerHistoryEvents();
-    initPricingEvents();
-    initPacketsEvents();
-    initSettings();
     initChartFilters();
-    initUsageDetails();
     initMigrationEvents();
     initUpdaterEvents();
-    initRetryErrorLogsEvents();
-    initOtpEvents();
-    initRelayEvents();
     initRemoteEvents();
+    initRelayEvents();
+    initRetryErrorLogsEvents();
+    initPricingEvents();
+    initAutotriggerHistoryEvents();
     
+    // Page-specific inits are now called from each page's onMounted hook
+    // (see Accounts.vue, Settings.vue, Packets.vue, OTP.vue, UsageDetails.vue)
+
     (window as any).refreshLanguageFromBackend = () => {
       const savedLang = ipcRenderer.sendSync('settings:get-language') || 'zh';
       setLanguage(savedLang);
@@ -377,6 +387,10 @@ onMounted(() => {
 
     // Manually trigger initial switchView to populate settings etc.
     const initialView = route.path === '/' ? 'dashboard' : route.path.substring(1);
+    // Mark initial page as visited if not dashboard
+    if (initialView in visited.value) {
+      visited.value[initialView] = true;
+    }
     switchView(initialView);
 
     // Flush any pending listeners after all components are mounted

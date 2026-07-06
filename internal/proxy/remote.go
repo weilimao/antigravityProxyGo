@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +31,41 @@ type RemoteConfig struct {
 	IsLocal   bool   `json:"isLocal"`
 }
 
+// remoteCACertPool holds the trusted CA certificate pool for the remote relay server.
+// When populated (after DownloadCACert), the TLS client will verify the server certificate
+// against this pool instead of blindly skipping verification.
+var (
+	remoteCACertPool   *x509.CertPool
+	remoteCACertPoolMu sync.RWMutex
+)
+
+// setRemoteCACertPool updates the global CA cert pool for remote relay TLS verification.
+func setRemoteCACertPool(pool *x509.CertPool) {
+	remoteCACertPoolMu.Lock()
+	remoteCACertPool = pool
+	remoteCACertPoolMu.Unlock()
+}
+
+// getRemoteTLSConfig returns a TLS config that trusts the remote relay's CA cert when available.
+// Falls back to InsecureSkipVerify only if no CA cert has been loaded yet (e.g., initial health check).
+func getRemoteTLSConfig(serverName string) *tls.Config {
+	remoteCACertPoolMu.RLock()
+	pool := remoteCACertPool
+	remoteCACertPoolMu.RUnlock()
+
+	if pool != nil {
+		return &tls.Config{
+			RootCAs:    pool,
+			ServerName: serverName,
+		}
+	}
+	// Fallback: no CA cert loaded yet, allow insecure (for initial test/health check connections)
+	return &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         serverName,
+	}
+}
+
 // noProxyClient is a custom HTTP client that explicitly bypasses system proxy settings.
 // This is critical for local testing and health checks to prevent routing loops back into our own proxy port (18443).
 var noProxyClient = &http.Client{
@@ -39,17 +75,16 @@ var noProxyClient = &http.Client{
 		DisableKeepAlives: true,                   // 禁用连接复用与连接池，防止中继代理死连接残留卡死
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true, // 忽略自签名证书校验，用于内网穿透自签 TLS 端口
-		},
+		TLSClientConfig:       getRemoteTLSConfig(""),
 	},
 }
 
 // RemoteRelay manages client-side connection to a remote proxy relay server
 type RemoteRelay struct {
 	sync.RWMutex
-	config RemoteConfig
-	logFn  func(string)
+	config          RemoteConfig
+	logFn           func(string)
+	onTokenExpired  func() // called when a 401/407 is received, to trigger auto-relogin
 }
 
 // NewRemoteRelay creates a new RemoteRelay instance
@@ -57,6 +92,13 @@ func NewRemoteRelay(logFn func(string)) *RemoteRelay {
 	return &RemoteRelay{
 		logFn: logFn,
 	}
+}
+
+// SetOnTokenExpired registers a callback that is invoked when the token is expired (401/407 received).
+func (rr *RemoteRelay) SetOnTokenExpired(fn func()) {
+	rr.Lock()
+	rr.onTokenExpired = fn
+	rr.Unlock()
 }
 
 func (rr *RemoteRelay) buildURL(endpoint string) string {
@@ -250,10 +292,7 @@ func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error
 
 	// 若远程中继使用 HTTPS，则在发送明文 CONNECT 前先完成 TLS 握手升级
 	if isHTTPS {
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
-			ServerName:         host,
-		}
+		tlsConfig := getRemoteTLSConfig(host)
 		tlsConn := tls.Client(conn, tlsConfig)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			conn.Close()
@@ -278,6 +317,15 @@ func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		conn.Close()
+		// Trigger auto-relogin on token expiry (407 Proxy Auth Required)
+		if resp.StatusCode == http.StatusProxyAuthRequired || resp.StatusCode == http.StatusUnauthorized {
+			rr.RLock()
+			cb := rr.onTokenExpired
+			rr.RUnlock()
+			if cb != nil {
+				go cb()
+			}
+		}
 		return nil, fmt.Errorf("remote relay CONNECT failed with status %d", resp.StatusCode)
 	}
 
@@ -468,6 +516,15 @@ func (rr *RemoteRelay) FetchRemoteStats() (map[string]interface{}, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// Trigger auto-relogin on token expiry
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusProxyAuthRequired {
+			rr.RLock()
+			cb := rr.onTokenExpired
+			rr.RUnlock()
+			if cb != nil {
+				go cb()
+			}
+		}
 		return nil, fmt.Errorf("stats request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -557,6 +614,7 @@ func (rr *RemoteRelay) DownloadCACert(savePath string) error {
 	host := rr.config.Host
 	port := rr.config.Port
 	path := rr.config.Path
+	token := rr.config.Token
 	rr.RUnlock()
 
 	if port == "" {
@@ -576,6 +634,9 @@ func (rr *RemoteRelay) DownloadCACert(savePath string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, certURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create cert request: %w", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := noProxyClient.Do(req)
@@ -603,6 +664,16 @@ func (rr *RemoteRelay) DownloadCACert(savePath string) error {
 		return fmt.Errorf("failed to save CA cert: %w", err)
 	}
 
+	// Register the downloaded CA cert in the global TLS trust pool
+	// so subsequent connections verify the server against this CA
+	pool := x509.NewCertPool()
+	if pool.AppendCertsFromPEM(body) {
+		setRemoteCACertPool(pool)
+		if rr.logFn != nil {
+			rr.logFn("🔒 Remote CA cert loaded into TLS trust pool")
+		}
+	}
+
 	if rr.logFn != nil {
 		rr.logFn(fmt.Sprintf("📜 Remote CA cert saved to %s", savePath))
 	}
@@ -611,10 +682,6 @@ func (rr *RemoteRelay) DownloadCACert(savePath string) error {
 
 // FetchAndSaveRemoteLogDetail fetches a specific log from the remote server by req_id and saves it locally
 func (rr *RemoteRelay) FetchAndSaveRemoteLogDetail(reqID string, userKey string) error {
-	if f, err := os.OpenFile(`B:\antigravityProxy\data\debug.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-		f.WriteString(fmt.Sprintf("[%s] FetchAndSaveRemoteLogDetail start: reqID=%s, userKey=%s\n", time.Now().Format(time.RFC3339), reqID, userKey))
-		f.Close()
-	}
 
 	rr.RLock()
 	host := rr.config.Host
@@ -661,15 +728,10 @@ func (rr *RemoteRelay) FetchAndSaveRemoteLogDetail(reqID string, userKey string)
 		item.ID = 0                // Reset local ID for auto increment
 		item.UserID = userKey
 		item.Mode = "remote"
-		dbErr := db.InsertRequestLog(item)
-		if f, err := os.OpenFile(`B:\antigravityProxy\data\debug.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-			f.WriteString(fmt.Sprintf("[%s] FetchAndSaveRemoteLogDetail: Log fetched successfully, InsertRequestLog error: %v\n", time.Now().Format(time.RFC3339), dbErr))
-			f.Close()
-		}
-	} else {
-		if f, err := os.OpenFile(`B:\antigravityProxy\data\debug.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-			f.WriteString(fmt.Sprintf("[%s] FetchAndSaveRemoteLogDetail: data.Log is nil!\n", time.Now().Format(time.RFC3339)))
-			f.Close()
+		if err := db.InsertRequestLog(item); err != nil {
+			if rr.logFn != nil {
+				rr.logFn(fmt.Sprintf("⚠️ [RemoteRelay] Failed to insert remote log (reqID=%s): %v", reqID, err))
+			}
 		}
 	}
 

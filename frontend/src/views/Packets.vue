@@ -156,8 +156,9 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue';
+import { initPacketsEvents } from '../ui/packetsController';
 
 onMounted(() => {
-  // Logic from packets controller will go here
+  initPacketsEvents();
 });
 </script>

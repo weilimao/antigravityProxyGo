@@ -123,7 +123,11 @@ func (pe *ProxyEngine) UpdateSecurityRules(ssrfBlock, portBlock, domainFilter bo
 	pe.relaySecurityMu.Unlock()
 }
 
-func (pe *ProxyEngine) validateTargetSafety(targetHostPort string) error {
+// validateTargetSafety checks if the target host:port is allowed by security rules.
+// Returns a safe resolved address (ip:port) that should be used for the actual connection
+// to prevent DNS Rebinding attacks (TOCTOU between resolve and connect).
+// If SSRF block is disabled, returns empty string meaning "use original host".
+func (pe *ProxyEngine) validateTargetSafety(targetHostPort string) (string, error) {
 	pe.relaySecurityMu.RLock()
 	defer pe.relaySecurityMu.RUnlock()
 
@@ -136,20 +140,28 @@ func (pe *ProxyEngine) validateTargetSafety(targetHostPort string) error {
 	// 1. 端口安全检查
 	if pe.relayPortBlock {
 		if portStr != "443" && portStr != "80" {
-			return fmt.Errorf("端口 %s 已被安全策略限制，中继服务器仅放行 80/443", portStr)
+			return "", fmt.Errorf("端口 %s 已被安全策略限制，中继服务器仅放行 80/443", portStr)
 		}
 	}
 
-	// 2. SSRF 拦截（回环及私有网段 IP 禁连）
+	// 2. SSRF 拦截（回环及私有网段 IP 禁连）+ resolve-then-connect
+	var safeAddr string
 	if pe.relaySSRFBlock {
 		ips, err := net.LookupIP(host)
-		if err == nil {
-			for _, ip := range ips {
-				if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-					return fmt.Errorf("目标地址 %s 解析出的 IP %s 属于内部私有网段，已被拒绝连接", host, ip.String())
-				}
+		if err != nil {
+			// DNS resolution failure: deny by default to prevent bypass
+			return "", fmt.Errorf("目标地址 %s DNS 解析失败，已被安全策略拒绝: %v", host, err)
+		}
+		if len(ips) == 0 {
+			return "", fmt.Errorf("目标地址 %s 无法解析到任何 IP 地址", host)
+		}
+		for _, ip := range ips {
+			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+				return "", fmt.Errorf("目标地址 %s 解析出的 IP %s 属于内部私有网段，已被拒绝连接", host, ip.String())
 			}
 		}
+		// Use the first safe resolved IP for the actual connection (resolve-then-connect)
+		safeAddr = net.JoinHostPort(ips[0].String(), portStr)
 	}
 
 	// 3. 目标域名白名单校验
@@ -162,11 +174,11 @@ func (pe *ProxyEngine) validateTargetSafety(targetHostPort string) error {
 			}
 		}
 		if !matched {
-			return fmt.Errorf("目标域名 %s 不在白名单允许范围内，连接已被拒绝", host)
+			return "", fmt.Errorf("目标域名 %s 不在白名单允许范围内，连接已被拒绝", host)
 		}
 	}
 
-	return nil
+	return safeAddr, nil
 }
 
 func matchDomainPattern(domain, pattern string) bool {
@@ -387,8 +399,12 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 	relayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
 
 	// 如果来自中继用户的连接（即中继服务端特征），执行网络安全拦截检查
+	// safeDialAddr 是 SSRF 检查通过后返回的安全 IP:Port，用于实际连接以防 DNS Rebinding
+	var safeDialAddr string
 	if relayUserID != "" {
-		if errSec := pe.validateTargetSafety(hostAndPort); errSec != nil {
+		var errSec error
+		safeDialAddr, errSec = pe.validateTargetSafety(hostAndPort)
+		if errSec != nil {
 			pe.logFn(fmt.Sprintf("🛡️ [中继安全拦截] 拒绝中继用户 %s 连接到 %s: %v", relayUserID, hostAndPort, errSec))
 			clientConn.Write([]byte("HTTP/1.1 403 Forbidden\r\n\r\n"))
 			clientConn.Close()
@@ -436,7 +452,12 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Passthrough Tunnel (直接本地中转)
-		remoteConn, errDial := pe.dialWithProxy(hostAndPort)
+		// 使用 SSRF 安全检查返回的 IP 地址进行连接（防止 DNS Rebinding）
+		dialTarget := hostAndPort
+		if safeDialAddr != "" {
+			dialTarget = safeDialAddr
+		}
+		remoteConn, errDial := pe.dialWithProxy(dialTarget)
 		if errDial != nil {
 			pe.logFn(fmt.Sprintf("❌ CONNECT %s Dial error: %v", hostAndPort, errDial))
 			clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))

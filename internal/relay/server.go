@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -24,6 +25,7 @@ type RelayServer struct {
 	trackedListener   *trackedListener
 	logFn             func(string)
 	isRunning         bool
+	isTLS             bool
 	relayUserCtxKey   interface{}
 	relayAPIKeyCtxKey interface{}
 }
@@ -85,7 +87,10 @@ func (s *RelayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.engine.ServeHTTP(w, r.WithContext(ctx))
 }
 
-func (s *RelayServer) Start(port string) error {
+// Start starts the relay server on the given port.
+// If caCertPath and caKeyPath are provided and valid, the server will use TLS.
+// Otherwise, it falls back to plain HTTP for backward compatibility.
+func (s *RelayServer) Start(port string, caCertPath, caKeyPath string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -94,9 +99,36 @@ func (s *RelayServer) Start(port string) error {
 	}
 
 	addr := "0.0.0.0:" + port
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+
+	// Try TLS if cert and key paths are provided
+	var tlsConfig *tls.Config
+	if caCertPath != "" && caKeyPath != "" {
+		cert, err := tls.LoadX509KeyPair(caCertPath, caKeyPath)
+		if err != nil {
+			s.log("⚠️ Failed to load TLS cert/key (%v), falling back to HTTP", err)
+		} else {
+			tlsConfig = &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
+			}
+		}
+	}
+
+	var listener net.Listener
+	var err error
+
+	if tlsConfig != nil {
+		listener, err = tls.Listen("tcp", addr, tlsConfig)
+		if err != nil {
+			return fmt.Errorf("failed to listen TLS on %s: %w", addr, err)
+		}
+		s.isTLS = true
+	} else {
+		listener, err = net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("failed to listen on %s: %w", addr, err)
+		}
+		s.isTLS = false
 	}
 
 	s.listener = listener
@@ -106,7 +138,11 @@ func (s *RelayServer) Start(port string) error {
 	}
 
 	go func() {
-		s.log("Relay server started on %s", addr)
+		scheme := "http"
+		if s.isTLS {
+			scheme = "https"
+		}
+		s.log("Relay server started on %s://%s", scheme, addr)
 		if err := s.server.Serve(s.trackedListener); err != nil && err != http.ErrServerClosed {
 			s.log("Relay server error: %v", err)
 		}
@@ -114,6 +150,13 @@ func (s *RelayServer) Start(port string) error {
 
 	s.isRunning = true
 	return nil
+}
+
+// IsTLS returns whether the relay server is running with TLS enabled.
+func (s *RelayServer) IsTLS() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.isTLS
 }
 
 func (s *RelayServer) Stop() {

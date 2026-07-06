@@ -144,7 +144,6 @@ export function renderLogsTable() {
         logsTableBody = document.querySelector('#logsTable tbody');
     }
     if (!logsTableBody) return;
-    logsTableBody.innerHTML = '';
     
     valShowingText = document.getElementById('valShowingText');
     if (paginated.length === 0) {
@@ -153,10 +152,8 @@ export function renderLogsTable() {
             valShowingText.textContent = state.currentLanguage === 'zh' ? `共 0 条记录` : `Showing 0 entries`;
         }
     } else {
+        let html = '';
         paginated.forEach(log => {
-            const tr = document.createElement('tr');
-            tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors';
-            
             let statusClass = 'bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-900/40 dark:text-slate-400 dark:border-slate-800';
             let statusLabel = dict.statusMiss || 'MISS';
             if (log.cacheStatus === 'HIT') {
@@ -173,49 +170,43 @@ export function renderLogsTable() {
             const hitRateVal = log.inTokens > 0 ? (log.cachedTokens / log.inTokens * 100).toFixed(1) : '0.0';
             const hitRateColor = log.cachedTokens > 0 ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400 dark:text-slate-500';
 
-            tr.innerHTML = `
-                <td class="p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] whitespace-nowrap">${log.timestamp}</td>
-                <td class="p-3 font-data-mono truncate" title="${log.method} ${log.host}">
-                    <span class="text-[#0ea5e9] font-bold mr-2">${log.method}</span>
-                    <span class="text-on-surface dark:text-white">${log.host}</span>
-                </td>
-                <td class="p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate" title="${log.path}">${log.path}</td>
-                <td class="p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate" title="${log.sessionId || '-'}">${log.sessionId || '-'}</td>
-                <td class="p-3 font-sans font-medium text-on-surface dark:text-white truncate" title="${log.model}">
-                    <div class="flex flex-col min-w-0">
-                        <span class="font-semibold text-on-surface dark:text-white truncate">${log.model}</span>
-                        ${log.account ? `<span class="text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5" title="${log.account}">${log.account}</span>` : `<span class="text-[10px] text-slate-400 dark:text-slate-500 font-data-mono truncate mt-0.5">${state.currentLanguage === 'zh' ? '直连' : 'Direct'}</span>`}
-                    </div>
-                </td>
-                <td class="p-3 text-right font-data-mono">
-                    <div class="flex flex-col items-end">
-                        <span class="text-[10px] text-outline dark:text-outline-variant">${dict.input || '输入'}: ${log.inTokens.toLocaleString()}</span>
-                        <span class="text-on-surface dark:text-white">${dict.output || '输出'}: ${log.outTokens.toLocaleString()}</span>
-                    </div>
-                </td>
-                <td class="p-3 text-right font-data-mono text-emerald-600 dark:text-emerald-400 font-bold">$${(log.cost || 0).toFixed(6)}</td>
-                <td class="p-3 text-right font-data-mono">${formatDuration(log.durationMs)}</td>
-                <td class="p-3 text-center font-data-mono ${hitRateColor}">${hitRateVal}%</td>
-                <td class="p-3 text-center">
-                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${statusClass}">${statusLabel}</span>
-                    <span class="block text-[10px] font-bold ${statusColor} mt-1">HTTP ${log.statusCode}</span>
-                </td>
-                <td class="p-3 text-center">
-                    <button class="px-2 py-1 text-[11px] bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-fixed-dim rounded font-medium transition-all view-details-btn">
-                        ${state.currentLanguage === 'zh' ? '查看' : 'View'}
-                    </button>
-                </td>
+            html += `
+                <tr class="hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
+                    <td class="p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] whitespace-nowrap">${log.timestamp}</td>
+                    <td class="p-3 font-data-mono truncate" title="${log.method} ${log.host}">
+                        <span class="text-[#0ea5e9] font-bold mr-2">${log.method}</span>
+                        <span class="text-on-surface dark:text-white">${log.host}</span>
+                    </td>
+                    <td class="p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate" title="${log.path}">${log.path}</td>
+                    <td class="p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate" title="${log.sessionId || '-'}">${log.sessionId || '-'}</td>
+                    <td class="p-3 font-sans font-medium text-on-surface dark:text-white truncate" title="${log.model}">
+                        <div class="flex flex-col min-w-0">
+                            <span class="font-semibold text-on-surface dark:text-white truncate">${log.model}</span>
+                            ${log.account ? `<span class="text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5" title="${log.account}">${log.account}</span>` : `<span class="text-[10px] text-slate-400 dark:text-slate-500 font-data-mono truncate mt-0.5">${state.currentLanguage === 'zh' ? '直连' : 'Direct'}</span>`}
+                        </div>
+                    </td>
+                    <td class="p-3 text-right font-data-mono">
+                        <div class="flex flex-col items-end">
+                            <span class="text-[10px] text-outline dark:text-outline-variant">${dict.input || '输入'}: ${log.inTokens.toLocaleString()}</span>
+                            <span class="text-on-surface dark:text-white">${dict.output || '输出'}: ${log.outTokens.toLocaleString()}</span>
+                        </div>
+                    </td>
+                    <td class="p-3 text-right font-data-mono text-emerald-600 dark:text-emerald-400 font-bold">$${(log.cost || 0).toFixed(6)}</td>
+                    <td class="p-3 text-right font-data-mono">${formatDuration(log.durationMs)}</td>
+                    <td class="p-3 text-center font-data-mono ${hitRateColor}">${hitRateVal}%</td>
+                    <td class="p-3 text-center">
+                        <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${statusClass}">${statusLabel}</span>
+                        <span class="block text-[10px] font-bold ${statusColor} mt-1">HTTP ${log.statusCode}</span>
+                    </td>
+                    <td class="p-3 text-center">
+                        <button class="px-2 py-1 text-[11px] bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-fixed-dim rounded font-medium transition-all view-details-btn" data-log-id="${log.id}">
+                            ${state.currentLanguage === 'zh' ? '查看' : 'View'}
+                        </button>
+                    </td>
+                </tr>
             `;
-
-            const detailBtn = tr.querySelector('.view-details-btn');
-            if (detailBtn) {
-                detailBtn.addEventListener('click', () => {
-                    showModal(log);
-                });
-            }
-
-            logsTableBody!.appendChild(tr);
         });
+        logsTableBody.innerHTML = html;
 
         const showingText = state.currentLanguage === 'zh'
             ? `显示第 ${startIndex + 1} 到 ${endIndex} 条，共 ${totalItems} 条记录`
@@ -581,6 +572,24 @@ export function initDashboardEvents() {
     barErrors = document.getElementById('barErrors');
     valSuccessRate = document.getElementById('valSuccessRate');
     modelsTableBody = document.querySelector('#modelsTable tbody');
+    logsTableBody = document.querySelector('#logsTable tbody');
+
+    // 绑定事件委托：全局唯一代理日志表格中“查看”按钮的点击事件，极大减少 DOM 高频销毁重建时的事件绑定和内存占用
+    if (logsTableBody) {
+        logsTableBody.addEventListener('click', (e: Event) => {
+            const target = e.target as HTMLElement;
+            const btn = target.closest('.view-details-btn');
+            if (btn) {
+                const logId = btn.getAttribute('data-log-id');
+                if (logId) {
+                    const foundLog = state.allRequests.find(l => l.id === logId);
+                    if (foundLog) {
+                        showModal(foundLog);
+                    }
+                }
+            }
+        });
+    }
 
     // Event Listeners for Intercept Toggle
     if (proxyToggle) {

@@ -1377,6 +1377,10 @@ func (a *App) SetWindowVisible(v bool) {
 	a.isWindowVisibleMu.Lock()
 	a.isWindowVisible = v
 	a.isWindowVisibleMu.Unlock()
+	if v {
+		// 窗口恢复可见时，立刻补偿推送一次最新日志数据，防止后台静默状态期间漏刷
+		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
+	}
 }
 
 // IsWindowVisibleAndActive 检查窗口是否在前台且可见（非最小化且未隐藏）

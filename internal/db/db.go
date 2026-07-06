@@ -39,9 +39,9 @@ func InitDB(dataDir string) error {
 		return fmt.Errorf("failed to open sqlite database: %w", err)
 	}
 
-	// Configure connection pool
-	db.SetMaxOpenConns(50) // Allow concurrent readers in WAL mode
-	db.SetMaxIdleConns(10)
+	// Configure connection pool to save memory
+	db.SetMaxOpenConns(15) // Limit concurrent readers in WAL mode to control memory
+	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(time.Hour)
 
 	if err := db.Ping(); err != nil {
@@ -63,9 +63,9 @@ func CloseDB() {
 }
 
 func runMigrations(db *sql.DB, dataDir string) error {
-	// Enable WAL mode and busy timeout for better concurrency and performance
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`); err != nil {
-		log.Printf("Warning: Failed to enable WAL mode/busy timeout: %v\n", err)
+	// Enable WAL mode, busy timeout, and limit memory cache size per connection to 4MB (-4000 pages)
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA cache_size=-4000;`); err != nil {
+		log.Printf("Warning: Failed to enable WAL mode/busy timeout/cache limit: %v\n", err)
 	}
 
 	schemas := []string{

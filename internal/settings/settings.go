@@ -203,14 +203,28 @@ func (m *Manager) loadConfig() {
 		return
 	}
 
+	// Detect which security fields are explicitly set in the config file.
+	// If a security field is missing from an older config, apply secure defaults
+	// rather than the Go zero value (false).
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawMap); err == nil {
+		if _, exists := rawMap["relaySSRFBlock"]; !exists {
+			parsed.RelaySSRFBlock = true
+		}
+		if _, exists := rawMap["relayPortBlock"]; !exists {
+			parsed.RelayPortBlock = true
+		}
+		if _, exists := rawMap["relayDomainWhitelist"]; !exists {
+			parsed.RelayDomainWhitelist = []string{"*.googleapis.com", "*.google.com", "*.anthropic.com", "*.openai.com"}
+		}
+	}
+
 	if parsed.MaxRetries <= 0 {
 		parsed.MaxRetries = 20
 	}
-
 	if parsed.MaxRetryDelay <= 0 {
 		parsed.MaxRetryDelay = 10
 	}
-
 	if parsed.RequestTimeout <= 0 {
 		parsed.RequestTimeout = 300
 	}
@@ -409,13 +423,29 @@ func (m *Manager) SetRemoteKey(key string) error {
 func (m *Manager) GetRemotePassword() string {
 	m.RLock()
 	defer m.RUnlock()
-	return m.config.RemotePassword
+	// Decrypt stored credential (backward compatible: returns plaintext if not encrypted)
+	decrypted, err := DecryptCredential(m.config.RemotePassword)
+	if err != nil {
+		// If decryption fails, return stored value as-is (may be plaintext from old config)
+		return m.config.RemotePassword
+	}
+	return decrypted
 }
 
 func (m *Manager) SetRemotePassword(pwd string) error {
 	m.Lock()
 	defer m.Unlock()
-	m.config.RemotePassword = pwd
+	if pwd == "" {
+		m.config.RemotePassword = ""
+	} else {
+		encrypted, err := EncryptCredential(pwd)
+		if err != nil {
+			// Fallback to plaintext if encryption fails
+			m.config.RemotePassword = pwd
+		} else {
+			m.config.RemotePassword = encrypted
+		}
+	}
 	return m.SaveConfig()
 }
 

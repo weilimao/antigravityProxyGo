@@ -3,7 +3,6 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -87,7 +87,7 @@ func NewProxyHandler(
 		getRequestTimeout:      getRequestTimeout,
 		relayStatsCallback: relayStatsCallback,
 		relayQuotaCheck:    relayQuotaCheck,
-		client:             netutil.NewClient(0),
+		client:             netutil.NewClient(10 * time.Minute),
 	}
 }
 
@@ -685,6 +685,21 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Forward request
 		targetUrl := "https://" + localTargetHost + localTargetPath
+
+		// Clean up potential credential conflicts before sending to Google
+		if customHeaders.Get("Authorization") != "" {
+			customHeaders.Del("x-goog-api-key")
+			customHeaders.Del("X-Goog-Api-Key")
+			if parsedUrl, err := url.Parse(targetUrl); err == nil {
+				q := parsedUrl.Query()
+				if q.Get("key") != "" {
+					q.Del("key")
+					parsedUrl.RawQuery = q.Encode()
+					targetUrl = parsedUrl.String()
+				}
+			}
+		}
+
 		timeoutSec := 300
 		if h.getRequestTimeout != nil {
 			if val := h.getRequestTimeout(); val > 0 {
@@ -804,7 +819,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			respBodyBytes = sentBytes
 		} else {
-			respBodyBytes, errRead = io.ReadAll(resp.Body)
+			respBodyBytes, errRead = io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 		}
 
 		if errRead != nil {
@@ -1233,9 +1248,7 @@ func (h *ProxyHandler) getRemoteClient() *http.Client {
 			}
 			return nil, errors.New("remote relay disconnected")
 		},
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
+		TLSClientConfig:       getRemoteTLSConfig(""),
 		MaxIdleConns:          200,
 		MaxIdleConnsPerHost:   100,
 		IdleConnTimeout:       90 * time.Second,
@@ -1245,7 +1258,7 @@ func (h *ProxyHandler) getRemoteClient() *http.Client {
 
 	h.remoteClient = &http.Client{
 		Transport: transport,
-		Timeout:   0,
+		Timeout:   10 * time.Minute,
 	}
 	return h.remoteClient
 }

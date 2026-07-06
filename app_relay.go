@@ -548,11 +548,18 @@ func (a *App) startRelayServer(port string) error {
 		proxy.RelayAPIKeyCtxKey,
 	)
 
-	if err := a.relayServer.Start(port); err != nil {
+	// Pass empty strings for CA cert/key paths to default to HTTP.
+	// TLS support is implemented in the server, but should only be enabled via a future UI toggle
+	// rather than automatically hijacking the MITM proxy's CA certificates.
+	if err := a.relayServer.Start(port, "", ""); err != nil {
 		return err
 	}
 
-	a.AddLog(fmt.Sprintf("🚀 Relay server started on port %s", port))
+	scheme := "http"
+	if a.relayServer.IsTLS() {
+		scheme = "https"
+	}
+	a.AddLog(fmt.Sprintf("🚀 Relay server started on %s://0.0.0.0:%s", scheme, port))
 	return nil
 }
 
@@ -622,6 +629,25 @@ func (a *App) connectRemote(host, port, path, key, password string) error {
 	if err := a.remoteRelay.Login(host, port, path, key, password); err != nil {
 		return err
 	}
+
+	// Register auto-relogin callback for token expiry
+	a.remoteRelay.SetOnTokenExpired(func() {
+		a.AddLog("🔄 Token expired, attempting auto-relogin...")
+		savedKey := a.settingsMgr.GetRemoteKey()
+		savedPwd := a.settingsMgr.GetRemotePassword()
+		savedHost := a.settingsMgr.GetRemoteHost()
+		savedPort := a.settingsMgr.GetRemotePort()
+		savedPath := a.settingsMgr.GetRemotePath()
+		if savedKey == "" || savedPwd == "" || savedHost == "" {
+			a.AddLog("⚠️ Cannot auto-relogin: no saved credentials")
+			return
+		}
+		if err := a.remoteRelay.Login(savedHost, savedPort, savedPath, savedKey, savedPwd); err != nil {
+			a.AddLog(fmt.Sprintf("❌ Auto-relogin failed: %v", err))
+		} else {
+			a.AddLog("✅ Auto-relogin successful")
+		}
+	})
 
 	// Set remote relay on proxy engine
 	a.proxyEngine.SetRemoteRelay(a.remoteRelay)
@@ -727,7 +753,6 @@ func (a *App) getRemoteStatusPayload() map[string]interface{} {
 		"port":                remoteConfig.Port,
 		"path":                remoteConfig.Path,
 		"userKey":             remoteConfig.UserKey,
-		"token":               remoteConfig.Token,
 	}
 }
 

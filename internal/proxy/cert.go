@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const maxCertCacheSize = 200
+const maxCertCacheSize = 100
 
 type certCacheEntry struct {
 	cert     *tls.Certificate

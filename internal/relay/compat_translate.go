@@ -830,6 +830,12 @@ func extractToken(r *http.Request) string {
 	if tok := r.Header.Get("API_KEY"); tok != "" {
 		return strings.TrimSpace(tok)
 	}
+	if tok := r.Header.Get("x-goog-api-key"); tok != "" {
+		return strings.TrimSpace(tok)
+	}
+	if tok := r.Header.Get("X-Goog-Api-Key"); tok != "" {
+		return strings.TrimSpace(tok)
+	}
 
 	header := r.Header.Get("Authorization")
 	if header != "" {

@@ -41,6 +41,8 @@ type PacketCapturer struct {
 	getAccountTokens    func(id string) (string, string, string, error) // returns token, refreshToken, projectId, error
 	refreshAccount      func(id string) (string, error)
 	enablePacketCapture func() bool
+	saveTimeout         *time.Timer
+	saveTimeoutLock     sync.Mutex
 }
 
 func NewPacketCapturer(
@@ -116,13 +118,28 @@ func (pc *PacketCapturer) LoadFromDisk() {
 		return
 	}
 
-	var parsed []*CapturedPacket
-	if err := json.Unmarshal(data, &parsed); err != nil {
+	if err := json.Unmarshal(data, &pc.packets); err != nil {
 		pc.packets = make([]*CapturedPacket, 0)
 		return
 	}
-	pc.packets = parsed
 }
+
+func (pc *PacketCapturer) scheduleSave() {
+	pc.saveTimeoutLock.Lock()
+	defer pc.saveTimeoutLock.Unlock()
+
+	if pc.saveTimeout != nil {
+		return
+	}
+
+	pc.saveTimeout = time.AfterFunc(3*time.Second, func() {
+		pc.SaveToDisk()
+		pc.saveTimeoutLock.Lock()
+		pc.saveTimeout = nil
+		pc.saveTimeoutLock.Unlock()
+	})
+}
+
 
 func (pc *PacketCapturer) GetPacketKey(method, host, urlPath string) string {
 	cleanPath := strings.Split(urlPath, "?")[0]
@@ -161,7 +178,11 @@ func (pc *PacketCapturer) SavePacket(method, host, urlPath string, reqHeaders ma
 
 	var parsedReqBody interface{}
 	if len(reqBody) > 0 {
-		if err := json.Unmarshal(reqBody, &parsedReqBody); err != nil {
+		if len(reqBody) > 50000 {
+			parsedReqBody = string(reqBody[:50000]) + "... [已截断，防止内存溢出]"
+		} else if json.Valid(reqBody) {
+			parsedReqBody = json.RawMessage(reqBody)
+		} else {
 			parsedReqBody = string(reqBody)
 		}
 	}
@@ -192,7 +213,11 @@ func (pc *PacketCapturer) SavePacket(method, host, urlPath string, reqHeaders ma
 			}
 		}
 
-		if err := json.Unmarshal(decompressedResBody, &parsedResBody); err != nil {
+		if len(decompressedResBody) > 50000 {
+			parsedResBody = string(decompressedResBody[:50000]) + "... [已截断，防止内存溢出]"
+		} else if json.Valid(decompressedResBody) {
+			parsedResBody = json.RawMessage(decompressedResBody)
+		} else {
 			parsedResBody = string(decompressedResBody)
 		}
 	}
@@ -267,8 +292,13 @@ func (pc *PacketCapturer) SavePacket(method, host, urlPath string, reqHeaders ma
 	}
 	pc.packets = append([]*CapturedPacket{packet}, pc.packets...)
 
-	// Trigger async disk save
-	go pc.SaveToDisk()
+	// Truncate to maximum length of 50 to prevent unbounded memory growth
+	if len(pc.packets) > 50 {
+		pc.packets = pc.packets[:50]
+	}
+
+	// Trigger async disk save with debounce
+	pc.scheduleSave()
 
 	return packet
 }

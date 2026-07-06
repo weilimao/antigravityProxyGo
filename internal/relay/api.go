@@ -11,11 +11,12 @@ import (
 )
 
 type APIHandler struct {
-	authMgr    *AuthManager
-	statsMgr   *StatsTracker
-	packageMgr *PackageManager
-	logFn      func(string)
-	caCertPath string // 服务器 CA 证书路径，供远程客户端下载
+	authMgr      *AuthManager
+	statsMgr     *StatsTracker
+	packageMgr   *PackageManager
+	logFn        func(string)
+	caCertPath   string // 服务器 CA 证书路径，供远程客户端下载
+	loginLimiter *RateLimiter
 }
 
 func compareQuotas(q1, q2 UserQuotas) bool {
@@ -46,11 +47,12 @@ func compareQuotas(q1, q2 UserQuotas) bool {
 
 func NewAPIHandler(authMgr *AuthManager, statsMgr *StatsTracker, packageMgr *PackageManager, logFn func(string), caCertPath string) *APIHandler {
 	return &APIHandler{
-		authMgr:    authMgr,
-		statsMgr:   statsMgr,
-		packageMgr: packageMgr,
-		logFn:      logFn,
-		caCertPath: caCertPath,
+		authMgr:      authMgr,
+		statsMgr:     statsMgr,
+		packageMgr:   packageMgr,
+		logFn:        logFn,
+		caCertPath:   caCertPath,
+		loginLimiter: NewRateLimiter(),
 	}
 }
 
@@ -96,6 +98,20 @@ func (h *APIHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *APIHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// IP-based login rate limiting: max 5 attempts per minute per IP
+	clientIP := r.RemoteAddr
+	if idx := strings.LastIndex(clientIP, ":"); idx != -1 {
+		clientIP = clientIP[:idx]
+	}
+	if !h.loginLimiter.Allow("login_ip:"+clientIP, 5) {
+		h.log("Login rate limited for IP=%s", clientIP)
+		writeJSON(w, http.StatusTooManyRequests, map[string]interface{}{
+			"success": false,
+			"error":   "too many login attempts, please try again later",
+		})
+		return
+	}
+
 	var req struct {
 		Key      string `json:"key"`
 		Password string `json:"password"`
@@ -110,7 +126,7 @@ func (h *APIHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	session, err := h.authMgr.Login(req.Key, req.Password)
 	if err != nil {
-		h.log("Login failed for key=%s: %v", req.Key, err)
+		h.log("Login failed for IP=%s: %v", clientIP, err)
 		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{
 			"success": false,
 			"error":   err.Error(),
@@ -372,7 +388,18 @@ func (h *APIHandler) log(format string, args ...interface{}) {
 	}
 }
 
-func (h *APIHandler) handleCert(w http.ResponseWriter, _ *http.Request) {
+func (h *APIHandler) handleCert(w http.ResponseWriter, r *http.Request) {
+	// Require authentication to download CA certificate
+	token := extractBearerToken(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing token"})
+		return
+	}
+	if _, err := h.authMgr.ValidateToken(token); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
 	if h.caCertPath == "" {
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{"error": "cert path not configured"})
 		return

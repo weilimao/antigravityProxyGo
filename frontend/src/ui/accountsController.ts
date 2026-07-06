@@ -760,6 +760,16 @@ export function initAccountsEvents() {
             }
             div.textContent = logText;
             triggerLogsArea.appendChild(div);
+            
+            // Limit child nodes to 100 to prevent DOM memory leak
+            if (triggerLogsArea.children.length > 100) {
+                while (triggerLogsArea.children.length > 80) {
+                    if (triggerLogsArea.firstChild) {
+                        triggerLogsArea.removeChild(triggerLogsArea.firstChild);
+                    }
+                }
+            }
+            
             triggerLogsArea.scrollTop = triggerLogsArea.scrollHeight;
         }
     });

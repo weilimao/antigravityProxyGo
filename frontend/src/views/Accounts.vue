@@ -163,8 +163,9 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue';
+import { initAccountsEvents } from '../ui/accountsController';
 
 onMounted(() => {
-  // Logic from accounts controller will go here
+  initAccountsEvents();
 });
 </script>

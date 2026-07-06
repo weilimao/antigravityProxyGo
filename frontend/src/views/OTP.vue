@@ -89,8 +89,9 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue';
+import { initOtpEvents } from '../ui/otpController';
 
 onMounted(() => {
-  // Logic from otp controller will go here
+  initOtpEvents();
 });
 </script>
