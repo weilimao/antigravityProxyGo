@@ -1100,6 +1100,12 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					if qErr == nil && len(res.Buckets) > 0 {
 						h.accountMgr.UpdateAccountCooldownFromQuota(a.ID, res.Buckets)
 					}
+					if qErr == nil {
+						h.accountMgr.UpdateAccountTier(a.ID, res.Tier)
+						if res.Credits != nil {
+							h.accountMgr.UpdateAccountCredits(a.ID, *res.Credits)
+						}
+					}
 				}(lastUsedAccount)
 			}
 
@@ -1126,7 +1132,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							h.logFn(fmt.Sprintf("✅ [负载均衡] 账号 %s 额度充足，已同步解除冷静期，恢复可用状态。", email))
 						}
 					}
-				} else if qErr != nil {
+				}
+				if qErr == nil {
+					h.accountMgr.UpdateAccountTier(lastUsedAccount.ID, res.Tier)
+					if res.Credits != nil {
+						h.accountMgr.UpdateAccountCredits(lastUsedAccount.ID, *res.Credits)
+					}
+				} else {
 					h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 同步刷新配额失败: %v", email, qErr))
 				}
 			} else if errAttempt.Error() == "QUOTA_EXHAUSTED" {
@@ -1137,6 +1149,12 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					res, qErr := h.quotaFetch(a)
 					if qErr == nil && len(res.Buckets) > 0 {
 						h.accountMgr.UpdateAccountCooldownFromQuota(a.ID, res.Buckets)
+					}
+					if qErr == nil {
+						h.accountMgr.UpdateAccountTier(a.ID, res.Tier)
+						if res.Credits != nil {
+							h.accountMgr.UpdateAccountCredits(a.ID, *res.Credits)
+						}
 					}
 				}(lastUsedAccount)
 			}
