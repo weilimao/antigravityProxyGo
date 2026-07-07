@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -66,6 +67,8 @@ type App struct {
 	relayServer       *relay.RelayServer
 	remoteRelay          *proxy.RemoteRelay
 	autoTriggerScheduler *autotrigger.Scheduler
+	pendingLogs     []string
+	pendingLogsMu   sync.Mutex
 }
 
 func NewApp() *App {
@@ -193,17 +196,49 @@ func (a *App) startup(ctx context.Context) {
 	)
 	a.packetCap.Init(activeDir)
 
-		// Bind UI update callbacks
-	a.statsTracker.SetOnPayloadUpdate(func() {
-		if a.IsWindowVisibleAndActive() {
-			wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(true))
+	// Bind UI update callbacks with concurrent-safe throttling to prevent UI rendering freeze
+	var lastEmitTime time.Time
+	var emitMu sync.Mutex
+	var pendingTimer *time.Timer
+
+	triggerStatsUpdate := func() {
+		emitMu.Lock()
+		defer emitMu.Unlock()
+
+		now := time.Now()
+		elapsed := now.Sub(lastEmitTime)
+		const throttleInterval = 1000 * time.Millisecond
+
+		sendUpdate := func() {
+			if a.IsWindowVisibleAndActive() {
+				wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(true))
+			}
+			lastEmitTime = time.Now()
+			if pendingTimer != nil {
+				pendingTimer.Stop()
+				pendingTimer = nil
+			}
 		}
+
+		if elapsed >= throttleInterval {
+			sendUpdate()
+		} else {
+			if pendingTimer == nil {
+				pendingTimer = time.AfterFunc(throttleInterval-elapsed, func() {
+					emitMu.Lock()
+					sendUpdate()
+					emitMu.Unlock()
+				})
+			}
+		}
+	}
+
+	a.statsTracker.SetOnPayloadUpdate(func() {
+		triggerStatsUpdate()
 	})
 
 	a.usageTracker.SetOnPayloadUpdate(func() {
-		if a.IsWindowVisibleAndActive() {
-			wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(true))
-		}
+		triggerStatsUpdate()
 	})
 
 	// 6. Initialize Proxy Engine
@@ -440,6 +475,31 @@ func (a *App) startup(ctx context.Context) {
 	a.monitorCancel = cancel
 	go a.startMemoryMonitor(monitorCtx)
 
+	// Start Logs Batch Flusher
+	go func(ctx context.Context) {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.pendingLogsMu.Lock()
+				if len(a.pendingLogs) == 0 {
+					a.pendingLogsMu.Unlock()
+					continue
+				}
+				batch := a.pendingLogs
+				a.pendingLogs = nil
+				a.pendingLogsMu.Unlock()
+
+				if a.IsWindowVisibleAndActive() {
+					wailsRuntime.EventsEmit(a.ctx, "logs:batch", batch)
+				}
+			}
+		}
+	}(monitorCtx)
+
 	a.initTray()
 }
 
@@ -486,9 +546,12 @@ func (a *App) AddLog(msg string) {
 	}
 	a.logBufferMu.Unlock()
 
-	if a.IsWindowVisibleAndActive() {
-		wailsRuntime.EventsEmit(a.ctx, "log", formatted)
+	a.pendingLogsMu.Lock()
+	a.pendingLogs = append(a.pendingLogs, formatted)
+	if len(a.pendingLogs) > 200 {
+		a.pendingLogs = a.pendingLogs[1:]
 	}
+	a.pendingLogsMu.Unlock()
 }
 
 // OpenPath opens system browser or path
@@ -738,8 +801,10 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 		a.emitMemoryStats()
 		a.logBufferMu.Lock()
-		for _, log := range a.logBuffer {
-			wailsRuntime.EventsEmit(a.ctx, "log", log)
+		if len(a.logBuffer) > 0 {
+			logsCopy := make([]string, len(a.logBuffer))
+			copy(logsCopy, a.logBuffer)
+			wailsRuntime.EventsEmit(a.ctx, "logs:batch", logsCopy)
 		}
 		a.logBufferMu.Unlock()
 		{
@@ -1349,6 +1414,10 @@ func (a *App) startMemoryMonitor(ctx context.Context) {
 				if a.IsWindowVisibleAndActive() {
 					wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 				}
+				// Periodically force the Go runtime to release unused heap
+				// memory back to the OS. Under heavy concurrent traffic the
+				// runtime may retain freed pages; this caps RSS growth.
+				debug.FreeOSMemory()
 			}
 		}
 	}
@@ -1363,6 +1432,9 @@ func (a *App) emitMemoryStats() {
 	// Read Go runtime actual heap allocation (actual in-use memory by Go objects)
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
+
+	fmt.Printf("[DEBUG MEMORY] Total RSS: %.2f MB | Go Heap: %.2f MB | Go Sys: %.2f MB | Proc Count: %d | CPU: %.1f%%\n",
+		float64(total)/(1024*1024), float64(ms.HeapAlloc)/(1024*1024), float64(ms.Sys)/(1024*1024), count, cpuPercent)
 
 	wailsRuntime.EventsEmit(a.ctx, "memory-stats-updated", map[string]interface{}{
 		"total":        total,
@@ -1398,7 +1470,12 @@ func (a *App) IsWindowVisibleAndActive() bool {
 
 // getStatsPayload 获取隔离或原生的统计载荷快照
 func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
-	usagePayload := a.usageTracker.GetPayload()
+	// Skip the heavy usage deep-copy on the 1s hot path; usage data is only
+	// sent on the 60s heartbeat (simplified=false) and explicit get-state.
+	var usagePayload interface{}
+	if !simplified {
+		usagePayload = a.usageTracker.GetPayload()
+	}
 	if a.remoteRelay != nil && a.remoteRelay.GetConfig().Connected {
 		cfg := a.remoteRelay.GetConfig()
 		// No remote log syncing to local database anymore. All metrics are pre-aggregated and queried on-demand.

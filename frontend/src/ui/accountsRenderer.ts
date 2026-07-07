@@ -862,7 +862,18 @@ export function updateAggregateQuotaUI() {
 
     const dict = i18n[state.currentLanguage] || i18n.zh;
 
-    const isPool = poolModeToggle ? poolModeToggle.checked : false;
+    let isPool = false;
+    if (state.lastBackendData) {
+        if (state.currentActiveChannel === 'antigravity') {
+            isPool = !!state.lastBackendData.poolMode;
+        } else if (state.currentActiveChannel === 'gemini-cli') {
+            isPool = !!state.lastBackendData.geminiCliPoolMode;
+        } else if (state.currentActiveChannel === 'project') {
+            isPool = !!state.lastBackendData.projectPoolMode;
+        }
+    } else if (poolModeToggle) {
+        isPool = poolModeToggle.checked;
+    }
     const isRemote = !!state.isRemoteMode;
     const hasRemoteStats = !!(state.remoteStats && state.remoteStats.quotas);
 

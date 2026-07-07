@@ -285,13 +285,13 @@ export async function refreshAllAccountsQuotas() {
                 const result = await ipcRenderer.invoke('quota:fetch', acc.id);
                 if (result && !result.error) {
                     state.quotaCache[acc.id] = result.buckets;
+                    updateAggregateQuotaUI(); // 每刷新一个账号，就重新计算并更新一次总额度条
                 }
             } catch (err) {
                 console.error(`Failed to refresh quota for ${acc.email}:`, err);
             }
             await new Promise(r => setTimeout(r, 100));
         }
-        updateAggregateQuotaUI();
         if (accountsList && accountsList.children.length > 0) {
             renderAccounts(state.currentAccountsList);
         }
@@ -388,8 +388,6 @@ export function initAccountsEvents() {
     btnRefreshAllQuota = document.getElementById('btnRefreshAllQuota') as HTMLButtonElement | null;
     btnRefreshAllIcon = document.getElementById('btnRefreshAllIcon');
     btnClearSessions = document.getElementById('btnClearSessions') as HTMLButtonElement | null;
-    btnRefreshAggregateQuota = document.getElementById('btnRefreshAggregateQuota') as HTMLButtonElement | null;
-    btnRefreshAggregateIcon = document.getElementById('btnRefreshAggregateIcon');
     poolModeContainer = document.getElementById('poolModeContainer') as HTMLDivElement | null;
     lblPoolMode = document.getElementById('lblPoolMode');
     btnChannelAntigravity = document.getElementById('btnChannelAntigravity') as HTMLButtonElement | null;
@@ -428,9 +426,6 @@ export function initAccountsEvents() {
 
     if (btnRefreshAllQuota) {
         btnRefreshAllQuota.addEventListener('click', refreshAllQuotas);
-    }
-    if (btnRefreshAggregateQuota) {
-        btnRefreshAggregateQuota.addEventListener('click', refreshAllAccountsQuotas);
     }
 
     // Filter & Pagination Event Bindings
@@ -645,24 +640,7 @@ export function initAccountsEvents() {
     } */
 
     // Register accounts data update channel listener
-    ipcRenderer.on('accounts-res', (event: any, data: any) => {
-        state.lastBackendData = data;
-        if (data && typeof data.activeChannel !== 'undefined') {
-            state.currentActiveChannel = data.activeChannel;
-        }
-        if (!state.currentViewTab) {
-            state.currentViewTab = state.currentActiveChannel;
-        }
-        updateViewTabUI();
-        if (data.accounts) {
-            state.currentAccountsList = data.accounts;
-            renderAccounts(data.accounts);
-        }
-        updateAggregateQuotaUI();
-        if (state.callbacks.updateAnalyzeAccountSelect) {
-            state.callbacks.updateAnalyzeAccountSelect();
-        }
-    });
+    // (Moved to global initAccountsGlobalEvents below)
 
     // 监听账号多选事件以刷新批量操作栏
     document.addEventListener('account-selection-changed', updateBatchActionBarUI);
@@ -742,7 +720,95 @@ export function initAccountsEvents() {
         btnStartTriggerTest.addEventListener('click', startTriggerTestExecution);
     }
 
-    // 绑定全局 log 事件，过滤显示测试进度
+    // 当 DOM 挂载时，根据已经同步过的 accounts 数据对 DOM 状态进行一轮初始化
+    if (state.lastBackendData) {
+        updateViewTabUI();
+        updatePoolModeUI();
+        updateLayoutUI();
+        if (state.currentAccountsList) {
+            renderAccounts(state.currentAccountsList);
+        }
+        updateAggregateQuotaUI();
+    }
+
+    // 主动触发一次账号数据同步，确保在前端初始化完毕后拉取到最新数据
+    ipcRenderer.send('accounts:get');
+    initAutoTriggerModalEvents();
+}
+
+let isInitialQuotaLoaded = false;
+
+export async function refreshAllAccountsQuotasSilently() {
+    if (!state.currentAccountsList || state.currentAccountsList.length === 0) return;
+    try {
+        for (const acc of state.currentAccountsList) {
+            if (!acc.enabled) {
+                continue;
+            }
+            try {
+                const result = await ipcRenderer.invoke('quota:fetch', acc.id);
+                if (result && !result.error) {
+                    state.quotaCache[acc.id] = result.buckets;
+                    updateAggregateQuotaUI(); // 每刷新一个账号，就重新计算并更新一次总额度条
+                }
+            } catch (err) {
+                console.error(`[Silent Refresh] Failed to refresh quota for ${acc.email}:`, err);
+            }
+            await new Promise(r => setTimeout(r, 100));
+        }
+        const accountsListEl = document.getElementById('accountsList');
+        if (accountsListEl && state.callbacks.renderAccounts) {
+            state.callbacks.renderAccounts(state.currentAccountsList);
+        }
+    } catch (err) {
+        console.error('[Silent Refresh] Error during global silent quota refresh:', err);
+    }
+}
+
+export function initAccountsGlobalEvents() {
+    // 获取主页“一键刷新”按钮 DOM 并进行事件绑定，因为主页 DOM 在程序启动时即始终存在
+    btnRefreshAggregateQuota = document.getElementById('btnRefreshAggregateQuota') as HTMLButtonElement | null;
+    btnRefreshAggregateIcon = document.getElementById('btnRefreshAggregateIcon');
+    if (btnRefreshAggregateQuota) {
+        btnRefreshAggregateQuota.addEventListener('click', refreshAllAccountsQuotas);
+    }
+
+    // 1. 注册账号数据更新频道监听
+    ipcRenderer.on('accounts-res', (event: any, data: any) => {
+        state.lastBackendData = data;
+        if (data && typeof data.activeChannel !== 'undefined') {
+            state.currentActiveChannel = data.activeChannel;
+        }
+        if (!state.currentViewTab) {
+            state.currentViewTab = state.currentActiveChannel;
+        }
+        
+        // 尝试更新视图 Tab
+        updateViewTabUI();
+
+        if (data.accounts) {
+            state.currentAccountsList = data.accounts;
+            // 只有当 DOM 列表容器存在时才重新绘制账号卡片
+            const accountsListEl = document.getElementById('accountsList');
+            if (accountsListEl) {
+                renderAccounts(data.accounts);
+            }
+        }
+        
+        updateAggregateQuotaUI();
+        
+        if (state.callbacks.updateAnalyzeAccountSelect) {
+            state.callbacks.updateAnalyzeAccountSelect();
+        }
+
+        // 第一次加载账号时，自动在后台静默刷新所有账号池的额度信息
+        if (!isInitialQuotaLoaded && data.accounts && data.accounts.length > 0) {
+            isInitialQuotaLoaded = true;
+            refreshAllAccountsQuotasSilently();
+        }
+    });
+
+    // 2. 绑定全局 log 事件，过滤显示测试进度
     ipcRenderer.on('log', (event: any, logText: string) => {
         if (logText && logText.includes('[测试回复]') && triggerLogsArea) {
             if (triggerLogsArea.innerHTML.includes('等待配置')) {
@@ -774,9 +840,8 @@ export function initAccountsEvents() {
         }
     });
 
-    // 主动触发一次账号数据同步，确保在前端初始化完毕后拉取到最新数据
+    // 3. 页面打开时拉取一次最新账号信息
     ipcRenderer.send('accounts:get');
-    initAutoTriggerModalEvents();
 }
 
 async function loadSessionBindings() {

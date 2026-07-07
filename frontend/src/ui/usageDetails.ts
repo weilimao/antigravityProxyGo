@@ -361,59 +361,69 @@ export function render(usage?: any) {
         const nextBtn = document.getElementById('btnNextUsagePage') as HTMLButtonElement;
         if (nextBtn) nextBtn.disabled = currentPage >= totalPages;
     }
-
-    // 重新为当前页的 details 绑定展开状态与分页按钮事件
-    const currentContainer = document.getElementById('usageContainerCard');
-    if (currentContainer) {
-        currentContainer.querySelectorAll('details').forEach(el => {
-            el.addEventListener('toggle', () => {
-                const key = el.getAttribute('data-account-key');
-                if (key) {
-                    if (el.open) {
-                        openAccounts.add(key);
-                    } else {
-                        openAccounts.delete(key);
-                    }
-                }
-            });
-        });
-
-        const prevBtn = currentContainer.querySelector('#btnPrevUsagePage');
-        if (prevBtn) {
-            prevBtn.replaceWith(prevBtn.cloneNode(true));
-            const newPrev = currentContainer.querySelector('#btnPrevUsagePage');
-            if (newPrev && currentPage > 1) {
-                newPrev.addEventListener('click', () => {
-                    currentPage--;
-                    render();
-                });
-            }
-        }
-
-        const nextBtn = currentContainer.querySelector('#btnNextUsagePage');
-        if (nextBtn) {
-            nextBtn.replaceWith(nextBtn.cloneNode(true));
-            const newNext = currentContainer.querySelector('#btnNextUsagePage');
-            if (newNext && currentPage < totalPages) {
-                newNext.addEventListener('click', () => {
-                    currentPage++;
-                    render();
-                });
-            }
-        }
-
-        currentContainer.querySelectorAll('.btn-usage-page-num').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const p = Number((e.currentTarget as HTMLElement).getAttribute('data-page'));
-                if (p && p !== currentPage) {
-                    currentPage = p;
-                    render();
-                }
-            });
-        });
-    }
 }
 
 export function init() {
-    ensurePanel();
+    const panel = ensurePanel();
+    if (!panel) return;
+
+    // 1. 事件委托：使用捕获阶段监听 details 标签的 toggle 事件
+    panel.addEventListener('toggle', (e) => {
+        const target = e.target as HTMLElement;
+        if (target && target.tagName.toLowerCase() === 'details') {
+            const key = target.getAttribute('data-account-key');
+            if (key) {
+                const detailsEl = target as HTMLDetailsElement;
+                if (detailsEl.open) {
+                    openAccounts.add(key);
+                } else {
+                    openAccounts.delete(key);
+                }
+            }
+        }
+    }, true);
+
+    // 2. 事件委托：监听分页按钮点击事件
+    panel.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement;
+
+        // 上一页
+        const prevBtn = target.closest('#btnPrevUsagePage');
+        if (prevBtn && currentPage > 1 && !(prevBtn as HTMLButtonElement).disabled) {
+            currentPage--;
+            render();
+            return;
+        }
+
+        // 下一页
+        const nextBtn = target.closest('#btnNextUsagePage');
+        if (nextBtn && !(nextBtn as HTMLButtonElement).disabled) {
+            const allAccounts = currentUsageData && currentUsageData.accounts ? Object.values(currentUsageData.accounts) : [];
+            const query = searchQuery.trim().toLowerCase();
+            const filteredAccounts = allAccounts.filter((acc: any) => {
+                if (!query) return true;
+                const name = (acc.email || acc.accountId || '').toLowerCase();
+                return name.includes(query);
+            });
+            const totalItems = filteredAccounts.length;
+            const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+
+            if (currentPage < totalPages) {
+                currentPage++;
+                render();
+            }
+            return;
+        }
+
+        // 页码点击
+        const pageNumBtn = target.closest('.btn-usage-page-num');
+        if (pageNumBtn) {
+            const p = Number(pageNumBtn.getAttribute('data-page'));
+            if (p && p !== currentPage) {
+                currentPage = p;
+                render();
+            }
+            return;
+        }
+    });
 }

@@ -198,6 +198,7 @@ import { initMigrationEvents } from './ui/migrationController';
 import { initUpdaterEvents } from './ui/updaterController';
 import { initRetryErrorLogsEvents } from './ui/retryErrorLogsController';
 import { initRelayEvents } from './ui/relayController';
+import { initAccountsGlobalEvents } from './ui/accountsController';
 
 const route = useRoute();
 
@@ -222,8 +223,8 @@ const rightSection = ref<HTMLElement | null>(null);
 const dropdownRef = ref<HTMLElement | null>(null);
 
 let lastRequiredWidth = 1280;
-let lastLeftHtml = '';
-let lastRightHtml = '';
+let layoutObserver: MutationObserver | null = null;
+let layoutMeasureTimer: any = null;
 let layoutTimer: any = null;
 
 const toggleDropdown = () => {
@@ -319,17 +320,18 @@ const updateResponsiveLayout = () => {
   }
 };
 
-const checkDOMChanges = () => {
-  const leftHtml = leftSection.value ? leftSection.value.innerHTML : '';
-  const rightHtml = rightSection.value ? rightSection.value.innerHTML : '';
-  
-  if (leftHtml !== lastLeftHtml || rightHtml !== lastRightHtml) {
-    lastLeftHtml = leftHtml;
-    lastRightHtml = rightHtml;
+// Header content changes (cert badge, status text, language labels) can change
+// the natural width and require re-measuring. We react via MutationObserver
+// instead of polling innerHTML every 500ms (which serialized the whole header
+// subtree and forced reflows). Only childList/characterData are observed — NOT
+// attributes — so the isCollapsed-driven 'remote-collapsed' class toggle on
+// rightSection does not feed back into a measurement loop.
+const scheduleForceMeasure = () => {
+  if (layoutMeasureTimer) return;
+  layoutMeasureTimer = setTimeout(() => {
+    layoutMeasureTimer = null;
     forceMeasure();
-  } else {
-    updateResponsiveLayout();
-  }
+  }, 150);
 };
 
 watch(() => route.path, async (newPath) => {
@@ -371,6 +373,7 @@ onMounted(() => {
     initRetryErrorLogsEvents();
     initPricingEvents();
     initAutotriggerHistoryEvents();
+    initAccountsGlobalEvents();
     
     // Page-specific inits are now called from each page's onMounted hook
     // (see Accounts.vue, Settings.vue, Packets.vue, OTP.vue, UsageDetails.vue)
@@ -398,10 +401,18 @@ onMounted(() => {
         (window as any).initWailsReady();
     }
     
-    // Set initial measured widths and start DOM change checks
+    // Set initial measured widths and observe header content changes
     setTimeout(() => {
       forceMeasure();
-      layoutTimer = setInterval(checkDOMChanges, 500);
+      if (leftSection.value && rightSection.value) {
+        layoutObserver = new MutationObserver(() => scheduleForceMeasure());
+        const opts: MutationObserverInit = { childList: true, characterData: true, subtree: true };
+        layoutObserver.observe(leftSection.value, opts);
+        layoutObserver.observe(rightSection.value, opts);
+      }
+      // Light safety net for size drift (e.g. restore from minimize) without
+      // serializing innerHTML every tick.
+      layoutTimer = setInterval(updateResponsiveLayout, 2000);
     }, 150);
   }, 100);
 });
@@ -409,6 +420,14 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', closeDropdown);
   window.removeEventListener('resize', updateResponsiveLayout);
+  if (layoutObserver) {
+    layoutObserver.disconnect();
+    layoutObserver = null;
+  }
+  if (layoutMeasureTimer) {
+    clearTimeout(layoutMeasureTimer);
+    layoutMeasureTimer = null;
+  }
   if (layoutTimer) {
     clearInterval(layoutTimer);
   }

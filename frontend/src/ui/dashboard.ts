@@ -8,6 +8,7 @@ import { refreshDataDir } from './migrationController';
 import { initAppVersion } from './updaterController';
 import { startOtpTimer, stopOtpTimer } from './otpController';
 import { refreshRelayPackages, refreshRelayUsers } from './relayController';
+import { deactivateSettings } from './settingsController';
 
 // DOM Elements
 let html: HTMLElement;
@@ -84,6 +85,24 @@ let consoleBody: HTMLElement | null;
 let isConsoleScrollScheduled = false;
 let lastStatsUpdatedSig = '';
 
+// Console log ring buffer: a fixed pool of DOM nodes is reused instead of
+// creating/removing a <div> per log line. Under heavy concurrent traffic the
+// backend can flush hundreds of log lines per 250ms tick; the old create+prune
+// loop caused WebView memory pools to inflate without ever being returned to
+// the OS. Reusing nodes caps the work at O(MAX_CONSOLE_ENTRIES) per tick.
+const MAX_CONSOLE_ENTRIES = 120;
+const consolePool: HTMLDivElement[] = [];
+let consolePoolIdx = 0;
+
+// Trend chart redraw throttle: the chart only needs to refresh every few
+// seconds, not on every 1s stats-updated tick. Avoids per-second path/string
+// rebuilds and onmousemove-closure reassignment.
+let lastTrendsSig = '';
+let lastChartRange = '';
+let lastChartDrawTs = 0;
+let chartRedrawTimer: any = null;
+const CHART_DRAW_MIN_INTERVAL = 3000;
+
 let consoleFloatBtn: HTMLElement | null = null;
 let consoleToggleBtn: HTMLElement | null = null;
 let consoleResizeHandle: HTMLElement | null = null;
@@ -115,19 +134,56 @@ function formatDuration(ms: number | undefined): string {
     return `${(ms / 1000).toFixed(2)}s`;
 }
 
+// Apply emoji-based severity classes to a console entry (reset each reuse).
+function applyConsoleClasses(entry: HTMLElement, log: string) {
+    if (log.includes('⚠️')) entry.classList.add('warn');
+    if (log.includes('❌')) entry.classList.add('error');
+    if (log.includes('✅') || log.includes('🚀')) entry.classList.add('info');
+}
+
+// Throttled trend-chart redraw: re-draw at most once per CHART_DRAW_MIN_INTERVAL,
+// with a trailing draw so the final state is always reflected. Range changes
+// draw immediately; within-range data updates are coalesced. Skips entirely
+// when the filtered trends signature has not changed.
+function maybeDrawTrendChart() {
+    if (!state.trendsData || state.trendsData.length === 0) return;
+    const filteredTrends = chartRenderer.getFilteredTrends(state.trendsData, state.currentRange);
+    const last = filteredTrends[filteredTrends.length - 1];
+    const sig = `${state.currentRange}:${filteredTrends.length}:${last ? `${last.time}_${last.requests}_${last.input}` : ''}`;
+    if (sig === lastTrendsSig) return;
+
+    const rangeChanged = state.currentRange !== lastChartRange;
+    const now = Date.now();
+    if (rangeChanged || now - lastChartDrawTs >= CHART_DRAW_MIN_INTERVAL) {
+        chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange);
+        lastTrendsSig = sig;
+        lastChartRange = state.currentRange;
+        lastChartDrawTs = now;
+        if (chartRedrawTimer) {
+            clearTimeout(chartRedrawTimer);
+            chartRedrawTimer = null;
+        }
+    } else if (!chartRedrawTimer) {
+        chartRedrawTimer = setTimeout(() => {
+            chartRedrawTimer = null;
+            maybeDrawTrendChart();
+        }, CHART_DRAW_MIN_INTERVAL - (now - lastChartDrawTs));
+    }
+}
+
 // Filter and render logs table with pagination
 export function renderLogsTable() {
     const dict = i18n[state.currentLanguage] || {};
-    
+
     // Filter requests
     const filtered = state.allRequests.filter(log => {
         if (!state.searchQuery) return true;
         const q = state.searchQuery.toLowerCase();
-        return log.host.toLowerCase().includes(q) || 
-               log.path.toLowerCase().includes(q) || 
-               log.model.toLowerCase().includes(q) || 
-               (log.sessionId || '').toLowerCase().includes(q) ||
-               log.method.toLowerCase().includes(q);
+        return log.host.toLowerCase().includes(q) ||
+            log.path.toLowerCase().includes(q) ||
+            log.model.toLowerCase().includes(q) ||
+            (log.sessionId || '').toLowerCase().includes(q) ||
+            log.method.toLowerCase().includes(q);
     });
 
     // Pagination bounds
@@ -144,7 +200,7 @@ export function renderLogsTable() {
         logsTableBody = document.querySelector('#logsTable tbody');
     }
     if (!logsTableBody) return;
-    
+
     valShowingText = document.getElementById('valShowingText');
     if (paginated.length === 0) {
         logsTableBody.innerHTML = `<tr><td colspan="11" class="p-8 text-center text-outline dark:text-outline-variant italic">${dict.noLogs || '暂无日志'}</td></tr>`;
@@ -166,7 +222,7 @@ export function renderLogsTable() {
 
             const isError = log.statusCode >= 400;
             const statusColor = isError ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400';
-            
+
             const hitRateVal = log.inTokens > 0 ? (log.cachedTokens / log.inTokens * 100).toFixed(1) : '0.0';
             const hitRateColor = log.cachedTokens > 0 ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400 dark:text-slate-500';
 
@@ -220,12 +276,11 @@ export function renderLogsTable() {
     paginationControls = document.getElementById('paginationControls');
     if (!paginationControls) return;
     paginationControls.innerHTML = '';
-    
+
     const addBtn = (label: string, pageNum: number, isActive = false, isDisabled = false) => {
         const btn = document.createElement('button');
-        btn.className = `px-2.5 py-1 border border-outline-variant/60 rounded text-[12px] transition-colors ${
-            isActive ? 'bg-primary text-white border-primary dark:bg-primary-container dark:border-primary-container' : 'bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white hover:bg-slate-50 dark:hover:bg-white/5'
-        } ${isDisabled ? 'opacity-40 cursor-not-allowed' : ''}`;
+        btn.className = `px-2.5 py-1 border border-outline-variant/60 rounded text-[12px] transition-colors ${isActive ? 'bg-primary text-white border-primary dark:bg-primary-container dark:border-primary-container' : 'bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white hover:bg-slate-50 dark:hover:bg-white/5'
+            } ${isDisabled ? 'opacity-40 cursor-not-allowed' : ''}`;
         btn.textContent = label;
         if (!isDisabled) {
             btn.addEventListener('click', () => {
@@ -264,7 +319,7 @@ export function renderLogsTable() {
 // Multi-language Text Translation
 export function setLanguage(lang: string) {
     state.currentLanguage = lang;
-    
+
     toggleZH = document.getElementById('toggleZH');
     toggleEN = document.getElementById('toggleEN');
     logSearchInput = document.getElementById('logSearchInput') as HTMLInputElement | null;
@@ -276,9 +331,9 @@ export function setLanguage(lang: string) {
         if (toggleEN) toggleEN.className = 'px-2 py-0.5 text-[11px] font-medium bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-full shadow-sm';
         if (toggleZH) toggleZH.className = 'px-2 py-0.5 text-[11px] font-medium text-outline rounded-full transition-all';
     }
-    
+
     const dict = i18n[lang] || {};
-    
+
     document.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
         if (key && dict[key]) {
@@ -337,7 +392,7 @@ export function updateStatusLabel() {
     const isIntercept = proxyToggle.checked;
     const dict = i18n[state.currentLanguage] || {};
     statusText.textContent = isIntercept ? (dict.statusOn || '开启') : (dict.statusOff || '关闭');
-    
+
     if (isIntercept) {
         statusText.className = 'text-[13px] font-bold text-emerald-600 dark:text-emerald-400';
         proxyToggle.className = 'toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-primary appearance-none cursor-pointer translate-x-5 transition-transform duration-200 ease-in-out';
@@ -369,7 +424,7 @@ export function setTheme(theme: string) {
 // UI tab switching
 export function switchTab(tab: string) {
     state.activeTab = tab;
-    
+
     tabModels = document.getElementById('tabModels');
     tabLogs = document.getElementById('tabLogs');
     tabPricing = document.getElementById('tabPricing');
@@ -381,15 +436,15 @@ export function switchTab(tab: string) {
 
     const activeClass = 'px-4 py-2 text-[13px] font-bold text-primary border-b-2 border-primary';
     const inactiveClass = 'px-4 py-2 text-[13px] font-bold text-outline hover:text-primary transition-colors border-b-2 border-transparent';
-    
+
     if (tabModels) tabModels.className = tab === 'models' ? activeClass : inactiveClass;
     if (tabLogs) tabLogs.className = tab === 'logs' ? activeClass : inactiveClass;
     if (tabPricing) tabPricing.className = tab === 'pricing' ? activeClass : inactiveClass;
-    
+
     if (modelsContent) modelsContent.classList.toggle('hidden', tab !== 'models');
     if (logsContent) logsContent.classList.toggle('hidden', tab !== 'logs');
     if (pricingContent) pricingContent.classList.toggle('hidden', tab !== 'pricing');
-    
+
     if (logSearchRow) {
         logSearchRow.classList.toggle('hidden', tab !== 'logs');
     }
@@ -464,7 +519,11 @@ export function switchView(viewName: string) {
         initAppVersion();
         refreshRelayPackages();
         refreshRelayUsers();
-    } else if (viewName === 'accounts') {
+    } else {
+        deactivateSettings();
+    }
+
+    if (viewName === 'accounts') {
         if (state.currentAccountsList) {
             // Re-render accounts on tab switch
             state.callbacks.renderAccounts(state.currentAccountsList);
@@ -681,20 +740,20 @@ export function initDashboardEvents() {
                     // Switch to FLOAT mode
                     systemConsole!.classList.add('floating');
                     systemConsole!.classList.remove('expanded');
-                    
+
                     // Show resize handle, hide toggle drawer button
                     if (consoleResizeHandle) consoleResizeHandle.classList.remove('hidden');
                     if (consoleToggleBtn) consoleToggleBtn.style.display = 'none';
-                    
+
                     // Recover dimensions/position from localStorage, fallback to responsive viewport-based sizes
                     const defaultWidth = Math.min(900, Math.max(400, window.innerWidth * 0.7));
                     const defaultHeight = Math.min(600, Math.max(300, window.innerHeight * 0.6));
                     const savedWidth = localStorage.getItem('console_float_width') || String(defaultWidth);
                     const savedHeight = localStorage.getItem('console_float_height') || String(defaultHeight);
-                    
+
                     systemConsole!.style.width = `${savedWidth}px`;
                     systemConsole!.style.height = `${savedHeight}px`;
-                    
+
                     const savedLeft = localStorage.getItem('console_float_left');
                     const savedTop = localStorage.getItem('console_float_top');
                     if (savedLeft && savedTop) {
@@ -707,33 +766,33 @@ export function initDashboardEvents() {
                     }
                     systemConsole!.style.bottom = 'auto';
                     systemConsole!.style.right = 'auto';
-                    
+
                     if (consoleBody) {
                         consoleBody.style.display = 'block';
                         consoleBody.scrollTop = consoleBody.scrollHeight;
                     }
-                    
+
                     consoleFloatBtn!.textContent = 'vertical_align_bottom';
                     consoleFloatBtn!.setAttribute('data-i18n-title', 'consoleDockTitle');
                     consoleFloatBtn!.title = state.currentLanguage === 'zh' ? '贴回底部' : 'Dock to bottom';
                 } else {
                     // Switch back to DOCKED mode
                     systemConsole!.classList.remove('floating');
-                    
+
                     // Hide resize handle, show toggle drawer button
                     if (consoleResizeHandle) consoleResizeHandle.classList.add('hidden');
                     if (consoleToggleBtn) {
                         consoleToggleBtn.style.display = 'block';
                         consoleToggleBtn.textContent = 'keyboard_double_arrow_down';
                     }
-                    
+
                     // Reset styling
                     systemConsole!.style.width = '';
                     systemConsole!.style.left = '';
                     systemConsole!.style.top = '';
                     systemConsole!.style.bottom = '';
                     systemConsole!.style.right = '';
-                    
+
                     // Auto-expand in docked mode
                     systemConsole!.classList.add('expanded');
                     systemConsole!.style.height = '30vh';
@@ -741,7 +800,7 @@ export function initDashboardEvents() {
                         consoleBody.style.display = 'block';
                         consoleBody.scrollTop = consoleBody.scrollHeight;
                     }
-                    
+
                     consoleFloatBtn!.textContent = 'open_in_new';
                     consoleFloatBtn!.setAttribute('data-i18n-title', 'consoleFloatTitle');
                     consoleFloatBtn!.title = state.currentLanguage === 'zh' ? '脱离为浮窗' : 'Detach to floating window';
@@ -754,15 +813,15 @@ export function initDashboardEvents() {
             if (!systemConsole!.classList.contains('floating')) return;
             // Ignore button clicks
             if ((e.target as HTMLElement).closest('.material-symbols-outlined')) return;
-            
+
             isConsoleDragging = true;
             consoleDragStartX = e.clientX;
             consoleDragStartY = e.clientY;
-            
+
             const rect = systemConsole!.getBoundingClientRect();
             consoleDragInitialLeft = rect.left;
             consoleDragInitialTop = rect.top;
-            
+
             document.body.style.userSelect = 'none';
             systemConsole!.style.transition = 'none';
         });
@@ -775,11 +834,11 @@ export function initDashboardEvents() {
                 isConsoleResizing = true;
                 consoleResizeStartX = e.clientX;
                 consoleResizeStartY = e.clientY;
-                
+
                 const rect = systemConsole!.getBoundingClientRect();
                 consoleResizeInitialWidth = rect.width;
                 consoleResizeInitialHeight = rect.height;
-                
+
                 document.body.style.userSelect = 'none';
                 systemConsole!.style.transition = 'none';
             });
@@ -790,37 +849,37 @@ export function initDashboardEvents() {
             if (isConsoleDragging && systemConsole!.classList.contains('floating')) {
                 const dx = e.clientX - consoleDragStartX;
                 const dy = e.clientY - consoleDragStartY;
-                
+
                 let newLeft = consoleDragInitialLeft + dx;
                 let newTop = consoleDragInitialTop + dy;
-                
+
                 const rect = systemConsole!.getBoundingClientRect();
                 const maxLeft = window.innerWidth - rect.width;
                 const maxTop = window.innerHeight - rect.height;
-                
+
                 // Boundary protection
                 newLeft = Math.max(0, Math.min(newLeft, maxLeft));
                 newTop = Math.max(0, Math.min(newTop, maxTop));
-                
+
                 systemConsole!.style.left = `${newLeft}px`;
                 systemConsole!.style.top = `${newTop}px`;
             }
-            
+
             if (isConsoleResizing && systemConsole!.classList.contains('floating')) {
                 const dx = e.clientX - consoleResizeStartX;
                 const dy = e.clientY - consoleResizeStartY;
-                
+
                 let newWidth = consoleResizeInitialWidth + dx;
                 let newHeight = consoleResizeInitialHeight + dy;
-                
+
                 // Limit minimum sizes
                 newWidth = Math.max(300, newWidth);
                 newHeight = Math.max(150, newHeight);
-                
+
                 // Limit maximum sizes to screen
                 newWidth = Math.min(window.innerWidth - 20, newWidth);
                 newHeight = Math.min(window.innerHeight - 20, newHeight);
-                
+
                 systemConsole!.style.width = `${newWidth}px`;
                 systemConsole!.style.height = `${newHeight}px`;
             }
@@ -831,25 +890,25 @@ export function initDashboardEvents() {
                 isConsoleDragging = false;
                 document.body.style.userSelect = '';
                 systemConsole!.style.transition = '';
-                
+
                 // Persist coordinates
                 const rect = systemConsole!.getBoundingClientRect();
                 localStorage.setItem('console_float_left', String(rect.left));
                 localStorage.setItem('console_float_top', String(rect.top));
             }
-            
+
             if (isConsoleResizing) {
                 isConsoleResizing = false;
                 document.body.style.userSelect = '';
                 systemConsole!.style.transition = '';
-                
+
                 // Persist size
                 const rect = systemConsole!.getBoundingClientRect();
                 localStorage.setItem('console_float_width', String(rect.width));
                 localStorage.setItem('console_float_height', String(rect.height));
             }
         });
-        
+
         // Window resize boundary self-correction
         window.addEventListener('resize', () => {
             if (systemConsole!.classList.contains('floating')) {
@@ -858,10 +917,10 @@ export function initDashboardEvents() {
                 let top = rect.top;
                 let width = rect.width;
                 let height = rect.height;
-                
+
                 let sizeChanged = false;
                 let posChanged = false;
-                
+
                 if (width > window.innerWidth - 20) {
                     width = window.innerWidth - 20;
                     systemConsole!.style.width = `${width}px`;
@@ -872,10 +931,10 @@ export function initDashboardEvents() {
                     systemConsole!.style.height = `${height}px`;
                     sizeChanged = true;
                 }
-                
+
                 const maxLeft = window.innerWidth - width;
                 const maxTop = window.innerHeight - height;
-                
+
                 if (left > maxLeft) {
                     left = Math.max(0, maxLeft);
                     systemConsole!.style.left = `${left}px`;
@@ -886,7 +945,7 @@ export function initDashboardEvents() {
                     systemConsole!.style.top = `${top}px`;
                     posChanged = true;
                 }
-                
+
                 if (posChanged) {
                     localStorage.setItem('console_float_left', String(left));
                     localStorage.setItem('console_float_top', String(top));
@@ -990,13 +1049,13 @@ export function initDashboardEvents() {
         const lastReqSig = (requests && requests.length > 0) ? `${requests[0].timestamp}_${requests[0].statusCode}_${requests[0].cost}` : '';
         const reqsLen = requests ? requests.length : 0;
         const usageSig = usage ? JSON.stringify(usage) : '';
-        
+
         const currentSig = `${statsSig}|${trendsLen}|${reqsLen}_${lastReqSig}|${usageSig}`;
         if (currentSig === lastStatsUpdatedSig) {
             return; // Skip rendering if no relevant metrics have changed
         }
         lastStatsUpdatedSig = currentSig;
-        
+
         if (stats) state.statsData = stats;
         if (trends !== undefined && trends !== null) {
             state.trendsData = trends;
@@ -1007,23 +1066,48 @@ export function initDashboardEvents() {
         renderActiveView();
     });
 
-    // Appending raw logs to console tray
-    ipcRenderer.on('log', (event: any, log: string) => {
+    // Appending raw logs batch to console tray to minimize DOM reflows
+    ipcRenderer.on('logs:batch', (event: any, logs: string[]) => {
         if (!consoleBody) {
             consoleBody = document.getElementById('consoleBody');
         }
-        if (!consoleBody) return;
-        const entry = document.createElement('div');
-        entry.className = 'console-entry';
-        if (log.includes('⚠️')) entry.classList.add('warn');
-        if (log.includes('❌')) entry.classList.add('error');
-        if (log.includes('✅') || log.includes('🚀')) entry.classList.add('info');
-        entry.textContent = log;
-        consoleBody.appendChild(entry);
-        
-        // Batch prune console elements if count exceeds 150 to reduce child removal frequency
-        if (consoleBody.children.length > 150) {
-            while (consoleBody.children.length > 120) {
+        if (!consoleBody || !logs || logs.length === 0) return;
+
+        const fragment = document.createDocumentFragment();
+
+        if (consolePool.length < MAX_CONSOLE_ENTRIES) {
+            // Warmup: pool not yet full — create new nodes only (preserves order).
+            const capacity = MAX_CONSOLE_ENTRIES - consolePool.length;
+            const slice = logs.length > capacity ? logs.slice(logs.length - capacity) : logs;
+            for (const log of slice) {
+                const entry = document.createElement('div');
+                entry.className = 'console-entry';
+                applyConsoleClasses(entry, log);
+                entry.textContent = log;
+                consolePool.push(entry);
+                fragment.appendChild(entry);
+            }
+        } else {
+            // Steady state: reuse the oldest pooled node. appendChild relocates
+            // an existing node to the end, so a fixed pool naturally stays in
+            // newest-last order with zero create/remove churn. Only the last
+            // MAX_CONSOLE_ENTRIES lines of the batch are rendered; older ones
+            // would have been pruned anyway.
+            const slice = logs.length > MAX_CONSOLE_ENTRIES ? logs.slice(logs.length - MAX_CONSOLE_ENTRIES) : logs;
+            for (const log of slice) {
+                const entry = consolePool[consolePoolIdx];
+                consolePoolIdx = (consolePoolIdx + 1) % MAX_CONSOLE_ENTRIES;
+                entry.className = 'console-entry';
+                applyConsoleClasses(entry, log);
+                entry.textContent = log;
+                fragment.appendChild(entry);
+            }
+        }
+        consoleBody.appendChild(fragment);
+
+        // Safety prune (only relevant during warmup; steady state is exactly MAX)
+        if (consoleBody.children.length > MAX_CONSOLE_ENTRIES) {
+            while (consoleBody.children.length > MAX_CONSOLE_ENTRIES) {
                 if (consoleBody.firstChild) {
                     consoleBody.removeChild(consoleBody.firstChild);
                 }
@@ -1067,7 +1151,7 @@ export function renderModelsTable(stats: any) {
         modelsTableBody = document.querySelector('#modelsTable tbody');
     }
     if (!modelsTableBody) return;
-    
+
     modelsTableBody.innerHTML = '';
     const dict = i18n[state.currentLanguage] || {};
     const modelEntries = Object.entries(stats.models || {}).sort((a: any, b: any) => {
@@ -1076,7 +1160,7 @@ export function renderModelsTable(stats: any) {
         if (totalB !== totalA) return totalB - totalA;
         return (b[1].reqs || 0) - (a[1].reqs || 0);
     });
-    
+
     if (modelEntries.length === 0) {
         modelsTableBody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-outline dark:text-outline-variant italic">${dict.noData || '暂无数据'}</td></tr>`;
     } else {
@@ -1112,14 +1196,14 @@ export function renderActiveView() {
         // 1. Update Metrics Cards
         const totalRequests = (stats.totalRequests || 0) + (stats.totalErrors || 0);
         if (valReqs) valReqs.textContent = totalRequests;
-        
+
         if (valRetries) {
             valRetries.textContent = stats.totalRetries || 0;
         }
         if (valErrors) {
             valErrors.textContent = stats.totalErrors || 0;
         }
-        
+
         const successRate = totalRequests > 0 ? (stats.totalRequests / totalRequests * 100) : 100;
         if (valSuccessRate) {
             valSuccessRate.textContent = successRate.toFixed(1) + '%';
@@ -1130,14 +1214,14 @@ export function renderActiveView() {
         }
 
         if (valTokens) valTokens.textContent = (stats.totalInputTokens + stats.totalOutputTokens).toLocaleString();
-        
+
         const totalIn = stats.totalInputTokens - stats.totalCachedTokens;
         if (valTokensIn) valTokensIn.textContent = chartRenderer.formatCompactNumber(totalIn);
         if (valTokensOut) valTokensOut.textContent = chartRenderer.formatCompactNumber(stats.totalOutputTokens);
         if (valTotalCost) {
             valTotalCost.textContent = `$${(stats.totalCost || 0).toFixed(4)}`;
         }
-        
+
         const totalSum = totalIn + stats.totalOutputTokens;
         const inPercent = totalSum > 0 ? (totalIn / totalSum * 100) : 50;
         const outPercent = 100 - inPercent;
@@ -1151,11 +1235,8 @@ export function renderActiveView() {
 
         if (gaugeCircle) gaugeCircle.setAttribute('stroke-dasharray', `${hitRate.toFixed(1)}, 100`);
 
-        // 2. Draw SVG Area Trend line (only if we have trendsData)
-        if (state.trendsData && state.trendsData.length > 0) {
-            const filteredTrends = chartRenderer.getFilteredTrends(state.trendsData, state.currentRange);
-            chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange);
-        }
+        // 2. Draw SVG Area Trend line (throttled; only when trends actually change)
+        maybeDrawTrendChart();
 
         // 3. Render sub-tabs table (only the active one!)
         if (state.activeTab === 'models') {
@@ -1183,30 +1264,30 @@ export function hideModal() {
 
 export function showModal(log: any) {
     if (!detailsModal || !modalContainer) return;
-    
+
     if (modalTime) modalTime.textContent = log.timestamp || '-';
     if (modalSession) modalSession.textContent = log.sessionId || '-';
     if (modalModel) modalModel.textContent = log.model || '-';
     if (modalPath) modalPath.textContent = `${log.method || 'POST'} ${log.host || ''}${log.path || ''}`;
     if (modalDuration) modalDuration.textContent = formatDuration(log.durationMs);
     if (modalCost) modalCost.textContent = `$${(log.cost || 0).toFixed(6)}`;
-    
+
     if (log.account) {
         if (modalAccountWrapper) modalAccountWrapper.classList.remove('hidden');
         if (modalAccount) modalAccount.textContent = log.account;
     } else {
         if (modalAccountWrapper) modalAccountWrapper.classList.add('hidden');
     }
-    
+
     const inT = log.inTokens || 0;
     const outT = log.outTokens || 0;
     const cachedT = log.cachedTokens || 0;
     if (modalTokens) modalTokens.textContent = `In: ${inT.toLocaleString()} | Out: ${outT.toLocaleString()} | Cache: ${cachedT.toLocaleString()}`;
-    
+
     let cacheBadge = log.cacheStatus || 'NONE';
     let statusColor = log.statusCode >= 400 ? 'text-rose-500' : 'text-emerald-500';
     if (modalStatus) modalStatus.innerHTML = `<span class="text-primary dark:text-primary-fixed-dim mr-2">${cacheBadge}</span><span class="${statusColor}">HTTP ${log.statusCode}</span>`;
-    
+
     let formattedJson = '';
     if (log.requestBody) {
         try {

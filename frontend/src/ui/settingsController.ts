@@ -2,6 +2,16 @@ import { ipcRenderer, shell } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
 
+let networkRefreshTimer: any = null;
+
+export function deactivateSettings() {
+    if (networkRefreshTimer) {
+        clearInterval(networkRefreshTimer);
+        networkRefreshTimer = null;
+        console.log('[SettingsController] Outbound network logs auto refresh stopped.');
+    }
+}
+
 function updatePacketCaptureVisibility(enabled: boolean) {
     const ids = ['navPacketsLink', 'navPacketsLinkDropdown'];
     ids.forEach(id => {
@@ -34,8 +44,6 @@ export function initSettings() {
         // Tab switching
         const activeTabClass = 'px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200';
         const inactiveTabClass = 'px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200';
-
-        let networkRefreshTimer: any = null;
 
         function startNetworkLogsAutoRefresh() {
             if (networkRefreshTimer) return;
