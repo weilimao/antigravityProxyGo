@@ -114,12 +114,23 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			maxBodyBytes = configured
 		}
 	}
+	bodyReadStart := time.Now()
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
 		return
 	}
 	r.Body.Close()
+
+	// 诊断计时：如果请求体读取超过 1 秒，输出警告日志定位 IDE 端慢发送问题
+	bodyReadMs := time.Since(bodyReadStart).Milliseconds()
+	overallMs := time.Since(startTime).Milliseconds()
+	if bodyReadMs > 1000 || overallMs > 2000 {
+		if h.logFn != nil {
+			h.logFn(fmt.Sprintf("⏱️ [诊断计时] %s %s%s | 请求体读取: %dms (大小: %d bytes) | ServeHTTP 总耗时: %dms",
+				r.Method, r.Host, r.URL.Path, bodyReadMs, len(bodyBytes), overallMs))
+		}
+	}
 
 	// Capture active project from request body
 	if len(bodyBytes) > 0 {
@@ -748,6 +759,17 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var streamErr error = nil
 			var mismatchHappened bool = false
 
+			// 监听 Context 取消事件，一旦取消立即关闭上游响应体，强行中断阻塞的 Read
+			cancelChan := make(chan struct{})
+			go func() {
+				select {
+				case <-ctx.Done():
+					_ = resp.Body.Close()
+				case <-cancelChan:
+				}
+			}()
+			defer close(cancelChan)
+
 			for {
 				n, errR := resp.Body.Read(buf)
 				if n > 0 {
@@ -1269,7 +1291,7 @@ func (h *ProxyHandler) getRemoteClient() *http.Client {
 		TLSClientConfig:       getRemoteTLSConfig(""),
 		MaxIdleConns:          200,
 		MaxIdleConnsPerHost:   100,
-		IdleConnTimeout:       90 * time.Second,
+		IdleConnTimeout:       300 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
@@ -1279,6 +1301,19 @@ func (h *ProxyHandler) getRemoteClient() *http.Client {
 		Timeout:   10 * time.Minute,
 	}
 	return h.remoteClient
+}
+
+// ResetRemoteClient 清理并重置远程中继 HTTP Client 单例。
+// 在 Disconnect 或切换远程中继后调用，确保旧的 Transport（含旧 TLS 配置和连接池）被释放。
+func (h *ProxyHandler) ResetRemoteClient() {
+	h.remoteClientMu.Lock()
+	defer h.remoteClientMu.Unlock()
+	if h.remoteClient != nil {
+		if t, ok := h.remoteClient.Transport.(*http.Transport); ok {
+			t.CloseIdleConnections()
+		}
+		h.remoteClient = nil
+	}
 }
 
 // forwardThroughRemote 处理客户端模式下的 HTTP 请求路由，将请求在 TLS 层上中继至远端服务器并执行流式转发与抓包
@@ -1342,6 +1377,17 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 	flusher, isFlusher := w.(http.Flusher)
 	buf := make([]byte, 4096)
 	var respBodyBuf bytes.Buffer
+
+	// 监听 Context 取消事件，一旦取消立即关闭上游响应体，强行中断阻塞的 Read
+	cancelChan := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = resp.Body.Close()
+		case <-cancelChan:
+		}
+	}()
+	defer close(cancelChan)
 
 	for {
 		n, errRead := resp.Body.Read(buf)

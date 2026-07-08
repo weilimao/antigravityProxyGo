@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -107,4 +108,107 @@ func TestProxyHandler_Timeout(t *testing.T) {
 
 	t.Logf("Result HTTP Code: %d, Response Body: %s", rec.Code, rec.Body.String())
 	t.Logf("Test passed. Early timeout triggered successfully. Request took %v", duration)
+}
+
+func TestProxyHandler_StreamingCancellation(t *testing.T) {
+	// 1. 启动一个支持 Stream 流式输出的 Mock 测试服务器
+	streamSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		// 循环输出数据块，间隔 50ms
+		for i := 0; i < 100; i++ {
+			select {
+			case <-r.Context().Done():
+				// 正常监听到客户端断开
+				return
+			default:
+				_, _ = w.Write([]byte(fmt.Sprintf("data: chunk %d\n\n", i)))
+				flusher.Flush()
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	}))
+	defer streamSrv.Close()
+
+	srvURL, err := url.Parse(streamSrv.URL)
+	if err != nil {
+		t.Fatalf("Failed to parse server URL: %v", err)
+	}
+
+	// 2. 初始化 ProxyHandler 依赖桩
+	accMgr := account.NewManager()
+	sessionRouter := session.NewRouter()
+	pricingMgr := pricing.NewManager()
+	statsTracker := stats.NewTracker(pricingMgr)
+	usageTracker := stats.NewUsageTracker(pricingMgr)
+	errLogger := stats.NewRetryErrorLogger()
+	packetCap := stats.NewPacketCapturer(nil, nil, func() bool { return false })
+
+	handler := NewProxyHandler(
+		accMgr,
+		sessionRouter,
+		statsTracker,
+		usageTracker,
+		errLogger,
+		packetCap,
+		func(s string) { t.Logf("[ProxyHandler Log] %s", s) }, // logFn
+		nil,               // quotaFetch
+		nil,               // tokenRefresh
+		func(s1, s2 string) {}, // setCapturedProject
+		func(s string) string { return "" }, // getStoredProject
+		func() int { return 0 },             // getMaxRetries
+		func() int { return 1 },             // getMaxRetryDelay
+		func() int64 { return 1024 * 1024 }, // 1MB
+		func() int { return 30 },            // getRequestTimeout
+		nil, // relayStatsCallback
+		nil, // relayQuotaCheck
+	)
+
+	// 3. 配置测试服务器的 client 到 handler.client
+	srvClient := streamSrv.Client()
+	srvClient.Timeout = 0
+	transport := srvClient.Transport.(*http.Transport)
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return net.Dial(network, srvURL.Host)
+	}
+	transport.TLSClientConfig.InsecureSkipVerify = true
+	handler.client = srvClient
+
+	// 4. 构造流式推理请求，使得 isStreaming 条件满足
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	defer cancelReq()
+	
+	req := httptest.NewRequest(http.MethodPost, "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:streamGenerateContent", nil)
+	req.Host = "generativelanguage.googleapis.com"
+	req = req.WithContext(reqCtx)
+
+	rec := httptest.NewRecorder()
+
+	// 5. 模拟在 100ms 后主动取消客户端 Context，此时 Mock 服务端应该刚发出第 2 个 chunk
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancelReq()
+	}()
+
+	startTime := time.Now()
+	// 执行 ProxyHandler。如果未优化，它会一直跑完 Mock 的 100 个 chunk（耗时约 5 秒）
+	// 如果已优化，它会在 100ms 被 cancel 时立即退出
+	handler.ServeHTTP(rec, req)
+	duration := time.Since(startTime)
+
+	t.Logf("Streaming request took %v", duration)
+
+	// 6. 断言：应该在 100ms 到 500ms 内快速返回（允许调度抖动），而不是等 5 秒发完
+	if duration >= 1500*time.Millisecond {
+		t.Errorf("Streaming request was not cancelled promptly, took: %v", duration)
+	}
+	
+	t.Logf("Test passed. Cancelled request terminated in %v", duration)
 }

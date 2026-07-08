@@ -10,12 +10,14 @@ import (
 	"sync"
 	"time"
 
+	"antigravity-proxy/internal/db"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type ModelQuota struct {
-	EnableFixed  bool  `json:"enableFixed"`
-	FixedTokens  int64 `json:"fixedTokens"`
+	EnableFixed  bool   `json:"enableFixed"`
+	FixedTokens  int64  `json:"fixedTokens"`
+	ResetAt      string `json:"resetAt,omitempty"`
 
 	EnableHourly bool    `json:"enableHourly"`
 	HourlyHours  float64 `json:"hourlyHours"`
@@ -128,7 +130,7 @@ func (m *UserManager) UpdateUserEnabled(id string, enabled bool) error {
 	return fmt.Errorf("user not found")
 }
 
-func (m *UserManager) UpdateUserQuota(id string, quotas UserQuotas) error {
+func (m *UserManager) UpdateUserQuota(id string, quotas UserQuotas, resetLimit bool) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -147,6 +149,23 @@ func (m *UserManager) UpdateUserQuota(id string, quotas UserQuotas) error {
 			} else {
 				quotas.ExpireAt = 0 // permanent
 			}
+
+			if resetLimit {
+				resetTimeStr := time.Now().Format(time.RFC3339)
+				quotas.Gemini.ResetAt = resetTimeStr
+				quotas.Claude.ResetAt = resetTimeStr
+
+				// Reset rolling windows in SQLite database
+				_ = db.SetQuotaWindowStart(id, "gemini_hourly", resetTimeStr)
+				_ = db.SetQuotaWindowStart(id, "gemini_daily", resetTimeStr)
+				_ = db.SetQuotaWindowStart(id, "claude_hourly", resetTimeStr)
+				_ = db.SetQuotaWindowStart(id, "claude_daily", resetTimeStr)
+			} else {
+				// Retain existing ResetAt values
+				quotas.Gemini.ResetAt = u.Quotas.Gemini.ResetAt
+				quotas.Claude.ResetAt = u.Quotas.Claude.ResetAt
+			}
+
 			u.Quotas = quotas
 			m.saveToDiskLocked()
 			return nil

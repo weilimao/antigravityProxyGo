@@ -238,24 +238,26 @@ func DialContext(ctx context.Context, network, address string) (net.Conn, error)
 		return conn, err
 	}
 
+	dialDirect := func() (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, network, address)
+	}
+
 	dummyReq, err := http.NewRequestWithContext(ctx, "CONNECT", "https://"+address, nil)
 	if err != nil {
-		var d net.Dialer
-		conn, errDial := d.DialContext(ctx, network, address)
+		conn, errDial := dialDirect()
 		return logAndReturn(conn, "DIRECT", errDial)
 	}
 
 	proxyURL, err := GetSystemProxy(dummyReq)
 	if err != nil || proxyURL == nil {
-		var d net.Dialer
-		conn, errDial := d.DialContext(ctx, network, address)
+		conn, errDial := dialDirect()
 		return logAndReturn(conn, "DIRECT", errDial)
 	}
 
 	// 核心保护：如果要拨号的目标地址就是代理服务器本身的 Host，强制直连，防止死循环
 	if address == proxyURL.Host || strings.HasPrefix(address, proxyURL.Host+":") {
-		var d net.Dialer
-		conn, errDial := d.DialContext(ctx, network, address)
+		conn, errDial := dialDirect()
 		return logAndReturn(conn, "DIRECT", errDial)
 	}
 
@@ -271,27 +273,38 @@ func DialContext(ctx context.Context, network, address string) (net.Conn, error)
 		}
 		dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, proxyAuth, proxy.Direct)
 		if err != nil {
-			return logAndReturn(nil, pStr, fmt.Errorf("create SOCKS5 dialer failed: %w", err))
+			connDirect, errDial := dialDirect()
+			return logAndReturn(connDirect, "DIRECT (Proxy Fallback)", errDial)
 		}
+		
+		var conn net.Conn
+		var errDial error
 		if ctxDialer, ok := dialer.(proxy.ContextDialer); ok {
-			conn, errDial := ctxDialer.DialContext(ctx, network, address)
-			return logAndReturn(conn, pStr, errDial)
+			conn, errDial = ctxDialer.DialContext(ctx, network, address)
+		} else {
+			conn, errDial = dialer.Dial(network, address)
 		}
-		conn, errDial := dialer.Dial(network, address)
-		return logAndReturn(conn, pStr, errDial)
+		
+		if errDial != nil {
+			connDirect, errDial := dialDirect()
+			return logAndReturn(connDirect, "DIRECT (Proxy Fallback)", errDial)
+		}
+		return logAndReturn(conn, pStr, nil)
 
 	case "http", "https":
 		var d net.Dialer
 		conn, err := d.DialContext(ctx, "tcp", proxyURL.Host)
 		if err != nil {
-			return logAndReturn(nil, pStr, fmt.Errorf("connect to HTTP proxy %s failed: %w", proxyURL.Host, err))
+			connDirect, errDial := dialDirect()
+			return logAndReturn(connDirect, "DIRECT (Proxy Fallback)", errDial)
 		}
 
 		// Send CONNECT request to HTTP proxy
 		req, err := http.NewRequestWithContext(ctx, "CONNECT", "http://"+address, nil)
 		if err != nil {
 			conn.Close()
-			return logAndReturn(nil, pStr, err)
+			connDirect, errDial := dialDirect()
+			return logAndReturn(connDirect, "DIRECT (Proxy Fallback)", errDial)
 		}
 		req.Header.Set("Proxy-Connection", "Keep-Alive")
 		req.Header.Set("Host", address)
@@ -307,26 +320,28 @@ func DialContext(ctx context.Context, network, address string) (net.Conn, error)
 		err = req.Write(conn)
 		if err != nil {
 			conn.Close()
-			return logAndReturn(nil, pStr, fmt.Errorf("write CONNECT request to HTTP proxy failed: %w", err))
+			connDirect, errDial := dialDirect()
+			return logAndReturn(connDirect, "DIRECT (Proxy Fallback)", errDial)
 		}
 
 		resp, err := http.ReadResponse(bufio.NewReader(conn), req)
 		if err != nil {
 			conn.Close()
-			return logAndReturn(nil, pStr, fmt.Errorf("read CONNECT response from HTTP proxy failed: %w", err))
+			connDirect, errDial := dialDirect()
+			return logAndReturn(connDirect, "DIRECT (Proxy Fallback)", errDial)
 		}
 		resp.Body.Close()
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			conn.Close()
-			return logAndReturn(nil, pStr, fmt.Errorf("HTTP proxy CONNECT failed with status: %s", resp.Status))
+			connDirect, errDial := dialDirect()
+			return logAndReturn(connDirect, "DIRECT (Proxy Fallback)", errDial)
 		}
 
 		return logAndReturn(conn, pStr, nil)
 
 	default:
-		var d net.Dialer
-		conn, errDial := d.DialContext(ctx, network, address)
+		conn, errDial := dialDirect()
 		return logAndReturn(conn, "DIRECT", errDial)
 	}
 }

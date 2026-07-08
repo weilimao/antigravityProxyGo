@@ -34,6 +34,10 @@
 </label>
 <input class="w-full px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-transparent text-on-surface dark:text-white focus:outline-none focus:border-primary" id="quotaRateLimit" placeholder="默认每分钟 30 次" data-i18n-placeholder="relayQuotaRateLimitPlaceholder" type="number"/>
 </div>
+<div class="mb-4 flex items-center gap-2" id="quotaResetContainer">
+<input class="text-primary focus:ring-primary rounded cursor-pointer w-4 h-4" id="quotaResetLimit" type="checkbox"/>
+<label class="text-[12px] font-medium text-outline cursor-pointer select-none" for="quotaResetLimit" data-i18n="relayQuotaResetLimitLabel">重置当前周期的限额使用量 (滚动周期与总量配额都将从0开始)</label>
+</div>
 <div class="mb-4 bg-outline-variant/5 p-3 rounded-lg border border-outline-variant/20" id="quotaPresetsContainer">
 <div class="text-[12px] font-medium text-outline mb-2" data-i18n="relayQuotaQuickSetupLabel">快速设置套餐</div>
 <div class="flex gap-2 flex-wrap" id="dynamicQuotaPresets"></div>

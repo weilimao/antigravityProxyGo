@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -87,7 +88,11 @@ func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 		if remoteAddr == "" {
 			remoteAddr = "unknown:0"
 		}
-		baseKey = "sock:" + remoteAddr
+		if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+			baseKey = "sock:" + host
+		} else {
+			baseKey = "sock:" + remoteAddr
+		}
 	}
 
 	// 从请求体中提取稳定的会话级/周期级特征，作为 sessionKey 的后缀进行更精细的分流

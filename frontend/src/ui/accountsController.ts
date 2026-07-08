@@ -43,6 +43,8 @@ let triggerResultsContainer: HTMLDivElement | null;
 let triggerResultsTableBody: HTMLTableSectionElement | null;
 let triggerModalAccountCount: HTMLSpanElement | null;
 
+let isGlobalEventsInitialized = false;
+
 // 自动化任务包 Modal 变量定义
 let btnManageAutoTrigger: HTMLButtonElement | null;
 let autoTriggerModal: HTMLDivElement | null;
@@ -545,12 +547,6 @@ export function initAccountsEvents() {
             }
             if (addAccountDropdown) addAccountDropdown.classList.toggle('hidden');
         });
-
-        document.addEventListener('click', (e: any) => {
-            if (btnAddAccount && addAccountDropdown && !btnAddAccount.contains(e.target) && !addAccountDropdown.contains(e.target)) {
-                addAccountDropdown.classList.add('hidden');
-            }
-        });
     }
 
     // Dynamic project-based button appending
@@ -642,8 +638,6 @@ export function initAccountsEvents() {
     // Register accounts data update channel listener
     // (Moved to global initAccountsGlobalEvents below)
 
-    // 监听账号多选事件以刷新批量操作栏
-    document.addEventListener('account-selection-changed', updateBatchActionBarUI);
 
     // 全选按钮绑定
     const chkAll = document.getElementById('chkSelectAllAccounts') as HTMLInputElement | null;
@@ -766,79 +760,94 @@ export async function refreshAllAccountsQuotasSilently() {
 }
 
 export function initAccountsGlobalEvents() {
-    // 获取主页“一键刷新”按钮 DOM 并进行事件绑定，因为主页 DOM 在程序启动时即始终存在
-    btnRefreshAggregateQuota = document.getElementById('btnRefreshAggregateQuota') as HTMLButtonElement | null;
-    btnRefreshAggregateIcon = document.getElementById('btnRefreshAggregateIcon');
-    if (btnRefreshAggregateQuota) {
-        btnRefreshAggregateQuota.addEventListener('click', refreshAllAccountsQuotas);
-    }
-
-    // 1. 注册账号数据更新频道监听
-    ipcRenderer.on('accounts-res', (event: any, data: any) => {
-        state.lastBackendData = data;
-        if (data && typeof data.activeChannel !== 'undefined') {
-            state.currentActiveChannel = data.activeChannel;
+    // 注册全局一次性监听器，防止多次打开账号页面时重复绑定及闭包导致的 Detached DOM 内存泄漏
+    if (!isGlobalEventsInitialized) {
+        // 获取主页“一键刷新”按钮 DOM 并进行事件绑定，因为主页 DOM 在程序启动时即始终存在
+        btnRefreshAggregateQuota = document.getElementById('btnRefreshAggregateQuota') as HTMLButtonElement | null;
+        btnRefreshAggregateIcon = document.getElementById('btnRefreshAggregateIcon');
+        if (btnRefreshAggregateQuota) {
+            btnRefreshAggregateQuota.addEventListener('click', refreshAllAccountsQuotas);
         }
-        if (!state.currentViewTab) {
-            state.currentViewTab = state.currentActiveChannel;
-        }
-        
-        // 尝试更新视图 Tab
-        updateViewTabUI();
 
-        if (data.accounts) {
-            state.currentAccountsList = data.accounts;
-            // 只有当 DOM 列表容器存在时才重新绘制账号卡片
-            const accountsListEl = document.getElementById('accountsList');
-            if (accountsListEl) {
-                renderAccounts(data.accounts);
+        // 1. 注册账号数据更新频道监听
+        ipcRenderer.on('accounts-res', (event: any, data: any) => {
+            state.lastBackendData = data;
+            if (data && typeof data.activeChannel !== 'undefined') {
+                state.currentActiveChannel = data.activeChannel;
             }
-        }
-        
-        updateAggregateQuotaUI();
-        
-        if (state.callbacks.updateAnalyzeAccountSelect) {
-            state.callbacks.updateAnalyzeAccountSelect();
-        }
-
-        // 第一次加载账号时，自动在后台静默刷新所有账号池的额度信息
-        if (!isInitialQuotaLoaded && data.accounts && data.accounts.length > 0) {
-            isInitialQuotaLoaded = true;
-            refreshAllAccountsQuotasSilently();
-        }
-    });
-
-    // 2. 绑定全局 log 事件，过滤显示测试进度
-    ipcRenderer.on('log', (event: any, logText: string) => {
-        if (logText && logText.includes('[测试回复]') && triggerLogsArea) {
-            if (triggerLogsArea.innerHTML.includes('等待配置')) {
-                triggerLogsArea.innerHTML = '';
+            if (!state.currentViewTab) {
+                state.currentViewTab = state.currentActiveChannel;
             }
-            const div = document.createElement('div');
-            if (logText.includes('❌')) {
-                div.className = 'text-red-400';
-            } else if (logText.includes('✅')) {
-                div.className = 'text-emerald-400';
-            } else if (logText.includes('⚡') || logText.includes('🏁')) {
-                div.className = 'text-amber-400 font-medium';
-            } else {
-                div.className = 'text-slate-300';
-            }
-            div.textContent = logText;
-            triggerLogsArea.appendChild(div);
             
-            // Limit child nodes to 100 to prevent DOM memory leak
-            if (triggerLogsArea.children.length > 100) {
-                while (triggerLogsArea.children.length > 80) {
-                    if (triggerLogsArea.firstChild) {
-                        triggerLogsArea.removeChild(triggerLogsArea.firstChild);
-                    }
+            // 尝试更新视图 Tab
+            updateViewTabUI();
+
+            if (data.accounts) {
+                state.currentAccountsList = data.accounts;
+                // 只有当 DOM 列表容器存在时才重新绘制账号卡片
+                const accountsListEl = document.getElementById('accountsList');
+                if (accountsListEl) {
+                    renderAccounts(data.accounts);
                 }
             }
             
-            triggerLogsArea.scrollTop = triggerLogsArea.scrollHeight;
-        }
-    });
+            updateAggregateQuotaUI();
+            
+            if (state.callbacks.updateAnalyzeAccountSelect) {
+                state.callbacks.updateAnalyzeAccountSelect();
+            }
+
+            // 第一次加载账号时，自动在后台静默刷新所有账号池的额度信息
+            if (!isInitialQuotaLoaded && data.accounts && data.accounts.length > 0) {
+                isInitialQuotaLoaded = true;
+                refreshAllAccountsQuotasSilently();
+            }
+        });
+
+        // 监听账号多选事件以刷新批量操作栏
+        document.addEventListener('account-selection-changed', updateBatchActionBarUI);
+
+        // 绑定全局点击事件，用于关闭添加账号的下拉菜单
+        document.addEventListener('click', (e: any) => {
+            if (btnAddAccount && addAccountDropdown && !btnAddAccount.contains(e.target) && !addAccountDropdown.contains(e.target)) {
+                addAccountDropdown.classList.add('hidden');
+            }
+        });
+
+        // 2. 绑定全局 log 事件，过滤显示测试进度
+        ipcRenderer.on('log', (event: any, logText: string) => {
+            if (logText && logText.includes('[测试回复]') && triggerLogsArea) {
+                if (triggerLogsArea.innerHTML.includes('等待配置')) {
+                    triggerLogsArea.innerHTML = '';
+                }
+                const div = document.createElement('div');
+                if (logText.includes('❌')) {
+                    div.className = 'text-red-400';
+                } else if (logText.includes('✅')) {
+                    div.className = 'text-emerald-400';
+                } else if (logText.includes('⚡') || logText.includes('🏁')) {
+                    div.className = 'text-amber-400 font-medium';
+                } else {
+                    div.className = 'text-slate-300';
+                }
+                div.textContent = logText;
+                triggerLogsArea.appendChild(div);
+                
+                // Limit child nodes to 100 to prevent DOM memory leak
+                if (triggerLogsArea.children.length > 100) {
+                    while (triggerLogsArea.children.length > 80) {
+                        if (triggerLogsArea.firstChild) {
+                            triggerLogsArea.removeChild(triggerLogsArea.firstChild);
+                        }
+                    }
+                }
+                
+                triggerLogsArea.scrollTop = triggerLogsArea.scrollHeight;
+            }
+        });
+
+        isGlobalEventsInitialized = true;
+    }
 
     // 3. 页面打开时拉取一次最新账号信息
     ipcRenderer.send('accounts:get');

@@ -364,17 +364,25 @@ func (a *App) startup(ctx context.Context) {
 			}
 
 			if quota.EnableFixed {
-				var lifetimeTokens int64
-				if stats != nil {
-					for mName, mStats := range stats.Models {
-						if (isClaude && strings.Contains(strings.ToLower(mName), "claude")) || 
-						   (!isClaude && !strings.Contains(strings.ToLower(mName), "claude")) {
-							lifetimeTokens += int64(mStats.InputTokens + mStats.OutputTokens)
+				var usedTokens int64
+				if quota.ResetAt != "" {
+					var err error
+					usedTokens, err = db.GetTokensForUserModelFamilySince(userID, familyKeyword, quota.ResetAt)
+					if err != nil {
+						return fmt.Errorf("failed to check fixed quota")
+					}
+				} else {
+					if stats != nil {
+						for mName, mStats := range stats.Models {
+							if (isClaude && strings.Contains(strings.ToLower(mName), "claude")) || 
+							   (!isClaude && !strings.Contains(strings.ToLower(mName), "claude")) {
+								usedTokens += int64(mStats.InputTokens + mStats.OutputTokens)
+							}
 						}
 					}
 				}
-				if lifetimeTokens >= quota.FixedTokens {
-					return fmt.Errorf("fixed token limit exceeded")
+				if usedTokens >= quota.FixedTokens {
+					return fmt.Errorf("fixed token limit exceeded (%d / %d)", usedTokens, quota.FixedTokens)
 				}
 			}
 

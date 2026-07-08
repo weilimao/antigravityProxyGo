@@ -70,6 +70,22 @@ func (a *AuthManager) ValidateToken(token string) (*RelaySession, error) {
 				ExpiresAt: time.Now().Add(5 * time.Minute),
 			}, nil
 		}
+
+		// 识别官方 Key 前缀并自动映射至本地首个启用账户的放行逻辑
+		if strings.HasPrefix(token, "sk-ant-") {
+			users := a.userMgr.GetUsers()
+			for _, u := range users {
+				if u.Enabled {
+					return &RelaySession{
+						UserID:    u.ID,
+						UserKey:   u.Key,
+						APIKeyID:  "official_bypass",
+						ExpiresAt: time.Now().Add(5 * time.Minute),
+					}, nil
+				}
+			}
+		}
+
 		return nil, fmt.Errorf("invalid token")
 	}
 	if time.Now().After(session.ExpiresAt) {

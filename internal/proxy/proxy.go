@@ -334,7 +334,7 @@ func (pe *ProxyEngine) Stop() {
 }
 
 func (pe *ProxyEngine) dialWithProxy(address string) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	return netutil.DialContext(ctx, "tcp", address)
 }
@@ -364,6 +364,13 @@ func (pe *ProxyEngine) ResetConnections() {
 	pe.logFn("✅ 全局 HTTP/HTTPS 代理连接已全部重置。")
 }
 
+// ResetRemoteClient 清理远程中继 HTTP Client 单例，使下次请求重新构建 Transport。
+func (pe *ProxyEngine) ResetRemoteClient() {
+	if pe.handler != nil {
+		pe.handler.ResetRemoteClient()
+	}
+}
+
 func (pe *ProxyEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		pe.handleConnect(w, r)
@@ -375,6 +382,9 @@ func (pe *ProxyEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
+	connectStart := time.Now()
+	pe.logFn(fmt.Sprintf("🔗 [CONNECT 计时] 收到隧道请求: %s", r.Host))
+
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
@@ -418,7 +428,9 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 	shouldDecrypt := pe.isInterceptMode && isTargetHost
 	pe.Unlock()
 
-	pe.logFn(fmt.Sprintf("🔍 Host: %s | Decrypt: %v | UA: %s", host, shouldDecrypt, r.Header.Get("User-Agent")))
+	if shouldDecrypt {
+		pe.logFn(fmt.Sprintf("🔍 Host: %s | Decrypt: %v | UA: %s", host, shouldDecrypt, r.Header.Get("User-Agent")))
+	}
 
 	if !shouldDecrypt {
 		// 远程模式优先级最高：所有无需解密的请求通过远程代理中继
@@ -503,6 +515,7 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Enqueue to decrypted HTTP Server
+	pe.logFn(fmt.Sprintf("🔗 [CONNECT 计时] 隧道建立完成 (%s): %dms", host, time.Since(connectStart).Milliseconds()))
 	select {
 	case pe.mitmListener.conns <- connToEnqueue:
 	case <-time.After(3 * time.Second): // 允许排队等待最长 3 秒，避免高并发下瞬间溢出丢弃

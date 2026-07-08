@@ -176,6 +176,7 @@ export function renderRelayPackages() {
     document.getElementById('quotaPackageNameContainer')?.classList.remove('hidden');
     const dict = i18n[state.currentLanguage] || {};
     document.getElementById('quotaPresetsContainer')?.classList.add('hidden');
+    document.getElementById('quotaResetContainer')?.classList.add('hidden');
     (document.getElementById('relayQuotaModalTitle') as HTMLElement).innerText = id 
         ? (dict.relayQuotaModalTitleEditTemplate || '编辑套餐模板') 
         : (dict.relayQuotaModalTitleCreateTemplate || '新建套餐模板');

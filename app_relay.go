@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/cert"
+	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/patch"
 	"antigravity-proxy/internal/proxy"
 	"antigravity-proxy/internal/relay"
@@ -276,7 +277,8 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 			b, _ := json.Marshal(args[1])
 			_ = json.Unmarshal(b, &quotas)
 		}
-		err := a.relayUserMgr.UpdateUserQuota(userId, quotas)
+		resetLimit := getBoolArg(2)
+		err := a.relayUserMgr.UpdateUserQuota(userId, quotas, resetLimit)
 		if err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
@@ -330,7 +332,28 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		}
 		stats := a.relayStatsMgr.GetUserStats(userId)
 		var geminiLifetime, claudeLifetime int64
-		if stats != nil {
+		user := a.relayUserMgr.GetUserByID(userId)
+		if user != nil {
+			if user.Quotas.Gemini.ResetAt != "" {
+				geminiLifetime, _ = db.GetTokensForUserModelFamilySince(userId, "gemini", user.Quotas.Gemini.ResetAt)
+			} else if stats != nil {
+				for mName, mStats := range stats.Models {
+					if !strings.Contains(strings.ToLower(mName), "claude") {
+						geminiLifetime += int64(mStats.InputTokens + mStats.OutputTokens)
+					}
+				}
+			}
+
+			if user.Quotas.Claude.ResetAt != "" {
+				claudeLifetime, _ = db.GetTokensForUserModelFamilySince(userId, "claude", user.Quotas.Claude.ResetAt)
+			} else if stats != nil {
+				for mName, mStats := range stats.Models {
+					if strings.Contains(strings.ToLower(mName), "claude") {
+						claudeLifetime += int64(mStats.InputTokens + mStats.OutputTokens)
+					}
+				}
+			}
+		} else if stats != nil {
 			for mName, mStats := range stats.Models {
 				if strings.Contains(strings.ToLower(mName), "claude") {
 					claudeLifetime += int64(mStats.InputTokens + mStats.OutputTokens)
@@ -344,7 +367,6 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		var claudeHourlyUsed, claudeDailyUsed int64
 		var geminiHourlyResetAt, claudeHourlyResetAt string
 		var geminiDailyResetAt, claudeDailyResetAt string
-		user := a.relayUserMgr.GetUserByID(userId)
 		if user != nil {
 			if user.Quotas.Gemini.EnableHourly && user.Quotas.Gemini.HourlyHours > 0 {
 				var resetStr string
@@ -718,6 +740,7 @@ func (a *App) disconnectRemote() {
 	if a.remoteRelay != nil {
 		a.remoteRelay.Disconnect()
 		a.proxyEngine.SetRemoteRelay(nil)
+		a.proxyEngine.ResetRemoteClient()
 
 		// 重新加载本地证书到内存中，使代理引擎能够继续正常解密签名
 		activeDir := a.settingsMgr.GetActiveDataDirectory()

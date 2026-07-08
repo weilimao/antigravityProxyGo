@@ -214,6 +214,9 @@ function renderRelayUsers() {
     (document.getElementById('quotaPackageId') as HTMLInputElement).value = '';
     document.getElementById('quotaPackageNameContainer')?.classList.add('hidden');
     document.getElementById('quotaPresetsContainer')?.classList.remove('hidden');
+    document.getElementById('quotaResetContainer')?.classList.remove('hidden');
+    const resetCheckbox = document.getElementById('quotaResetLimit') as HTMLInputElement;
+    if (resetCheckbox) resetCheckbox.checked = false;
     const dict = i18n[state.currentLanguage] || {};
     (document.getElementById('relayQuotaModalTitle') as HTMLElement).innerText = dict.relayQuotaModalTitleUser || '用户限额配置';
     
@@ -396,7 +399,8 @@ function renderRelayUsers() {
             await ipcRenderer.invoke('relay:save-package', { id: pkgId, name: pkgName, quotas });
             await refreshRelayPackages();
         } else {
-            await ipcRenderer.invoke('relay:update-user-quota', userId, quotas);
+            const resetLimit = (document.getElementById('quotaResetLimit') as HTMLInputElement)?.checked || false;
+            await ipcRenderer.invoke('relay:update-user-quota', userId, quotas, resetLimit);
             await refreshRelayUsers();
         }
         (window as any)._relayCloseModal('relayUserQuotaModal');

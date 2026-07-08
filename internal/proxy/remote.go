@@ -85,6 +85,11 @@ type RemoteRelay struct {
 	config          RemoteConfig
 	logFn           func(string)
 	onTokenExpired  func() // called when a 401/407 is received, to trigger auto-relogin
+
+	// 预热连接池：预先建立 TCP+TLS 连接，消除首次请求冷启动延迟
+	warmPool     chan net.Conn
+	warmPoolDone chan struct{}
+	warmPoolMu   sync.Mutex
 }
 
 // NewRemoteRelay creates a new RemoteRelay instance
@@ -206,11 +211,18 @@ func (rr *RemoteRelay) Login(host, port, path, key, password string) error {
 	if rr.logFn != nil {
 		rr.logFn(fmt.Sprintf("✅ Remote relay connected to %s:%s%s", host, port, path))
 	}
+
+	// 登录成功后启动连接预热池，消除后续首次请求的冷启动延迟
+	rr.StartWarmPool()
+
 	return nil
 }
 
 // Disconnect logs out from the remote relay server and clears the session
 func (rr *RemoteRelay) Disconnect() {
+	// 先停止预热连接池，释放所有预建连接
+	rr.StopWarmPool()
+
 	rr.Lock()
 	wasConnected := rr.config.Connected
 	host := rr.config.Host
@@ -252,17 +264,17 @@ func (rr *RemoteRelay) GetConfig() RemoteConfig {
 	return rr.config
 }
 
-// DialThroughRemote establishes a TCP tunnel through the remote relay server
-func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error) {
+// dialRelayRaw establishes a raw TCP (and optionally TLS) connection to the remote relay server,
+// without sending the CONNECT request. This is used for connection pre-warming and by DialThroughRemote.
+func (rr *RemoteRelay) dialRelayRaw() (net.Conn, error) {
 	rr.RLock()
-	host := rr.config.Host
+	rawHost := rr.config.Host
 	port := rr.config.Port
-	token := rr.config.Token
 	rr.RUnlock()
 
 	// 剥离协议前缀以进行纯 TCP 物理拨号
 	isHTTPS := false
-	host = strings.TrimSpace(host)
+	host := strings.TrimSpace(rawHost)
 	host = strings.TrimSuffix(host, "/")
 	if strings.HasPrefix(host, "https://") {
 		isHTTPS = true
@@ -274,7 +286,7 @@ func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error
 	if port == "" {
 		if isHTTPS {
 			port = "443"
-		} else if strings.HasPrefix(rr.config.Host, "http://") {
+		} else if strings.HasPrefix(rawHost, "http://") {
 			port = "80"
 		} else {
 			port = "18444"
@@ -301,10 +313,206 @@ func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error
 		conn = tlsConn
 	}
 
+	return conn, nil
+}
+
+// StartWarmPool 启动后台预热连接池。在 Login 成功后或重连后调用。
+// 预热池会预建 TCP+TLS 连接到远程中继服务器，使首次请求跳过耗时的建连握手阶段。
+func (rr *RemoteRelay) StartWarmPool() {
+	rr.warmPoolMu.Lock()
+	defer rr.warmPoolMu.Unlock()
+
+	// 清理已有的旧池（幂等安全，支持 re-login 场景）
+	rr.stopWarmPoolLocked()
+
+	rr.warmPool = make(chan net.Conn, 3)
+	rr.warmPoolDone = make(chan struct{})
+
+	go rr.maintainWarmPool()
+}
+
+// StopWarmPool 停止预热连接池并排空所有预建连接。
+func (rr *RemoteRelay) StopWarmPool() {
+	rr.warmPoolMu.Lock()
+	defer rr.warmPoolMu.Unlock()
+	rr.stopWarmPoolLocked()
+}
+
+// stopWarmPoolLocked 内部实现，必须在持有 warmPoolMu 锁时调用。
+func (rr *RemoteRelay) stopWarmPoolLocked() {
+	if rr.warmPoolDone != nil {
+		select {
+		case <-rr.warmPoolDone:
+			// 已经关闭
+		default:
+			close(rr.warmPoolDone)
+		}
+	}
+	// 排空并关闭池中所有连接
+	if rr.warmPool != nil {
+		for {
+			select {
+			case conn := <-rr.warmPool:
+				if conn != nil {
+					conn.Close()
+				}
+			default:
+				rr.warmPool = nil
+				return
+			}
+		}
+	}
+}
+
+// getWarmConn 非阻塞地从预热池中获取一个连接。
+// 如果池为空或连接已失效，返回 nil。
+func (rr *RemoteRelay) getWarmConn() net.Conn {
+	rr.warmPoolMu.Lock()
+	pool := rr.warmPool
+	rr.warmPoolMu.Unlock()
+
+	if pool == nil {
+		return nil
+	}
+
+	select {
+	case conn := <-pool:
+		// 快速验证连接存活性：如果 SetDeadline 返回错误，说明底层连接已断开
+		if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			conn.Close()
+			return nil
+		}
+		// 重置 deadline，交由后续 CONNECT 逻辑控制超时
+		_ = conn.SetDeadline(time.Time{})
+		return conn
+	default:
+		return nil
+	}
+}
+
+// replenishPool 异步补充预热连接池（在每次消耗连接后调用）。
+func (rr *RemoteRelay) replenishPool() {
+	rr.warmPoolMu.Lock()
+	pool := rr.warmPool
+	done := rr.warmPoolDone
+	rr.warmPoolMu.Unlock()
+
+	if pool == nil || done == nil {
+		return
+	}
+	select {
+	case <-done:
+		return
+	default:
+	}
+
+	// 仅在池未满时补充
+	if len(pool) >= 2 {
+		return
+	}
+
+	conn, err := rr.dialRelayRaw()
+	if err != nil {
+		return
+	}
+
+	select {
+	case pool <- conn:
+	case <-done:
+		conn.Close()
+	default:
+		conn.Close() // 池已满
+	}
+}
+
+// maintainWarmPool 后台维护预热连接池的 goroutine。
+func (rr *RemoteRelay) maintainWarmPool() {
+	if rr.logFn != nil {
+		rr.logFn("🔥 [预热] 正在预建远程中继连接池...")
+	}
+
+	// 初始突发：预建 2 个连接
+	established := 0
+	for i := 0; i < 2; i++ {
+		select {
+		case <-rr.warmPoolDone:
+			return
+		default:
+		}
+		conn, err := rr.dialRelayRaw()
+		if err != nil {
+			if rr.logFn != nil {
+				rr.logFn(fmt.Sprintf("⚠️ [预热] 预建连接 #%d 失败: %v", i+1, err))
+			}
+			continue
+		}
+		select {
+		case rr.warmPool <- conn:
+			established++
+		case <-rr.warmPoolDone:
+			conn.Close()
+			return
+		default:
+			conn.Close()
+		}
+	}
+
+	if rr.logFn != nil {
+		rr.logFn(fmt.Sprintf("✅ [预热] 远程中继连接池已就绪 (%d 个连接已预建)", established))
+	}
+
+	// 维护循环：每 30 秒检查并补充池
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-rr.warmPoolDone:
+			return
+		case <-ticker.C:
+			rr.replenishPool()
+		}
+	}
+}
+
+// DialThroughRemote establishes a TCP tunnel through the remote relay server.
+// It first attempts to use a pre-warmed connection from the pool to eliminate cold-start latency.
+// Falls back to creating a new connection if the pool is empty or the warm connection is stale.
+func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error) {
+	rr.RLock()
+	token := rr.config.Token
+	rr.RUnlock()
+
+	// 1. 尝试从预热连接池获取已建立好的连接（非阻塞）
+	conn := rr.getWarmConn()
+	usedWarm := conn != nil
+
+	// 2. 若预热池为空或获取失败，降级为即时新建连接
+	if conn == nil {
+		var err error
+		conn, err = rr.dialRelayRaw()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// 3. 在已建立的连接上发送 CONNECT 请求（此时连接已就绪，仅需网络往返）
 	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Bearer %s\r\n\r\n", targetHostPort, targetHostPort, token)
 	if _, err := conn.Write([]byte(connectReq)); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to send CONNECT request: %w", err)
+		// 若预热连接已失效，降级新建连接重试一次
+		if usedWarm {
+			var err2 error
+			conn, err2 = rr.dialRelayRaw()
+			if err2 != nil {
+				return nil, fmt.Errorf("failed to connect to remote relay: %w", err2)
+			}
+			if _, err3 := conn.Write([]byte(connectReq)); err3 != nil {
+				conn.Close()
+				return nil, fmt.Errorf("failed to send CONNECT request: %w", err3)
+			}
+		} else {
+			return nil, fmt.Errorf("failed to send CONNECT request: %w", err)
+		}
 	}
 
 	br := bufio.NewReader(conn)
@@ -329,8 +537,12 @@ func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error
 		return nil, fmt.Errorf("remote relay CONNECT failed with status %d", resp.StatusCode)
 	}
 
+	// 4. 异步补充预热连接池
+	go rr.replenishPool()
+
 	return conn, nil
 }
+
 
 // FetchRemoteKeys fetches the list of API keys from the remote server
 func (rr *RemoteRelay) FetchRemoteKeys() (interface{}, error) {
