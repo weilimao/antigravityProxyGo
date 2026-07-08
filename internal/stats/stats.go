@@ -65,6 +65,51 @@ type RequestLog struct {
 	DurationMs     int64       `json:"durationMs"`
 }
 
+// RequestLogLite is the scalar-only projection of RequestLog sent on the
+// stats-updated hot path. The logs table only renders these fields; the
+// (potentially large) requestBody / requestHeaders are fetched on demand via
+// GetRequestDetails when a user opens the details modal. This keeps the
+// per-tick IPC payload and V8 JSON-parse allocations small, which is the
+// single biggest lever for keeping the WebView renderer memory bounded under
+// heavy traffic.
+type RequestLogLite struct {
+	ID           string  `json:"id"`
+	Timestamp    string  `json:"timestamp"`
+	Method       string  `json:"method"`
+	Host         string  `json:"host"`
+	Path         string  `json:"path"`
+	Model        string  `json:"model"`
+	InTokens     int     `json:"inTokens"`
+	OutTokens    int     `json:"outTokens"`
+	CachedTokens int     `json:"cachedTokens"`
+	CacheStatus  string  `json:"cacheStatus"`
+	StatusCode   int     `json:"statusCode"`
+	Cost         float64 `json:"cost"`
+	Account      string  `json:"account"`
+	SessionID    string  `json:"sessionId"`
+	DurationMs   int64   `json:"durationMs"`
+}
+
+func toRequestLogLite(r *RequestLog) RequestLogLite {
+	return RequestLogLite{
+		ID:           r.ID,
+		Timestamp:    r.Timestamp,
+		Method:       r.Method,
+		Host:         r.Host,
+		Path:         r.Path,
+		Model:        r.Model,
+		InTokens:     r.InTokens,
+		OutTokens:    r.OutTokens,
+		CachedTokens: r.CachedTokens,
+		CacheStatus:  r.CacheStatus,
+		StatusCode:   r.StatusCode,
+		Cost:         r.Cost,
+		Account:      r.Account,
+		SessionID:    r.SessionID,
+		DurationMs:   r.DurationMs,
+	}
+}
+
 type StatsData struct {
 	Stats    GlobalStats    `json:"stats"`
 	Trends   []*HourlyTrend `json:"trends"`
@@ -348,27 +393,11 @@ func (t *Tracker) GetPayload(usagePayload interface{}) map[string]interface{} {
 		}
 	}
 
-	requestsCopy := make([]*RequestLog, len(t.requests))
+	// Lite projection: only scalar fields. requestBody / requestHeaders stay
+	// in t.requests and are fetched on demand via GetRequestDetails.
+	requestsCopy := make([]RequestLogLite, len(t.requests))
 	for i, req := range t.requests {
-		requestsCopy[i] = &RequestLog{
-			ID:             req.ID,
-			Timestamp:      req.Timestamp,
-			Method:         req.Method,
-			Host:           req.Host,
-			Path:           req.Path,
-			Model:          req.Model,
-			InTokens:       req.InTokens,
-			OutTokens:      req.OutTokens,
-			CachedTokens:   req.CachedTokens,
-			CacheStatus:    req.CacheStatus,
-			StatusCode:     req.StatusCode,
-			Cost:           req.Cost,
-			Account:        req.Account,
-			RequestBody:    req.RequestBody,
-			RequestHeaders: req.RequestHeaders,
-			SessionID:      req.SessionID,
-			DurationMs:     req.DurationMs,
-		}
+		requestsCopy[i] = toRequestLogLite(req)
 	}
 
 	return map[string]interface{}{
@@ -406,27 +435,9 @@ func (t *Tracker) GetPayloadSimplified(usagePayload interface{}) map[string]inte
 		Models:            modelsCopy,
 	}
 
-	requestsCopy := make([]*RequestLog, len(t.requests))
+	requestsCopy := make([]RequestLogLite, len(t.requests))
 	for i, req := range t.requests {
-		requestsCopy[i] = &RequestLog{
-			ID:             req.ID,
-			Timestamp:      req.Timestamp,
-			Method:         req.Method,
-			Host:           req.Host,
-			Path:           req.Path,
-			Model:          req.Model,
-			InTokens:       req.InTokens,
-			OutTokens:      req.OutTokens,
-			CachedTokens:   req.CachedTokens,
-			CacheStatus:    req.CacheStatus,
-			StatusCode:     req.StatusCode,
-			Cost:           req.Cost,
-			Account:        req.Account,
-			RequestBody:    req.RequestBody,
-			RequestHeaders: req.RequestHeaders,
-			SessionID:      req.SessionID,
-			DurationMs:     req.DurationMs,
-		}
+		requestsCopy[i] = toRequestLogLite(req)
 	}
 
 	return map[string]interface{}{
@@ -435,6 +446,22 @@ func (t *Tracker) GetPayloadSimplified(usagePayload interface{}) map[string]inte
 		"requests": requestsCopy,
 		"usage":    usagePayload,
 	}
+}
+
+// GetRequestDetails returns the (truncated) requestBody and requestHeaders for
+// a given request ID from the in-memory recent log buffer. Used by the frontend
+// details modal to fetch heavy payload on demand instead of carrying it on
+// every stats-updated tick. Returns nil/nil when the id is no longer in the
+// 50-entry recent window (or in remote mode, where bodies aren't stored).
+func (t *Tracker) GetRequestDetails(id string) (interface{}, interface{}) {
+	t.RLock()
+	defer t.RUnlock()
+	for _, r := range t.requests {
+		if r.ID == id {
+			return r.RequestBody, r.RequestHeaders
+		}
+	}
+	return nil, nil
 }
 
 func (t *Tracker) scheduleSave() {

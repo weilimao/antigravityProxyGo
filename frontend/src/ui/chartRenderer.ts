@@ -570,8 +570,16 @@ export function getFilteredTrends(trends: any[], range: string): any[] {
         slots = generateHourlySlots(168); // Fallback 7d
     }
     
+    // Index trends by their time key once (O(n)) so each slot lookup is O(1).
+    // The previous slots.map(slot => trends.find(...)) was O(slots * trends),
+    // i.e. up to 720 * 720 comparisons on the 30d range, every chart redraw.
+    const trendsByTime = new Map<string, any>();
+    for (const item of trends) {
+        trendsByTime.set(item.time, item);
+    }
+
     const result = slots.map(slot => {
-        const found = trends.find(item => item.time === slot);
+        const found = trendsByTime.get(slot);
         if (found) {
             return found;
         } else {
@@ -585,7 +593,7 @@ export function getFilteredTrends(trends: any[], range: string): any[] {
             };
         }
     });
-    
+
     return result;
 }
 

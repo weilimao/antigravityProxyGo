@@ -87,10 +87,10 @@ let lastStatsUpdatedSig = '';
 
 // Console log ring buffer: a fixed pool of DOM nodes is reused instead of
 // creating/removing a <div> per log line. Under heavy concurrent traffic the
-// backend can flush hundreds of log lines per 250ms tick; the old create+prune
+// backend can flush hundreds of log lines per 1.5s tick; the old create+prune
 // loop caused WebView memory pools to inflate without ever being returned to
 // the OS. Reusing nodes caps the work at O(MAX_CONSOLE_ENTRIES) per tick.
-const MAX_CONSOLE_ENTRIES = 120;
+const MAX_CONSOLE_ENTRIES = 80;
 const consolePool: HTMLDivElement[] = [];
 let consolePoolIdx = 0;
 
@@ -171,6 +171,164 @@ function maybeDrawTrendChart() {
     }
 }
 
+// --- Logs table row pool ---
+// A fixed pool of reusable <tr> nodes (grown up to itemsPerPage) is patched
+// in place instead of rebuilding the table via innerHTML on every stats tick.
+// Under heavy traffic the create+destroy churn of innerHTML caused Blink's DOM
+// node pools to inflate without returning memory to the OS.
+interface LogsRowSlot {
+    tr: HTMLTableRowElement;
+    timestamp: HTMLTableCellElement;
+    method: HTMLSpanElement;
+    host: HTMLSpanElement;
+    methodHostCell: HTMLTableCellElement;
+    path: HTMLTableCellElement;
+    sessionId: HTMLTableCellElement;
+    modelName: HTMLSpanElement;
+    account: HTMLSpanElement;
+    modelCell: HTMLTableCellElement;
+    inTokens: HTMLSpanElement;
+    outTokens: HTMLSpanElement;
+    cost: HTMLTableCellElement;
+    duration: HTMLTableCellElement;
+    hitRate: HTMLTableCellElement;
+    cacheBadge: HTMLSpanElement;
+    httpCode: HTMLSpanElement;
+    viewBtn: HTMLButtonElement;
+}
+
+const logsRowSlots: LogsRowSlot[] = [];
+
+function buildLogsRowSlot(): LogsRowSlot {
+    const tr = document.createElement('tr');
+    tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors';
+
+    const makeTd = (className: string): HTMLTableCellElement => {
+        const td = document.createElement('td');
+        td.className = className;
+        return td;
+    };
+    const makeSpan = (className: string): HTMLSpanElement => {
+        const s = document.createElement('span');
+        s.className = className;
+        return s;
+    };
+
+    const timestamp = makeTd('p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] whitespace-nowrap');
+
+    const methodHostCell = makeTd('p-3 font-data-mono truncate');
+    const method = makeSpan('text-[#0ea5e9] font-bold mr-2');
+    const host = makeSpan('text-on-surface dark:text-white');
+    methodHostCell.appendChild(method);
+    methodHostCell.appendChild(host);
+
+    const path = makeTd('p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate');
+    const sessionId = makeTd('p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate');
+
+    const modelCell = makeTd('p-3 font-sans font-medium text-on-surface dark:text-white truncate');
+    const modelDiv = document.createElement('div');
+    modelDiv.className = 'flex flex-col min-w-0';
+    const modelName = makeSpan('font-semibold text-on-surface dark:text-white truncate');
+    const account = makeSpan('text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5');
+    modelDiv.appendChild(modelName);
+    modelDiv.appendChild(account);
+    modelCell.appendChild(modelDiv);
+
+    const tokensCell = makeTd('p-3 text-right font-data-mono');
+    const tokensDiv = document.createElement('div');
+    tokensDiv.className = 'flex flex-col items-end';
+    const inTokens = makeSpan('text-[10px] text-outline dark:text-outline-variant');
+    const outTokens = makeSpan('text-on-surface dark:text-white');
+    tokensDiv.appendChild(inTokens);
+    tokensDiv.appendChild(outTokens);
+    tokensCell.appendChild(tokensDiv);
+
+    const cost = makeTd('p-3 text-right font-data-mono text-emerald-600 dark:text-emerald-400 font-bold');
+    const duration = makeTd('p-3 text-right font-data-mono');
+    const hitRate = makeTd('p-3 text-center font-data-mono');
+
+    const statusCell = makeTd('p-3 text-center');
+    const cacheBadge = makeSpan('inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium');
+    const httpCode = makeSpan('block text-[10px] font-bold mt-1');
+    statusCell.appendChild(cacheBadge);
+    statusCell.appendChild(httpCode);
+
+    const btnCell = makeTd('p-3 text-center');
+    const viewBtn = document.createElement('button');
+    viewBtn.className = 'px-2 py-1 text-[11px] bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-fixed-dim rounded font-medium transition-all view-details-btn';
+    btnCell.appendChild(viewBtn);
+
+    tr.appendChild(timestamp);
+    tr.appendChild(methodHostCell);
+    tr.appendChild(path);
+    tr.appendChild(sessionId);
+    tr.appendChild(modelCell);
+    tr.appendChild(tokensCell);
+    tr.appendChild(cost);
+    tr.appendChild(duration);
+    tr.appendChild(hitRate);
+    tr.appendChild(statusCell);
+    tr.appendChild(btnCell);
+
+    return { tr, timestamp, method, host, methodHostCell, path, sessionId, modelName, account, modelCell, inTokens, outTokens, cost, duration, hitRate, cacheBadge, httpCode, viewBtn };
+}
+
+function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
+    slot.timestamp.textContent = log.timestamp;
+
+    slot.method.textContent = log.method;
+    slot.host.textContent = log.host;
+    slot.methodHostCell.setAttribute('title', `${log.method} ${log.host}`);
+
+    slot.path.textContent = log.path;
+    slot.path.setAttribute('title', log.path);
+
+    slot.sessionId.textContent = log.sessionId || '-';
+    slot.sessionId.setAttribute('title', log.sessionId || '-');
+
+    slot.modelName.textContent = log.model;
+    slot.modelCell.setAttribute('title', log.model);
+
+    if (log.account) {
+        slot.account.textContent = log.account;
+        slot.account.setAttribute('title', log.account);
+        slot.account.className = 'text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5';
+    } else {
+        slot.account.textContent = state.currentLanguage === 'zh' ? '直连' : 'Direct';
+        slot.account.className = 'text-[10px] text-slate-400 dark:text-slate-500 font-data-mono truncate mt-0.5';
+    }
+
+    slot.inTokens.textContent = `${dict.input || '输入'}: ${log.inTokens.toLocaleString()}`;
+    slot.outTokens.textContent = `${dict.output || '输出'}: ${log.outTokens.toLocaleString()}`;
+
+    slot.cost.textContent = `$${(log.cost || 0).toFixed(6)}`;
+    slot.duration.textContent = formatDuration(log.durationMs);
+
+    const hitRateVal = log.inTokens > 0 ? (log.cachedTokens / log.inTokens * 100).toFixed(1) : '0.0';
+    const hitRateColor = log.cachedTokens > 0 ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400 dark:text-slate-500';
+    slot.hitRate.textContent = `${hitRateVal}%`;
+    slot.hitRate.className = `p-3 text-center font-data-mono ${hitRateColor}`;
+
+    let statusClass = 'bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-900/40 dark:text-slate-400 dark:border-slate-800';
+    let statusLabel = dict.statusMiss || 'MISS';
+    if (log.cacheStatus === 'HIT') {
+        statusClass = 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/30';
+        statusLabel = dict.statusHit || 'HIT';
+    } else if (log.cacheStatus === 'NONE') {
+        statusClass = 'bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/20 dark:text-purple-400 dark:border-purple-900/30';
+        statusLabel = dict.statusNone || 'NONE';
+    }
+    slot.cacheBadge.textContent = statusLabel;
+    slot.cacheBadge.className = `inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${statusClass}`;
+
+    const statusColor = log.statusCode >= 400 ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400';
+    slot.httpCode.textContent = `HTTP ${log.statusCode}`;
+    slot.httpCode.className = `block text-[10px] font-bold mt-1 ${statusColor}`;
+
+    slot.viewBtn.setAttribute('data-log-id', log.id);
+    slot.viewBtn.textContent = state.currentLanguage === 'zh' ? '查看' : 'View';
+}
+
 // Filter and render logs table with pagination
 export function renderLogsTable() {
     const dict = i18n[state.currentLanguage] || {};
@@ -203,66 +361,33 @@ export function renderLogsTable() {
 
     valShowingText = document.getElementById('valShowingText');
     if (paginated.length === 0) {
+        // Empty state: drop the row pool and show a single placeholder row.
+        // (Only on filter transitions / no data, so churn here is acceptable.)
+        logsRowSlots.length = 0;
         logsTableBody.innerHTML = `<tr><td colspan="11" class="p-8 text-center text-outline dark:text-outline-variant italic">${dict.noLogs || '暂无日志'}</td></tr>`;
         if (valShowingText) {
             valShowingText.textContent = state.currentLanguage === 'zh' ? `共 0 条记录` : `Showing 0 entries`;
         }
     } else {
-        let html = '';
-        paginated.forEach(log => {
-            let statusClass = 'bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-900/40 dark:text-slate-400 dark:border-slate-800';
-            let statusLabel = dict.statusMiss || 'MISS';
-            if (log.cacheStatus === 'HIT') {
-                statusClass = 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/30';
-                statusLabel = dict.statusHit || 'HIT';
-            } else if (log.cacheStatus === 'NONE') {
-                statusClass = 'bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/20 dark:text-purple-400 dark:border-purple-900/30';
-                statusLabel = dict.statusNone || 'NONE';
-            }
-
-            const isError = log.statusCode >= 400;
-            const statusColor = isError ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400';
-
-            const hitRateVal = log.inTokens > 0 ? (log.cachedTokens / log.inTokens * 100).toFixed(1) : '0.0';
-            const hitRateColor = log.cachedTokens > 0 ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400 dark:text-slate-500';
-
-            html += `
-                <tr class="hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
-                    <td class="p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] whitespace-nowrap">${log.timestamp}</td>
-                    <td class="p-3 font-data-mono truncate" title="${log.method} ${log.host}">
-                        <span class="text-[#0ea5e9] font-bold mr-2">${log.method}</span>
-                        <span class="text-on-surface dark:text-white">${log.host}</span>
-                    </td>
-                    <td class="p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate" title="${log.path}">${log.path}</td>
-                    <td class="p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate" title="${log.sessionId || '-'}">${log.sessionId || '-'}</td>
-                    <td class="p-3 font-sans font-medium text-on-surface dark:text-white truncate" title="${log.model}">
-                        <div class="flex flex-col min-w-0">
-                            <span class="font-semibold text-on-surface dark:text-white truncate">${log.model}</span>
-                            ${log.account ? `<span class="text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5" title="${log.account}">${log.account}</span>` : `<span class="text-[10px] text-slate-400 dark:text-slate-500 font-data-mono truncate mt-0.5">${state.currentLanguage === 'zh' ? '直连' : 'Direct'}</span>`}
-                        </div>
-                    </td>
-                    <td class="p-3 text-right font-data-mono">
-                        <div class="flex flex-col items-end">
-                            <span class="text-[10px] text-outline dark:text-outline-variant">${dict.input || '输入'}: ${log.inTokens.toLocaleString()}</span>
-                            <span class="text-on-surface dark:text-white">${dict.output || '输出'}: ${log.outTokens.toLocaleString()}</span>
-                        </div>
-                    </td>
-                    <td class="p-3 text-right font-data-mono text-emerald-600 dark:text-emerald-400 font-bold">$${(log.cost || 0).toFixed(6)}</td>
-                    <td class="p-3 text-right font-data-mono">${formatDuration(log.durationMs)}</td>
-                    <td class="p-3 text-center font-data-mono ${hitRateColor}">${hitRateVal}%</td>
-                    <td class="p-3 text-center">
-                        <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${statusClass}">${statusLabel}</span>
-                        <span class="block text-[10px] font-bold ${statusColor} mt-1">HTTP ${log.statusCode}</span>
-                    </td>
-                    <td class="p-3 text-center">
-                        <button class="px-2 py-1 text-[11px] bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-fixed-dim rounded font-medium transition-all view-details-btn" data-log-id="${log.id}">
-                            ${state.currentLanguage === 'zh' ? '查看' : 'View'}
-                        </button>
-                    </td>
-                </tr>
-            `;
-        });
-        logsTableBody.innerHTML = html;
+        // Reuse a fixed pool of <tr> nodes (grown up to itemsPerPage) and patch
+        // cell textContent / classNames in place. This avoids the destroy-and-
+        // recreate churn of `innerHTML =` that inflated Blink's DOM node pools
+        // under sustained traffic.
+        if (logsRowSlots.length === 0) {
+            logsTableBody.innerHTML = '';
+        }
+        while (logsRowSlots.length < paginated.length) {
+            const slot = buildLogsRowSlot();
+            logsRowSlots.push(slot);
+            logsTableBody.appendChild(slot.tr);
+        }
+        for (let i = 0; i < paginated.length; i++) {
+            updateLogsRowSlot(logsRowSlots[i], paginated[i], dict);
+            logsRowSlots[i].tr.classList.remove('hidden');
+        }
+        for (let i = paginated.length; i < logsRowSlots.length; i++) {
+            logsRowSlots[i].tr.classList.add('hidden');
+        }
 
         const showingText = state.currentLanguage === 'zh'
             ? `显示第 ${startIndex + 1} 到 ${endIndex} 条，共 ${totalItems} 条记录`
@@ -1257,14 +1382,48 @@ export function hideModal() {
     modalContainer.classList.add('scale-95');
     modalContainer.classList.remove('scale-100');
 
-    // Clear massive text areas to release memory of large API requests/responses in DOM tree immediately
+    // Invalidate any in-flight on-demand details fetch and release the large
+    // API request/response text from the DOM tree immediately.
+    modalDetailsToken++;
     if (modalJsonArea) modalJsonArea.textContent = '';
     if (modalHeaderArea) modalHeaderArea.textContent = '';
+}
+
+// Bumped on every showModal/hideModal so stale on-demand details fetches
+// (for a previous entry, or after close) can be discarded.
+let modalDetailsToken = 0;
+
+function formatRequestBody(body: any): string {
+    if (!body) {
+        return state.currentLanguage === 'zh' ? '{\n  "message": "无请求参数"\n}' : '{\n  "message": "No request parameters"\n}';
+    }
+    try {
+        if (typeof body === 'object') {
+            return JSON.stringify(body, null, 2);
+        }
+        const parsed = JSON.parse(body);
+        return JSON.stringify(parsed, null, 2);
+    } catch (e) {
+        return String(body);
+    }
+}
+
+function formatRequestHeaders(headers: any): string {
+    if (!headers) {
+        return state.currentLanguage === 'zh' ? '{\n  "message": "无请求头数据"\n}' : '{\n  "message": "No request headers"\n}';
+    }
+    try {
+        return JSON.stringify(headers, null, 2);
+    } catch (e) {
+        return String(headers);
+    }
 }
 
 export function showModal(log: any) {
     if (!detailsModal || !modalContainer) return;
 
+    // Header fields come from the lite log metadata (always present on the
+    // stats-updated hot path).
     if (modalTime) modalTime.textContent = log.timestamp || '-';
     if (modalSession) modalSession.textContent = log.sessionId || '-';
     if (modalModel) modalModel.textContent = log.model || '-';
@@ -1284,42 +1443,33 @@ export function showModal(log: any) {
     const cachedT = log.cachedTokens || 0;
     if (modalTokens) modalTokens.textContent = `In: ${inT.toLocaleString()} | Out: ${outT.toLocaleString()} | Cache: ${cachedT.toLocaleString()}`;
 
-    let cacheBadge = log.cacheStatus || 'NONE';
-    let statusColor = log.statusCode >= 400 ? 'text-rose-500' : 'text-emerald-500';
+    const cacheBadge = log.cacheStatus || 'NONE';
+    const statusColor = log.statusCode >= 400 ? 'text-rose-500' : 'text-emerald-500';
     if (modalStatus) modalStatus.innerHTML = `<span class="text-primary dark:text-primary-fixed-dim mr-2">${cacheBadge}</span><span class="${statusColor}">HTTP ${log.statusCode}</span>`;
 
-    let formattedJson = '';
-    if (log.requestBody) {
-        try {
-            if (typeof log.requestBody === 'object') {
-                formattedJson = JSON.stringify(log.requestBody, null, 2);
-            } else {
-                const parsed = JSON.parse(log.requestBody);
-                formattedJson = JSON.stringify(parsed, null, 2);
-            }
-        } catch (e) {
-            formattedJson = String(log.requestBody);
-        }
-    } else {
-        formattedJson = state.currentLanguage === 'zh' ? '{\n  "message": "无请求参数"\n}' : '{\n  "message": "No request parameters"\n}';
-    }
-    if (modalJsonArea) modalJsonArea.textContent = formattedJson;
-
-    let formattedHeaders = '';
-    if (log.requestHeaders) {
-        try {
-            formattedHeaders = JSON.stringify(log.requestHeaders, null, 2);
-        } catch (e) {
-            formattedHeaders = String(log.requestHeaders);
-        }
-    } else {
-        formattedHeaders = state.currentLanguage === 'zh' ? '{\n  "message": "无请求头数据"\n}' : '{\n  "message": "No request headers"\n}';
-    }
-    if (modalHeaderArea) modalHeaderArea.textContent = formattedHeaders;
+    // Show the modal immediately with a loading placeholder; the heavy
+    // requestBody / requestHeaders are fetched on demand so they are not
+    // carried on every stats-updated tick.
+    const loadingText = state.currentLanguage === 'zh' ? '加载中…' : 'Loading…';
+    if (modalJsonArea) modalJsonArea.textContent = loadingText;
+    if (modalHeaderArea) modalHeaderArea.textContent = loadingText;
 
     detailsModal.classList.remove('opacity-0', 'pointer-events-none');
     modalContainer.classList.remove('scale-95');
     modalContainer.classList.add('scale-100');
+
+    const token = ++modalDetailsToken;
+    ipcRenderer.invoke('request:get-details', log.id).then((details: any) => {
+        if (token !== modalDetailsToken) return; // superseded by a newer open/close
+        const body = details ? details.requestBody : null;
+        const headers = details ? details.requestHeaders : null;
+        if (modalJsonArea) modalJsonArea.textContent = formatRequestBody(body);
+        if (modalHeaderArea) modalHeaderArea.textContent = formatRequestHeaders(headers);
+    }).catch(() => {
+        if (token !== modalDetailsToken) return;
+        if (modalJsonArea) modalJsonArea.textContent = formatRequestBody(null);
+        if (modalHeaderArea) modalHeaderArea.textContent = formatRequestHeaders(null);
+    });
 }
 
 // Global hooks

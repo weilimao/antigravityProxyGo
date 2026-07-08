@@ -1,6 +1,6 @@
 <template>
   <div class="antialiased min-h-screen flex flex-col font-sans">
-    <header ref="headerRef" class="bg-white/80 dark:bg-[#1a1f30]/80 backdrop-blur-md border-b border-outline-variant/30 flex justify-between items-center w-full px-4 lg:px-6 z-50 py-3">
+    <header ref="headerRef" class="bg-white dark:bg-[#1a1f30] border-b border-outline-variant/30 flex justify-between items-center w-full px-4 lg:px-6 z-50 py-3">
         <!-- 左侧及中间区域：Logo、证书管理和导航链接/下拉菜单 -->
         <div class="flex items-center gap-6 md:gap-8 lg:gap-12 flex-grow min-w-0">
             <!-- Logo 和证书管理 -->
@@ -410,9 +410,10 @@ onMounted(() => {
         layoutObserver.observe(leftSection.value, opts);
         layoutObserver.observe(rightSection.value, opts);
       }
-      // Light safety net for size drift (e.g. restore from minimize) without
-      // serializing innerHTML every tick.
-      layoutTimer = setInterval(updateResponsiveLayout, 2000);
+      // Note: no periodic reflow poll. Window size changes are handled by the
+      // 'resize' listener (which fires on minimize/restore too) and the
+      // MutationObserver above; a 2s setInterval that forced header reflow
+      // every tick was a steady source of Blink layout/compositing churn.
     }, 150);
   }, 100);
 });

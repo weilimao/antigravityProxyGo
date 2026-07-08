@@ -485,7 +485,10 @@ func (a *App) startup(ctx context.Context) {
 
 	// Start Logs Batch Flusher
 	go func(ctx context.Context) {
-		ticker := time.NewTicker(1 * time.Second)
+		// 1.5s cadence (was 1s): halves the number of DOM-mutation batches the
+		// console ring buffer processes per minute under heavy traffic, with no
+		// perceptible lag for human log reading.
+		ticker := time.NewTicker(1500 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
@@ -979,6 +982,19 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 	}
 
 	switch channel {
+	case "request:get-details":
+		// On-demand fetch of the (truncated) requestBody / requestHeaders for
+		// the details modal. The hot-path stats-updated payload only carries
+		// scalar request metadata, so heavy bodies are pulled here when the
+		// user actually opens a log entry. Returns nil when the id has aged
+		// out of the 50-entry recent window (or in remote mode).
+		reqID := getStringArg(0)
+		body, headers := a.statsTracker.GetRequestDetails(reqID)
+		return marshalResponse(map[string]interface{}{
+			"requestBody":    body,
+			"requestHeaders": headers,
+		})
+
 	case "auth:login":
 		provider := "gemini-cli"
 		if len(args) > 0 {
