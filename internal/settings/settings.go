@@ -61,6 +61,11 @@ type Config struct {
 	Language             string `json:"language"`
 	MaxRequestBodyMB     int    `json:"maxRequestBodyMB"`
 	RequestTimeout       int    `json:"requestTimeout"`
+	EnableCustomCompression bool   `json:"enableCustomCompression"`
+	MaxTokensThreshold      int    `json:"maxTokensThreshold"`
+	CompressionStrategy     string `json:"compressionStrategy"`
+	SummaryModel            string `json:"summaryModel"`
+	KeepRecentTurns         int    `json:"keepRecentTurns"`
 }
 
 func GetDefaultModelMappings() []ModelMappingEntry {
@@ -168,6 +173,11 @@ func (m *Manager) Init(defaultPath string) {
 		CustomSocks5Password: "",
 		Language:             "zh",
 		RequestTimeout:       300,
+		EnableCustomCompression: true,
+		MaxTokensThreshold:      100000,
+		CompressionStrategy:     "summarize",
+		SummaryModel:            "gemini-2.5-flash-lite",
+		KeepRecentTurns:         5,
 	}
 
 	m.loadConfig()
@@ -197,7 +207,12 @@ func (m *Manager) loadConfig() {
 	}
 
 	parsed := Config{
-		EnablePacketCapture: true,
+		EnablePacketCapture:  true,
+		EnableCustomCompression: true,
+		MaxTokensThreshold:   100000,
+		CompressionStrategy:  "summarize",
+		SummaryModel:         "gemini-2.5-flash-lite",
+		KeepRecentTurns:      5,
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return
@@ -996,8 +1011,41 @@ func (m *Manager) SetRequestTimeout(timeout int) error {
 	return m.SaveConfig()
 }
 
+type SessionOptimizationConfig struct {
+	EnableCustomCompression bool   `json:"enableCustomCompression"`
+	MaxTokensThreshold      int    `json:"maxTokensThreshold"`
+	CompressionStrategy     string `json:"compressionStrategy"`
+	SummaryModel            string `json:"summaryModel"`
+	KeepRecentTurns         int    `json:"keepRecentTurns"`
+}
+
+func (m *Manager) GetSessionOptimization() SessionOptimizationConfig {
+	m.RLock()
+	defer m.RUnlock()
+	return SessionOptimizationConfig{
+		EnableCustomCompression: m.config.EnableCustomCompression,
+		MaxTokensThreshold:      m.config.MaxTokensThreshold,
+		CompressionStrategy:     m.config.CompressionStrategy,
+		SummaryModel:            m.config.SummaryModel,
+		KeepRecentTurns:         m.config.KeepRecentTurns,
+	}
+}
+
+func (m *Manager) SetSessionOptimization(cfg SessionOptimizationConfig) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.EnableCustomCompression = cfg.EnableCustomCompression
+	m.config.MaxTokensThreshold = cfg.MaxTokensThreshold
+	m.config.CompressionStrategy = cfg.CompressionStrategy
+	m.config.SummaryModel = cfg.SummaryModel
+	m.config.KeepRecentTurns = cfg.KeepRecentTurns
+	return m.SaveConfig()
+}
+
 type ManagerInterface interface {
 	Init(defaultPath string)
+	GetSessionOptimization() SessionOptimizationConfig
+	SetSessionOptimization(cfg SessionOptimizationConfig) error
 	GetActiveDataDirectory() string
 	GetDefaultUserDataPath() string
 	GetEnableSystemLog() bool

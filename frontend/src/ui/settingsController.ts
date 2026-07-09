@@ -323,6 +323,47 @@ export function initSettings() {
             }
         }
 
+		const chkEnableCustomCompression = document.getElementById('chkEnableCustomCompression') as HTMLInputElement | null;
+		const numMaxTokensThreshold = document.getElementById('numMaxTokensThreshold') as HTMLInputElement | null;
+		const numKeepRecentTurns = document.getElementById('numKeepRecentTurns') as HTMLInputElement | null;
+		const selSummaryModel = document.getElementById('selSummaryModel') as HTMLSelectElement | null;
+		const divSessionCompressionOptions = document.getElementById('divSessionCompressionOptions');
+
+		function saveSessionOptimization() {
+			if (!chkEnableCustomCompression || !numMaxTokensThreshold || !numKeepRecentTurns || !selSummaryModel) return;
+			const cfg = {
+				enableCustomCompression: chkEnableCustomCompression.checked,
+				maxTokensThreshold: parseInt(numMaxTokensThreshold.value, 10) || 100000,
+				compressionStrategy: 'summarize',
+				summaryModel: selSummaryModel.value || 'gemini-2.5-flash-lite',
+				keepRecentTurns: parseInt(numKeepRecentTurns.value, 10) || 5
+			};
+			try {
+				ipcRenderer.send('settings:set-session-optimization', cfg);
+			} catch (err) {
+				console.error('[SettingsController] Failed to save session optimization:', err);
+			}
+		}
+
+		if (chkEnableCustomCompression) {
+			chkEnableCustomCompression.addEventListener('change', (e: any) => {
+				const enabled = e.target.checked;
+				if (divSessionCompressionOptions) {
+					divSessionCompressionOptions.style.display = enabled ? 'flex' : 'none';
+				}
+				saveSessionOptimization();
+			});
+		}
+		if (numMaxTokensThreshold) {
+			numMaxTokensThreshold.addEventListener('change', saveSessionOptimization);
+		}
+		if (numKeepRecentTurns) {
+			numKeepRecentTurns.addEventListener('change', saveSessionOptimization);
+		}
+		if (selSummaryModel) {
+			selSummaryModel.addEventListener('change', saveSessionOptimization);
+		}
+
         // Initial load
         refreshSettingsUI();
 
@@ -448,6 +489,52 @@ export function refreshSettingsUI() {
                 txtFallbackProxyPorts.value = String(ports);
             }
         }
+
+		const chkEnableCustomCompression = document.getElementById('chkEnableCustomCompression') as HTMLInputElement | null;
+		const numMaxTokensThreshold = document.getElementById('numMaxTokensThreshold') as HTMLInputElement | null;
+		const numKeepRecentTurns = document.getElementById('numKeepRecentTurns') as HTMLInputElement | null;
+		const selSummaryModel = document.getElementById('selSummaryModel') as HTMLSelectElement | null;
+		const divSessionCompressionOptions = document.getElementById('divSessionCompressionOptions');
+
+		if (chkEnableCustomCompression && numMaxTokensThreshold && numKeepRecentTurns && selSummaryModel) {
+			const cfg = ipcRenderer.sendSync('settings:get-session-optimization');
+			if (cfg) {
+				chkEnableCustomCompression.checked = !!cfg.enableCustomCompression;
+				numMaxTokensThreshold.value = String(cfg.maxTokensThreshold || 100000);
+				numKeepRecentTurns.value = String(cfg.keepRecentTurns || 5);
+				if (divSessionCompressionOptions) {
+					divSessionCompressionOptions.style.display = cfg.enableCustomCompression ? 'flex' : 'none';
+				}
+
+				ipcRenderer.invoke('relay:get-model-mapping').then((mappings: any) => {
+					const modelNames = (mappings || []).map((m: any) => m.clientModel).filter(Boolean);
+					selSummaryModel.innerHTML = '';
+					const defaultModels = ['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+					const allModels = Array.from(new Set([...modelNames, ...defaultModels]));
+					allModels.forEach(m => {
+						const opt = document.createElement('option');
+						opt.value = m;
+						opt.textContent = m;
+						if (m === cfg.summaryModel) {
+							opt.selected = true;
+						}
+						selSummaryModel.appendChild(opt);
+					});
+				}).catch(() => {
+					const defaultModels = ['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+					selSummaryModel.innerHTML = '';
+					defaultModels.forEach(m => {
+						const opt = document.createElement('option');
+						opt.value = m;
+						opt.textContent = m;
+						if (m === cfg.summaryModel) {
+							opt.selected = true;
+						}
+						selSummaryModel.appendChild(opt);
+					});
+				});
+			}
+		}
     } catch (err) {
         console.error('[SettingsController] Failed to refresh settings UI:', err);
     }

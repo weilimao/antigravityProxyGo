@@ -197,7 +197,6 @@ import { initChartFilters } from './ui/chartRenderer';
 import { initMigrationEvents } from './ui/migrationController';
 import { initUpdaterEvents } from './ui/updaterController';
 import { initRetryErrorLogsEvents } from './ui/retryErrorLogsController';
-import { initRelayEvents } from './ui/relayController';
 import { initAccountsGlobalEvents } from './ui/accountsController';
 
 const route = useRoute();
@@ -369,7 +368,6 @@ onMounted(() => {
     initMigrationEvents();
     initUpdaterEvents();
     initRemoteEvents();
-    initRelayEvents();
     initRetryErrorLogsEvents();
     initPricingEvents();
     initAutotriggerHistoryEvents();

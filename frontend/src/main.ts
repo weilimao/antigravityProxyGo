@@ -23,6 +23,28 @@ app.use(router);
     router.push({ name: view }).catch(() => {});
 };
 
+// 注册全局通用的模态框控制逻辑，防止在 Settings 页面加载前调用出错
+(window as any)._relayOpenModal = (id: string) => {
+    const modal = document.getElementById(id);
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    void modal.offsetWidth;
+    modal.classList.add('show');
+};
+
+(window as any)._relayCloseModal = (id: string) => {
+    const modal = document.getElementById(id);
+    if (!modal) return;
+    modal.classList.remove('show');
+    const onTransitionEnd = (e: TransitionEvent) => {
+        if (e.propertyName === 'opacity' && !modal.classList.contains('show')) {
+            modal.classList.add('hidden');
+            modal.removeEventListener('transitionend', onTransitionEnd);
+        }
+    };
+    modal.addEventListener('transitionend', onTransitionEnd);
+};
+
 app.mount('#app');
 
 

@@ -176,10 +176,50 @@
 </div>
 <input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white mt-1" id="txtFallbackProxyPorts" placeholder="例如：8888, 9999" data-i18n-placeholder="fallbackPortsPlaceholder" type="text"/>
 </div>
-</div>
+	</div>
 
-<!-- 系统启动设置卡片 -->
-<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+	<!-- 会话优化与压缩设置卡片 -->
+	<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+		<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+			<span class="material-symbols-outlined text-primary text-[20px]">compress</span>
+			<span data-i18n="sessionOptimizationTitle">会话优化与压缩设置</span>
+		</h2>
+		<p class="text-xs text-outline leading-relaxed" data-i18n="sessionOptimizationTip">
+			配置代理在遭遇会话超长时的主动会话压缩和模型降级路由。开启后，将从已启用模型列表中选择低成本模型默默代为总结并节省 Token 支出。
+		</p>
+		<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+			<div class="flex flex-col gap-0.5">
+				<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="enableCustomCompressionLabel">启用自定义会话压缩</span>
+				<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="enableCustomCompressionDesc">开启后，当上一轮请求输入超过设定的 Token 阈值时，自动在代理侧对历史做摘要压缩。</span>
+			</div>
+			<!-- Toggle Switch -->
+			<label class="relative inline-flex items-center cursor-pointer">
+				<input class="sr-only peer" id="chkEnableCustomCompression" type="checkbox"/>
+				<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+			</label>
+		</div>
+		<div class="flex flex-col gap-3 mt-1" id="divSessionCompressionOptions">
+			<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+				<div class="flex flex-col gap-1.5">
+					<label class="text-[12px] font-bold text-outline" data-i18n="maxTokensThresholdLabel">触发压缩的 Token 阈值</label>
+					<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-bold" id="numMaxTokensThreshold" min="1000" step="1000" type="number"/>
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<label class="text-[12px] font-bold text-outline" data-i18n="keepRecentTurnsLabel">压缩后保留的最近对话轮数</label>
+					<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-bold" id="numKeepRecentTurns" min="1" max="50" type="number"/>
+				</div>
+			</div>
+			<div class="flex flex-col gap-1.5">
+				<label class="text-[12px] font-bold text-outline" data-i18n="summaryModelLabel">用于生成摘要的低配模型</label>
+				<select class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-medium" id="selSummaryModel">
+					<!-- 动态填充 -->
+				</select>
+			</div>
+		</div>
+	</div>
+
+	<!-- 系统启动设置卡片 -->
+	<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
 <span class="material-symbols-outlined text-primary text-[20px]">settings_power</span>
 <span data-i18n="startupSettingTitle">系统启动设置</span>
@@ -543,8 +583,10 @@
 <script setup lang="ts">
 import { onMounted } from 'vue';
 import { initSettings } from '../ui/settingsController';
+import { initRelayEvents } from '../ui/relayController';
 
 onMounted(() => {
   initSettings();
+  initRelayEvents();
 });
 </script>

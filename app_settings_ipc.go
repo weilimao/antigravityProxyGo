@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"antigravity-proxy/internal/netutil"
+	"antigravity-proxy/internal/settings"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -27,6 +29,20 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 	}
 
 	switch channel {
+	case "settings:get-session-optimization":
+		wailsRuntime.EventsEmit(a.ctx, "settings:session-optimization-res", a.settingsMgr.GetSessionOptimization())
+		return true
+
+	case "settings:set-session-optimization":
+		var cfg settings.SessionOptimizationConfig
+		if len(args) > 0 {
+			b, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(b, &cfg)
+		}
+		_ = a.settingsMgr.SetSessionOptimization(cfg)
+		a.AddLog("⚙️ 自定义会话压缩与优化配置已更新")
+		return true
+
 	case "settings:set-fallback-proxy-ports":
 		_ = a.settingsMgr.SetFallbackProxyPorts(getStringArg(0))
 		a.AddLog(fmt.Sprintf("⚙️ 自定义 Fallback 扫描端口已更新: %s", getStringArg(0)))

@@ -58,8 +58,8 @@ func (s *RelayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Route OpenAI/Anthropic compat API requests
-	if strings.HasPrefix(r.URL.Path, "/v1/") {
+	// Route OpenAI/Anthropic compat API requests and v1internal endpoints
+	if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/v1internal:") {
 		s.compatHandler.ServeHTTP(w, r)
 		return
 	}

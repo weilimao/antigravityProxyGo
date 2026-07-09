@@ -3,9 +3,11 @@ package relay
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -480,5 +482,79 @@ func TestOpenAIToolCallsCompat(t *testing.T) {
 	tc := choice.Message.ToolCalls[0]
 	if tc.Type != "function" || tc.Function.Name != "edit_file" {
 		t.Errorf("unexpected tool call: %+v", tc)
+	}
+}
+
+func TestHandleV1Internal(t *testing.T) {
+	// 启动一个 Mock 的本地 18443 服务
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1internal:generateContent", func(w http.ResponseWriter, r *http.Request) {
+		// 校验请求头与请求体
+		if r.Header.Get("X-Relay-User-Id") != "user_123" {
+			t.Errorf("missing or invalid X-Relay-User-Id: %s", r.Header.Get("X-Relay-User-Id"))
+		}
+		if r.Header.Get("Authorization") != "Bearer key_123" {
+			t.Errorf("missing or invalid Authorization: %s", r.Header.Get("Authorization"))
+		}
+		body, _ := io.ReadAll(r.Body)
+		if string(body) != `{"prompt":"hello"}` {
+			t.Errorf("unexpected body: %s", string(body))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"response":"non-stream-ok"}`))
+	})
+	mux.HandleFunc("/v1internal:streamGenerateContent", func(w http.ResponseWriter, r *http.Request) {
+		// 校验请求头
+		if r.Header.Get("X-Relay-User-Id") != "user_123" {
+			t.Errorf("missing or invalid X-Relay-User-Id: %s", r.Header.Get("X-Relay-User-Id"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		w.Write([]byte("data: stream-ok\n\n"))
+	})
+
+	mockServer := httptest.NewServer(mux)
+	defer mockServer.Close()
+
+	// 临时覆盖本地代理端口地址以路由至 Mock 服务
+	origAddr := localProxyAddr
+	localProxyAddr = strings.TrimPrefix(mockServer.URL, "http://")
+	defer func() { localProxyAddr = origAddr }()
+
+	handler := NewAPICompatHandler(nil, nil, nil, nil, nil, nil)
+	session := &RelaySession{
+		UserID:  "user_123",
+		UserKey: "key_123",
+	}
+
+	// 1. 测试非流式 generateContent
+	reqNonStream := httptest.NewRequest(http.MethodPost, "/v1internal:generateContent", strings.NewReader(`{"prompt":"hello"}`))
+	rrNonStream := httptest.NewRecorder()
+	handler.handleV1Internal(rrNonStream, reqNonStream, session)
+
+	if rrNonStream.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rrNonStream.Code)
+	}
+	if string(rrNonStream.Body.Bytes()) != `{"response":"non-stream-ok"}` {
+		t.Errorf("unexpected non-stream body: %s", string(rrNonStream.Body.Bytes()))
+	}
+	if rrNonStream.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("unexpected content type: %s", rrNonStream.Header().Get("Content-Type"))
+	}
+
+	// 2. 测试流式 streamGenerateContent
+	reqStream := httptest.NewRequest(http.MethodPost, "/v1internal:streamGenerateContent?alt=sse", strings.NewReader(`{"prompt":"hello"}`))
+	rrStream := httptest.NewRecorder()
+	handler.handleV1Internal(rrStream, reqStream, session)
+
+	if rrStream.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rrStream.Code)
+	}
+	if string(rrStream.Body.Bytes()) != "data: stream-ok\n\n" {
+		t.Errorf("unexpected stream body: %s", string(rrStream.Body.Bytes()))
+	}
+	if rrStream.Header().Get("Content-Type") != "text/event-stream" {
+		t.Errorf("unexpected content type: %s", rrStream.Header().Get("Content-Type"))
 	}
 }

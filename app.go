@@ -409,6 +409,7 @@ func (a *App) startup(ctx context.Context) {
 			return nil
 		},
 	)
+	proxyHandler.SettingsMgr = a.settingsMgr
 
 	a.proxyEngine = proxy.NewProxyEngine(proxyHandler, a.AddLog, func(isRunning bool) {
 		wailsRuntime.EventsEmit(a.ctx, "state", isRunning)
@@ -617,6 +618,7 @@ func (a *App) domReady(ctx context.Context) {
 		"settings:get-custom-socks5-username": a.settingsMgr.GetCustomSocks5Username(),
 		"settings:get-custom-socks5-password": a.settingsMgr.GetCustomSocks5Password(),
 		"settings:get-language":               a.settingsMgr.GetLanguage(),
+		"settings:get-session-optimization":   a.settingsMgr.GetSessionOptimization(),
 	}
 
 	bytesCache, _ := json.Marshal(cache)

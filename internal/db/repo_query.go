@@ -268,3 +268,41 @@ func UpsertHourlyTrendsBatch(tx *sql.Tx, userID string, hourBucket string, reque
 	_, err := tx.Exec(query, userID, hourBucket, requests, inTokens, outTokens, cachedTokens, cost, inCost, outCost, cacheCost)
 	return err
 }
+
+// GetLastInTokensBySession 获取指定会话最新一次成功请求的输入 Token 数量
+func GetLastInTokensBySession(sessionID string) (int, error) {
+	if GlobalDB == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	var dbRows []string
+	rows, errQuery := GlobalDB.Query("SELECT id, session_id, in_tokens, status_code, mode FROM request_logs ORDER BY id DESC LIMIT 5")
+	if errQuery == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, inT, status int
+			var sess, md string
+			if errS := rows.Scan(&id, &sess, &inT, &status, &md); errS == nil {
+				dbRows = append(dbRows, fmt.Sprintf("[ID:%d|Sess:%s|InT:%d|Status:%d|Mode:%s]", id, sess, inT, status, md))
+			}
+		}
+	}
+
+	var inTokens int
+	query := `
+		SELECT in_tokens 
+		FROM request_logs 
+		WHERE session_id = ? AND status_code = 200 
+		ORDER BY id DESC 
+		LIMIT 1
+	`
+	err := GlobalDB.QueryRow(query, sessionID).Scan(&inTokens)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("未命中此 sessionID 的记录。最近写入错: '%s'。最新 5 条数据: %v", LastInsertError, dbRows)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("查询出错: %v。最近写入错: '%s'。最新 5 条数据: %v", err, LastInsertError, dbRows)
+	}
+	return inTokens, nil
+}
+

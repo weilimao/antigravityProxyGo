@@ -18,6 +18,8 @@ import (
 	"antigravity-proxy/internal/settings"
 )
 
+var localProxyAddr = "127.0.0.1:18443"
+
 type APICompatHandler struct {
 	authMgr       *AuthManager
 	accountMgr    *account.Manager
@@ -116,6 +118,12 @@ func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 3. Anthropic 对话接口
 	if path == "/v1/messages" && r.Method == http.MethodPost {
 		h.handleAnthropicMessages(w, r, session)
+		return
+	}
+
+	// 4. v1internal 接口 (支持 /v1internal:generateContent 或 /v1internal:streamGenerateContent)
+	if strings.HasPrefix(path, "/v1internal:") && r.Method == http.MethodPost {
+		h.handleV1Internal(w, r, session)
 		return
 	}
 
@@ -373,6 +381,29 @@ func (h *APICompatHandler) dispatchToGemini(
 ) {
 	startTime := time.Now()
 
+	// 1. 获取会话 Key
+	tempBytesForSession, _ := json.Marshal(geminiReq)
+	sessionKey := h.sessionRouter.ExtractSessionKey(r, tempBytesForSession)
+
+	// 调用优化器执行压缩与模型路由降级
+	targetModelToQuery, compressed := CheckAndOptimizeSession(
+		r,
+		geminiReq,
+		geminiModel,
+		sessionKey,
+		userSession.UserKey,
+		userSession.UserID,
+		userSession.APIKeyID,
+		h.client,
+		h.settingsMgr,
+		func(msg string) {
+			h.log("%s", msg)
+		},
+	)
+	if compressed {
+		h.log("✅ [Relay Compat] 会话压缩成功，请求体已优化")
+	}
+
 	geminiReqBytes, err := json.Marshal(geminiReq)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "failed to marshal gemini request"})
@@ -404,7 +435,7 @@ func (h *APICompatHandler) dispatchToGemini(
 	h.log("📋 [调试] 请求体: %d 条消息 | 角色序列: %v | 工具数: %d | 体积: %d bytes",
 		len(geminiReq.Contents), roleSeq, toolCount, len(geminiReqBytes))
 
-	// 准备向本地核心代理服务 (18443 端口) 发起请求以复用成熟的账号池分发与自动重试逻辑
+	// 准备向本地核心代理服务 (18443 端口) 发起请求以复用成熟 of 账号池分发与自动重试逻辑
 	action := "generateContent"
 	queryStr := ""
 	if stream {
@@ -412,7 +443,7 @@ func (h *APICompatHandler) dispatchToGemini(
 		queryStr = "?alt=sse"
 	}
 
-	targetURL := fmt.Sprintf("http://127.0.0.1:18443/v1beta/models/%s:%s%s", geminiModel, action, queryStr)
+	targetURL := fmt.Sprintf("http://%s/v1beta/models/%s:%s%s", localProxyAddr, targetModelToQuery, action, queryStr)
 
 	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(geminiReqBytes))
 	if err != nil {
@@ -429,7 +460,7 @@ func (h *APICompatHandler) dispatchToGemini(
 	}
 	req.Header.Set("X-Antigravity-Original-Path", r.URL.Path)
 	req.Header.Set("X-Antigravity-Original-Method", r.Method)
-	h.log("Forwarding translated request to local proxy (18443) | Model: %s | Stream: %v", geminiModel, stream)
+	h.log("Forwarding translated request to local proxy (18443) | Model: %s | Stream: %v", targetModelToQuery, stream)
 
 	// 流式请求使用无超时 Client，避免长时间生成（>5min）被 http.Client.Timeout 截断
 	httpClient := h.client
@@ -463,6 +494,7 @@ func (h *APICompatHandler) dispatchToGemini(
 		h.handleNormalResponse(w, resp.Body, userSession, geminiModel, apiFormat, startTime, r.URL.Path, reqID)
 	}
 }
+
 
 func removeAccountFromList(list []*account.Account, accountID string) []*account.Account {
 	var result []*account.Account
@@ -1218,4 +1250,84 @@ func (l *RateLimiter) Allow(userID string, limit int) bool {
 	validReqs = append(validReqs, now)
 	l.userRequests[userID] = validReqs
 	return true
+}
+
+func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Request, userSession *RelaySession) {
+	// 读取请求体
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "failed to read request body"})
+		return
+	}
+	r.Body.Close()
+
+	// 动态检测目标 Action 和流式属性
+	path := r.URL.Path // e.g. /v1internal:generateContent
+	action := "generateContent"
+	if strings.Contains(path, "streamGenerateContent") {
+		action = "streamGenerateContent"
+	}
+	isStreaming := action == "streamGenerateContent" || strings.Contains(r.URL.RawQuery, "alt=sse")
+
+	// 构造发往本地核心代理服务 (18443 端口) 的请求，保留原始路径与查询参数
+	// 这样可以复用本地代理的账号池分发、重试以及计费统计逻辑
+	queryStr := ""
+	if r.URL.RawQuery != "" {
+		queryStr = "?" + r.URL.RawQuery
+	} else if isStreaming && !strings.Contains(r.URL.RawQuery, "alt=sse") {
+		queryStr = "?alt=sse"
+	}
+
+	targetURL := fmt.Sprintf("http://%s%s%s", localProxyAddr, path, queryStr)
+
+	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "failed to create request: " + err.Error()})
+		return
+	}
+
+	// 复制头部
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer " + userSession.UserKey)
+	req.Header.Set("X-Relay-User-Id", userSession.UserID)
+	if userSession.APIKeyID != "" {
+		req.Header.Set("X-Relay-Api-Key-Id", userSession.APIKeyID)
+	}
+
+	// 执行请求并流式响应
+	httpClient := h.client
+	if isStreaming {
+		httpClient = h.streamClient
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "failed to forward request to proxy: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	// 拷贝响应头
+	for k, values := range resp.Header {
+		for _, v := range values {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+
+	// 流式传输响应体
+	buf := make([]byte, 4096)
+	flusher, isFlusher := w.(http.Flusher)
+	for {
+		n, errRead := resp.Body.Read(buf)
+		if n > 0 {
+			_, _ = w.Write(buf[:n])
+			if isFlusher {
+				flusher.Flush()
+			}
+		}
+		if errRead != nil {
+			break
+		}
+	}
 }

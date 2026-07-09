@@ -331,6 +331,10 @@ func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 			CachedCost:   cachedCost,
 			DurationMs:   rl.DurationMs,
 			StatusCode:   rl.StatusCode,
+			Method:       rl.Method,
+			Host:         rl.Host,
+			Path:         rl.Path,
+			SessionID:    rl.SessionID,
 		}
 		_ = db.InsertRequestLog(dbItem)
 	}(reqLog, t.pricingMgr)

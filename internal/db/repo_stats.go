@@ -5,6 +5,8 @@ import (
 	"fmt"
 )
 
+var LastInsertError string
+
 // RequestLog represents a single request entry in DB
 type RequestLog struct {
 	ID           int64   `json:"id"` // SQLite rowid/autoincrement
@@ -49,8 +51,10 @@ func InsertRequestLog(log *RequestLog) error {
 		log.Method, log.Host, log.Path, log.SessionID,
 	)
 	if err != nil {
+		LastInsertError = err.Error()
 		return err
 	}
+	LastInsertError = ""
 	id, _ := res.LastInsertId()
 	log.ID = id
 	return nil

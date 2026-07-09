@@ -20,7 +20,9 @@ import (
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/netutil"
+	"antigravity-proxy/internal/relay"
 	"antigravity-proxy/internal/session"
+	"antigravity-proxy/internal/settings"
 	"antigravity-proxy/internal/stats"
 )
 
@@ -43,11 +45,12 @@ type ProxyHandler struct {
 	relayStatsCallback     func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string)
 	relayQuotaCheck        func(userID, apiKeyID, modelName string) error
 	client                 *http.Client
+	SettingsMgr            settings.ManagerInterface
 
 	// 远程中继转发相关
-	getRemoteRelay     func() RemoteRelayInterface
-	remoteClient       *http.Client
-	remoteClientMu     sync.Mutex
+	getRemoteRelay func() RemoteRelayInterface
+	remoteClient   *http.Client
+	remoteClientMu sync.Mutex
 }
 
 func NewProxyHandler(
@@ -70,24 +73,24 @@ func NewProxyHandler(
 	relayQuotaCheck func(userID, apiKeyID, modelName string) error,
 ) *ProxyHandler {
 	return &ProxyHandler{
-		accountMgr:         accountMgr,
-		sessionRouter:      sessionRouter,
-		statsTracker:       statsTracker,
-		usageTracker:       usageTracker,
-		errLogger:          errLogger,
-		packetCap:          packetCap,
-		logFn:              logFn,
-		quotaFetch:         quotaFetch,
-		tokenRefresh:       tokenRefresh,
-		setCapturedProject: setCapturedProject,
-		getStoredProject:   getStoredProject,
+		accountMgr:             accountMgr,
+		sessionRouter:          sessionRouter,
+		statsTracker:           statsTracker,
+		usageTracker:           usageTracker,
+		errLogger:              errLogger,
+		packetCap:              packetCap,
+		logFn:                  logFn,
+		quotaFetch:             quotaFetch,
+		tokenRefresh:           tokenRefresh,
+		setCapturedProject:     setCapturedProject,
+		getStoredProject:       getStoredProject,
 		getMaxRetries:          getMaxRetries,
 		getMaxRetryDelay:       getMaxRetryDelay,
 		getMaxRequestBodyBytes: getMaxRequestBodyBytes,
 		getRequestTimeout:      getRequestTimeout,
-		relayStatsCallback: relayStatsCallback,
-		relayQuotaCheck:    relayQuotaCheck,
-		client:             netutil.NewClient(10 * time.Minute),
+		relayStatsCallback:     relayStatsCallback,
+		relayQuotaCheck:        relayQuotaCheck,
+		client:                 netutil.NewClient(10 * time.Minute),
 	}
 }
 
@@ -230,6 +233,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if rr := h.getRemoteRelay(); rr != nil && rr.IsConnected() {
 			isLocalRelayLoop := false
 			incomingRelayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
+			if incomingRelayUserID == "" {
+				incomingRelayUserID = r.Header.Get("X-Relay-User-Id")
+			}
 			if incomingRelayUserID != "" {
 				isLocalRelayLoop = true
 			}
@@ -401,6 +407,105 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			sessionKey = "sock:acc:" + strings.TrimPrefix(rawSessionKey, "sock:")
 		} else {
 			sessionKey = "acc:" + rawSessionKey
+		}
+	}
+
+	// 代理侧主动会话优化与压缩核心 (当请求直接打到 18443 时)
+	if h.SettingsMgr != nil && len(bodyBytes) > 0 && strings.Contains(strings.ToLower(targetPath), "generatecontent") {
+		if h.logFn != nil {
+			h.logFn(fmt.Sprintf("🔍 [18443 劫持诊断] 收到模型请求 | sessionKey: %s | targetPath: %s", sessionKey, targetPath))
+		}
+		// 检测是否为嵌套包装格式，以正确解包出 GeminiRequest 进行会话压缩优化
+		var bodyMap map[string]interface{}
+		isWrappedPayload := false
+		if json.Unmarshal(bodyBytes, &bodyMap) == nil {
+			if _, hasRequest := bodyMap["request"]; hasRequest {
+				isWrappedPayload = true
+			}
+		}
+
+		var geminiReq relay.GeminiRequest
+		var err error
+		if isWrappedPayload {
+			if reqField, ok := bodyMap["request"]; ok {
+				reqBytes, marshalErr := json.Marshal(reqField)
+				if marshalErr == nil {
+					err = json.Unmarshal(reqBytes, &geminiReq)
+				} else {
+					err = marshalErr
+				}
+			} else {
+				err = fmt.Errorf("missing request field in wrapped payload")
+			}
+		} else {
+			err = json.Unmarshal(bodyBytes, &geminiReq)
+		}
+
+		if err != nil {
+			if h.logFn != nil {
+				h.logFn(fmt.Sprintf("❌ [18443 劫持诊断] json.Unmarshal 失败: %v", err))
+			}
+		} else {
+			userKey := r.Header.Get("Authorization")
+			if strings.HasPrefix(strings.ToLower(userKey), "bearer ") {
+				userKey = userKey[7:]
+			}
+			optimizedModel, compressed := relay.CheckAndOptimizeSession(
+				r,
+				&geminiReq,
+				currentModel,
+				sessionKey,
+				userKey,
+				relayUserID,
+				relayAPIKeyID,
+				h.client,
+				h.SettingsMgr,
+				func(msg string) {
+					if h.logFn != nil {
+						h.logFn(msg)
+					}
+				},
+			)
+			if compressed {
+				var newBytes []byte
+				if isWrappedPayload {
+					// 嵌套格式：仅替换 request 字段内的 contents，保留外层包装
+					compressedContents, marshalErr := json.Marshal(geminiReq.Contents)
+					if marshalErr != nil {
+						if h.logFn != nil {
+							h.logFn(fmt.Sprintf("❌ [18443 代理劫持] 压缩后序列化 contents 失败: %v", marshalErr))
+						}
+					} else {
+						if reqField, ok := bodyMap["request"].(map[string]interface{}); ok {
+							reqField["contents"] = json.RawMessage(compressedContents)
+							if newBody, err2 := json.Marshal(bodyMap); err2 == nil {
+								newBytes = newBody
+							}
+						}
+					}
+				} else {
+					// 标准 Gemini 格式：直接序列化整个 GeminiRequest
+					newBytes, err = json.Marshal(geminiReq)
+				}
+
+				if len(newBytes) > 0 {
+					bodyBytes = newBytes
+					if currentModel != optimizedModel {
+						targetPath = strings.Replace(targetPath, "/models/"+currentModel, "/models/"+optimizedModel, 1)
+						r.URL.Path = strings.Replace(r.URL.Path, "/models/"+currentModel, "/models/"+optimizedModel, 1)
+					}
+					currentModel = optimizedModel
+					r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+					r.ContentLength = int64(len(bodyBytes))
+					if h.logFn != nil {
+						h.logFn(fmt.Sprintf("🔄 [18443 代理劫持] 成功对会话 %s 实施了自定义压缩，新体积为 %d 字节，目标路径重定向为 %s (嵌套格式: %v)", sessionKey, len(bodyBytes), targetPath, isWrappedPayload))
+					}
+				} else if err != nil {
+					if h.logFn != nil {
+						h.logFn(fmt.Sprintf("❌ [18443 代理劫持] 压缩后序列化失败: %v，保留原始请求体", err))
+					}
+				}
+			}
 		}
 	}
 
@@ -586,7 +691,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if (localTargetHost == "cloudcode-pa.googleapis.com" || localTargetHost == "daily-cloudcode-pa.googleapis.com") && isRealModelRequest(localTargetPath) {
 					localTargetHost = "aiplatform.googleapis.com"
 					customHeaders.Set("Host", localTargetHost)
-					
+
 					action := "generateContent"
 					if strings.Contains(localTargetPath, "streamGenerateContent") {
 						action = "streamGenerateContent"
@@ -672,12 +777,12 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						}
 
 						wrappedReq := map[string]interface{}{
-							"project": actualProjectId,
-							"requestId": fmt.Sprintf("chat/%d-%d", time.Now().Unix(), rand.Intn(1000000)),
-							"request": standardReq,
-							"model": modelName,
-							"userAgent": "antigravity",
-							"requestType": "chat",
+							"project":            actualProjectId,
+							"requestId":          fmt.Sprintf("chat/%d-%d", time.Now().Unix(), rand.Intn(1000000)),
+							"request":            standardReq,
+							"model":              modelName,
+							"userAgent":          "antigravity",
+							"requestType":        "chat",
 							"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
 						}
 						if wrappedBytes, err := json.Marshal(wrappedReq); err == nil {
@@ -1011,7 +1116,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Fetch current active account mapping reference
 		usePoolForRetry := false
 		var retryChannel string
-		
+
 		isPoolReq := isRealModelRequest(targetPath) || isAgentRequest(targetPath) || targetHost == "aiplatform.googleapis.com"
 		if isPoolReq {
 			usePoolForRetry = true
@@ -1142,14 +1247,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					refreshedAcc := h.accountMgr.GetAccountByID(lastUsedAccount.ID)
 					if refreshedAcc != nil {
 						cat := h.accountMgr.GetModelCategory(currentModel)
-							cooldown := int64(0)
-							if refreshedAcc.Cooldowns != nil {
-								if c, ok := refreshedAcc.Cooldowns[cat]; ok {
-									cooldown = c
-								}
-							} else {
-								cooldown = refreshedAcc.CooldownUntil
+						cooldown := int64(0)
+						if refreshedAcc.Cooldowns != nil {
+							if c, ok := refreshedAcc.Cooldowns[cat]; ok {
+								cooldown = c
 							}
+						} else {
+							cooldown = refreshedAcc.CooldownUntil
+						}
 						if cooldown == 0 {
 							h.logFn(fmt.Sprintf("✅ [负载均衡] 账号 %s 额度充足，已同步解除冷静期，恢复可用状态。", email))
 						}

@@ -29,26 +29,6 @@ export function initRelayEvents() {
         });
     };
 
-    (window as any)._relayOpenModal = (id: string) => {
-        const modal = document.getElementById(id);
-        if (!modal) return;
-        modal.classList.remove('hidden');
-        void modal.offsetWidth;
-        modal.classList.add('show');
-    };
-
-    (window as any)._relayCloseModal = (id: string) => {
-        const modal = document.getElementById(id);
-        if (!modal) return;
-        modal.classList.remove('show');
-        const onTransitionEnd = (e: TransitionEvent) => {
-            if (e.propertyName === 'opacity' && !modal.classList.contains('show')) {
-                modal.classList.add('hidden');
-                modal.removeEventListener('transitionend', onTransitionEnd);
-            }
-        };
-        modal.addEventListener('transitionend', onTransitionEnd);
-    };
 
     // Toggle relay server
     const chkRelayEnabled = document.getElementById('chkRelayEnabled') as HTMLInputElement;
@@ -81,11 +61,6 @@ export function initRelayEvents() {
         btnRelayUserCancel.addEventListener('click', closeAddUserModal);
     }
 
-    // Listen for relay config updates
-    ipcRenderer.on('relay-state', (_e: any, config: any) => {
-        if (chkRelayEnabled) chkRelayEnabled.checked = !!config?.enabled;
-        if (relayPortInput) relayPortInput.value = config?.port || '18444';
-    });
 
     // Search input event (300ms debounce)
     const searchInput = document.getElementById('relayUserSearchInput') as HTMLInputElement;
@@ -345,3 +320,11 @@ export function initRelayEvents() {
         }
     };
 }
+
+// Listen for relay config updates globally (only once when module loads)
+ipcRenderer.on('relay-state', (_e: any, config: any) => {
+    const chkRelayEnabled = document.getElementById('chkRelayEnabled') as HTMLInputElement | null;
+    const relayPortInput = document.getElementById('relayPortInput') as HTMLInputElement | null;
+    if (chkRelayEnabled) chkRelayEnabled.checked = !!config?.enabled;
+    if (relayPortInput) relayPortInput.value = config?.port || '18444';
+});
