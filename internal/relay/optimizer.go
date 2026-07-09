@@ -277,21 +277,35 @@ func parseSummaryResponse(respData []byte) (string, error) {
 		return "", fmt.Errorf("empty summary response from SSE stream")
 	}
 
-	var gemResp struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
+	type Candidate struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"content"`
 	}
-	if err := json.Unmarshal(respData, &gemResp); err != nil {
+	type RespStruct struct {
+		Candidates []Candidate `json:"candidates"`
+	}
+
+	var aux struct {
+		RespStruct
+		Response *RespStruct `json:"response"`
+	}
+
+	if err := json.Unmarshal(respData, &aux); err != nil {
 		return "", err
 	}
 
-	if len(gemResp.Candidates) > 0 && len(gemResp.Candidates[0].Content.Parts) > 0 {
-		return gemResp.Candidates[0].Content.Parts[0].Text, nil
+	var finalResp *RespStruct
+	if aux.Response != nil && len(aux.Response.Candidates) > 0 {
+		finalResp = aux.Response
+	} else {
+		finalResp = &aux.RespStruct
+	}
+
+	if len(finalResp.Candidates) > 0 && len(finalResp.Candidates[0].Content.Parts) > 0 {
+		return finalResp.Candidates[0].Content.Parts[0].Text, nil
 	}
 
 	return "", fmt.Errorf("empty response")

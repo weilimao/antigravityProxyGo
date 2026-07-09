@@ -619,6 +619,10 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				} else {
 					targetModel = mapModelForProject(currentModel)
 				}
+			} else if strings.Contains(localTargetPath, "v1internal") {
+				// 对于 v1internal 接口，当使用个人账号通道时，直接保留客户端传入的项目 ID，避免因权限缺失报错。
+				targetProject = bodyJson.Project
+				targetModel = ""
 			} else {
 				// 对于普通账号通道，我们强行将其改写规范为默认账号请求模式：
 				// 1. 强行将项目 ID 覆写为共享账号的默认项目，避免账号因无权限访问自定义项目而报 403
@@ -749,51 +753,115 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			} else {
-				// 对于 Antigravity 个人通道网页账户：如果拦截到发往 generativelanguage 官方模型的推理请求，
-				// 底层在发送给谷歌前，动态且防呆地将其伪装改写为发往云助手的正式推理项目接口，以避免 scopes 不足的 403 拒绝
-				if localTargetHost == "generativelanguage.googleapis.com" && isRealModelRequest(localTargetPath) {
-					localTargetHost = "daily-cloudcode-pa.googleapis.com"
+				// 对于 Antigravity 个人通道网页账户：
+				isV1Internal := strings.Contains(localTargetPath, "v1internal") && isRealModelRequest(localTargetPath)
+				
+				hasCustomProject := poolAccount.ProjectID != ""
+				if !hasCustomProject && h.getStoredProject != nil {
+					hasCustomProject = h.getStoredProject(poolAccount.Email) != ""
+				}
+
+				if isV1Internal && !hasCustomProject {
+					// 核心大招：如果这是一个 v1internal 请求，且当前账号没有任何捕获的专属项目 ID，
+					// 我们直接将其反向翻译并降级为标准的 generativelanguage 接口发送，彻底规避 IAM 权限 403 限制！
+					localTargetHost = "generativelanguage.googleapis.com"
 					customHeaders.Set("Host", localTargetHost)
 
-					action := "streamGenerateContent"
-					queryStr := "?alt=sse"
-					localTargetPath = fmt.Sprintf("/v1internal:%s%s", action, queryStr)
+					action := "generateContent"
+					if strings.Contains(localTargetPath, "streamGenerateContent") {
+						action = "streamGenerateContent"
+					}
+					isStreaming := action == "streamGenerateContent" || strings.Contains(localTargetPath, "alt=sse")
+					if isStreaming && !strings.Contains(action, "streamGenerateContent") {
+						action = "streamGenerateContent"
+					}
+					queryStr := ""
+					if isStreaming {
+						queryStr = "?alt=sse"
+					}
 
-					var standardReq map[string]interface{}
-					if err := json.Unmarshal(finalReqBody, &standardReq); err == nil {
-						modelName := targetModel
-						if modelName == "" {
-							modelName = currentModel
-						}
+					modelName := targetModel
+					if modelName == "" {
+						modelName = currentModel
+					}
+					if modelName == "" || modelName == "unknown" || modelName == "antigravity-core" {
+						modelName = "gemini-1.5-flash" // 默认好用且免费的模型
+					}
 
-						standardReq["sessionId"] = fmt.Sprintf("-%d", time.Now().UnixNano()/1e6)
+					localTargetPath = fmt.Sprintf("/v1beta/models/%s:%s%s", modelName, action, queryStr)
 
-						actualProjectId := poolAccount.ProjectID
-						if actualProjectId == "" {
-							actualProjectId = h.getStoredProject("default")
-						}
-						if actualProjectId == "" {
-							actualProjectId = "favorable-synapse-ttvcb" // 最终兜底
-						}
-
-						wrappedReq := map[string]interface{}{
-							"project":            actualProjectId,
-							"requestId":          fmt.Sprintf("chat/%d-%d", time.Now().Unix(), rand.Intn(1000000)),
-							"request":            standardReq,
-							"model":              modelName,
-							"userAgent":          "antigravity",
-							"requestType":        "chat",
-							"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
-						}
-						if wrappedBytes, err := json.Marshal(wrappedReq); err == nil {
-							finalReqBody = wrappedBytes
-							customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
-							customHeaders.Set("User-Agent", "antigravity/hub/2.2.1 windows/amd64")
+					// 剥离外层 v1internal 包体，提取内层标准的 request 字段
+					var v1internalReq map[string]interface{}
+					if err := json.Unmarshal(finalReqBody, &v1internalReq); err == nil {
+						if innerReq, exists := v1internalReq["request"]; exists {
+							if innerBytes, errMar := json.Marshal(innerReq); errMar == nil {
+								finalReqBody = innerBytes
+								customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
+							}
 						}
 					}
 
 					if attemptIndex == 0 {
-						h.logFn(fmt.Sprintf("🔄 [Antigravity 网页路由] 重写并封装专有载荷: %s -> https://%s%s", r.URL.Path, localTargetHost, localTargetPath))
+						h.logFn(fmt.Sprintf("🔄 [Antigravity 降级翻译] v1internal 无项目权限账号降级为官方通用接口: %s -> https://%s%s", r.URL.Path, localTargetHost, localTargetPath))
+					}
+				} else if localTargetHost == "generativelanguage.googleapis.com" && isRealModelRequest(localTargetPath) {
+					// 如果原本就是 generativelanguage 且有专属项目，则按原逻辑伪装升级
+					if hasCustomProject {
+						localTargetHost = "daily-cloudcode-pa.googleapis.com"
+						customHeaders.Set("Host", localTargetHost)
+
+						action := "generateContent"
+						queryStr := ""
+						if strings.Contains(localTargetPath, "streamGenerateContent") || strings.Contains(r.URL.RawQuery, "alt=sse") {
+							action = "streamGenerateContent"
+							queryStr = "?alt=sse"
+						}
+						localTargetPath = fmt.Sprintf("/v1internal:%s%s", action, queryStr)
+
+						var standardReq map[string]interface{}
+						if err := json.Unmarshal(finalReqBody, &standardReq); err == nil {
+							modelName := targetModel
+							if modelName == "" {
+								modelName = currentModel
+							}
+
+							standardReq["sessionId"] = fmt.Sprintf("-%d", time.Now().UnixNano()/1e6)
+
+							actualProjectId := poolAccount.ProjectID
+							if actualProjectId == "" && h.getStoredProject != nil {
+								actualProjectId = h.getStoredProject(poolAccount.Email)
+							}
+							if actualProjectId == "" {
+								actualProjectId = h.getStoredProject("default")
+							}
+							if actualProjectId == "" {
+								actualProjectId = "favorable-synapse-ttvcb" // 最终兜底
+							}
+
+							wrappedReq := map[string]interface{}{
+								"project":            actualProjectId,
+								"requestId":          fmt.Sprintf("chat/%d-%d", time.Now().Unix(), rand.Intn(1000000)),
+								"request":            standardReq,
+								"model":              modelName,
+								"userAgent":          "antigravity",
+								"requestType":        "chat",
+								"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
+							}
+							if wrappedBytes, err := json.Marshal(wrappedReq); err == nil {
+								finalReqBody = wrappedBytes
+								customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
+								customHeaders.Set("User-Agent", "antigravity/hub/2.2.1 windows/amd64")
+							}
+						}
+
+						if attemptIndex == 0 {
+							h.logFn(fmt.Sprintf("🔄 [Antigravity 网页路由] 重写并封装专有载荷: %s -> https://%s%s", r.URL.Path, localTargetHost, localTargetPath))
+						}
+					} else {
+						// 否则（无项目且直接调用 generativelanguage），保留原样发送
+						if attemptIndex == 0 {
+							h.logFn(fmt.Sprintf("🔄 [Antigravity 通用路由] 保留官方通用接口访问: %s -> https://%s%s", r.URL.Path, localTargetHost, localTargetPath))
+						}
 					}
 				}
 			}
