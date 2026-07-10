@@ -584,9 +584,11 @@
 import { onMounted } from 'vue';
 import { initSettings } from '../ui/settingsController';
 import { initRelayEvents } from '../ui/relayController';
+import { initAboutPanelEvents } from '../ui/updaterController';
 
 onMounted(() => {
   initSettings();
   initRelayEvents();
+  initAboutPanelEvents();
 });
 </script>

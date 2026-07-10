@@ -215,22 +215,17 @@ export async function initAppVersion() {
     }
 }
 
-export function initUpdaterEvents() {
+export async function initAboutPanelEvents() {
+    lblCurrentVersion = document.getElementById('lblCurrentVersion');
     btnCheckUpdate = document.getElementById('btnCheckUpdate') as HTMLButtonElement | null;
     iconCheckUpdate = document.getElementById('iconCheckUpdate');
-    
-    updateModalCloseBtn = document.getElementById('updateModalCloseBtn');
-    if (updateModalCloseBtn) {
-        updateModalCloseBtn.addEventListener('click', () => {
-            if (updaterState !== 'downloading') {
-                hideModal();
-                setUpdaterUIState('idle');
-            }
-        });
-    }
 
+    // 1. 初始化关于页面的版本号显示
+    await initAppVersion();
+
+    // 2. 绑定检查更新按钮的点击事件
     if (btnCheckUpdate) {
-        btnCheckUpdate.addEventListener('click', async () => {
+        btnCheckUpdate.onclick = async () => {
             isManualCheck = true;
             if (iconCheckUpdate) iconCheckUpdate.classList.add('animate-spin');
             setUpdaterUIState('checking');
@@ -240,6 +235,18 @@ export function initUpdaterEvents() {
                 setUpdaterUIState('error', { message: err.message || err });
             } finally {
                 if (iconCheckUpdate) iconCheckUpdate.classList.remove('animate-spin');
+            }
+        };
+    }
+}
+
+export function initUpdaterEvents() {
+    updateModalCloseBtn = document.getElementById('updateModalCloseBtn');
+    if (updateModalCloseBtn) {
+        updateModalCloseBtn.addEventListener('click', () => {
+            if (updaterState !== 'downloading') {
+                hideModal();
+                setUpdaterUIState('idle');
             }
         });
     }
