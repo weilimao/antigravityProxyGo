@@ -160,6 +160,9 @@ func (am *AuthManager) RefreshToken(acc *account.Account) (string, error) {
 	}
 
 	promise.token = tokenResp.AccessToken
+	if am.accountMgr != nil {
+		am.accountMgr.UpdateAccessToken(acc.ID, promise.token)
+	}
 	return promise.token, nil
 }
 

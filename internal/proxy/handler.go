@@ -42,7 +42,7 @@ type ProxyHandler struct {
 	getMaxRetryDelay       func() int
 	getMaxRequestBodyBytes func() int64
 	getRequestTimeout      func() int
-	relayStatsCallback     func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string)
+	relayStatsCallback     func(allocatedAccount, userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string)
 	relayQuotaCheck        func(userID, apiKeyID, modelName string) error
 	client                 *http.Client
 	SettingsMgr            settings.ManagerInterface
@@ -69,7 +69,7 @@ func NewProxyHandler(
 	getMaxRetryDelay func() int,
 	getMaxRequestBodyBytes func() int64,
 	getRequestTimeout func() int,
-	relayStatsCallback func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string),
+	relayStatsCallback func(allocatedAccount, userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string),
 	relayQuotaCheck func(userID, apiKeyID, modelName string) error,
 ) *ProxyHandler {
 	return &ProxyHandler{
@@ -1131,7 +1131,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						headerKeys = append(headerKeys, fmt.Sprintf("%s=%v", k, r.Header.Values(k)))
 					}
 
-					h.relayStatsCallback(relayUserID, relayAPIKeyID, currentModel, inTokens, outTokens, cachedTokens,
+					h.relayStatsCallback(allocatedAccount, relayUserID, relayAPIKeyID, currentModel, inTokens, outTokens, cachedTokens,
 						r.Method, r.Host, r.URL.Path, sessionKey, time.Since(startTime).Milliseconds(), resp.StatusCode, reqID)
 				}
 				var accMeta *stats.AccountMeta
@@ -1292,14 +1292,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 				go func(a *account.Account) {
 					res, qErr := h.quotaFetch(a)
-					if qErr == nil && len(res.Buckets) > 0 {
-						h.accountMgr.UpdateAccountCooldownFromQuota(a.ID, res.Buckets)
-					}
-					if qErr == nil {
-						h.accountMgr.UpdateAccountTier(a.ID, res.Tier)
-						if res.Credits != nil {
-							h.accountMgr.UpdateAccountCredits(a.ID, *res.Credits)
-						}
+					if qErr == nil && res != nil {
+						h.accountMgr.UpdateAccountQuota(a.ID, res)
 					}
 				}(lastUsedAccount)
 			}
@@ -1309,8 +1303,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+5*60*1000, currentModel)
 
 				res, qErr := h.quotaFetch(lastUsedAccount)
-				if qErr == nil && len(res.Buckets) > 0 {
-					h.accountMgr.UpdateAccountCooldownFromQuota(lastUsedAccount.ID, res.Buckets)
+				if qErr == nil && res != nil {
+					h.accountMgr.UpdateAccountQuota(lastUsedAccount.ID, res)
 					// 重新检查当前冷静期状态，确认是否清零
 					refreshedAcc := h.accountMgr.GetAccountByID(lastUsedAccount.ID)
 					if refreshedAcc != nil {
@@ -1327,13 +1321,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							h.logFn(fmt.Sprintf("✅ [负载均衡] 账号 %s 额度充足，已同步解除冷静期，恢复可用状态。", email))
 						}
 					}
-				}
-				if qErr == nil {
-					h.accountMgr.UpdateAccountTier(lastUsedAccount.ID, res.Tier)
-					if res.Credits != nil {
-						h.accountMgr.UpdateAccountCredits(lastUsedAccount.ID, *res.Credits)
-					}
-				} else {
+				} else if qErr != nil {
 					h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 同步刷新配额失败: %v", email, qErr))
 				}
 			} else if errAttempt.Error() == "QUOTA_EXHAUSTED" {
@@ -1342,14 +1330,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 				go func(a *account.Account) {
 					res, qErr := h.quotaFetch(a)
-					if qErr == nil && len(res.Buckets) > 0 {
-						h.accountMgr.UpdateAccountCooldownFromQuota(a.ID, res.Buckets)
-					}
-					if qErr == nil {
-						h.accountMgr.UpdateAccountTier(a.ID, res.Tier)
-						if res.Credits != nil {
-							h.accountMgr.UpdateAccountCredits(a.ID, *res.Credits)
-						}
+					if qErr == nil && res != nil {
+						h.accountMgr.UpdateAccountQuota(a.ID, res)
 					}
 				}(lastUsedAccount)
 			}
@@ -1708,7 +1690,7 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 		// 触发 Relay Quota 扣减（如果是 Relay 下游用户请求）
 		relayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
 		if relayUserID != "" && h.relayStatsCallback != nil {
-			h.relayStatsCallback(relayUserID, relayAPIKeyID, currentModel, inTokens, outTokens, cachedTokens,
+			h.relayStatsCallback("远程中继", relayUserID, relayAPIKeyID, currentModel, inTokens, outTokens, cachedTokens,
 				r.Method, targetHost, targetPath, "remote_session", time.Since(startTime).Milliseconds(), resp.StatusCode, reqID)
 		}
 	}

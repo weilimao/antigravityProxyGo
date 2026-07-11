@@ -42,6 +42,7 @@ type GeminiToolDeclaration struct {
 type GeminiFunctionDecl struct {
 	Name                 string                 `json:"name"`
 	Description          string                 `json:"description,omitempty"`
+	Parameters           map[string]interface{} `json:"parameters,omitempty"`
 	ParametersJsonSchema map[string]interface{} `json:"parametersJsonSchema,omitempty"`
 }
 
@@ -196,10 +197,11 @@ func translateToolsToGemini(tools []AnthropicTool) []GeminiToolDeclaration {
 	}
 	decls := make([]GeminiFunctionDecl, 0, len(tools))
 	for _, tool := range tools {
+		schema := convertSchemaTypesToUpper(tool.InputSchema)
 		decls = append(decls, GeminiFunctionDecl{
-			Name:                 tool.Name,
-			Description:          tool.Description,
-			ParametersJsonSchema: convertSchemaTypesToUpper(tool.InputSchema),
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  schema,
 		})
 	}
 	return []GeminiToolDeclaration{{FunctionDeclarations: decls}}

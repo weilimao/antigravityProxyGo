@@ -497,8 +497,15 @@ func TestHandleV1Internal(t *testing.T) {
 			t.Errorf("missing or invalid Authorization: %s", r.Header.Get("Authorization"))
 		}
 		body, _ := io.ReadAll(r.Body)
-		if string(body) != `{"prompt":"hello"}` {
-			t.Errorf("unexpected body: %s", string(body))
+		var reqMap map[string]interface{}
+		if err := json.Unmarshal(body, &reqMap); err != nil {
+			t.Errorf("failed to unmarshal request body: %v", err)
+		}
+		if reqMap["prompt"] != "hello" {
+			t.Errorf("unexpected prompt: %v", reqMap["prompt"])
+		}
+		if reqMap["project"] != "favorable-synapse-ttvcb" {
+			t.Errorf("unexpected project: %v", reqMap["project"])
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
@@ -556,5 +563,59 @@ func TestHandleV1Internal(t *testing.T) {
 	}
 	if rrStream.Header().Get("Content-Type") != "text/event-stream" {
 		t.Errorf("unexpected content type: %s", rrStream.Header().Get("Content-Type"))
+	}
+}
+
+func TestTranslateToolsToGemini(t *testing.T) {
+	anthTools := []AnthropicTool{
+		{
+			Name:        "get_weather",
+			Description: "Get the current weather",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"location": map[string]interface{}{
+						"type": "string",
+					},
+				},
+				"required": []interface{}{"location"},
+			},
+		},
+	}
+	
+	gemTools := translateToolsToGemini(anthTools)
+	if len(gemTools) != 1 || len(gemTools[0].FunctionDeclarations) != 1 {
+		t.Fatalf("expected 1 gemini tool declaration, got %+v", gemTools)
+	}
+	
+	decl := gemTools[0].FunctionDeclarations[0]
+	if decl.Name != "get_weather" {
+		t.Errorf("expected name 'get_weather', got %q", decl.Name)
+	}
+	
+	// 验证 parameters 有值，且 parametersJsonSchema 为 nil 字段，以防止 Google API 参数校验冲突
+	if decl.Parameters == nil {
+		t.Fatalf("expected Parameters to be non-nil")
+	}
+	if decl.ParametersJsonSchema != nil {
+		t.Fatalf("expected ParametersJsonSchema to be nil")
+	}
+	
+	// 序列化验证，确保 JSON 中只包含 "parameters"，且不包含 "parametersJsonSchema"
+	jsonBytes, err := json.Marshal(decl)
+	if err != nil {
+		t.Fatalf("failed to marshal GeminiFunctionDecl: %v", err)
+	}
+	
+	var rawMap map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &rawMap); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	
+	if _, ok := rawMap["parameters"]; !ok {
+		t.Errorf("JSON output is missing 'parameters' key")
+	}
+	if _, ok := rawMap["parametersJsonSchema"]; ok {
+		t.Errorf("JSON output should not contain 'parametersJsonSchema' key")
 	}
 }

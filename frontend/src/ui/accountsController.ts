@@ -804,6 +804,16 @@ export function initAccountsGlobalEvents() {
             }
         });
 
+        // 1.2 注册配额实时更新频道监听
+        ipcRenderer.on('quota-updated', (event: any, data: any) => {
+            if (data && data.accountId) {
+                state.quotaCache[data.accountId] = data.buckets;
+                const acc = state.currentAccountsList.find(a => a.id === data.accountId);
+                const cooldowns = acc ? acc.cooldowns : {};
+                loadAccountQuota(data.accountId, null, null, false, cooldowns);
+            }
+        });
+
         // 监听账号多选事件以刷新批量操作栏
         document.addEventListener('account-selection-changed', updateBatchActionBarUI);
 

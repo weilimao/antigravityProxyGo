@@ -342,6 +342,31 @@ func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 	t.scheduleSave()
 }
 
+func (t *Tracker) AddRequestLogInMemoryOnly(reqLog *RequestLog) {
+	// 只保留真正的模型对话/发送请求（即包含 generatecontent 或 predict 的 API 调用）
+	p := strings.ToLower(reqLog.Path)
+	isRealModel := strings.Contains(p, "generatecontent") || strings.Contains(p, "predict")
+	if !isRealModel {
+		return
+	}
+
+	if reqLog.Model == "" || reqLog.Model == "unknown" {
+		return
+	}
+
+	t.Lock()
+	reqLog.Cost = t.pricingMgr.CalculateCost(reqLog.Model, reqLog.InTokens, reqLog.OutTokens, reqLog.CachedTokens)
+	reqLog.RequestBody = TruncateRequestBody(reqLog.RequestBody)
+
+	t.requests = append([]*RequestLog{reqLog}, t.requests...)
+	if len(t.requests) > 50 {
+		t.requests = t.requests[:50]
+	}
+	t.Unlock()
+
+	t.scheduleSave()
+}
+
 func (t *Tracker) ClearRetriesOrErrors(logType string) {
 	t.Lock()
 	if logType == "RETRY" || logType == "ALL" {

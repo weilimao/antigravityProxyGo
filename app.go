@@ -134,6 +134,15 @@ func (a *App) startup(ctx context.Context) {
 		})
 	}
 
+	a.accountMgr.OnQuotaUpdated = func(accountId string, res *account.QuotaResult) {
+		wailsRuntime.EventsEmit(a.ctx, "quota-updated", map[string]interface{}{
+			"accountId": accountId,
+			"buckets":   res.Buckets,
+			"tier":      res.Tier,
+			"credits":   res.Credits,
+		})
+	}
+
 	a.accountMgr.OnAccountDisabled = func(accountId string) {
 		a.sessionRouter.InvalidateByAccountId(accountId)
 	}
@@ -258,7 +267,7 @@ func (a *App) startup(ctx context.Context) {
 		a.settingsMgr.GetMaxRetryDelay,
 		func() int64 { return int64(a.settingsMgr.GetMaxRequestBodyMB()) * 1024 * 1024 },
 		a.settingsMgr.GetRequestTimeout,
-		func(userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string) {
+		func(allocatedAccount, userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string) {
 			if a.relayStatsMgr != nil {
 				rate := a.statsTracker.GetPricingMgr().GetPricingForModel(modelName)
 				nonCachedIn := inTokens - cachedTokens
@@ -291,6 +300,23 @@ func (a *App) startup(ctx context.Context) {
 					SessionID:    sessionID,
 				}
 				_ = db.InsertRequestLog(dbItem)
+
+				a.statsTracker.AddRequestLogInMemoryOnly(&stats.RequestLog{
+					ID:           reqID,
+					Timestamp:    time.Now().Format("01/02 15:04:05"),
+					Method:       method,
+					Host:         host,
+					Path:         path,
+					Model:        modelName,
+					Account:      allocatedAccount,
+					InTokens:     inTokens,
+					OutTokens:    outTokens,
+					CachedTokens: cachedTokens,
+					Cost:         totalCost,
+					StatusCode:   statusCode,
+					SessionID:    sessionID,
+					DurationMs:   durationMs,
+				})
 
 				a.relayStatsMgr.RecordUsage(relay.RelaySample{
 					ReqID:        reqID,
@@ -1125,13 +1151,7 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 			a.AddLog(fmt.Sprintf("❌ [配额刷新] 账号 %s 刷新配额失败: %v", acc.Email, err))
 			return marshalResponse(map[string]interface{}{"error": err.Error(), "buckets": []interface{}{}})
 		}
-		if len(res.Buckets) > 0 {
-			a.accountMgr.UpdateAccountCooldownFromQuota(accId, res.Buckets)
-		}
-		a.accountMgr.UpdateAccountTier(accId, res.Tier)
-		if res.Credits != nil {
-			a.accountMgr.UpdateAccountCredits(accId, *res.Credits)
-		}
+		a.accountMgr.UpdateAccountQuota(accId, res)
 		a.AddLog(fmt.Sprintf("✅ [配额刷新] 账号 %s 配额及积分刷新成功！(Tier: %s)", acc.Email, res.Tier))
 		return marshalResponse(res)
 

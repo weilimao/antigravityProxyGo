@@ -1506,9 +1506,6 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			finalErr = fmt.Errorf("no available account assigned from pool")
 			break
 		}
-
-		// 确认项目 ID 状态
-		hasCustomProject := poolAccount.ProjectID != ""
 		actualProjectId := poolAccount.ProjectID
 
 		// 构建发往谷歌的直连请求参数
@@ -1525,8 +1522,24 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			}
 			targetModel := mapModelForProjectInRelay(currentModel)
 			targetPath = fmt.Sprintf("/v1/projects/%s/locations/global/publishers/google/models/%s:%s%s", poolAccount.ProjectID, targetModel, vertexAction, queryStr)
-		} else if !hasCustomProject {
-			// 纯素免费个人账号（无专属项目 ID）：直接反向翻译并降级为标准的 generativelanguage 接口发送，彻底规避 403 IAM 权限限制！
+		} else if poolAccount.Provider == "antigravity" {
+			// 个人网页账号（网页通道，使用 Cloud Code 接口）：不管有没有专属项目，都发往云助手的 v1internal 接口，若无项目 ID 则使用公共默认值
+			targetHost = "daily-cloudcode-pa.googleapis.com"
+			targetPath = fmt.Sprintf("/v1internal:%s%s", action, queryStr)
+			if actualProjectId == "" {
+				actualProjectId = "favorable-synapse-ttvcb"
+			}
+			var v1internalReq map[string]interface{}
+			if err := json.Unmarshal(bodyBytes, &v1internalReq); err == nil {
+				if _, exists := v1internalReq["project"]; exists {
+					v1internalReq["project"] = actualProjectId
+					if innerBytes, errMar := json.Marshal(v1internalReq); errMar == nil {
+						finalReqBody = innerBytes
+					}
+				}
+			}
+		} else {
+			// 其他号源（如 gemini-cli / API Key 等）：直接反向翻译并降级为标准的 generativelanguage 接口发送
 			targetHost = "generativelanguage.googleapis.com"
 			fallbackModel := currentModel
 			if strings.Contains(fallbackModel, "low") || strings.Contains(fallbackModel, "agent") || strings.Contains(fallbackModel, "tab") || strings.Contains(fallbackModel, "3.5") {
@@ -1539,22 +1552,6 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			if err := json.Unmarshal(bodyBytes, &v1internalReq); err == nil {
 				if innerReq, exists := v1internalReq["request"]; exists {
 					if innerBytes, errMar := json.Marshal(innerReq); errMar == nil {
-						finalReqBody = innerBytes
-					}
-				}
-			}
-		} else {
-			// 个人网页账号（且有专属项目）：发往云助手的 v1internal 接口
-			targetHost = "daily-cloudcode-pa.googleapis.com"
-			targetPath = fmt.Sprintf("/v1internal:%s%s", action, queryStr)
-			if actualProjectId == "" {
-				actualProjectId = "favorable-synapse-ttvcb"
-			}
-			var v1internalReq map[string]interface{}
-			if err := json.Unmarshal(bodyBytes, &v1internalReq); err == nil {
-				if _, exists := v1internalReq["project"]; exists {
-					v1internalReq["project"] = actualProjectId
-					if innerBytes, errMar := json.Marshal(v1internalReq); errMar == nil {
 						finalReqBody = innerBytes
 					}
 				}

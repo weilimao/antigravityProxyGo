@@ -15,22 +15,23 @@ type Account struct {
 	// tokenMu protects concurrent reads/writes of AccessToken and RefreshToken
 	tokenMu sync.RWMutex `json:"-"`
 
-	ID             string           `json:"id"`
-	Email          string           `json:"email"`
-	AccessToken    string           `json:"access_token"`
-	RefreshToken   string           `json:"refresh_token"`
-	Provider       string           `json:"provider"`
-	ProjectID      string           `json:"projectId"`
-	ProjectLabel   string           `json:"projectLabel"`
-	ScopeType      string           `json:"scopeType"`
-	AddedAt        string           `json:"addedAt"`
-	Tier           string           `json:"tier"`
-	Enabled        bool             `json:"enabled"`
-	EnableOverages bool             `json:"enableOverages"`
-	Credits        *float64         `json:"credits"`
-	Cooldowns      map[string]int64 `json:"cooldowns"`     // category -> untilTimeMs
-	CooldownUntil  int64            `json:"cooldownUntil"` // min(cooldowns)
-	TwoFASecret    string           `json:"twofa_secret,omitempty"`
+	ID               string           `json:"id"`
+	Email            string           `json:"email"`
+	AccessToken      string           `json:"access_token"`
+	RefreshToken     string           `json:"refresh_token"`
+	Provider         string           `json:"provider"`
+	ProjectID        string           `json:"projectId"`
+	ProjectLabel     string           `json:"projectLabel"`
+	ScopeType        string           `json:"scopeType"`
+	AddedAt          string           `json:"addedAt"`
+	Tier             string           `json:"tier"`
+	Enabled          bool             `json:"enabled"`
+	EnableOverages   bool             `json:"enableOverages"`
+	Credits          *float64         `json:"credits"`
+	Cooldowns        map[string]int64 `json:"cooldowns"`     // category -> untilTimeMs
+	CooldownUntil    int64            `json:"cooldownUntil"` // min(cooldowns)
+	TwoFASecret      string           `json:"twofa_secret,omitempty"`
+	TokenRefreshedAt int64            `json:"token_refreshed_at"`
 }
 
 // GetAccessToken safely reads the access token under read lock.
@@ -44,7 +45,17 @@ func (a *Account) GetAccessToken() string {
 func (a *Account) SetAccessToken(token string) {
 	a.tokenMu.Lock()
 	a.AccessToken = token
+	if token != "" {
+		a.TokenRefreshedAt = time.Now().Unix()
+	}
 	a.tokenMu.Unlock()
+}
+
+// GetTokenRefreshedAt safely reads the token refreshed timestamp under read lock.
+func (a *Account) GetTokenRefreshedAt() int64 {
+	a.tokenMu.RLock()
+	defer a.tokenMu.RUnlock()
+	return a.TokenRefreshedAt
 }
 
 type QuotaBucket struct {
@@ -82,9 +93,11 @@ type Manager struct {
 	geminiCliPoolMode bool
 	activeChannel     string
 	currentIndex      int
-	errorCounts      map[string]int // accountId -> error count
-	cooldownTicker   *time.Ticker
-	cooldownStop     chan struct{}
+	errorCounts        map[string]int // accountId -> error count
+	cooldownTicker     *time.Ticker
+	cooldownStop       chan struct{}
+	tokenRefreshTicker *time.Ticker
+	tokenRefreshStop   chan struct{}
 
 	// 解耦回调函数
 	OnAccountsUpdated        func(accounts []*Account)
@@ -93,6 +106,7 @@ type Manager struct {
 	OnQuotaRestored          func(accountId string, categories []string)
 	FetchQuota               func(account *Account) (*QuotaResult, error)
 	RefreshToken             func(account *Account) (string, error)
+	OnQuotaUpdated           func(accountId string, result *QuotaResult)
 }
 
 func NewManager() *Manager {
@@ -112,6 +126,7 @@ func (m *Manager) Init(userDataPath string) {
 
 	m.LoadAccounts()
 	m.StartCooldownMonitor()
+	m.StartTokenRefreshMonitor()
 }
 
 func (m *Manager) UpdatePath(newPath string) {
@@ -285,13 +300,7 @@ func (m *Manager) AddAccount(acc *Account) {
 		go func() {
 			res, err := m.FetchQuota(acc)
 			if err == nil && res != nil {
-				m.UpdateAccountCooldownFromQuota(acc.ID, res.Buckets)
-				if res.Tier != "" {
-					m.UpdateAccountTier(acc.ID, res.Tier)
-				}
-				if res.Credits != nil {
-					m.UpdateAccountCredits(acc.ID, *res.Credits)
-				}
+				m.UpdateAccountQuota(acc.ID, res)
 			}
 		}()
 	}
@@ -363,20 +372,21 @@ func (m *Manager) GetAccounts() []*Account {
 		}
 
 		list = append(list, &Account{
-			ID:             a.ID,
-			Email:          a.Email,
-			Provider:       a.Provider,
-			ProjectID:      a.ProjectID,
-			ProjectLabel:   a.ProjectLabel,
-			ScopeType:      a.ScopeType,
-			AddedAt:        a.AddedAt,
-			Tier:           a.Tier,
-			Enabled:        a.Enabled,
-			EnableOverages: a.EnableOverages,
-			Credits:        creditsCopy,
-			Cooldowns:      cooldownsCopy,
-			CooldownUntil:  a.CooldownUntil,
-			TwoFASecret:    a.TwoFASecret,
+			ID:               a.ID,
+			Email:            a.Email,
+			Provider:         a.Provider,
+			ProjectID:        a.ProjectID,
+			ProjectLabel:     a.ProjectLabel,
+			ScopeType:        a.ScopeType,
+			AddedAt:          a.AddedAt,
+			Tier:             a.Tier,
+			Enabled:          a.Enabled,
+			EnableOverages:   a.EnableOverages,
+			Credits:          creditsCopy,
+			Cooldowns:        cooldownsCopy,
+			CooldownUntil:    a.CooldownUntil,
+			TwoFASecret:      a.TwoFASecret,
+			TokenRefreshedAt: a.GetTokenRefreshedAt(),
 		})
 	}
 	return list
@@ -1123,14 +1133,8 @@ func (m *Manager) StartCooldownMonitor() {
 							return
 						}
 
-						if res != nil && len(res.Buckets) > 0 {
-							m.UpdateAccountCooldownFromQuota(a.ID, res.Buckets)
-						}
-						if res != nil && res.Tier != "" {
-							m.UpdateAccountTier(a.ID, res.Tier)
-						}
-						if res != nil && res.Credits != nil {
-							m.UpdateAccountCredits(a.ID, *res.Credits)
+						if res != nil {
+							m.UpdateAccountQuota(a.ID, res)
 						}
 					}(acc)
 				}
@@ -1148,6 +1152,77 @@ func (m *Manager) StopCooldownMonitor() {
 		m.cooldownTicker.Stop()
 		m.cooldownTicker = nil
 		close(m.cooldownStop)
+	}
+}
+
+func (m *Manager) StartTokenRefreshMonitor() {
+	m.Lock()
+	if m.tokenRefreshTicker != nil {
+		m.Unlock()
+		return
+	}
+	m.tokenRefreshTicker = time.NewTicker(5 * time.Minute)
+	m.tokenRefreshStop = make(chan struct{})
+	m.Unlock()
+
+	go func() {
+		for {
+			select {
+			case <-m.tokenRefreshTicker.C:
+				m.CheckAndRefreshTokens()
+			case <-m.tokenRefreshStop:
+				return
+			}
+		}
+	}()
+}
+
+func (m *Manager) CheckAndRefreshTokens() {
+	m.RLock()
+	var refreshAccounts []*Account
+	nowSec := time.Now().Unix()
+	for _, a := range m.accounts {
+		// 仅对已启用，有刷新Token和AccessToken的非2fa账号做定时刷新
+		// 判断时间是否超过50分钟 (50 * 60 = 3000 秒)
+		// a.TokenRefreshedAt 如果是 0，说明还没存过，应当刷新一次进行初始化记录
+		if a.Enabled && a.RefreshToken != "" && a.AccessToken != "" && a.Provider != "2fa" {
+			refreshedAt := a.GetTokenRefreshedAt()
+			if refreshedAt == 0 || (nowSec-refreshedAt) > 50*60 {
+				refreshAccounts = append(refreshAccounts, a)
+			}
+		}
+	}
+	m.RUnlock()
+
+	if len(refreshAccounts) == 0 {
+		return
+	}
+
+	if m.RefreshToken == nil {
+		return
+	}
+
+	for _, acc := range refreshAccounts {
+		go func(a *Account) {
+			fmt.Printf("[TokenRefreshMonitor] Automatically refreshing token for account: %s\n", a.Email)
+			newToken, err := m.RefreshToken(a)
+			if err != nil {
+				fmt.Printf("[TokenRefreshMonitor] Failed to auto-refresh token for %s: %v\n", a.Email, err)
+				return
+			}
+			m.UpdateAccessToken(a.ID, newToken)
+			fmt.Printf("[TokenRefreshMonitor] Successfully refreshed token for %s\n", a.Email)
+		}(acc)
+	}
+}
+
+func (m *Manager) StopTokenRefreshMonitor() {
+	m.Lock()
+	defer m.Unlock()
+	if m.tokenRefreshTicker != nil {
+		m.tokenRefreshTicker.Stop()
+		m.tokenRefreshTicker = nil
+		close(m.tokenRefreshStop)
 	}
 }
 
@@ -1210,13 +1285,7 @@ func (m *Manager) RecordAccountError(id string, statusCode int, modelName string
 			go func(a *Account) {
 				res, err := m.FetchQuota(a)
 				if err == nil && res != nil {
-					m.UpdateAccountCooldownFromQuota(a.ID, res.Buckets)
-					if res.Tier != "" {
-						m.UpdateAccountTier(a.ID, res.Tier)
-					}
-					if res.Credits != nil {
-						m.UpdateAccountCredits(a.ID, *res.Credits)
-					}
+					m.UpdateAccountQuota(a.ID, res)
 				} else if err != nil && logFn != nil {
 					logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 自动刷新配额失败: %v", a.Email, err))
 				}
@@ -1229,6 +1298,25 @@ func (m *Manager) ResetAccountError(id string) {
 	m.Lock()
 	defer m.Unlock()
 	delete(m.errorCounts, id)
+}
+
+func (m *Manager) UpdateAccountQuota(id string, res *QuotaResult) {
+	if res == nil {
+		return
+	}
+	m.ResetAccountError(id)
+	if len(res.Buckets) > 0 {
+		m.UpdateAccountCooldownFromQuota(id, res.Buckets)
+	}
+	if res.Tier != "" {
+		m.UpdateAccountTier(id, res.Tier)
+	}
+	if res.Credits != nil {
+		m.UpdateAccountCredits(id, *res.Credits)
+	}
+	if m.OnQuotaUpdated != nil {
+		m.OnQuotaUpdated(id, res)
+	}
 }
 
 func (m *Manager) RefreshAccountTokenSync(id string) (string, error) {
