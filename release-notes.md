@@ -1,3 +1,8 @@
+### v1.1.17 更新日志
+
+- **修复 macOS 及 Linux 等非 Windows 平台的编译报错**：通过 Go 构建标签（Build Tags）解耦 Windows 平台特有的 `syscall` 系统根证书动态读取逻辑。将 Windows 专用逻辑迁移至 `cli_windows.go`，并在 `cli_other.go` 提供非 Windows 平台的空实现，确保跨平台编译能够顺利通过。
+- **重构条件编译架构**：优化 `internal/patch/` 下的条件编译架构设计，使其更加清晰符合 Go 语言惯用规范。
+
 ### v1.1.16 更新日志
 
 - **实现证书静默合并与完全无感启动**：在 Windows 平台上，代理程序直接通过 Go 语言底层的 Syscall 调用 Windows 的 `crypt32.dll` API 来读取并导出当前系统所有受信任根证书公钥，从而在无需管理员提权的情况下与代理 CA 证书动态合并为 `ca_combined.pem`，并通过 `SSL_CERT_FILE` 变量注入。这既实现了零弹窗（不产生 Windows 安全警告或 UAC 提权窗）的安全代理配置，又完美解决了普通 CMD 与 PowerShell 命令行工具下 `agy` 命令报证书未知签名（x509 unknown authority）的 SSL 校验错误。
