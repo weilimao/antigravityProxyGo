@@ -14,7 +14,7 @@
     !define INFO_PRODUCTNAME "Antigravity Proxy"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "1.1.14"
+    !define INFO_PRODUCTVERSION "1.1.15"
 !endif
 !ifndef INFO_COPYRIGHT
     !define INFO_COPYRIGHT "Copyright © weilimao"

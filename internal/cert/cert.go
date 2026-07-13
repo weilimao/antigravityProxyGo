@@ -116,7 +116,7 @@ func UninstallCert() (bool, string) {
 		hideWindow(cmdUser)
 		_ = cmdUser.Run()
 
-		// 2. 尝试以管理员权限通过 PowerShell 从本地计算机证书库中卸载
+		// 2. 尝试从本地计算机证书库中卸载（如果之前有残留）
 		psCmd := fmt.Sprintf("Start-Process certutil -ArgumentList '-delstore', 'ROOT', '%s' -Verb RunAs -Wait -WindowStyle Hidden", certCommonName)
 		cmdElevated := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
 		hideWindow(cmdElevated)
