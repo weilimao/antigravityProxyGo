@@ -52,3 +52,70 @@ func TestSettings_RequestTimeout(t *testing.T) {
 		t.Errorf("Expected invalid timeout to fallback to 300, got %d", timeout)
 	}
 }
+
+func TestSettings_RelayModelMappingRetention(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "antigravity-settings-mapping-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	mgr := NewManager()
+	mgr.Init(tempDir)
+
+	// 1. Initially, we should have all default model mappings
+	initialMappings := mgr.GetRelayModelMapping()
+	if len(initialMappings) == 0 {
+		t.Fatalf("Expected default model mappings to be loaded, got 0")
+	}
+
+	// Record original count of mappings
+	origCount := len(initialMappings)
+	targetToDelete := initialMappings[0].ClientModel
+
+	// 2. Delete the first mapping
+	var newMappings []ModelMappingEntry
+	for _, entry := range initialMappings {
+		if entry.ClientModel != targetToDelete {
+			newMappings = append(newMappings, entry)
+		}
+	}
+	if err := mgr.SetRelayModelMapping(newMappings); err != nil {
+		t.Fatalf("Failed to set model mappings: %v", err)
+	}
+
+	// 3. Re-initialize a new manager to simulate app restart
+	newMgr := NewManager()
+	newMgr.Init(tempDir)
+
+	reloadedMappings := newMgr.GetRelayModelMapping()
+	if len(reloadedMappings) != origCount-1 {
+		t.Errorf("Expected reloaded mappings count to be %d, got %d", origCount-1, len(reloadedMappings))
+	}
+
+	foundDeleted := false
+	for _, entry := range reloadedMappings {
+		if entry.ClientModel == targetToDelete {
+			foundDeleted = true
+			break
+		}
+	}
+	if foundDeleted {
+		t.Errorf("Expected model mapping for %q to remain deleted, but it was restored", targetToDelete)
+	}
+
+	// 4. Test deleting ALL mappings
+	if err := newMgr.SetRelayModelMapping([]ModelMappingEntry{}); err != nil {
+		t.Fatalf("Failed to clear all model mappings: %v", err)
+	}
+
+	// Re-initialize manager again
+	finalMgr := NewManager()
+	finalMgr.Init(tempDir)
+
+	finalMappings := finalMgr.GetRelayModelMapping()
+	if len(finalMappings) != 0 {
+		t.Errorf("Expected model mappings to remain empty, but got %d entries", len(finalMappings))
+	}
+}
+

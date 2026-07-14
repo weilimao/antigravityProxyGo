@@ -52,6 +52,7 @@ type Config struct {
 	RelayDomainFilter    bool     `json:"relayDomainFilter"`
 	RelayDomainWhitelist []string `json:"relayDomainWhitelist"`
 	RelayModelMapping    []ModelMappingEntry `json:"relayModelMapping"`
+	DeletedModelMappings []string            `json:"deletedModelMappings"`
 	EnablePacketCapture  bool   `json:"enablePacketCapture"`
 	FallbackProxyPorts   string `json:"fallbackProxyPorts"`
 	CustomSocks5Address  string `json:"customSocks5Address"`
@@ -252,13 +253,18 @@ func (m *Manager) loadConfig() {
 		existingMap[entry.ClientModel] = true
 	}
 
+	deletedMap := make(map[string]bool)
+	for _, name := range m.config.DeletedModelMappings {
+		deletedMap[name] = true
+	}
+
 	modified := false
-	if len(m.config.RelayModelMapping) == 0 {
+	if len(m.config.RelayModelMapping) == 0 && len(m.config.DeletedModelMappings) == 0 {
 		m.config.RelayModelMapping = defaults
 		modified = true
 	} else {
 		for _, def := range defaults {
-			if !existingMap[def.ClientModel] {
+			if !existingMap[def.ClientModel] && !deletedMap[def.ClientModel] {
 				m.config.RelayModelMapping = append(m.config.RelayModelMapping, def)
 				modified = true
 			}
@@ -535,7 +541,7 @@ func (m *Manager) SetRelayDomainWhitelist(val []string) error {
 func (m *Manager) GetRelayModelMapping() []ModelMappingEntry {
 	m.RLock()
 	defer m.RUnlock()
-	if len(m.config.RelayModelMapping) == 0 {
+	if len(m.config.RelayModelMapping) == 0 && len(m.config.DeletedModelMappings) == 0 {
 		return GetDefaultModelMappings()
 	}
 	return m.config.RelayModelMapping
@@ -544,6 +550,21 @@ func (m *Manager) GetRelayModelMapping() []ModelMappingEntry {
 func (m *Manager) SetRelayModelMapping(val []ModelMappingEntry) error {
 	m.Lock()
 	defer m.Unlock()
+
+	// Identify deleted default mappings
+	defaults := GetDefaultModelMappings()
+	existingInVal := make(map[string]bool)
+	for _, entry := range val {
+		existingInVal[entry.ClientModel] = true
+	}
+
+	var deleted []string
+	for _, def := range defaults {
+		if !existingInVal[def.ClientModel] {
+			deleted = append(deleted, def.ClientModel)
+		}
+	}
+	m.config.DeletedModelMappings = deleted
 	m.config.RelayModelMapping = val
 	return m.SaveConfig()
 }
