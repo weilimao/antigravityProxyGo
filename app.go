@@ -643,6 +643,7 @@ func (a *App) domReady(ctx context.Context) {
 		"settings:get-custom-socks5-enabled":  a.settingsMgr.GetCustomSocks5Enabled(),
 		"settings:get-custom-socks5-username": a.settingsMgr.GetCustomSocks5Username(),
 		"settings:get-custom-socks5-password": a.settingsMgr.GetCustomSocks5Password(),
+		"settings:get-prompt-prefix":          a.settingsMgr.GetPromptPrefix(),
 		"settings:get-language":               a.settingsMgr.GetLanguage(),
 		"settings:get-session-optimization":   a.settingsMgr.GetSessionOptimization(),
 	}

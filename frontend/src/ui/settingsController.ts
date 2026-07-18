@@ -313,6 +313,18 @@ export function initSettings() {
             });
         }
 
+        const txtPromptPrefix = document.getElementById('txtPromptPrefix') as HTMLTextAreaElement | null;
+        if (txtPromptPrefix) {
+            txtPromptPrefix.addEventListener('change', (e: any) => {
+                const val = e.target.value;
+                try {
+                    ipcRenderer.send('settings:set-prompt-prefix', val);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save prompt prefix:', err);
+                }
+            });
+        }
+
         function updateConsoleVisibility(enabled: boolean) {
             if (systemConsole) {
                 if (enabled) {
@@ -487,6 +499,14 @@ export function refreshSettingsUI() {
             const ports = ipcRenderer.sendSync('settings:get-fallback-proxy-ports');
             if (ports !== null && ports !== undefined) {
                 txtFallbackProxyPorts.value = String(ports);
+            }
+        }
+
+        const txtPromptPrefix = document.getElementById('txtPromptPrefix') as HTMLTextAreaElement | null;
+        if (txtPromptPrefix) {
+            const prefix = ipcRenderer.sendSync('settings:get-prompt-prefix');
+            if (prefix !== null && prefix !== undefined) {
+                txtPromptPrefix.value = String(prefix);
             }
         }
 

@@ -109,6 +109,11 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		wailsRuntime.EventsEmit(a.ctx, "settings:network-logs-res", netutil.GetNetworkLogs())
 		return true
 
+	case "settings:set-prompt-prefix":
+		_ = a.settingsMgr.SetPromptPrefix(getStringArg(0))
+		a.AddLog("⚙️ 自定义提示词前缀已更新")
+		return true
+
 	case "settings:language-changed":
 		lang := getStringArg(0)
 		if lang != "" {

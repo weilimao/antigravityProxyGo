@@ -119,3 +119,35 @@ func TestSettings_RelayModelMappingRetention(t *testing.T) {
 	}
 }
 
+func TestSettings_PromptPrefix(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "antigravity-settings-prompt-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	mgr := NewManager()
+	mgr.Init(tempDir)
+
+	// 1. 默认值校验
+	if prefix := mgr.GetPromptPrefix(); prefix != "" {
+		t.Errorf("Expected default PromptPrefix to be empty, got %q", prefix)
+	}
+
+	// 2. 设置并校验
+	testPrefix := "[Please reply in English] "
+	if err := mgr.SetPromptPrefix(testPrefix); err != nil {
+		t.Fatalf("Failed to set prompt prefix: %v", err)
+	}
+	if prefix := mgr.GetPromptPrefix(); prefix != testPrefix {
+		t.Errorf("Expected PromptPrefix to be %q, got %q", testPrefix, prefix)
+	}
+
+	// 3. 重启加载校验
+	newMgr := NewManager()
+	newMgr.Init(tempDir)
+	if prefix := newMgr.GetPromptPrefix(); prefix != testPrefix {
+		t.Errorf("Expected reloaded PromptPrefix to be %q, got %q", testPrefix, prefix)
+	}
+}
+

@@ -178,6 +178,21 @@
 </div>
 	</div>
 
+	<!-- 自定义消息前缀设置卡片 -->
+	<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+		<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+			<span class="material-symbols-outlined text-primary text-[20px]">chat_bubble</span>
+			<span data-i18n="promptPrefixTitle">自定义消息前缀</span>
+		</h2>
+		<p class="text-xs text-outline leading-relaxed" data-i18n="promptPrefixTip">
+			在发送请求到上游之前，会自动在每条发送的内容消息主体最前端拼接上此处配置的文本，可用于对模型预设规则、系统提示词补充或限制回答格式等。该配置仅在流式聊天接口（如 Chat 窗口）生效，不干扰后台代码自动补全。留空则不拼接。
+		</p>
+		<div class="flex flex-col gap-1.5 border-t border-outline-variant/20 pt-4 mt-2">
+			<label class="text-[12px] font-bold text-outline" data-i18n="promptPrefixLabel">消息前缀文本 (支持多行)</label>
+			<textarea class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white mt-1 h-20 resize-y" id="txtPromptPrefix" placeholder="例如：[请用中文回答] " data-i18n-placeholder="promptPrefixPlaceholder"></textarea>
+		</div>
+	</div>
+
 	<!-- 会话优化与压缩设置卡片 -->
 	<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 		<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">

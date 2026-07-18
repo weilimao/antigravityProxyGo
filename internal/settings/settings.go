@@ -67,6 +67,7 @@ type Config struct {
 	CompressionStrategy     string `json:"compressionStrategy"`
 	SummaryModel            string `json:"summaryModel"`
 	KeepRecentTurns         int    `json:"keepRecentTurns"`
+	PromptPrefix            string `json:"promptPrefix"`
 }
 
 func GetDefaultModelMappings() []ModelMappingEntry {
@@ -1032,6 +1033,19 @@ func (m *Manager) SetRequestTimeout(timeout int) error {
 	return m.SaveConfig()
 }
 
+func (m *Manager) GetPromptPrefix() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.PromptPrefix
+}
+
+func (m *Manager) SetPromptPrefix(val string) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.PromptPrefix = val
+	return m.SaveConfig()
+}
+
 type SessionOptimizationConfig struct {
 	EnableCustomCompression bool   `json:"enableCustomCompression"`
 	MaxTokensThreshold      int    `json:"maxTokensThreshold"`
@@ -1123,6 +1137,8 @@ type ManagerInterface interface {
 	SetLanguage(lang string) error
 	GetRequestTimeout() int
 	SetRequestTimeout(timeout int) error
+	GetPromptPrefix() string
+	SetPromptPrefix(val string) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,

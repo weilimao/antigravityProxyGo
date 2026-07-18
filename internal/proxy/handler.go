@@ -125,6 +125,17 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
+	// 仅对流式接口注入自定义提示词前缀
+	if h.SettingsMgr != nil && len(bodyBytes) > 0 && isRealModelRequest(r.URL.Path) {
+		isStreaming := strings.Contains(r.URL.Path, "streamGenerateContent") || strings.Contains(r.URL.RawQuery, "alt=sse")
+		if isStreaming {
+			prefix := h.SettingsMgr.GetPromptPrefix()
+			if prefix != "" {
+				bodyBytes = injectPromptPrefix(bodyBytes, prefix)
+			}
+		}
+	}
+
 	// 诊断计时：如果请求体读取超过 1 秒，输出警告日志定位 IDE 端慢发送问题
 	bodyReadMs := time.Since(bodyReadStart).Milliseconds()
 	overallMs := time.Since(startTime).Milliseconds()
