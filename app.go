@@ -644,6 +644,13 @@ func (a *App) domReady(ctx context.Context) {
 		"settings:get-custom-socks5-username": a.settingsMgr.GetCustomSocks5Username(),
 		"settings:get-custom-socks5-password": a.settingsMgr.GetCustomSocks5Password(),
 		"settings:get-prompt-prefix":          a.settingsMgr.GetPromptPrefix(),
+		"settings:get-custom-model-override-enabled": a.settingsMgr.GetCustomModelOverrideEnabled(),
+		"settings:get-custom-model-override-id":      a.settingsMgr.GetCustomModelOverrideID(),
+		"settings:get-custom-thinking-override-enabled": a.settingsMgr.GetCustomThinkingOverrideEnabled(),
+		"settings:get-custom-thinking-supports":        a.settingsMgr.GetCustomThinkingSupports(),
+		"settings:get-custom-thinking-budget":          a.settingsMgr.GetCustomThinkingBudget(),
+		"settings:get-custom-thinking-min-budget":      a.settingsMgr.GetCustomThinkingMinBudget(),
+		"settings:get-custom-max-output-tokens":        a.settingsMgr.GetCustomMaxOutputTokens(),
 		"settings:get-language":               a.settingsMgr.GetLanguage(),
 		"settings:get-session-optimization":   a.settingsMgr.GetSessionOptimization(),
 	}

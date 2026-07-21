@@ -68,6 +68,13 @@ type Config struct {
 	SummaryModel            string `json:"summaryModel"`
 	KeepRecentTurns         int    `json:"keepRecentTurns"`
 	PromptPrefix            string `json:"promptPrefix"`
+	CustomModelOverrideEnabled    bool   `json:"customModelOverrideEnabled"`
+	CustomModelOverrideID         string `json:"customModelOverrideID"`
+	CustomThinkingOverrideEnabled bool   `json:"customThinkingOverrideEnabled"`
+	CustomThinkingSupports        bool   `json:"customThinkingSupports"`
+	CustomThinkingBudget          int    `json:"customThinkingBudget"`
+	CustomThinkingMinBudget       int    `json:"customThinkingMinBudget"`
+	CustomMaxOutputTokens         int    `json:"customMaxOutputTokens"`
 }
 
 func GetDefaultModelMappings() []ModelMappingEntry {
@@ -180,6 +187,13 @@ func (m *Manager) Init(defaultPath string) {
 		CompressionStrategy:     "summarize",
 		SummaryModel:            "gemini-2.5-flash-lite",
 		KeepRecentTurns:         5,
+		CustomModelOverrideEnabled:    false,
+		CustomModelOverrideID:         "",
+		CustomThinkingOverrideEnabled: false,
+		CustomThinkingSupports:        true,
+		CustomThinkingBudget:          -1,
+		CustomThinkingMinBudget:       32,
+		CustomMaxOutputTokens:         65536,
 	}
 
 	m.loadConfig()
@@ -234,6 +248,16 @@ func (m *Manager) loadConfig() {
 		if _, exists := rawMap["relayDomainWhitelist"]; !exists {
 			parsed.RelayDomainWhitelist = []string{"*.googleapis.com", "*.google.com", "*.anthropic.com", "*.openai.com"}
 		}
+		if _, exists := rawMap["customThinkingSupports"]; !exists {
+			parsed.CustomThinkingSupports = true
+		}
+	}
+
+	if parsed.CustomThinkingMinBudget <= 0 {
+		parsed.CustomThinkingMinBudget = 32
+	}
+	if parsed.CustomMaxOutputTokens <= 0 {
+		parsed.CustomMaxOutputTokens = 65536
 	}
 
 	if parsed.MaxRetries <= 0 {
@@ -1046,6 +1070,97 @@ func (m *Manager) SetPromptPrefix(val string) error {
 	return m.SaveConfig()
 }
 
+func (m *Manager) GetCustomModelOverrideEnabled() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.CustomModelOverrideEnabled
+}
+
+func (m *Manager) SetCustomModelOverrideEnabled(val bool) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.CustomModelOverrideEnabled = val
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetCustomModelOverrideID() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.CustomModelOverrideID
+}
+
+func (m *Manager) SetCustomModelOverrideID(val string) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.CustomModelOverrideID = val
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetCustomThinkingOverrideEnabled() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.CustomThinkingOverrideEnabled
+}
+
+func (m *Manager) SetCustomThinkingOverrideEnabled(val bool) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.CustomThinkingOverrideEnabled = val
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetCustomThinkingBudget() int {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.CustomThinkingBudget
+}
+
+func (m *Manager) SetCustomThinkingBudget(val int) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.CustomThinkingBudget = val
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetCustomThinkingSupports() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.CustomThinkingSupports
+}
+
+func (m *Manager) SetCustomThinkingSupports(val bool) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.CustomThinkingSupports = val
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetCustomThinkingMinBudget() int {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.CustomThinkingMinBudget
+}
+
+func (m *Manager) SetCustomThinkingMinBudget(val int) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.CustomThinkingMinBudget = val
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetCustomMaxOutputTokens() int {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.CustomMaxOutputTokens
+}
+
+func (m *Manager) SetCustomMaxOutputTokens(val int) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.CustomMaxOutputTokens = val
+	return m.SaveConfig()
+}
+
 type SessionOptimizationConfig struct {
 	EnableCustomCompression bool   `json:"enableCustomCompression"`
 	MaxTokensThreshold      int    `json:"maxTokensThreshold"`
@@ -1139,6 +1254,20 @@ type ManagerInterface interface {
 	SetRequestTimeout(timeout int) error
 	GetPromptPrefix() string
 	SetPromptPrefix(val string) error
+	GetCustomModelOverrideEnabled() bool
+	SetCustomModelOverrideEnabled(val bool) error
+	GetCustomModelOverrideID() string
+	SetCustomModelOverrideID(val string) error
+	GetCustomThinkingOverrideEnabled() bool
+	SetCustomThinkingOverrideEnabled(val bool) error
+	GetCustomThinkingSupports() bool
+	SetCustomThinkingSupports(val bool) error
+	GetCustomThinkingBudget() int
+	SetCustomThinkingBudget(val int) error
+	GetCustomThinkingMinBudget() int
+	SetCustomThinkingMinBudget(val int) error
+	GetCustomMaxOutputTokens() int
+	SetCustomMaxOutputTokens(val int) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,

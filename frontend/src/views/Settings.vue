@@ -193,6 +193,66 @@
 		</div>
 	</div>
 
+	<!-- 全局自定义模型覆写卡片 -->
+	<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+		<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+			<span class="material-symbols-outlined text-primary text-[20px]">transform</span>
+			<span data-i18n="customModelOverrideTitle">全局自定义模型覆写</span>
+		</h2>
+		<p class="text-xs text-outline leading-relaxed" data-i18n="customModelOverrideTip">
+			配置强制拦截并修改客户端请求的原始模型。开启后，不论客户端请求任何模型（如 gemini-1.5-flash），代理都会在底层透明地将其路由到此处指定的模型，而对客户端保持无感。
+		</p>
+		<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+			<div class="flex flex-col gap-0.5">
+				<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="enableCustomModelOverrideLabel">启用全局模型覆写</span>
+				<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="enableCustomModelOverrideDesc">强制接管并忽略客户端传递的模型标识。</span>
+			</div>
+			<!-- Toggle Switch -->
+			<label class="relative inline-flex items-center cursor-pointer">
+				<input class="sr-only peer" id="chkEnableCustomModelOverride" type="checkbox"/>
+				<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+			</label>
+		</div>
+		<div class="flex flex-col gap-1.5 mt-1" id="divCustomModelOverrideOptions">
+			<label class="text-[12px] font-bold text-outline" data-i18n="customModelOverrideIDLabel">目标模型 ID (被覆写的实际模型)</label>
+			<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomModelOverrideID" placeholder="例如：gemini-1.5-pro" data-i18n-placeholder="customModelOverrideIDPlaceholder" type="text" />
+		</div>
+
+		<!-- 全局思维链预算 (Thinking Budget) 覆写开关与参数 -->
+		<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+			<div class="flex flex-col gap-0.5">
+				<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="enableCustomThinkingOverrideLabel">启用思维链预算 (Thinking Budget) 覆写</span>
+				<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="enableCustomThinkingOverrideDesc">开启后，强制重写请求 Payload 中的 thinkingConfig 深度思考 Token 预算。</span>
+			</div>
+			<!-- Toggle Switch -->
+			<label class="relative inline-flex items-center cursor-pointer">
+				<input class="sr-only peer" id="chkEnableCustomThinkingOverride" type="checkbox"/>
+				<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+			</label>
+		</div>
+		<div class="flex flex-col gap-3 mt-1" id="divCustomThinkingOverrideOptions">
+			<div class="flex items-center justify-between">
+				<label class="text-[12px] font-bold text-outline" data-i18n="customThinkingSupportsLabel">声明模型具备思维链能力 (supportsThinking)</label>
+				<label class="relative inline-flex items-center cursor-pointer">
+					<input class="sr-only peer" id="chkCustomThinkingSupports" type="checkbox"/>
+					<div class="w-9 h-5 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+				</label>
+			</div>
+			<div class="flex flex-col gap-1">
+				<label class="text-[12px] font-bold text-outline" data-i18n="customThinkingBudgetLabel">默认思考 Token 预算 (thinkingBudget: -1 自适应, 0 关闭, >0 固定上限)</label>
+				<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomThinkingBudget" placeholder="-1" type="number" />
+			</div>
+			<div class="flex flex-col gap-1">
+				<label class="text-[12px] font-bold text-outline" data-i18n="customThinkingMinBudgetLabel">最小思考 Token 限制 (minThinkingBudget)</label>
+				<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomThinkingMinBudget" placeholder="32" type="number" />
+			</div>
+			<div class="flex flex-col gap-1">
+				<label class="text-[12px] font-bold text-outline" data-i18n="customMaxOutputTokensLabel">最大单次输出 Token 上限 (maxOutputTokens)</label>
+				<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomMaxOutputTokens" placeholder="65536" type="number" />
+			</div>
+		</div>
+	</div>
+
 	<!-- 会话优化与压缩设置卡片 -->
 	<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 		<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">

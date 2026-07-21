@@ -28,6 +28,18 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		return false
 	}
 
+	getIntArg := func(idx int) int {
+		if idx < len(args) {
+			if f, ok := args[idx].(float64); ok {
+				return int(f)
+			}
+			if i, ok := args[idx].(int); ok {
+				return i
+			}
+		}
+		return 0
+	}
+
 	switch channel {
 	case "settings:get-session-optimization":
 		wailsRuntime.EventsEmit(a.ctx, "settings:session-optimization-res", a.settingsMgr.GetSessionOptimization())
@@ -112,6 +124,59 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 	case "settings:set-prompt-prefix":
 		_ = a.settingsMgr.SetPromptPrefix(getStringArg(0))
 		a.AddLog("⚙️ 自定义提示词前缀已更新")
+		return true
+
+	case "settings:set-custom-model-override-enabled":
+		enabled := getBoolArg(0)
+		_ = a.settingsMgr.SetCustomModelOverrideEnabled(enabled)
+		status := "禁用"
+		if enabled {
+			status = "启用"
+		}
+		a.AddLog(fmt.Sprintf("⚙️ 自定义模型覆盖状态已更新: %s", status))
+		return true
+
+	case "settings:set-custom-model-override-id":
+		_ = a.settingsMgr.SetCustomModelOverrideID(getStringArg(0))
+		a.AddLog("⚙️ 自定义模型覆盖 ID 已更新")
+		return true
+
+	case "settings:set-custom-thinking-override-enabled":
+		enabled := getBoolArg(0)
+		_ = a.settingsMgr.SetCustomThinkingOverrideEnabled(enabled)
+		status := "禁用"
+		if enabled {
+			status = "启用"
+		}
+		a.AddLog(fmt.Sprintf("⚙️ 自定义思维链覆盖状态已更新: %s", status))
+		return true
+
+	case "settings:set-custom-thinking-supports":
+		supports := getBoolArg(0)
+		_ = a.settingsMgr.SetCustomThinkingSupports(supports)
+		status := "否"
+		if supports {
+			status = "是"
+		}
+		a.AddLog(fmt.Sprintf("⚙️ 自定义思维链声明支持状态已更新: %s", status))
+		return true
+
+	case "settings:set-custom-thinking-budget":
+		budget := getIntArg(0)
+		_ = a.settingsMgr.SetCustomThinkingBudget(budget)
+		a.AddLog(fmt.Sprintf("⚙️ 自定义思维链预算已更新: %d", budget))
+		return true
+
+	case "settings:set-custom-thinking-min-budget":
+		minBudget := getIntArg(0)
+		_ = a.settingsMgr.SetCustomThinkingMinBudget(minBudget)
+		a.AddLog(fmt.Sprintf("⚙️ 自定义思维链最小预算已更新: %d", minBudget))
+		return true
+
+	case "settings:set-custom-max-output-tokens":
+		maxTokens := getIntArg(0)
+		_ = a.settingsMgr.SetCustomMaxOutputTokens(maxTokens)
+		a.AddLog(fmt.Sprintf("⚙️ 自定义最大输出 Token 已更新: %d", maxTokens))
 		return true
 
 	case "settings:language-changed":

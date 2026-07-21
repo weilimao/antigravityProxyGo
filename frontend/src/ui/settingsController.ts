@@ -325,6 +325,86 @@ export function initSettings() {
             });
         }
 
+        const chkEnableCustomModelOverride = document.getElementById('chkEnableCustomModelOverride') as HTMLInputElement | null;
+        if (chkEnableCustomModelOverride) {
+            chkEnableCustomModelOverride.addEventListener('change', (e: any) => {
+                try {
+                    ipcRenderer.send('settings:set-custom-model-override-enabled', e.target.checked);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save custom model override enabled:', err);
+                }
+            });
+        }
+
+        const txtCustomModelOverrideID = document.getElementById('txtCustomModelOverrideID') as HTMLInputElement | null;
+        if (txtCustomModelOverrideID) {
+            txtCustomModelOverrideID.addEventListener('change', (e: any) => {
+                try {
+                    ipcRenderer.send('settings:set-custom-model-override-id', e.target.value);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save custom model override ID:', err);
+                }
+            });
+        }
+
+        const chkEnableCustomThinkingOverride = document.getElementById('chkEnableCustomThinkingOverride') as HTMLInputElement | null;
+        if (chkEnableCustomThinkingOverride) {
+            chkEnableCustomThinkingOverride.addEventListener('change', (e: any) => {
+                try {
+                    ipcRenderer.send('settings:set-custom-thinking-override-enabled', e.target.checked);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save custom thinking override enabled:', err);
+                }
+            });
+        }
+
+        const chkCustomThinkingSupports = document.getElementById('chkCustomThinkingSupports') as HTMLInputElement | null;
+        if (chkCustomThinkingSupports) {
+            chkCustomThinkingSupports.addEventListener('change', (e: any) => {
+                try {
+                    ipcRenderer.send('settings:set-custom-thinking-supports', e.target.checked);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save custom thinking supports:', err);
+                }
+            });
+        }
+
+        const txtCustomThinkingBudget = document.getElementById('txtCustomThinkingBudget') as HTMLInputElement | null;
+        if (txtCustomThinkingBudget) {
+            txtCustomThinkingBudget.addEventListener('change', (e: any) => {
+                try {
+                    const val = parseInt(e.target.value, 10);
+                    ipcRenderer.send('settings:set-custom-thinking-budget', isNaN(val) ? -1 : val);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save custom thinking budget:', err);
+                }
+            });
+        }
+
+        const txtCustomThinkingMinBudget = document.getElementById('txtCustomThinkingMinBudget') as HTMLInputElement | null;
+        if (txtCustomThinkingMinBudget) {
+            txtCustomThinkingMinBudget.addEventListener('change', (e: any) => {
+                try {
+                    const val = parseInt(e.target.value, 10);
+                    ipcRenderer.send('settings:set-custom-thinking-min-budget', isNaN(val) ? 32 : val);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save custom thinking min budget:', err);
+                }
+            });
+        }
+
+        const txtCustomMaxOutputTokens = document.getElementById('txtCustomMaxOutputTokens') as HTMLInputElement | null;
+        if (txtCustomMaxOutputTokens) {
+            txtCustomMaxOutputTokens.addEventListener('change', (e: any) => {
+                try {
+                    const val = parseInt(e.target.value, 10);
+                    ipcRenderer.send('settings:set-custom-max-output-tokens', isNaN(val) ? 65536 : val);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save custom max output tokens:', err);
+                }
+            });
+        }
+
         function updateConsoleVisibility(enabled: boolean) {
             if (systemConsole) {
                 if (enabled) {
@@ -507,6 +587,62 @@ export function refreshSettingsUI() {
             const prefix = ipcRenderer.sendSync('settings:get-prompt-prefix');
             if (prefix !== null && prefix !== undefined) {
                 txtPromptPrefix.value = String(prefix);
+            }
+        }
+
+        const chkEnableCustomModelOverride = document.getElementById('chkEnableCustomModelOverride') as HTMLInputElement | null;
+        if (chkEnableCustomModelOverride) {
+            const enabled = ipcRenderer.sendSync('settings:get-custom-model-override-enabled');
+            if (enabled !== null && enabled !== undefined) {
+                chkEnableCustomModelOverride.checked = !!enabled;
+            }
+        }
+
+        const txtCustomModelOverrideID = document.getElementById('txtCustomModelOverrideID') as HTMLInputElement | null;
+        if (txtCustomModelOverrideID) {
+            const overrideID = ipcRenderer.sendSync('settings:get-custom-model-override-id');
+            if (overrideID !== null && overrideID !== undefined) {
+                txtCustomModelOverrideID.value = String(overrideID);
+            }
+        }
+
+        const chkEnableCustomThinkingOverride = document.getElementById('chkEnableCustomThinkingOverride') as HTMLInputElement | null;
+        if (chkEnableCustomThinkingOverride) {
+            const enabled = ipcRenderer.sendSync('settings:get-custom-thinking-override-enabled');
+            if (enabled !== null && enabled !== undefined) {
+                chkEnableCustomThinkingOverride.checked = !!enabled;
+            }
+        }
+
+        const chkCustomThinkingSupports = document.getElementById('chkCustomThinkingSupports') as HTMLInputElement | null;
+        if (chkCustomThinkingSupports) {
+            const supports = ipcRenderer.sendSync('settings:get-custom-thinking-supports');
+            if (supports !== null && supports !== undefined) {
+                chkCustomThinkingSupports.checked = !!supports;
+            }
+        }
+
+        const txtCustomThinkingBudget = document.getElementById('txtCustomThinkingBudget') as HTMLInputElement | null;
+        if (txtCustomThinkingBudget) {
+            const budget = ipcRenderer.sendSync('settings:get-custom-thinking-budget');
+            if (budget !== null && budget !== undefined) {
+                txtCustomThinkingBudget.value = String(budget);
+            }
+        }
+
+        const txtCustomThinkingMinBudget = document.getElementById('txtCustomThinkingMinBudget') as HTMLInputElement | null;
+        if (txtCustomThinkingMinBudget) {
+            const minBudget = ipcRenderer.sendSync('settings:get-custom-thinking-min-budget');
+            if (minBudget !== null && minBudget !== undefined) {
+                txtCustomThinkingMinBudget.value = String(minBudget);
+            }
+        }
+
+        const txtCustomMaxOutputTokens = document.getElementById('txtCustomMaxOutputTokens') as HTMLInputElement | null;
+        if (txtCustomMaxOutputTokens) {
+            const maxTokens = ipcRenderer.sendSync('settings:get-custom-max-output-tokens');
+            if (maxTokens !== null && maxTokens !== undefined) {
+                txtCustomMaxOutputTokens.value = String(maxTokens);
             }
         }
 
