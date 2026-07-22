@@ -94,6 +94,7 @@ type Manager struct {
 	activeChannel     string
 	currentIndex      int
 	errorCounts        map[string]int // accountId -> error count
+	refreshLocks       sync.Map       // accountId -> *sync.Mutex (Double-Checked Locking)
 	cooldownTicker     *time.Ticker
 	cooldownStop       chan struct{}
 	tokenRefreshTicker *time.Ticker
@@ -107,6 +108,11 @@ type Manager struct {
 	FetchQuota               func(account *Account) (*QuotaResult, error)
 	RefreshToken             func(account *Account) (string, error)
 	OnQuotaUpdated           func(accountId string, result *QuotaResult)
+}
+
+func (m *Manager) getAccountRefreshLock(id string) *sync.Mutex {
+	v, _ := m.refreshLocks.LoadOrStore(id, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }
 
 func NewManager() *Manager {
@@ -1329,6 +1335,25 @@ func (m *Manager) RefreshAccountTokenSync(id string) (string, error) {
 
 	if m.RefreshToken == nil {
 		return "", errors.New("Token 刷新服务未注册")
+	}
+
+	// 1. First Check: 如果 Token 在 30 秒内刚刚成功刷新过，直接复用
+	if refreshedAt := acc.GetTokenRefreshedAt(); refreshedAt > 0 && time.Now().Unix()-refreshedAt < 30 {
+		if token := acc.GetAccessToken(); token != "" {
+			return token, nil
+		}
+	}
+
+	// 2. 加单账号互斥锁，保障同一账号的并发请求安全串行化
+	lock := m.getAccountRefreshLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	// 3. Second Check: 拿到锁后再次检查，若已被先到达的协程完成刷新则直接复用
+	if refreshedAt := acc.GetTokenRefreshedAt(); refreshedAt > 0 && time.Now().Unix()-refreshedAt < 30 {
+		if token := acc.GetAccessToken(); token != "" {
+			return token, nil
+		}
 	}
 
 	newToken, err := m.RefreshToken(acc)

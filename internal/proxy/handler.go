@@ -3,6 +3,8 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -919,7 +921,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 								modelName = currentModel
 							}
 
-							standardReq["sessionId"] = fmt.Sprintf("-%d", time.Now().UnixNano()/1e6)
+							if rawSessionKey != "" {
+								hasher := sha256.New()
+								hasher.Write([]byte(rawSessionKey))
+								standardReq["sessionId"] = "-" + hex.EncodeToString(hasher.Sum(nil))[:16]
+							} else {
+								standardReq["sessionId"] = fmt.Sprintf("-%d", time.Now().UnixNano()/1e6)
+							}
 
 							actualProjectId := poolAccount.ProjectID
 							if actualProjectId == "" && h.getStoredProject != nil {
@@ -934,11 +942,11 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 							wrappedReq := map[string]interface{}{
 								"project":            actualProjectId,
-								"requestId":          fmt.Sprintf("chat/%d-%d", time.Now().Unix(), rand.Intn(1000000)),
+								"requestId":          fmt.Sprintf("agent/%d-%d", time.Now().Unix(), rand.Intn(1000000)),
 								"request":            standardReq,
 								"model":              modelName,
 								"userAgent":          "antigravity",
-								"requestType":        "chat",
+								"requestType":        "agent",
 								"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
 							}
 							if wrappedBytes, err := json.Marshal(wrappedReq); err == nil {
@@ -978,6 +986,30 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// 彻底剥离可能暴露中继分发的敏感内部请求头，防止被 Google 上游风控识别
+		customHeaders.Del("X-Relay-User-Id")
+		customHeaders.Del("X-Relay-Api-Key-Id")
+		customHeaders.Del("X-Antigravity-Original-Path")
+		customHeaders.Del("X-Antigravity-Original-Method")
+		customHeaders.Del("X-Antigravity-Req-ID")
+		customHeaders.Del("x-relay-user-id")
+		customHeaders.Del("x-relay-api-key-id")
+		customHeaders.Del("x-antigravity-original-path")
+		customHeaders.Del("x-antigravity-original-method")
+		customHeaders.Del("x-antigravity-req-id")
+
+		// 剥离多余的 Content-Length 与 Host 标头，使 Header 集合与图一 100% 精准一致
+		customHeaders.Del("Content-Length")
+		customHeaders.Del("content-length")
+		customHeaders.Del("Host")
+		customHeaders.Del("host")
+
+		// 统一伪装 User-Agent 为正规官方客户端格式 (与图一完全一致)
+		ua := customHeaders.Get("User-Agent")
+		if ua == "" || strings.Contains(strings.ToLower(ua), "go-http-client") || strings.Contains(ua, "2.2.1") {
+			customHeaders.Set("User-Agent", "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)")
+		}
+
 		timeoutSec := 300
 		if h.getRequestTimeout != nil {
 			if val := h.getRequestTimeout(); val > 0 {
@@ -1000,7 +1032,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		var respBodyBytes []byte
 		var errRead error
-		isStreaming := strings.Contains(localTargetPath, "streamGenerateContent")
+		isStreaming := strings.Contains(localTargetPath, "streamGenerateContent") || strings.Contains(localTargetPath, "alt=sse")
 
 		var skippedBytes int = 0
 		if isStreaming && resp.StatusCode == 200 {
@@ -1116,7 +1148,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Capture packet logging (Save to PacketCapturer) before any error short-circuit return
-		h.packetCap.SavePacket(r.Method, localTargetHost, localTargetPath, r.Header, finalReqBody, resp.Header, respBodyBytes, resp.StatusCode)
+		h.packetCap.SavePacket(r.Method, localTargetHost, localTargetPath, customHeaders, finalReqBody, resp.Header, respBodyBytes, resp.StatusCode)
 
 		if resp.StatusCode >= 400 {
 			if !(resp.StatusCode == 429 && strings.Contains(localTargetPath, "retrieveUserQuota")) {
@@ -1329,6 +1361,11 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(status)
 				w.Write(body)
 			}
+			return
+		}
+
+		if r.Context().Err() != nil {
+			h.logFn(fmt.Sprintf("%s ⏹️ 客户端已取消连接，终止后续 503 重试与账号切换。", logPrefix))
 			return
 		}
 
@@ -1754,22 +1791,38 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 		}
 		_ = db.InsertRequestLog(dbItem)
 
+		var reqBodyParsed interface{}
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, &reqBodyParsed); err != nil {
+				reqBodyParsed = string(bodyBytes)
+			}
+		}
+
+		headersMap := make(map[string]interface{})
+		for k, v := range r.Header {
+			if len(v) > 0 {
+				headersMap[k] = v[0]
+			}
+		}
+
 		// Record locally in memory tracker so it shows up on the client dashboard
 		h.statsTracker.AddRequestLog(&stats.RequestLog{
-			ID:           reqID,
-			Timestamp:    time.Now().Format("01/02 15:04:05"),
-			Method:       logMethod,
-			Host:         targetHost,
-			Path:         logPath,
-			Model:        currentModel,
-			Account:      rr.GetConfig().UserKey,
-			InTokens:     inTokens,
-			OutTokens:    outTokens,
-			CachedTokens: cachedTokens,
-			Cost:         totalCost,
-			StatusCode:   resp.StatusCode,
-			SessionID:    sessionID,
-			DurationMs:   time.Since(startTime).Milliseconds(),
+			ID:             reqID,
+			Timestamp:      time.Now().Format("01/02 15:04:05"),
+			Method:         logMethod,
+			Host:           targetHost,
+			Path:           logPath,
+			Model:          currentModel,
+			Account:        rr.GetConfig().UserKey,
+			InTokens:       inTokens,
+			OutTokens:      outTokens,
+			CachedTokens:   cachedTokens,
+			Cost:           totalCost,
+			StatusCode:     resp.StatusCode,
+			RequestBody:    reqBodyParsed,
+			RequestHeaders: headersMap,
+			SessionID:      sessionID,
+			DurationMs:     time.Since(startTime).Milliseconds(),
 		})
 
 		// Record usage locally so the client UI can reflect the remote quota consumption

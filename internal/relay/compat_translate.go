@@ -213,6 +213,30 @@ func (m *AnthropicMessage) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type GeminiThinkingConfig struct {
+	ThinkingBudget int `json:"thinkingBudget,omitempty"`
+}
+
+type GeminiConfig struct {
+	Temperature     *float64              `json:"temperature,omitempty"`
+	MaxOutputTokens *int                  `json:"maxOutputTokens,omitempty"`
+	CandidateCount  int                   `json:"candidateCount,omitempty"`
+	ThinkingConfig  *GeminiThinkingConfig `json:"thinkingConfig,omitempty"`
+}
+
+type GeminiRequest struct {
+	Contents          []GeminiContent         `json:"contents"`
+	SystemInstruction *GeminiInstruction      `json:"systemInstruction,omitempty"`
+	GenerationConfig  *GeminiConfig           `json:"generationConfig,omitempty"`
+	Tools             []GeminiToolDeclaration `json:"tools,omitempty"`
+	ToolConfig        *GeminiToolConfig       `json:"toolConfig,omitempty"`
+}
+
+type AnthropicThinking struct {
+	Type         string `json:"type,omitempty"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
+}
+
 type AnthropicRequest struct {
 	Model       string             `json:"model"`
 	Messages    []AnthropicMessage `json:"messages"`
@@ -222,6 +246,7 @@ type AnthropicRequest struct {
 	Stream      bool               `json:"stream,omitempty"`
 	Tools       []AnthropicTool    `json:"tools,omitempty"`
 	ToolChoice  json.RawMessage    `json:"tool_choice,omitempty"`
+	Thinking    *AnthropicThinking `json:"thinking,omitempty"`
 }
 
 // UnmarshalJSON 允许 AnthropicRequest.System 兼容字符串及数组两种格式 of JSON 解析
@@ -235,6 +260,7 @@ func (r *AnthropicRequest) UnmarshalJSON(data []byte) error {
 		Stream      bool               `json:"stream,omitempty"`
 		Tools       []AnthropicTool    `json:"tools,omitempty"`
 		ToolChoice  json.RawMessage    `json:"tool_choice,omitempty"`
+		Thinking    *AnthropicThinking `json:"thinking,omitempty"`
 	}
 
 	if err := json.Unmarshal(data, &temp); err != nil {
@@ -248,6 +274,7 @@ func (r *AnthropicRequest) UnmarshalJSON(data []byte) error {
 	r.Stream = temp.Stream
 	r.Tools = temp.Tools
 	r.ToolChoice = temp.ToolChoice
+	r.Thinking = temp.Thinking
 
 	if len(temp.System) == 0 {
 		return nil
@@ -310,6 +337,7 @@ type GeminiPart struct {
 	FunctionCall     *GeminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *GeminiFunctionResponse `json:"functionResponse,omitempty"`
 	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
+	Thought          bool                    `json:"thought,omitempty"`
 }
 
 type GeminiContent struct {
@@ -319,20 +347,6 @@ type GeminiContent struct {
 
 type GeminiInstruction struct {
 	Parts []GeminiPart `json:"parts"`
-}
-
-type GeminiConfig struct {
-	Temperature     *float64 `json:"temperature,omitempty"`
-	MaxOutputTokens *int     `json:"maxOutputTokens,omitempty"`
-	CandidateCount  int      `json:"candidateCount,omitempty"`
-}
-
-type GeminiRequest struct {
-	Contents          []GeminiContent        `json:"contents"`
-	SystemInstruction *GeminiInstruction     `json:"systemInstruction,omitempty"`
-	GenerationConfig  *GeminiConfig          `json:"generationConfig,omitempty"`
-	Tools             []GeminiToolDeclaration `json:"tools,omitempty"`
-	ToolConfig        *GeminiToolConfig       `json:"toolConfig,omitempty"`
 }
 
 type GeminiCandidateContent struct {
@@ -644,30 +658,50 @@ func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 				textResult.WriteString("[Image Result attached]")
 			}
 			
-			gemReq.Contents = append(gemReq.Contents, GeminiContent{
-				Role: "user",
-				Parts: []GeminiPart{{
-					FunctionResponse: &GeminiFunctionResponse{
-						Name:     toolName,
-						Response: map[string]interface{}{"result": textResult.String()},
-						ID:       msg.ToolCallID,
-					},
-				}},
-			})
-			
-			if len(imageParts) > 0 {
+			funcPart := GeminiPart{
+				FunctionResponse: &GeminiFunctionResponse{
+					Name:     toolName,
+					Response: map[string]interface{}{"result": truncateToolResultText(textResult.String(), 30000)},
+					ID:       msg.ToolCallID,
+				},
+			}
+
+			n := len(gemReq.Contents)
+			if n > 0 && gemReq.Contents[n-1].Role == "user" {
+				gemReq.Contents[n-1].Parts = append(gemReq.Contents[n-1].Parts, funcPart)
+			} else {
 				gemReq.Contents = append(gemReq.Contents, GeminiContent{
 					Role:  "user",
-					Parts: imageParts,
+					Parts: []GeminiPart{funcPart},
 				})
 			}
-			
+
+			if len(imageParts) > 0 {
+				n = len(gemReq.Contents)
+				if n > 0 && gemReq.Contents[n-1].Role == "user" {
+					gemReq.Contents[n-1].Parts = append(gemReq.Contents[n-1].Parts, imageParts...)
+				} else {
+					gemReq.Contents = append(gemReq.Contents, GeminiContent{
+						Role:  "user",
+						Parts: imageParts,
+					})
+				}
+			}
+
 		} else {
 			// user 消息
-			gemReq.Contents = append(gemReq.Contents, GeminiContent{
-				Role:  "user",
-				Parts: parseOpenAIContentString(msg.Content),
-			})
+			userParts := parseOpenAIContentString(msg.Content)
+			if len(userParts) > 0 {
+				n := len(gemReq.Contents)
+				if n > 0 && gemReq.Contents[n-1].Role == "user" {
+					gemReq.Contents[n-1].Parts = append(gemReq.Contents[n-1].Parts, userParts...)
+				} else {
+					gemReq.Contents = append(gemReq.Contents, GeminiContent{
+						Role:  "user",
+						Parts: userParts,
+					})
+				}
+			}
 		}
 	}
 
@@ -681,6 +715,19 @@ func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 		gemReq.GenerationConfig = &GeminiConfig{
 			Temperature:     openReq.Temperature,
 			MaxOutputTokens: openReq.MaxTokens,
+		}
+	}
+
+	// 自动为 flash / pro / thinking 等思考型推理模型注入 thinkingConfig 预算，防止谷歌上游截断返回 0 OutTokens
+	lowerModel := strings.ToLower(openReq.Model)
+	if strings.Contains(lowerModel, "flash") || strings.Contains(lowerModel, "pro") || strings.Contains(lowerModel, "thinking") {
+		if gemReq.GenerationConfig == nil {
+			gemReq.GenerationConfig = &GeminiConfig{}
+		}
+		if gemReq.GenerationConfig.ThinkingConfig == nil {
+			gemReq.GenerationConfig.ThinkingConfig = &GeminiThinkingConfig{
+				ThinkingBudget: 8192,
+			}
 		}
 	}
 
@@ -752,7 +799,7 @@ func TranslateAnthropicToGemini(anthReq *AnthropicRequest) *GeminiRequest {
 			case "tool_result":
 				// user 消息中的工具结果 → Gemini functionResponse Part
 				toolName := findToolNameByID(anthReq.Messages, block.ToolUseID)
-				resultText := SanitizeAllThoughtSignatures(extractToolResultText(block))
+				resultText := truncateToolResultText(SanitizeAllThoughtSignatures(extractToolResultText(block)), 30000)
 				funcRespParts = append(funcRespParts, GeminiPart{
 					FunctionResponse: &GeminiFunctionResponse{
 						Name:     toolName,
@@ -784,10 +831,15 @@ func TranslateAnthropicToGemini(anthReq *AnthropicRequest) *GeminiRequest {
 		}
 	}
 
-	if anthReq.Temperature != nil || anthReq.MaxTokens != nil {
+	if anthReq.Temperature != nil || anthReq.MaxTokens != nil || anthReq.Thinking != nil {
 		gemReq.GenerationConfig = &GeminiConfig{
 			Temperature:     anthReq.Temperature,
 			MaxOutputTokens: anthReq.MaxTokens,
+		}
+		if anthReq.Thinking != nil && anthReq.Thinking.BudgetTokens > 0 {
+			gemReq.GenerationConfig.ThinkingConfig = &GeminiThinkingConfig{
+				ThinkingBudget: anthReq.Thinking.BudgetTokens,
+			}
 		}
 	}
 
@@ -852,14 +904,30 @@ func extractToken(r *http.Request) string {
 	return strings.TrimSpace(r.URL.Query().Get("key"))
 }
 
-// parseToolCallArgs 将 JSON 字符串格式的参数解析为 map
+// parseToolCallArgs 将 JSON 字符串格式的参数解析为 map，并兜底处理空参数防止 Gemini 报 MALFORMED_FUNCTION_CALL
 func parseToolCallArgs(argsStr string) map[string]interface{} {
-	if argsStr == "" {
-		return map[string]interface{}{}
+	trimmed := strings.TrimSpace(argsStr)
+	if trimmed == "" || trimmed == "{}" {
+		return map[string]interface{}{"_": true}
 	}
 	var args map[string]interface{}
 	if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
 		return map[string]interface{}{"raw": argsStr}
 	}
+	if len(args) == 0 {
+		return map[string]interface{}{"_": true}
+	}
 	return args
+}
+
+// truncateToolResultText 智能截断过长的工具输出，保留头部与尾部关键信息，防止提示词上下文爆炸（>10万Token）
+func truncateToolResultText(text string, maxChars int) string {
+	if maxChars <= 0 || len(text) <= maxChars {
+		return text
+	}
+	half := maxChars / 2
+	head := text[:half]
+	tail := text[len(text)-half:]
+	truncatedCount := len(text) - maxChars
+	return fmt.Sprintf("%s\n\n...[Tool Output Truncated %d Characters to save context]...\n\n%s", head, truncatedCount, tail)
 }

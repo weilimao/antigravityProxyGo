@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"sort"
 	"strings"
 )
 
@@ -204,6 +205,10 @@ func translateToolsToGemini(tools []AnthropicTool) []GeminiToolDeclaration {
 			Parameters:  schema,
 		})
 	}
+	// 按工具名称字典序升序排序，保证流式和多轮调用中稳定头部的 Prompt Cache 缓存命中率
+	sort.Slice(decls, func(i, j int) bool {
+		return decls[i].Name < decls[j].Name
+	})
 	return []GeminiToolDeclaration{{FunctionDeclarations: decls}}
 }
 
@@ -244,38 +249,65 @@ func translateToolChoiceToGemini(toolChoice json.RawMessage) *GeminiToolConfig {
 	return config
 }
 
+func hasFunctionResponse(c GeminiContent) bool {
+	for _, p := range c.Parts {
+		if p.FunctionResponse != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // mergeConsecutiveRoles 合并连续相同角色的消息。
-// Gemini API 要求 user/model 严格交替，但 Claude Code harness 会注入额外的
-// user 消息（如 skills 列表、system-reminder），导致出现连续同角色消息。
-// 此函数将连续同角色的 Parts 合入一条消息，并在 function→user 中间
+// Gemini API 要求 user/model 严格交替，但 Claude Code / Codex CLI 会注入额外的
+// user 消息（如 skills 列表、system-reminder、继续指令），导致出现连续同角色消息。
+// 此函数将连续同角色的 Parts 合入一条消息，并在 function/tool_response → user 中间
 // 插入占位 model 消息以满足 Gemini 的角色交替约束。
 func mergeConsecutiveRoles(contents []GeminiContent) []GeminiContent {
+	if len(contents) == 0 {
+		return contents
+	}
+
+	// 保证每一个 content 节点都包含显式的 Role (默认 "user")
+	for i := range contents {
+		if contents[i].Role == "" {
+			contents[i].Role = "user"
+		}
+	}
+
 	if len(contents) <= 1 {
 		return contents
 	}
 
-	// 第一步：合并连续同角色消息
+	// 第一步：合并连续同角色消息（注意：含有 functionResponse 的 user 节点不能与普通 user 节点合并）
 	merged := make([]GeminiContent, 0, len(contents))
 	merged = append(merged, contents[0])
 	for i := 1; i < len(contents); i++ {
 		last := &merged[len(merged)-1]
-		if contents[i].Role == last.Role {
+		if contents[i].Role == last.Role && (contents[i].Role != "user" || hasFunctionResponse(*last) == hasFunctionResponse(contents[i])) {
 			last.Parts = append(last.Parts, contents[i].Parts...)
 		} else {
 			merged = append(merged, contents[i])
 		}
 	}
 
-	// 第二步：在 function→user 之间插入占位 model 消息
-	// Gemini 要求 function 消息后必须跟 model 消息
+	// 第二步：在 function / functionResponse → user 之间插入占位 model 消息
+	// Gemini 要求 function / tool_response 消息后必须跟 model 消息才能跟后续的 user prompt
 	fixed := make([]GeminiContent, 0, len(merged)+2)
 	for i, c := range merged {
 		fixed = append(fixed, c)
-		if c.Role == "function" && i+1 < len(merged) && merged[i+1].Role != "model" {
+		if (c.Role == "function" || hasFunctionResponse(c)) && i+1 < len(merged) && merged[i+1].Role != "model" {
 			fixed = append(fixed, GeminiContent{
 				Role:  "model",
 				Parts: []GeminiPart{{Text: "OK."}},
 			})
+		}
+	}
+
+	// 再次兜底检查所有节点的 Role 必填性
+	for i := range fixed {
+		if fixed[i].Role == "" {
+			fixed[i].Role = "user"
 		}
 	}
 

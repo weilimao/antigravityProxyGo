@@ -3,6 +3,7 @@ package relay
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -84,7 +85,7 @@ func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
 	// 校验速率限制 (每分钟最多请求次数，默认为30次)
-	if r.Method == http.MethodPost && (path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/messages") {
+	if r.Method == http.MethodPost && (path == "/v1/chat/completions" || path == "/v1/responses" || path == "/responses" || path == "/responses/compact" || path == "/v1/messages") {
 		limit := 30
 		user := h.authMgr.userMgr.GetUserByID(session.UserID)
 		if user != nil && user.Quotas.RateLimit > 0 {
@@ -109,8 +110,8 @@ func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. OpenAI 对话接口 (兼容 Codex 等客户端在“Chat Completions (转换)”模式下调用的 /v1/responses 路径)
-	if (path == "/v1/chat/completions" || path == "/v1/responses") && r.Method == http.MethodPost {
+	// 2. OpenAI 对话接口 (兼容 Codex 等客户端调用的 /v1/responses, /responses, /responses/compact 路径)
+	if (path == "/v1/chat/completions" || path == "/v1/responses" || path == "/responses" || path == "/responses/compact") && r.Method == http.MethodPost {
 		h.handleOpenAIChat(w, r, session)
 		return
 	}
@@ -345,7 +346,7 @@ func (h *APICompatHandler) handleOpenAIChat(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	h.dispatchToGemini(w, r, userSession, geminiModel, geminiReq, openReq.Stream, apiFormat)
+	h.dispatchToGemini(w, r, userSession, openReq.Model, geminiModel, geminiReq, openReq.Stream, apiFormat)
 }
 
 func (h *APICompatHandler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request, userSession *RelaySession) {
@@ -367,13 +368,14 @@ func (h *APICompatHandler) handleAnthropicMessages(w http.ResponseWriter, r *htt
 
 	h.log("Anthropic Request mapped. ClientModel: %s -> GeminiModel: %s | User: %s", anthReq.Model, geminiModel, userSession.UserKey)
 
-	h.dispatchToGemini(w, r, userSession, geminiModel, geminiReq, anthReq.Stream, "anthropic")
+	h.dispatchToGemini(w, r, userSession, anthReq.Model, geminiModel, geminiReq, anthReq.Stream, "anthropic")
 }
 
 func (h *APICompatHandler) dispatchToGemini(
 	w http.ResponseWriter,
 	r *http.Request,
 	userSession *RelaySession,
+	clientModel string,
 	geminiModel string,
 	geminiReq *GeminiRequest,
 	stream bool,
@@ -544,13 +546,14 @@ func (h *APICompatHandler) dispatchToGemini(
 
 	targetURL := fmt.Sprintf("http://%s/v1beta/models/%s:%s%s", localProxyAddr, targetModelToQuery, action, queryStr)
 
-	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(geminiReqBytes))
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(geminiReqBytes))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "failed to create request: " + err.Error()})
 		return
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)")
 	// 将用户的凭证传递给本地代理，本地代理将据此提取 sessionKey 自动粘性绑定账号池并执行扣费统计
 	req.Header.Set("Authorization", "Bearer "+userSession.UserKey)
 	req.Header.Set("X-Relay-User-Id", userSession.UserID)
@@ -587,7 +590,7 @@ func (h *APICompatHandler) dispatchToGemini(
 
 	// 4. 流式传输（SSE）处理
 	if stream {
-		h.handleStreamResponse(w, resp.Body, userSession, geminiModel, apiFormat, startTime, r.URL.Path, reqID)
+		h.handleStreamResponse(r.Context(), w, resp.Body, userSession, clientModel, geminiModel, apiFormat, startTime, r.URL.Path, reqID)
 	} else {
 		// 5. 非流式传输处理
 		h.handleNormalResponse(w, resp.Body, userSession, geminiModel, apiFormat, startTime, r.URL.Path, reqID)
@@ -783,9 +786,11 @@ func (h *APICompatHandler) handleNormalResponse(
 }
 
 func (h *APICompatHandler) handleStreamResponse(
+	ctx context.Context,
 	w http.ResponseWriter,
 	respBody io.Reader,
 	userSession *RelaySession,
+	clientModel string,
 	geminiModel string,
 	apiFormat string,
 	startTime time.Time,
@@ -801,6 +806,7 @@ func (h *APICompatHandler) handleStreamResponse(
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK) // 显式发送 200 + SSE 响应头，确保客户端立即收到
 	flusher.Flush()
 
@@ -814,6 +820,12 @@ func (h *APICompatHandler) handleStreamResponse(
 	}
 	createdAt := startTime.Unix()
 
+	// 保持透传客户端原始请求的模型 ID，避免 Claude Code 等 Strict 客户端校验失败
+	displayModel := clientModel
+	if displayModel == "" {
+		displayModel = geminiModel
+	}
+
 	// 初始化计数
 	inTokens := 0
 	outTokens := 0
@@ -823,6 +835,7 @@ func (h *APICompatHandler) handleStreamResponse(
 	// 流式状态跟踪
 	blockIndex := 0
 	textBlockOpen := false
+	thinkingBlockOpen := false
 	hasFunctionCall := false
 	openAIRoleSent := false
 
@@ -835,7 +848,7 @@ func (h *APICompatHandler) handleStreamResponse(
 				"type":          "message",
 				"role":          "assistant",
 				"content":       []interface{}{},
-				"model":         geminiModel,
+				"model":         displayModel,
 				"stop_reason":   nil,
 				"stop_sequence": nil,
 				"usage":         map[string]interface{}{"input_tokens": 0, "output_tokens": 0},
@@ -888,6 +901,12 @@ func (h *APICompatHandler) handleStreamResponse(
 	}
 
 	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			h.log("⏹️ 客户端连接已取消，中断流式响应扫描")
+			return
+		default:
+		}
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
 			continue
@@ -912,106 +931,221 @@ func (h *APICompatHandler) handleStreamResponse(
 			outTokens = gemResp.UsageMetadata.CandidatesTokenCount
 		}
 
-		if len(gemResp.Candidates) == 0 || len(gemResp.Candidates[0].Content.Parts) == 0 {
+		if len(gemResp.Candidates) == 0 {
 			continue
 		}
 
-		// 遍历所有 Parts，分别处理 text 和 functionCall
+		// 只要拿到上游 Candidate 响应，第一时间发射 OpenAI role: "assistant" 声明首包（对齐 Antigravity-Manager 逻辑）
+		if apiFormat == "openai" && !openAIRoleSent {
+			initChunk := OpenAIStreamChunk{
+				ID:      streamID,
+				Object:  "chat.completion.chunk",
+				Created: createdAt,
+				Model:   displayModel,
+				Choices: []OpenAIStreamChoice{
+					{Index: 0, Delta: OpenAIDelta{Role: "assistant"}, FinishReason: nil},
+				},
+			}
+			initBytes, _ := json.Marshal(initChunk)
+			fmt.Fprintf(w, "data: %s\n\n", string(initBytes))
+			flusher.Flush()
+			openAIRoleSent = true
+		}
+
+		if len(gemResp.Candidates[0].Content.Parts) == 0 {
+			continue
+		}
+
+		// 遍历所有 Parts，分别处理 text、thinking 和 functionCall
 		for _, part := range gemResp.Candidates[0].Content.Parts {
-			if part.Text != "" {
-				if apiFormat == "openai" {
-					if !openAIRoleSent {
-						initChunk := OpenAIStreamChunk{
+			cleanText := SanitizeAllThoughtSignatures(part.Text)
+			if cleanText != "" {
+				if part.Thought {
+					// 思考过程分片处理
+					if apiFormat == "anthropic" {
+						if textBlockOpen {
+							stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
+							stopBytes, _ := json.Marshal(stopEvt)
+							fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
+							blockIndex++
+							textBlockOpen = false
+						}
+						if !thinkingBlockOpen {
+							startEvt := map[string]interface{}{
+								"type":          "content_block_start",
+								"index":         blockIndex,
+								"content_block": map[string]interface{}{"type": "thinking", "thinking": ""},
+							}
+							startBytes, _ := json.Marshal(startEvt)
+							fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", string(startBytes))
+							thinkingBlockOpen = true
+						}
+						deltaEvt := map[string]interface{}{
+							"type":  "content_block_delta",
+							"index": blockIndex,
+							"delta": map[string]interface{}{"type": "thinking_delta", "thinking": cleanText},
+						}
+						deltaBytes, _ := json.Marshal(deltaEvt)
+						fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(deltaBytes))
+					} else if apiFormat == "openai" {
+						chunk := OpenAIStreamChunk{
 							ID:      streamID,
 							Object:  "chat.completion.chunk",
 							Created: createdAt,
-							Model:   geminiModel,
+							Model:   displayModel,
 							Choices: []OpenAIStreamChoice{
-								{Index: 0, Delta: OpenAIDelta{Role: "assistant"}, FinishReason: nil},
+								{Index: 0, Delta: OpenAIDelta{Content: cleanText}, FinishReason: nil},
 							},
 						}
-						initBytes, _ := json.Marshal(initChunk)
-						fmt.Fprintf(w, "data: %s\n\n", string(initBytes))
-						flusher.Flush()
-						openAIRoleSent = true
-					}
+						chunkBytes, _ := json.Marshal(chunk)
+						fmt.Fprintf(w, "data: %s\n\n", string(chunkBytes))
+					} else if apiFormat == "responses" {
+						if !responsesMsgOpened {
+							itemAdded := map[string]interface{}{
+								"type":            "response.output_item.added",
+								"sequence_number": nextSeq(),
+								"output_index":    0,
+								"item": map[string]interface{}{
+									"id":      responsesMsgID,
+									"type":    "message",
+									"status":  "in_progress",
+									"role":    "assistant",
+									"content": []interface{}{},
+								},
+							}
+							itemBytes, _ := json.Marshal(itemAdded)
+							fmt.Fprintf(w, "event: response.output_item.added\ndata: %s\n\n", string(itemBytes))
 
-					chunk := OpenAIStreamChunk{
-						ID:      streamID,
-						Object:  "chat.completion.chunk",
-						Created: createdAt,
-						Model:   geminiModel,
-						Choices: []OpenAIStreamChoice{
-							{Index: 0, Delta: OpenAIDelta{Content: part.Text}, FinishReason: nil},
-						},
-					}
-					chunkBytes, _ := json.Marshal(chunk)
-					fmt.Fprintf(w, "data: %s\n\n", string(chunkBytes))
-				} else if apiFormat == "responses" {
-					if !responsesMsgOpened {
-						itemAdded := map[string]interface{}{
-							"type":            "response.output_item.added",
-							"sequence_number": nextSeq(),
-							"output_index":    0,
-							"item": map[string]interface{}{
-								"id":      responsesMsgID,
-								"type":    "message",
-								"status":  "in_progress",
-								"role":    "assistant",
-								"content": []interface{}{},
-							},
+							partAdded := map[string]interface{}{
+								"type":            "response.content_part.added",
+								"sequence_number": nextSeq(),
+								"item_id":         responsesMsgID,
+								"output_index":    0,
+								"content_index":   0,
+								"part": map[string]interface{}{
+									"type": "reasoning_text",
+									"text": "",
+								},
+							}
+							partBytes, _ := json.Marshal(partAdded)
+							fmt.Fprintf(w, "event: response.content_part.added\ndata: %s\n\n", string(partBytes))
+							responsesMsgOpened = true
 						}
-						itemBytes, _ := json.Marshal(itemAdded)
-						fmt.Fprintf(w, "event: response.output_item.added\ndata: %s\n\n", string(itemBytes))
-
-						partAdded := map[string]interface{}{
-							"type":            "response.content_part.added",
+						deltaEvt := map[string]interface{}{
+							"type":            "response.reasoning_text.delta",
 							"sequence_number": nextSeq(),
 							"item_id":         responsesMsgID,
 							"output_index":    0,
 							"content_index":   0,
-							"part": map[string]interface{}{
-								"type": "output_text",
-								"text": "",
+							"delta":           cleanText,
+						}
+						deltaBytes, _ := json.Marshal(deltaEvt)
+						fmt.Fprintf(w, "event: response.reasoning_text.delta\ndata: %s\n\n", string(deltaBytes))
+					}
+					flusher.Flush()
+				} else {
+					// 正规 Output Text 消息文本处理
+					if apiFormat == "openai" {
+						if !openAIRoleSent {
+							initChunk := OpenAIStreamChunk{
+								ID:      streamID,
+								Object:  "chat.completion.chunk",
+								Created: createdAt,
+								Model:   displayModel,
+								Choices: []OpenAIStreamChoice{
+									{Index: 0, Delta: OpenAIDelta{Role: "assistant"}, FinishReason: nil},
+								},
+							}
+							initBytes, _ := json.Marshal(initChunk)
+							fmt.Fprintf(w, "data: %s\n\n", string(initBytes))
+							flusher.Flush()
+							openAIRoleSent = true
+						}
+
+						chunk := OpenAIStreamChunk{
+							ID:      streamID,
+							Object:  "chat.completion.chunk",
+							Created: createdAt,
+							Model:   displayModel,
+							Choices: []OpenAIStreamChoice{
+								{Index: 0, Delta: OpenAIDelta{Content: cleanText}, FinishReason: nil},
 							},
 						}
-						partBytes, _ := json.Marshal(partAdded)
-						fmt.Fprintf(w, "event: response.content_part.added\ndata: %s\n\n", string(partBytes))
-						responsesMsgOpened = true
-					}
-					responsesTextBuf.WriteString(part.Text)
+						chunkBytes, _ := json.Marshal(chunk)
+						fmt.Fprintf(w, "data: %s\n\n", string(chunkBytes))
+					} else if apiFormat == "responses" {
+						if !responsesMsgOpened {
+							itemAdded := map[string]interface{}{
+								"type":            "response.output_item.added",
+								"sequence_number": nextSeq(),
+								"output_index":    0,
+								"item": map[string]interface{}{
+									"id":      responsesMsgID,
+									"type":    "message",
+									"status":  "in_progress",
+									"role":    "assistant",
+									"content": []interface{}{},
+								},
+							}
+							itemBytes, _ := json.Marshal(itemAdded)
+							fmt.Fprintf(w, "event: response.output_item.added\ndata: %s\n\n", string(itemBytes))
 
-					deltaEvt := map[string]interface{}{
-						"type":            "response.output_text.delta",
-						"sequence_number": nextSeq(),
-						"item_id":         responsesMsgID,
-						"output_index":    0,
-						"content_index":   0,
-						"delta":           part.Text,
-					}
-					deltaBytes, _ := json.Marshal(deltaEvt)
-					fmt.Fprintf(w, "event: response.output_text.delta\ndata: %s\n\n", string(deltaBytes))
-				} else { // anthropic
-					// 延迟开启 text block：仅在有实际文本时才发送 content_block_start
-					if !textBlockOpen {
-						blockStart := map[string]interface{}{
-							"type":          "content_block_start",
-							"index":         blockIndex,
-							"content_block": map[string]interface{}{"type": "text", "text": ""},
+							partAdded := map[string]interface{}{
+								"type":            "response.content_part.added",
+								"sequence_number": nextSeq(),
+								"item_id":         responsesMsgID,
+								"output_index":    0,
+								"content_index":   0,
+								"part": map[string]interface{}{
+									"type": "output_text",
+									"text": "",
+								},
+							}
+							partBytes, _ := json.Marshal(partAdded)
+							fmt.Fprintf(w, "event: response.content_part.added\ndata: %s\n\n", string(partBytes))
+							responsesMsgOpened = true
 						}
-						blockStartBytes, _ := json.Marshal(blockStart)
-						fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", string(blockStartBytes))
-						textBlockOpen = true
+						responsesTextBuf.WriteString(cleanText)
+
+						deltaEvt := map[string]interface{}{
+							"type":            "response.output_text.delta",
+							"sequence_number": nextSeq(),
+							"item_id":         responsesMsgID,
+							"output_index":    0,
+							"content_index":   0,
+							"delta":           cleanText,
+						}
+						deltaBytes, _ := json.Marshal(deltaEvt)
+						fmt.Fprintf(w, "event: response.output_text.delta\ndata: %s\n\n", string(deltaBytes))
+					} else { // anthropic
+						if thinkingBlockOpen {
+							stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
+							stopBytes, _ := json.Marshal(stopEvt)
+							fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
+							blockIndex++
+							thinkingBlockOpen = false
+						}
+						// 延迟开启 text block：仅在有实际文本时才发送 content_block_start
+						if !textBlockOpen {
+							blockStart := map[string]interface{}{
+								"type":          "content_block_start",
+								"index":         blockIndex,
+								"content_block": map[string]interface{}{"type": "text", "text": ""},
+							}
+							blockStartBytes, _ := json.Marshal(blockStart)
+							fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", string(blockStartBytes))
+							textBlockOpen = true
+						}
+						delta := map[string]interface{}{
+							"type":  "content_block_delta",
+							"index": blockIndex,
+							"delta": map[string]interface{}{"type": "text_delta", "text": cleanText},
+						}
+						deltaBytes, _ := json.Marshal(delta)
+						fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(deltaBytes))
 					}
-					delta := map[string]interface{}{
-						"type":  "content_block_delta",
-						"index": blockIndex,
-						"delta": map[string]interface{}{"type": "text_delta", "text": part.Text},
-					}
-					deltaBytes, _ := json.Marshal(delta)
-					fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(deltaBytes))
+					flusher.Flush()
 				}
-				flusher.Flush()
 			}
 
 			if part.FunctionCall != nil {
@@ -1195,6 +1329,37 @@ func (h *APICompatHandler) handleStreamResponse(
 
 	// 发射结束帧
 	if apiFormat == "openai" {
+		if !openAIRoleSent && !hasOpenAIToolCall {
+			initChunk := OpenAIStreamChunk{
+				ID:      streamID,
+				Object:  "chat.completion.chunk",
+				Created: createdAt,
+				Model:   displayModel,
+				Choices: []OpenAIStreamChoice{
+					{Index: 0, Delta: OpenAIDelta{Role: "assistant", Content: "I have processed your request."}, FinishReason: nil},
+				},
+			}
+			initBytes, _ := json.Marshal(initChunk)
+			fmt.Fprintf(w, "data: %s\n\n", string(initBytes))
+			flusher.Flush()
+			openAIRoleSent = true
+		} else if openAIRoleSent && outTokens == 0 && !hasOpenAIToolCall {
+			// 如果已经发过 role: "assistant" 初始帧，但上游因为 finishReason: OTHER 输出了 0 个 OutTokens
+			// 补发非空 Content 帧，防止 Codex CLI 接收空 Content 而静默断开
+			fallbackChunk := OpenAIStreamChunk{
+				ID:      streamID,
+				Object:  "chat.completion.chunk",
+				Created: createdAt,
+				Model:   displayModel,
+				Choices: []OpenAIStreamChoice{
+					{Index: 0, Delta: OpenAIDelta{Content: "I have processed your request."}, FinishReason: nil},
+				},
+			}
+			fallbackBytes, _ := json.Marshal(fallbackChunk)
+			fmt.Fprintf(w, "data: %s\n\n", string(fallbackBytes))
+			flusher.Flush()
+		}
+
 		var finishReason interface{} = "stop"
 		if hasOpenAIToolCall {
 			finishReason = "tool_calls"
@@ -1203,7 +1368,7 @@ func (h *APICompatHandler) handleStreamResponse(
 			ID:      streamID,
 			Object:  "chat.completion.chunk",
 			Created: createdAt,
-			Model:   geminiModel,
+			Model:   displayModel,
 			Choices: []OpenAIStreamChoice{
 				{Index: 0, Delta: OpenAIDelta{}, FinishReason: finishReason},
 			},
@@ -1211,6 +1376,7 @@ func (h *APICompatHandler) handleStreamResponse(
 		finalBytes, _ := json.Marshal(finalChunk)
 		fmt.Fprintf(w, "data: %s\n\n", string(finalBytes))
 		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
 	} else if apiFormat == "responses" {
 		fullText := responsesTextBuf.String()
 		var outputItems []interface{}
@@ -1279,11 +1445,42 @@ func (h *APICompatHandler) handleStreamResponse(
 		completedBytes, _ := json.Marshal(completedEvt)
 		fmt.Fprintf(w, "event: response.completed\ndata: %s\n\n", string(completedBytes))
 	} else { // anthropic
-		// 关闭未完成的 text block
+		// 关闭未完成的 thinking block / text block
+		if thinkingBlockOpen {
+			blockStop := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
+			blockStopBytes, _ := json.Marshal(blockStop)
+			fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(blockStopBytes))
+			blockIndex++
+			thinkingBlockOpen = false
+		}
 		if textBlockOpen {
 			blockStop := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
 			blockStopBytes, _ := json.Marshal(blockStop)
 			fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(blockStopBytes))
+			textBlockOpen = false
+		}
+
+		// 兜底：如果完全没有打开过任何 content block (blockIndex == 0 && !hasFunctionCall)，给 Anthropic / Claude Code 客户端发射一个空 text content block，确保 Claude Code 不会报错
+		if blockIndex == 0 && !hasFunctionCall {
+			startEvt := map[string]interface{}{
+				"type":          "content_block_start",
+				"index":         0,
+				"content_block": map[string]interface{}{"type": "text", "text": ""},
+			}
+			startBytes, _ := json.Marshal(startEvt)
+			fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", string(startBytes))
+
+			deltaEvt := map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]interface{}{"type": "text_delta", "text": ""},
+			}
+			deltaBytes, _ := json.Marshal(deltaEvt)
+			fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(deltaBytes))
+
+			stopEvt := map[string]interface{}{"type": "content_block_stop", "index": 0}
+			stopBytes, _ := json.Marshal(stopEvt)
+			fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
 		}
 
 		stopReason := "end_turn"
@@ -1568,11 +1765,7 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+poolAccount.GetAccessToken())
-		if targetHost == "daily-cloudcode-pa.googleapis.com" {
-			req.Header.Set("User-Agent", "antigravity/hub/2.2.1 windows/amd64")
-		} else {
-			req.Header.Set("User-Agent", "antigravity-client")
-		}
+		req.Header.Set("User-Agent", "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)")
 
 		h.log("🚀 [中继直连重试 %d/%d] 正在为用户 %s 分配账号 %s | 目标: https://%s%s", attempt+1, maxAttempts, userSession.UserID, poolAccount.Email, targetHost, targetPath)
 

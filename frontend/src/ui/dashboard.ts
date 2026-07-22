@@ -758,22 +758,20 @@ export function initDashboardEvents() {
     modelsTableBody = document.querySelector('#modelsTable tbody');
     logsTableBody = document.querySelector('#logsTable tbody');
 
-    // 绑定事件委托：全局唯一代理日志表格中“查看”按钮的点击事件，极大减少 DOM 高频销毁重建时的事件绑定和内存占用
-    if (logsTableBody) {
-        logsTableBody.addEventListener('click', (e: Event) => {
-            const target = e.target as HTMLElement;
-            const btn = target.closest('.view-details-btn');
-            if (btn) {
-                const logId = btn.getAttribute('data-log-id');
-                if (logId) {
-                    const foundLog = state.allRequests.find(l => l.id === logId);
-                    if (foundLog) {
-                        showModal(foundLog);
-                    }
+    // 绑定事件委托：全局唯一代理日志表格中“查看”按钮的点击事件，支持 DOM 节点重置
+    document.addEventListener('click', (e: Event) => {
+        const target = e.target as HTMLElement;
+        const btn = target.closest('.view-details-btn');
+        if (btn) {
+            const logId = btn.getAttribute('data-log-id');
+            if (logId) {
+                const foundLog = state.allRequests.find(l => l.id === logId);
+                if (foundLog) {
+                    showModal(foundLog);
                 }
             }
-        });
-    }
+        }
+    });
 
     // Event Listeners for Intercept Toggle
     if (proxyToggle) {
@@ -1420,6 +1418,27 @@ function formatRequestHeaders(headers: any): string {
 }
 
 export function showModal(log: any) {
+    if (!detailsModal || !modalContainer) {
+        detailsModal = document.getElementById('detailsModal');
+        modalContainer = document.getElementById('modalContainer');
+        modalCloseBtn = document.getElementById('modalCloseBtn');
+        modalCloseBtnSecondary = document.getElementById('modalCloseBtnSecondary');
+        modalCopyBtn = document.getElementById('modalCopyBtn');
+        modalCopyHeadersBtn = document.getElementById('modalCopyHeadersBtn');
+
+        modalTime = document.getElementById('modalTime');
+        modalSession = document.getElementById('modalSession');
+        modalModel = document.getElementById('modalModel');
+        modalPath = document.getElementById('modalPath');
+        modalTokens = document.getElementById('modalTokens');
+        modalStatus = document.getElementById('modalStatus');
+        modalCost = document.getElementById('modalCost');
+        modalAccount = document.getElementById('modalAccount');
+        modalAccountWrapper = document.getElementById('modalAccountWrapper');
+        modalDuration = document.getElementById('modalDuration');
+        modalJsonArea = document.getElementById('modalJsonArea');
+        modalHeaderArea = document.getElementById('modalHeaderArea');
+    }
     if (!detailsModal || !modalContainer) return;
 
     // Header fields come from the lite log metadata (always present on the
