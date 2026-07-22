@@ -1,3 +1,11 @@
+### v1.1.20 更新日志
+
+- **思考签名跨包缓存机制（sigcache）**：新增 `sigcache` 模块，为跨包调用/会话思维签名（thoughtSignature）提供全局集中式缓存，彻底修复 Codex CLI 工具调用在特定上下文下的死循环问题。
+- **优化思维链（Thinking Stream）与响应清洗**：完善中途重试流式 SSE 拼接及思维链标签清洗逻辑 (`json_schema_clean`)，提升中继兼容性与请求头清理能力。
+- **自动化测试全量通过**：补全 `json_schema_clean_test` 与 `thought_sig_strip_test` 单元测试，确保高并发与重试场景下的稳定传输。
+
+---
+
 ### v1.1.19 更新日志
 
 - **修复发送至 Google 上游的 HTTP 400 INVALID_ARGUMENT 报错**：重写请求 Payload 时，当 `thinkingBudget` 设置为 `-1`（自适应/动态预算）或 `0`（强制关闭）时，代理只拼入相应的 `includeThoughts` 逻辑，不再向发送给谷歌上游的 JSON 包体中拼入 `-1` 等非规范数值，彻底规避谷歌 CloudCode REST/gRPC 网关的参数校验报错。

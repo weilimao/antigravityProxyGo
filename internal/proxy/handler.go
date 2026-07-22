@@ -138,6 +138,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 全局工具声明清洗：对所有模型请求（无论 v1internal 还是 generativelanguage），
+	// 清洗 tools 中的 JSON Schema 以符合 Gemini API 要求，防止 MALFORMED_FUNCTION_CALL。
+	// 这是参考 Antigravity-Manager 的 clean_json_schema 实现的核心防护。
+	if len(bodyBytes) > 0 && isRealModelRequest(r.URL.Path) {
+		bodyBytes = cleanToolDeclarationsInBody(bodyBytes)
+	}
+
 	// 诊断计时：如果请求体读取超过 1 秒，输出警告日志定位 IDE 端慢发送问题
 	bodyReadMs := time.Since(bodyReadStart).Milliseconds()
 	overallMs := time.Since(startTime).Milliseconds()
@@ -889,10 +896,29 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					// 剥离外层 v1internal 包体，提取内层标准的 request 字段
 					var v1internalReq map[string]interface{}
 					if err := json.Unmarshal(finalReqBody, &v1internalReq); err == nil {
-						if innerReq, exists := v1internalReq["request"]; exists {
-							if innerBytes, errMar := json.Marshal(innerReq); errMar == nil {
-								finalReqBody = innerBytes
-								customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
+						if innerReqRaw, exists := v1internalReq["request"]; exists {
+							if innerReq, ok := innerReqRaw.(map[string]interface{}); ok {
+								// 核心修复：codex cli 的 v1internal 可能把 tools, systemInstruction 等丢在外层
+								// 降级为官方接口时，必须将这些外层配置合入 innerReq 避免工具约束丢失导致模型幻觉
+								for _, key := range []string{"tools", "systemInstruction", "generationConfig", "toolConfig"} {
+									if val, hasKey := v1internalReq[key]; hasKey {
+										if _, alreadyInInner := innerReq[key]; !alreadyInInner {
+											innerReq[key] = val
+										}
+									}
+								}
+
+								// 降级翻译后执行完整的 Gemini 兼容性清洗：
+								// 1. 清除 thoughtSignature（标准 API 不支持，会触发 MALFORMED_FUNCTION_CALL）
+								// 2. 清洗工具声明中的 JSON Schema（移除 Gemini 不支持的 $schema/additionalProperties/format 等字段）
+								// 3. 注入宽松 toolConfig
+								// 这是修复 Codex CLI 频繁断连的核心手段，参考 Antigravity-Manager 的 clean_json_schema 实现
+								cleanAndPrepareGeminiRequest(innerReq)
+
+								if innerBytes, errMar := json.Marshal(innerReq); errMar == nil {
+									finalReqBody = innerBytes
+									customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
+								}
 							}
 						}
 					}
@@ -949,6 +975,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 								"requestType":        "agent",
 								"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
 							}
+
+							// 注入缓存的 thoughtSignature 到 functionCall parts，替换 skip_thought_signature_validator 哨兵值
+							// 保证 v1internal API 思考链连续性，参考 Antigravity-Manager 的 SignatureCache 实现
+							if innerReq, ok := wrappedReq["request"].(map[string]interface{}); ok {
+								InjectCachedSignatures(innerReq, rawSessionKey, modelName)
+							}
+
 							if wrappedBytes, err := json.Marshal(wrappedReq); err == nil {
 								finalReqBody = wrappedBytes
 								customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
@@ -1034,7 +1067,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var errRead error
 		isStreaming := strings.Contains(localTargetPath, "streamGenerateContent") || strings.Contains(localTargetPath, "alt=sse")
 
-		var skippedBytes int = 0
 		if isStreaming && resp.StatusCode == 200 {
 			if !headersSent {
 				// Copy headers to writer
@@ -1056,7 +1088,35 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			buf := make([]byte, 4096)
 			var clientDisconnected bool = false
 			var streamErr error = nil
-			var mismatchHappened bool = false
+			var malformedFunctionCall bool = false
+			var writeMu sync.Mutex
+
+			// 启动 SSE 心跳保活协程：如果长时间读取上游无响应/Prefill耗时极长，定期向下游写入标准 SSE 注释帧
+			heartbeatStopChan := make(chan struct{})
+			go func() {
+				ticker := time.NewTicker(10 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						// SSE 注释帧，冒号开头，无害且持续重置客户端/网关 ReadTimeout
+						writeMu.Lock()
+						_, hbErr := w.Write([]byte(": keep-alive (antigravity-proxy heartbeat)\n\n"))
+						if hbErr == nil && hasFlusher {
+							flusher.Flush()
+						}
+						writeMu.Unlock()
+						if hbErr != nil {
+							return
+						}
+					case <-heartbeatStopChan:
+						return
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+			defer close(heartbeatStopChan)
 
 			// 监听 Context 取消事件，一旦取消立即关闭上游响应体，强行中断阻塞的 Read
 			cancelChan := make(chan struct{})
@@ -1073,35 +1133,19 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				n, errR := resp.Body.Read(buf)
 				if n > 0 {
 					chunk := buf[:n]
-					// 若此前尝试已发送过数据，则在此次尝试中跳过相同的前缀
-					if len(sentBytes) > 0 && skippedBytes < len(sentBytes) && !mismatchHappened {
-						bytesToCompare := len(sentBytes) - skippedBytes
-						if bytesToCompare > len(chunk) {
-							bytesToCompare = len(chunk)
-						}
-
-						// 验证前缀是否完全匹配
-						mismatch := false
-						for i := 0; i < bytesToCompare; i++ {
-							if chunk[i] != sentBytes[skippedBytes+i] {
-								mismatch = true
-								break
-							}
-						}
-
-						if !mismatch {
-							// 匹配成功，安全跳过
-							skippedBytes += bytesToCompare
-							chunk = chunk[bytesToCompare:]
-						} else {
-							// 发生不一致，为安全起见降级为直接传输
-							h.logFn(fmt.Sprintf("%s ⚠️ 重试流数据不匹配，将直接追加后续传输", logPrefix))
-							mismatchHappened = true
-						}
-					}
-
 					if len(chunk) > 0 {
+						// 检测 MALFORMED_FUNCTION_CALL：Google 上游在流中返回此 finishReason 时，
+						// 表示模型生成了格式错误的空函数调用，属于不可重试的终端错误
+						if !malformedFunctionCall && bytes.Contains(chunk, []byte("MALFORMED_FUNCTION_CALL")) {
+							malformedFunctionCall = true
+							h.logFn(fmt.Sprintf("%s ⚠️ 检测到上游 MALFORMED_FUNCTION_CALL（模型生成了格式错误的空函数调用），通常因 thoughtSignature 未剥离或 toolConfig 缺失导致", logPrefix))
+						}
+						writeMu.Lock()
 						_, writeErr := w.Write(chunk)
+						if writeErr == nil && hasFlusher {
+							flusher.Flush()
+						}
+						writeMu.Unlock()
 						if writeErr != nil {
 							clientDisconnected = true
 							break
@@ -1116,8 +1160,11 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 								sentBytes = append(sentBytes, chunk[:remaining]...)
 							}
 						}
-						if hasFlusher {
-							flusher.Flush()
+
+						// 提取 thoughtSignature 并缓存，下次请求注入到 functionCall parts
+						// 保证 v1internal API 的思考链连续性，防止模型丢失上下文后重复生成失败的工具调用
+						if rawSessionKey != "" {
+							GetSignatureCache().ExtractAndCacheSignatures(chunk, rawSessionKey)
 						}
 					}
 				}
@@ -1131,16 +1178,43 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if clientDisconnected {
-				// 客户端主动断开，直接返回不重试
+				// 客户端主动断开，标记明确日志，避免外层抓包当成正常的空响应
+				h.logFn(fmt.Sprintf("%s ⚠️ 下游客户端主动中断或超时关闭了 Socket 连接 (Early Disconnect)", logPrefix))
+				if len(sentBytes) == 0 {
+					sentBytes = []byte("[WARN: CLIENT_EARLY_DISCONNECT - Downstream closed socket before stream completion]")
+				}
 				return resp.StatusCode, resp.Header, sentBytes, true, nil
 			}
 			if streamErr != nil {
-				// 上游异常中断，触发重试
+				if len(sentBytes) > 0 {
+					// 已发送业务数据，HTTP 响应已提交，重试会导致两次响应拼接损坏。
+					// 保留已发送的部分流正常结束（客户端可检测到流不完整并自行重试）。
+					h.logFn(fmt.Sprintf("%s ⚠️ 流式响应中途中断，已发送 %d 字节业务数据。为避免响应拼接损坏不再重试，保留已发送内容。", logPrefix, len(sentBytes)))
+					return resp.StatusCode, resp.Header, sentBytes, true, nil
+				}
+				// 未发送任何业务数据，HTTP 响应实质未提交，可安全重试
+				h.logFn(fmt.Sprintf("%s ⚠️ 流式响应在发送业务数据前中断（仅可能发了心跳），将重试。", logPrefix))
 				return resp.StatusCode, resp.Header, sentBytes, true, errors.New("STREAM_INTERRUPTED")
 			}
 			respBodyBytes = sentBytes
+
+			// 检测真空响应：finishReason:STOP 且无工具调用且无非空文本。
+			// 注意：模型返回 functionCall 时 text 常为空，这是正常工具调用响应，不是空响应。
+			// 只有既无 functionCall 又无非空 text 才是模型真正放弃输出。
+			if len(respBodyBytes) > 0 && bytes.Contains(respBodyBytes, []byte(`"finishReason": "STOP"`)) {
+				hasFunctionCall := bytes.Contains(respBodyBytes, []byte(`"functionCall"`))
+				hasNonEmptyText := reNonEmptyText.Match(respBodyBytes)
+				if !hasFunctionCall && !hasNonEmptyText {
+					h.logFn(fmt.Sprintf("%s [空响应诊断] finishReason=STOP 且无工具调用、无文本内容 - 模型未输出任何内容。常见原因: 模型在工具调用失败后放弃输出 / 上下文过长截断 / 上游临时异常。", logPrefix))
+				}
+			}
 		} else {
 			respBodyBytes, errRead = io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+		}
+
+		// 非流式响应提取 thoughtSignature 并缓存，下次请求注入到 functionCall parts
+		if isRealModelRequest(localTargetPath) && rawSessionKey != "" {
+			GetSignatureCache().ExtractFromFullResponse(respBodyBytes, rawSessionKey)
 		}
 
 		if errRead != nil {

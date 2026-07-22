@@ -23,6 +23,9 @@ var (
 	rePromptTokens    = regexp.MustCompile(`"promptTokenCount"\s*:\s*(\d+)`)
 	reCandidateTokens = regexp.MustCompile(`"candidatesTokenCount"\s*:\s*(\d+)`)
 	reCachedTokens    = regexp.MustCompile(`"cachedContentTokenCount"\s*:\s*(\d+)`)
+	// reNonEmptyText 匹配 "text": " 后跟至少一个非引号字符，用于判断响应是否含非空文本。
+	// 模型返回 functionCall 时 text 常为空，属于正常工具调用响应，不应判为空响应。
+	reNonEmptyText = regexp.MustCompile(`"text"\s*:\s*"[^"]`)
 )
 
 func isIgnoredTelemetry(path string) bool {
@@ -222,6 +225,25 @@ func (h *ProxyHandler) logRequestToTracker(
 		SessionID:      logSession,
 		DurationMs:     time.Since(startTime).Milliseconds(),
 	})
+}
+
+// stripThoughtSignature 递归清除 JSON 请求体中所有 parts 里的 thoughtSignature 字段。
+// 标准 generativelanguage API 不支持 thoughtSignature，降级翻译时若保留该字段，
+// 会导致 Google 上游解析异常，触发 MALFORMED_FUNCTION_CALL 错误使流式响应提前中断。
+func stripThoughtSignature(obj interface{}) {
+	switch v := obj.(type) {
+	case map[string]interface{}:
+		// 删除当前层级的 thoughtSignature
+		delete(v, "thoughtSignature")
+		// 递归处理所有值
+		for _, val := range v {
+			stripThoughtSignature(val)
+		}
+	case []interface{}:
+		for _, item := range v {
+			stripThoughtSignature(item)
+		}
+	}
 }
 
 // decompressIfNeeded returns the decompressed bytes if the headers indicate the content is gzipped.

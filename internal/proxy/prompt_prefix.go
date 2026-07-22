@@ -5,8 +5,17 @@ import (
 )
 
 // injectPromptPrefix 负责解析请求载荷，并将自定义提示词前缀插入到最新一条 user 消息的前端
+// 针对 Context Caching（前缀缓存）优化：如果请求体体积巨大（>100KB，通常含有长篇会话历史、复杂 Tools 或沙箱系统指令），
+// 进行全量 JSON Unmarshal/Marshal 会改变原有 JSON 字段顺序与字节排布，导致上游 SHA 前缀缓存命中率归零。
+// 此时自动触发 Bypass 保护机制，直接透传原始请求字节，守护长请求的前缀对齐与极速首字响应。
 func injectPromptPrefix(bodyBytes []byte, prefix string) []byte {
 	if prefix == "" || len(bodyBytes) == 0 {
+		return bodyBytes
+	}
+
+	// 上下文缓存保护门控 (Context Caching Preservation Gate)
+	const maxCacheSafeBytes = 100 * 1024 // 100KB
+	if len(bodyBytes) > maxCacheSafeBytes {
 		return bodyBytes
 	}
 

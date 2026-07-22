@@ -113,3 +113,15 @@ func TestPromptPrefix_Robustness(t *testing.T) {
 		t.Errorf("Expected no change for invalid JSON payload")
 	}
 }
+
+func TestPromptPrefix_CachePreservation(t *testing.T) {
+	// 3. 超大请求体 (>100KB) 触发缓存守护直接 Bypass 透传
+	largeBody := make([]byte, 101*1024)
+	for i := range largeBody {
+		largeBody[i] = 'a'
+	}
+	outLarge := injectPromptPrefix(largeBody, "[Prefix] ")
+	if !bytes.Equal(largeBody, outLarge) {
+		t.Errorf("Expected bypass preservation for large payload > 100KB")
+	}
+}

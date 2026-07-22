@@ -17,6 +17,7 @@ import (
 	"antigravity-proxy/internal/netutil"
 	"antigravity-proxy/internal/session"
 	"antigravity-proxy/internal/settings"
+	"antigravity-proxy/internal/sigcache"
 )
 
 var localProxyAddr = "127.0.0.1:18443"
@@ -1730,6 +1731,13 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			if err := json.Unmarshal(bodyBytes, &v1internalReq); err == nil {
 				if _, exists := v1internalReq["project"]; exists {
 					v1internalReq["project"] = actualProjectId
+
+					// 注入缓存的 thoughtSignature 到 functionCall parts，
+					// 替换哨兵值为真实签名，保证 v1internal API 思考链连续性
+					if innerReq, ok := v1internalReq["request"].(map[string]interface{}); ok {
+						sigcache.InjectCachedSignatures(innerReq, sigcache.GetGlobal(), userSession.UserID, currentModel)
+					}
+
 					if innerBytes, errMar := json.Marshal(v1internalReq); errMar == nil {
 						finalReqBody = innerBytes
 					}
@@ -1839,6 +1847,8 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			if isFlusher {
 				flusher.Flush()
 			}
+			// 提取 thoughtSignature 并缓存，下次请求注入到 functionCall parts
+			sigcache.GetGlobal().ExtractAndCacheSignatures(buf[:n], userSession.UserID)
 		}
 		if errRead != nil {
 			break
