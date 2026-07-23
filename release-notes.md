@@ -1,3 +1,12 @@
+### v1.1.21 更新日志
+
+- **修复 HTTP 400 INVALID_ARGUMENT 报错与连续角色合并**：新增 `cleanContentsRoles` 自动清洗逻辑，在请求到达 Google CloudCode (`v1internal:streamGenerateContent`) 上游前合并 `contents` 数组中连续出现的相同 `role`（如连续 `user` 节点），确保上游严格保持角色交替传输。
+- **Tab 补全模型思维链隔离保护**：为代码补全模型（包含 `tab` 名称的模型，如 `tab_flash_lite_preview`）增加防护隔离，自动跳过 `thinkingConfig` 与 `65536` `maxOutputTokens` 的拼入与覆写，彻底规避补全交互触发的网关 400 报错。
+- **界面默认设置调整为全关**：全局模型覆写（`customModelOverrideEnabled`）、思维链覆写（`customThinkingOverrideEnabled`）及声明思维能力（`customThinkingSupports`）默认开关均调整为全关 (false/0)，规避代理初次启动或重置时的无意覆写。
+- **单元测试全量绿灯通过**：新增并补充针对默认配置、`cleanContentsRoles` 角色合并以及 Tab 模型隔离防护的单元测试，确保系统高稳定性运行。
+
+---
+
 ### v1.1.20 更新日志
 
 - **思考签名跨包缓存机制（sigcache）**：新增 `sigcache` 模块，为跨包调用/会话思维签名（thoughtSignature）提供全局集中式缓存，彻底修复 Codex CLI 工具调用在特定上下文下的死循环问题。

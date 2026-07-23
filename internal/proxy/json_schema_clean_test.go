@@ -340,3 +340,75 @@ func TestCleanToolDeclarationsInBody_NoTools(t *testing.T) {
 		}
 	}
 }
+
+// TestCleanContentsRoles_ConsecutiveUserNodes 验证连续相同的 role 节点被正确合并
+func TestCleanContentsRoles_ConsecutiveUserNodes(t *testing.T) {
+	inputJSON := `[
+		{"role": "user", "parts": [{"text": "Hello 1"}]},
+		{"role": "user", "parts": [{"text": "Hello 2"}]},
+		{"role": "user", "parts": [{"text": "Hello 3"}]}
+	]`
+
+	var contents []interface{}
+	if err := json.Unmarshal([]byte(inputJSON), &contents); err != nil {
+		t.Fatalf("Failed to unmarshal contents: %v", err)
+	}
+
+	cleaned := cleanContentsRoles(contents)
+	if len(cleaned) != 1 {
+		t.Fatalf("Expected 1 content node after merging consecutive user roles, got %d", len(cleaned))
+	}
+
+	firstNode := cleaned[0].(map[string]interface{})
+	if role, _ := firstNode["role"].(string); role != "user" {
+		t.Errorf("Expected role 'user', got '%s'", role)
+	}
+
+	parts := firstNode["parts"].([]interface{})
+	if len(parts) != 3 {
+		t.Errorf("Expected 3 parts merged in single user node, got %d", len(parts))
+	}
+}
+
+// TestCleanContentsRoles_AlternatingRoles 验证交替 role 节点不会被错误合并
+func TestCleanContentsRoles_AlternatingRoles(t *testing.T) {
+	inputJSON := `[
+		{"role": "user", "parts": [{"text": "Hi"}]},
+		{"role": "model", "parts": [{"text": "Hello!"}]},
+		{"role": "user", "parts": [{"text": "How are you?"}]}
+	]`
+
+	var contents []interface{}
+	if err := json.Unmarshal([]byte(inputJSON), &contents); err != nil {
+		t.Fatalf("Failed to unmarshal contents: %v", err)
+	}
+
+	cleaned := cleanContentsRoles(contents)
+	if len(cleaned) != 3 {
+		t.Fatalf("Expected 3 content nodes for alternating roles, got %d", len(cleaned))
+	}
+}
+
+// TestCleanToolDeclarationsInBody_ConsecutiveRoles 验证在 cleanToolDeclarationsInBody 中自动合并连续 role
+func TestCleanToolDeclarationsInBody_ConsecutiveRoles(t *testing.T) {
+	inputJSON := `{
+		"request": {
+			"contents": [
+				{"role": "user", "parts": [{"text": "Part 1"}]},
+				{"role": "user", "parts": [{"text": "Part 2"}]}
+			]
+		}
+	}`
+
+	cleanedBytes := cleanToolDeclarationsInBody([]byte(inputJSON))
+	var doc map[string]interface{}
+	if err := json.Unmarshal(cleanedBytes, &doc); err != nil {
+		t.Fatalf("Failed to unmarshal cleaned bytes: %v", err)
+	}
+
+	reqMap := doc["request"].(map[string]interface{})
+	contents := reqMap["contents"].([]interface{})
+	if len(contents) != 1 {
+		t.Fatalf("Expected 1 content node in v1internal request, got %d", len(contents))
+	}
+}

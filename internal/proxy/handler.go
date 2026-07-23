@@ -717,60 +717,70 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 
-					// 写入思维链配置 (当 CustomThinkingOverrideEnabled 开启时触发)
+					// 写入思维链配置 (当 CustomThinkingOverrideEnabled 开启且非 Tab 补全模型时触发)
 					if h.SettingsMgr != nil && h.SettingsMgr.GetCustomThinkingOverrideEnabled() {
-						supportsThinking := h.SettingsMgr.GetCustomThinkingSupports()
-						budget := h.SettingsMgr.GetCustomThinkingBudget()
-						minBudget := h.SettingsMgr.GetCustomThinkingMinBudget()
-						maxOutputTokens := h.SettingsMgr.GetCustomMaxOutputTokens()
-
-						var thinkingCfg map[string]interface{}
-						if !supportsThinking || budget == 0 {
-							thinkingCfg = map[string]interface{}{
-								"includeThoughts": false,
-							}
-						} else if budget == -1 {
-							// -1 代表自适应/动态预算：包含 includeThoughts=true，但不传递 thinkingBudget 字段给谷歌上游（避免 400 错误）
-							thinkingCfg = map[string]interface{}{
-								"includeThoughts": true,
-							}
-						} else {
-							// >0 代表固定预算：下限校准后传递给谷歌
-							clampedBudget := budget
-							if minBudget > 0 && clampedBudget < minBudget {
-								clampedBudget = minBudget
-							}
-							thinkingCfg = map[string]interface{}{
-								"includeThoughts": true,
-								"thinkingBudget":  clampedBudget,
+						checkModel := finalTargetModel
+						if checkModel == "" {
+							if mVal, ok := bodyMap["model"].(string); ok {
+								checkModel = strings.TrimPrefix(mVal, "models/")
 							}
 						}
+						isTabModel := strings.Contains(strings.ToLower(checkModel), "tab")
 
-						// 1. 处理 v1internal 结构的 request.generationConfig
-						if reqMap, ok := bodyMap["request"].(map[string]interface{}); ok {
-							genConfig, ok := reqMap["generationConfig"].(map[string]interface{})
-							if !ok {
-								genConfig = make(map[string]interface{})
-								reqMap["generationConfig"] = genConfig
-							}
-							genConfig["thinkingConfig"] = thinkingCfg
-							if maxOutputTokens > 0 {
-								genConfig["maxOutputTokens"] = maxOutputTokens
-							}
-							bodyChanged = true
-						}
+						if !isTabModel {
+							supportsThinking := h.SettingsMgr.GetCustomThinkingSupports()
+							budget := h.SettingsMgr.GetCustomThinkingBudget()
+							minBudget := h.SettingsMgr.GetCustomThinkingMinBudget()
+							maxOutputTokens := h.SettingsMgr.GetCustomMaxOutputTokens()
 
-						// 2. 处理根节点的 generationConfig 结构
-						if genConfig, ok := bodyMap["generationConfig"].(map[string]interface{}); ok {
-							genConfig["thinkingConfig"] = thinkingCfg
-							if maxOutputTokens > 0 {
-								genConfig["maxOutputTokens"] = maxOutputTokens
+							var thinkingCfg map[string]interface{}
+							if !supportsThinking || budget == 0 {
+								thinkingCfg = map[string]interface{}{
+									"includeThoughts": false,
+								}
+							} else if budget == -1 {
+								// -1 代表自适应/动态预算：包含 includeThoughts=true，但不传递 thinkingBudget 字段给谷歌上游（避免 400 错误）
+								thinkingCfg = map[string]interface{}{
+									"includeThoughts": true,
+								}
+							} else {
+								// >0 代表固定预算：下限校准后传递给谷歌
+								clampedBudget := budget
+								if minBudget > 0 && clampedBudget < minBudget {
+									clampedBudget = minBudget
+								}
+								thinkingCfg = map[string]interface{}{
+									"includeThoughts": true,
+									"thinkingBudget":  clampedBudget,
+								}
 							}
-							bodyChanged = true
-						}
 
-						if attemptIndex == 0 {
-							h.logFn(fmt.Sprintf("🧠 [思维链覆写] 动态注入 thinkingConfig: supports=%v, budget=%d, maxOutputTokens=%d", supportsThinking, budget, maxOutputTokens))
+							// 1. 处理 v1internal 结构的 request.generationConfig
+							if reqMap, ok := bodyMap["request"].(map[string]interface{}); ok {
+								genConfig, ok := reqMap["generationConfig"].(map[string]interface{})
+								if !ok {
+									genConfig = make(map[string]interface{})
+									reqMap["generationConfig"] = genConfig
+								}
+								genConfig["thinkingConfig"] = thinkingCfg
+								if maxOutputTokens > 0 {
+									genConfig["maxOutputTokens"] = maxOutputTokens
+								}
+								bodyChanged = true
+							}
+
+							// 2. 处理根节点的 generationConfig 结构
+							if genConfig, ok := bodyMap["generationConfig"].(map[string]interface{}); ok {
+								genConfig["thinkingConfig"] = thinkingCfg
+								if maxOutputTokens > 0 {
+									genConfig["maxOutputTokens"] = maxOutputTokens
+								}
+								bodyChanged = true
+							}
+
+							if attemptIndex == 0 {
+								h.logFn(fmt.Sprintf("🧠 [思维链覆写] 动态注入 thinkingConfig: supports=%v, budget=%d, maxOutputTokens=%d", supportsThinking, budget, maxOutputTokens))
+							}
 						}
 					}
 

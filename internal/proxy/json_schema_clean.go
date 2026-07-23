@@ -431,7 +431,43 @@ func cleanAndPrepareGeminiRequest(req map[string]interface{}) {
 	}
 }
 
-// cleanToolDeclarationsInBody 对原始 JSON 请求体执行工具声明清洗。
+// cleanContentsRoles 清洗并合并 contents 数组中连续出现的相同 role 节点。
+// 例如连续多个 role="user" 的 Content 节点，将其 parts 追加合并到前一个 user 节点中，丢弃重复节点。
+func cleanContentsRoles(contents []interface{}) []interface{} {
+	if len(contents) <= 1 {
+		return contents
+	}
+
+	var result []interface{}
+	var lastRole string
+	var lastContent map[string]interface{}
+
+	for _, item := range contents {
+		content, ok := item.(map[string]interface{})
+		if !ok {
+			result = append(result, item)
+			continue
+		}
+
+		role, _ := content["role"].(string)
+		if lastContent != nil && role != "" && role == lastRole {
+			// 合并 parts
+			lastParts, _ := lastContent["parts"].([]interface{})
+			currParts, _ := content["parts"].([]interface{})
+			if currParts != nil {
+				lastContent["parts"] = append(lastParts, currParts...)
+			}
+		} else {
+			result = append(result, content)
+			lastContent = content
+			lastRole = role
+		}
+	}
+
+	return result
+}
+
+// cleanToolDeclarationsInBody 对原始 JSON 请求体执行工具声明清洗与角色规范化。
 // 支持标准 Gemini 格式和 v1internal 嵌套格式，自动检测并处理。
 // 这是全局入口，在请求到达上游前统一清洗，无论走 v1internal 还是降级路径。
 func cleanToolDeclarationsInBody(bodyBytes []byte) []byte {
@@ -446,18 +482,32 @@ func cleanToolDeclarationsInBody(bodyBytes []byte) []byte {
 
 	changed := false
 
-	// 情况1：v1internal 嵌套格式 — 清洗 request 内部的 tools
+	// 情况1：v1internal 嵌套格式 — 清洗 request 内部的 tools 与 contents
 	if reqObj, ok := doc["request"].(map[string]interface{}); ok {
 		if _, hasTools := reqObj["tools"]; hasTools {
 			cleanToolDeclarations(reqObj)
 			changed = true
 		}
+		if contents, hasContents := reqObj["contents"].([]interface{}); hasContents {
+			cleaned := cleanContentsRoles(contents)
+			if len(cleaned) != len(contents) {
+				reqObj["contents"] = cleaned
+				changed = true
+			}
+		}
 	}
 
-	// 情况2：标准 Gemini 格式 — 直接清洗顶层的 tools
+	// 情况2：标准 Gemini 格式 — 直接清洗顶层的 tools 与 contents
 	if _, hasTools := doc["tools"]; hasTools {
 		cleanToolDeclarations(doc)
 		changed = true
+	}
+	if contents, hasContents := doc["contents"].([]interface{}); hasContents {
+		cleaned := cleanContentsRoles(contents)
+		if len(cleaned) != len(contents) {
+			doc["contents"] = cleaned
+			changed = true
+		}
 	}
 
 	if !changed {

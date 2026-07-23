@@ -151,3 +151,27 @@ func TestSettings_PromptPrefix(t *testing.T) {
 	}
 }
 
+func TestSettings_DefaultAllOff(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "antigravity-settings-alloff-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	mgr := NewManager()
+	mgr.Init(tempDir)
+
+	if mgr.GetCustomModelOverrideEnabled() != false {
+		t.Errorf("Expected CustomModelOverrideEnabled to default to false")
+	}
+	if mgr.GetCustomThinkingOverrideEnabled() != false {
+		t.Errorf("Expected CustomThinkingOverrideEnabled to default to false")
+	}
+	if mgr.GetCustomThinkingSupports() != false {
+		t.Errorf("Expected CustomThinkingSupports to default to false")
+	}
+	if mgr.GetCustomThinkingBudget() != 0 {
+		t.Errorf("Expected CustomThinkingBudget to default to 0, got %d", mgr.GetCustomThinkingBudget())
+	}
+}
+

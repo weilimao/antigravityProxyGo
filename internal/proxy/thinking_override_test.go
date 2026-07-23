@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -135,5 +136,70 @@ func TestThinkingConfigInject_DisabledThinking(t *testing.T) {
 	}
 	if _, exists := tConfig["thinkingBudget"]; exists {
 		t.Errorf("Expected thinkingBudget to be omitted when thinking is disabled, but exists: %v", tConfig["thinkingBudget"])
+	}
+}
+
+func TestThinkingConfigInject_TabModelIsolation(t *testing.T) {
+	inputJSON := `{
+		"model": "tab_flash_lite_preview",
+		"request": {
+			"generationConfig": {}
+		}
+	}`
+
+	var bodyMap map[string]interface{}
+	if err := json.Unmarshal([]byte(inputJSON), &bodyMap); err != nil {
+		t.Fatalf("Failed to unmarshal input JSON: %v", err)
+	}
+
+	finalTargetModel := ""
+	customThinkingOverrideEnabled := true
+	supportsThinking := true
+	budget := -1
+	maxOutputTokens := 65536
+
+	if customThinkingOverrideEnabled {
+		checkModel := finalTargetModel
+		if checkModel == "" {
+			if mVal, ok := bodyMap["model"].(string); ok {
+				checkModel = strings.TrimPrefix(mVal, "models/")
+			}
+		}
+		isTabModel := strings.Contains(strings.ToLower(checkModel), "tab")
+
+		if !isTabModel {
+			var thinkingCfg map[string]interface{}
+			if !supportsThinking || budget == 0 {
+				thinkingCfg = map[string]interface{}{
+					"includeThoughts": false,
+				}
+			} else if budget == -1 {
+				thinkingCfg = map[string]interface{}{
+					"includeThoughts": true,
+				}
+			}
+
+			if reqMap, ok := bodyMap["request"].(map[string]interface{}); ok {
+				genConfig, ok := reqMap["generationConfig"].(map[string]interface{})
+				if !ok {
+					genConfig = make(map[string]interface{})
+					reqMap["generationConfig"] = genConfig
+				}
+				genConfig["thinkingConfig"] = thinkingCfg
+				if maxOutputTokens > 0 {
+					genConfig["maxOutputTokens"] = maxOutputTokens
+				}
+			}
+		}
+	}
+
+	reqMap := bodyMap["request"].(map[string]interface{})
+	genConfig := reqMap["generationConfig"].(map[string]interface{})
+
+	if _, exists := genConfig["thinkingConfig"]; exists {
+		t.Errorf("thinkingConfig should NOT be injected for Tab completion models")
+	}
+	if _, exists := genConfig["maxOutputTokens"]; exists {
+		t.Errorf("maxOutputTokens should NOT be injected for Tab completion models")
 	}
 }

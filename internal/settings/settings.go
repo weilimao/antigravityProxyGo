@@ -190,8 +190,8 @@ func (m *Manager) Init(defaultPath string) {
 		CustomModelOverrideEnabled:    false,
 		CustomModelOverrideID:         "",
 		CustomThinkingOverrideEnabled: false,
-		CustomThinkingSupports:        true,
-		CustomThinkingBudget:          -1,
+		CustomThinkingSupports:        false,
+		CustomThinkingBudget:          0,
 		CustomThinkingMinBudget:       32,
 		CustomMaxOutputTokens:         65536,
 	}
@@ -249,7 +249,7 @@ func (m *Manager) loadConfig() {
 			parsed.RelayDomainWhitelist = []string{"*.googleapis.com", "*.google.com", "*.anthropic.com", "*.openai.com"}
 		}
 		if _, exists := rawMap["customThinkingSupports"]; !exists {
-			parsed.CustomThinkingSupports = true
+			parsed.CustomThinkingSupports = false
 		}
 	}
 
