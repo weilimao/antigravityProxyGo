@@ -27,24 +27,43 @@ func (a *App) handleSessionIPC(channel string, args []interface{}) (string, bool
 
 	switch channel {
 	case "sessions:get":
+		// 可选入参:号池类型(provider/currentViewTab)。为空表示不筛选，返回所有绑定。
+		// 前端会话绑定弹窗依据当前选中的号池 Tab 透传该参数，避免跨池账号污染展示。
+		poolType := getStringArg(0)
+
 		type FrontendSessionInfo struct {
 			SessionKey   string `json:"sessionKey"`
 			AccountID    string `json:"accountId"`
 			AccountEmail string `json:"accountEmail"`
+			Provider     string `json:"provider"`
 			LastActive   int64  `json:"lastActive"`
 		}
 		bindings := a.sessionRouter.GetBindings()
+		emailMap := make(map[string]string)
+		providerMap := make(map[string]string)
+		if a.accountMgr != nil {
+			emailMap = a.accountMgr.GetAccountEmailMap()
+			providerMap = a.accountMgr.GetAccountProviderMap()
+		}
+		// hasPoolFilter 为 true 时只保留 provider 命中 poolType 的绑定；
+		// 为 false 时返回全部绑定，保持向后兼容语义。
+		hasPoolFilter := poolType != ""
 		res := make([]FrontendSessionInfo, 0, len(bindings))
 		for _, b := range bindings {
-			email := "未知账号"
-			acc := a.accountMgr.GetAccountByID(b.AccountID)
-			if acc != nil {
-				email = acc.Email
+			provider := providerMap[b.AccountID]
+			if hasPoolFilter && provider != poolType {
+				// 指定了号池类型却匹配失败(含账号已删除导致的空 provider)：过滤掉，避免跨池污染。
+				continue
+			}
+			email, ok := emailMap[b.AccountID]
+			if !ok || email == "" {
+				email = "未知账号"
 			}
 			res = append(res, FrontendSessionInfo{
 				SessionKey:   b.SessionKey,
 				AccountID:    b.AccountID,
 				AccountEmail: email,
+				Provider:     provider,
 				LastActive:   b.LastActive,
 			})
 		}

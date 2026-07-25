@@ -20,7 +20,9 @@ import (
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/autotrigger"
 	"antigravity-proxy/internal/cert"
+	"antigravity-proxy/internal/corelog"
 	"antigravity-proxy/internal/db"
+	"antigravity-proxy/internal/diagserver"
 	"antigravity-proxy/internal/dialogs"
 	"antigravity-proxy/internal/patch"
 	"antigravity-proxy/internal/pricing"
@@ -29,6 +31,7 @@ import (
 	"antigravity-proxy/internal/relay"
 	"antigravity-proxy/internal/session"
 	"antigravity-proxy/internal/settings"
+	"antigravity-proxy/internal/sigcache"
 	"antigravity-proxy/internal/stats"
 	"antigravity-proxy/internal/tray"
 	"antigravity-proxy/internal/update"
@@ -79,6 +82,11 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	// 0. 启动进程内 pprof 诊断端点 (仅 127.0.0.1:18765)。
+	// 用于在程序出现死等型整体卡死时，抓取全部 goroutine 调用栈现场，
+	// 精确定位阻塞点。启动失败不影响主流程。
+	diagserver.Start()
 
 	// 1. Initialize Settings Manager
 	a.settingsMgr = settings.NewManager()
@@ -153,7 +161,7 @@ func (a *App) startup(ctx context.Context) {
 		if acc != nil {
 			email = acc.Email
 		}
-		a.AddLog(fmt.Sprintf("🔄 [自动触发] 检测到账号 %s 的配额限制已恢复 (%s)，触发自动化任务...", email, strings.Join(categories, ", ")))
+		a.AddLog(fmt.Sprintf("🔄 [配额恢复] 检测到账号 %s 的 %s 配额限制已解除正常，可继续承接请求。", email, strings.Join(categories, ", ")))
 
 	}
 
@@ -335,9 +343,9 @@ func (a *App) startup(ctx context.Context) {
 				})
 			}
 			if a.relayUserMgr != nil && apiKeyID != "" {
-				isClaude := strings.Contains(strings.ToLower(modelName), "claude")
+				family := relay.DetectAPIKeyFamily(modelName)
 				totalTokens := int64(inTokens + outTokens)
-				a.relayUserMgr.RecordAPIKeyUsage(userID, apiKeyID, isClaude, totalTokens)
+				a.relayUserMgr.RecordAPIKeyUsage(userID, apiKeyID, family == relay.FamilyClaude, totalTokens)
 			}
 		},
 		func(userID, apiKeyID, modelName string) error {
@@ -355,12 +363,17 @@ func (a *App) startup(ctx context.Context) {
 			if apiKeyID != "" {
 				for _, key := range user.APIKeys {
 					if key.ID == apiKeyID {
-						isClaude := strings.Contains(strings.ToLower(modelName), "claude")
-						if isClaude {
+						family := relay.DetectAPIKeyFamily(modelName)
+						switch family {
+						case relay.FamilyClaude:
 							if key.LimitClaudeTokens > 0 && key.UsedClaudeTokens >= key.LimitClaudeTokens {
 								return fmt.Errorf("API Key Claude token limit exceeded (%d / %d)", key.UsedClaudeTokens, key.LimitClaudeTokens)
 							}
-						} else {
+						case relay.FamilyNvidia:
+							if key.LimitNvidiaTokens > 0 && key.UsedNvidiaTokens >= key.LimitNvidiaTokens {
+								return fmt.Errorf("API Key NVIDIA token limit exceeded (%d / %d)", key.UsedNvidiaTokens, key.LimitNvidiaTokens)
+							}
+						default:
 							if key.LimitGeminiTokens > 0 && key.UsedGeminiTokens >= key.LimitGeminiTokens {
 								return fmt.Errorf("API Key Gemini token limit exceeded (%d / %d)", key.UsedGeminiTokens, key.LimitGeminiTokens)
 							}
@@ -370,12 +383,19 @@ func (a *App) startup(ctx context.Context) {
 				}
 			}
 
-			isClaude := strings.Contains(strings.ToLower(modelName), "claude")
+			family := relay.DetectAPIKeyFamily(modelName)
 			var quota relay.ModelQuota
-			if isClaude {
+			var familyKeyword string
+			switch family {
+			case relay.FamilyClaude:
 				quota = user.Quotas.Claude
-			} else {
+				familyKeyword = "claude"
+			case relay.FamilyNvidia:
+				quota = user.Quotas.Nvidia
+				familyKeyword = relay.NvidiaQuotaFamily
+			default:
 				quota = user.Quotas.Gemini
+				familyKeyword = "gemini"
 			}
 
 			if !quota.EnableFixed && !quota.EnableHourly && !quota.EnableDaily {
@@ -383,11 +403,6 @@ func (a *App) startup(ctx context.Context) {
 			}
 
 			stats := a.relayStatsMgr.GetUserStats(userID)
-
-			familyKeyword := "gemini"
-			if isClaude {
-				familyKeyword = "claude"
-			}
 
 			if quota.EnableFixed {
 				var usedTokens int64
@@ -400,8 +415,7 @@ func (a *App) startup(ctx context.Context) {
 				} else {
 					if stats != nil {
 						for mName, mStats := range stats.Models {
-							if (isClaude && strings.Contains(strings.ToLower(mName), "claude")) || 
-							   (!isClaude && !strings.Contains(strings.ToLower(mName), "claude")) {
+							if relay.MatchModelFamily(mName, family) {
 								usedTokens += int64(mStats.InputTokens + mStats.OutputTokens)
 							}
 						}
@@ -413,7 +427,7 @@ func (a *App) startup(ctx context.Context) {
 			}
 
 			if quota.EnableHourly && quota.HourlyHours > 0 {
-				usedTokens, _, err := relay.GetActiveWindow(userID, familyKeyword, familyKeyword+"_hourly", quota.HourlyHours, true)
+				usedTokens, _, err := relay.GetActiveWindow(userID, familyKeyword, relay.QuotaTypeHourly(family), quota.HourlyHours, true)
 				if err != nil {
 					return fmt.Errorf("failed to check hourly quota")
 				}
@@ -423,7 +437,7 @@ func (a *App) startup(ctx context.Context) {
 			}
 
 			if quota.EnableDaily && quota.DailyDays > 0 {
-				usedTokens, _, err := relay.GetActiveWindow(userID, familyKeyword, familyKeyword+"_daily", quota.DailyDays*24, true)
+				usedTokens, _, err := relay.GetActiveWindow(userID, familyKeyword, relay.QuotaTypeDaily(family), quota.DailyDays*24, true)
 				if err != nil {
 					return fmt.Errorf("failed to check daily quota")
 				}
@@ -565,6 +579,13 @@ func (a *App) shutdown() {
 	activeDir := a.settingsMgr.GetActiveDataDirectory()
 	caCertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
 	_ = patch.PatchAll(false, a.settingsMgr.GetDefaultUserDataPath(), homeDir, caCertPath, func(s string) {})
+
+	// 通知 corelog 消费者排空残留日志并退出，避免进程结束时日志被截断，
+	// 也释放唯一向 os.Stdout 写入的后台 goroutine。
+	corelog.Stop()
+
+	// 通知签名缓存的清理协程退出，释放后台 goroutine。
+	sigcache.StopGlobal()
 }
 
 func (a *App) AddLog(msg string) {
@@ -574,8 +595,11 @@ func (a *App) AddLog(msg string) {
 	timestamp := time.Now().Format("15:04:05.000")
 	formatted := fmt.Sprintf("[%s] %s", timestamp, msg)
 
-	// 同时输出至标准输出，以便在终端中展示日志
-	fmt.Println(formatted)
+	// 同时输出至标准输出，以便在终端中展示日志。
+	// 使用 corelog 异步、永不阻塞的 writer：即便 Wails stdout 转发管道
+	// 下游停止消费，也不会反向阻塞请求处理 goroutine，从根本杜绝
+	// "数十秒后整体卡死、接口全阻塞"级联阻塞。
+	corelog.Println(formatted)
 
 	a.logBufferMu.Lock()
 	a.logBuffer = append(a.logBuffer, formatted)
@@ -724,22 +748,48 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			"poolMode":          a.accountMgr.GetPoolMode(),
 			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
 			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
+			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
+			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
 			"activeChannel":     a.accountMgr.GetActiveChannel(),
 		})
 
-	case "accounts:remove":
-		a.accountMgr.RemoveAccount(getStringArg(0))
+	case "accounts:remove", "nvidia:remove":
+		id := getStringArg(0)
+		if id != "" {
+			a.accountMgr.RemoveAccount(id)
+			a.AddLog(fmt.Sprintf("🗑️ [账号移除] 已成功移除账号 id=%s", id))
+			wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
+				"accounts":          a.accountMgr.GetAccounts(),
+				"poolMode":          a.accountMgr.GetPoolMode(),
+				"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
+				"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
+				"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
+				"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
+				"activeChannel":     a.accountMgr.GetActiveChannel(),
+			})
+		}
 
-	case "accounts:toggle-enabled":
-		a.accountMgr.UpdateAccountEnabled(getStringArg(0), getBoolArg(1))
-		acc := a.accountMgr.GetAccountByID(getStringArg(0))
+	case "accounts:toggle-enabled", "nvidia:toggle-enabled":
+		id := getStringArg(0)
+		enabled := getBoolArg(1)
+		a.accountMgr.UpdateAccountEnabled(id, enabled)
+		acc := a.accountMgr.GetAccountByID(id)
 		if acc != nil {
 			statusStr := "disabled"
-			if getBoolArg(1) {
+			if enabled {
 				statusStr = "enabled"
 			}
 			a.AddLog(fmt.Sprintf("🔄 Account %s is now %s in the pool.", acc.Email, statusStr))
 		}
+		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
+			"accounts":          a.accountMgr.GetAccounts(),
+			"poolMode":          a.accountMgr.GetPoolMode(),
+			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
+			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
+			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
+			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
+			"activeChannel":     a.accountMgr.GetActiveChannel(),
+		})
 
 	case "accounts:toggle-overages":
 		a.accountMgr.UpdateAccountOverages(getStringArg(0), getBoolArg(1))
@@ -753,15 +803,37 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 		}
 
 	case "accounts:export-all":
+		provider := getStringArg(0)
+		var defaultName string
+		var logMsg string
+		switch provider {
+		case "antigravity":
+			defaultName = "accounts_antigravity_export.json"
+			logMsg = "📥 [账号导出] 成功导出 Antigravity 官方账号"
+		case "project":
+			defaultName = "accounts_project_export.json"
+			logMsg = "📥 [账号导出] 成功导出 谷歌云项目 API 账号"
+		case "nvidia":
+			defaultName = "accounts_nvidia_export.json"
+			logMsg = "📥 [账号导出] 成功导出 NVIDIA 号池账号"
+		default:
+			defaultName = "accounts_export.json"
+			logMsg = "📥 [账号导出] 成功导出所有账号"
+		}
+
 		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
 			Title:       "导出账号配置",
-			DefaultName: "accounts_export.json",
+			DefaultName: defaultName,
 			Filters:     []dialogs.FileFilter{{DisplayName: "JSON Files", Pattern: "*.json"}},
 		})
 		if ok {
-			data, _ := json.MarshalIndent(map[string]interface{}{"accounts": a.accountMgr.GetRawAccounts()}, "", "  ")
+			accounts := a.accountMgr.GetRawAccountsByProvider(provider)
+			if accounts == nil {
+				accounts = []*account.Account{}
+			}
+			data, _ := json.MarshalIndent(map[string]interface{}{"accounts": accounts}, "", "  ")
 			_ = os.WriteFile(filePath, data, 0644)
-			a.AddLog("📥 [账号导出] 成功导出所有账号")
+			a.AddLog(logMsg)
 		}
 
 	case "accounts:export-single":
@@ -814,6 +886,28 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			a.AddLog("🔄 Project API Load Balancing disabled. Using a single active project account.")
 		}
 
+	case "pool:toggle-nvidia":
+		a.accountMgr.SetNvidiaPoolMode(getBoolArg(0))
+		if getBoolArg(0) {
+			a.AddLog("🔄 NVIDIA Pool Load Balancing enabled. Distributing requests across NVIDIA accounts.")
+		} else {
+			a.AddLog("🔄 NVIDIA Pool Load Balancing disabled. Using a single active NVIDIA account.")
+		}
+
+	case "nvidia:set-lb-mode":
+		mode := getStringArg(0)
+		a.accountMgr.SetNvidiaLBMode(mode)
+		a.AddLog("🔄 NVIDIA Load Balancing Algorithm switched to: " + a.accountMgr.GetNvidiaLBMode())
+		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
+			"accounts":          a.accountMgr.GetAccounts(),
+			"poolMode":          a.accountMgr.GetPoolMode(),
+			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
+			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
+			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
+			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
+			"activeChannel":     a.accountMgr.GetActiveChannel(),
+		})
+
 	/* case "pool:toggle-gemini-cli":
 		a.accountMgr.SetGeminiCliPoolMode(getBoolArg(0))
 		if getBoolArg(0) {
@@ -829,6 +923,8 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			"poolMode":          a.accountMgr.GetPoolMode(),
 			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
 			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
+			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
+			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
 			"activeChannel":     a.accountMgr.GetActiveChannel(),
 		})
 		a.AddLog("🔄 Switched active routing channel to: " + getStringArg(0))
@@ -1152,6 +1248,21 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		if acc == nil {
 			a.AddLog("❌ [配额刷新] 无法刷新配额：未找到对应的账号")
 			return marshalResponse(map[string]interface{}{"error": "Account not found", "buckets": []interface{}{}})
+		}
+		if acc.Provider == "nvidia" {
+			a.AddLog(fmt.Sprintf("🔄 [配额刷新] NVIDIA 账号 %s 正在请求上游验证可用性...", acc.Email))
+			res, err := a.accountMgr.FetchQuota(acc)
+			if err != nil {
+				a.AddLog(fmt.Sprintf("❌ [配额刷新] NVIDIA 账号 %s 配额请求失败: %v", acc.Email, err))
+				return marshalResponse(map[string]interface{}{"error": err.Error(), "buckets": []interface{}{}})
+			}
+			a.accountMgr.UpdateAccountQuota(accId, res)
+			modelCount := 0
+			if res.Credits != nil {
+				modelCount = int(*res.Credits)
+			}
+			a.AddLog(fmt.Sprintf("✅ [配额刷新] NVIDIA 账号 %s 可用，可用模型数 %d 个", acc.Email, modelCount))
+			return marshalResponse(res)
 		}
 		a.AddLog(fmt.Sprintf("🔄 [配额刷新] 开始刷新账号 %s 的配额...", acc.Email))
 		res, err := a.accountMgr.FetchQuota(acc)
@@ -1487,7 +1598,9 @@ func (a *App) emitMemoryStats() {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 
-	fmt.Printf("[DEBUG MEMORY] Total RSS: %.2f MB | Go Heap: %.2f MB | Go Sys: %.2f MB | Proc Count: %d | CPU: %.1f%%\n",
+	// 使用 corelog 异步输出，避免后台监控协程 fmt.Printf 写 stdout 被下游背压阻塞，
+	// 导致内存监控协程卡死后连带拖垮其它 handler。
+	corelog.Printf("[DEBUG MEMORY] Total RSS: %.2f MB | Go Heap: %.2f MB | Go Sys: %.2f MB | Proc Count: %d | CPU: %.1f%%\n",
 		float64(total)/(1024*1024), float64(ms.HeapAlloc)/(1024*1024), float64(ms.Sys)/(1024*1024), count, cpuPercent)
 
 	wailsRuntime.EventsEmit(a.ctx, "memory-stats-updated", map[string]interface{}{

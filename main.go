@@ -64,4 +64,12 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
+
+	// 进程级硬退出兜底：
+	// 即便存在后台 goroutine (account cooldown ticker、netutil 探测、
+	// sigcache cleaner 等未纳入统一退出信号的协程) 仍在运行并持有句柄，
+	// os.Exit 也会强制终止进程，彻底杜绝"退出窗口后进程在任务管理器
+	// 中残留不消失"的问题。OnShutdown 已在 wails.Run 返回前同步执行，
+	// 关键资源 (proxy、relay、session SaveToDisk 等) 已在此之前落盘完成。
+	os.Exit(0)
 }

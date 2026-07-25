@@ -208,3 +208,221 @@ func TestAccountManager_TokenRefreshMonitor(t *testing.T) {
 		t.Errorf("expected TokenRefreshedAt to be near current time, got %d (now is %d)", refreshedAcc.GetTokenRefreshedAt(), now)
 	}
 }
+
+// TestGetAccountProviderMap 验证 GetAccountProviderMap 返回 AccountID -> Provider 的映射，
+// 确保会话绑定弹窗按号池类型筛选时能正确拿到账号的 provider 信息。
+// 覆盖点：多 provider 混合、含 nil 账号、账号删除后映射同步消失。
+func TestGetAccountProviderMap(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "account_provider_map_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	m := NewManager()
+	m.Init(tempDir)
+
+	// 构造涵盖三种主要号池类型的账号集合
+	accAntigravity := &Account{
+		ID:       "acc-ag",
+		Email:    "ag@example.com",
+		Provider: "antigravity",
+		Enabled:  true,
+	}
+	accGoogle := &Account{
+		ID:       "acc-gg",
+		Email:    "gg@example.com",
+		Provider: "google",
+		Enabled:  true,
+	}
+	accNvidia := &Account{
+		ID:       "acc-nv",
+		Email:    "nv@example.com",
+		Provider: "nvidia",
+		Enabled:  true,
+	}
+	m.AddAccount(accAntigravity)
+	m.AddAccount(accGoogle)
+	m.AddAccount(accNvidia)
+
+	// 验证：三个 provider 各自命中正确的 ID
+	providerMap := m.GetAccountProviderMap()
+	if len(providerMap) != 3 {
+		t.Fatalf("expected provider map length 3, got %d", len(providerMap))
+	}
+	cases := []struct {
+		id       string
+		expected string
+	}{
+		{"acc-ag", "antigravity"},
+		{"acc-gg", "google"},
+		{"acc-nv", "nvidia"},
+	}
+	for _, c := range cases {
+		got, ok := providerMap[c.id]
+		if !ok {
+			t.Errorf("expected provider map to contain id %q, but missing", c.id)
+			continue
+		}
+		if got != c.expected {
+			t.Errorf("provider of %q = %q, expected %q", c.id, got, c.expected)
+		}
+	}
+
+	// 验证：账号删除后映射同步消失，不再残留旧 provider，避免会话筛选误命中已删账号
+	beforeDel := m.GetAccountProviderMap()
+	if _, ok := beforeDel["acc-gg"]; !ok {
+		t.Fatal("precondition: acc-gg should exist before delete")
+	}
+	m.RemoveAccount("acc-gg")
+	afterDel := m.GetAccountProviderMap()
+	if len(afterDel) != 2 {
+		t.Errorf("expected provider map length 2 after delete, got %d", len(afterDel))
+	}
+	if _, ok := afterDel["acc-gg"]; ok {
+		t.Errorf("expected acc-gg to be removed from provider map after deletion, but still present")
+	}
+}
+
+// TestSetAccountCooldown_NvidiaUsesNvidiaCategory 验证 NVIDIA 账号写入冷静期时
+// 使用独立的 "nvidia" 冷却类别，而非误归 gemini/claude，避免后续配额刷新
+// 把满额 NVIDIA 配额误判为 "gemini 配额恢复"。
+func TestSetAccountCooldown_NvidiaUsesNvidiaCategory(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "account_nv_cooldown_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	m := NewManager()
+	m.Init(tempDir)
+
+	acc := &Account{
+		ID:       "acc-nv",
+		Email:    "nv@example.com",
+		Provider: "nvidia",
+		Enabled:  true,
+	}
+	m.AddAccount(acc)
+
+	until := time.Now().UnixNano()/1e6 + 60*1000
+	m.SetAccountCooldownForChannel("acc-nv", until, "nvidia", "z-ai/glm-5.2")
+
+	got := m.GetAccountByID("acc-nv")
+	if got == nil {
+		t.Fatal("failed to find acc-nv after cooldown set")
+	}
+	m.RLock()
+	nvUntil, hasNvidia := got.Cooldowns["nvidia"]
+	_, hasGemini := got.Cooldowns["gemini"]
+	_, hasClaude := got.Cooldowns["claude"]
+	cooldownUntil := got.CooldownUntil
+	m.RUnlock()
+	if !hasNvidia || nvUntil != until {
+		t.Errorf("expected Cooldowns[nvidia]=%d, got ok=%v v=%d", until, hasNvidia, nvUntil)
+	}
+	if hasGemini {
+		t.Errorf("expected no Cooldowns[gemini] for nvidia account, but present")
+	}
+	if hasClaude {
+		t.Errorf("expected no Cooldowns[claude] for nvidia account, but present")
+	}
+	if cooldownUntil != until {
+		t.Errorf("expected CooldownUntil=%d, got %d", until, cooldownUntil)
+	}
+
+	// 对照校验：GetModelCategoryByProvider 对 nvidia 直接返回 "nvidia"
+	if cat := m.GetModelCategoryByProvider("nvidia", "z-ai/glm-5.2"); cat != "nvidia" {
+		t.Errorf("GetModelCategoryByProvider(nvidia,%q)=%q, expected nvidia", "z-ai/glm-5.2", cat)
+	}
+	// 对照校验：非 nvidia provider 仍维持原 gemini/claude 二分
+	if cat := m.GetModelCategoryByProvider("antigravity", "gemini-1.5-pro"); cat != "gemini" {
+		t.Errorf("GetModelCategoryByProvider(antigravity,gemini)=%q, expected gemini", cat)
+	}
+	if cat := m.GetModelCategoryByProvider("antigravity", "claude-sonnet-4-5"); cat != "claude" {
+		t.Errorf("GetModelCategoryByProvider(antigravity,claude)=%q, expected claude", cat)
+	}
+}
+
+// TestUpdateAccountCooldownFromQuota_NvidiaNoSpuriousRestored 验证当 NVIDIA 账号
+// 此前从未写入 gemini/claude 冷却键时，一次满额配额刷新(模拟 fetchNvidiaQuota 产出)
+// 不应误触发 OnQuotaRestored，从而消除"自动触发"日志刷屏。
+// 同时验证：若此前确有 nvidia 冷却键，满额刷新会正确地一次性恢复并携带 category="nvidia"，
+// 而不再误报为 gemini。
+func TestUpdateAccountCooldownFromQuota_NvidiaNoSpuriousRestored(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "account_nv_quota_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	m := NewManager()
+	m.Init(tempDir)
+
+	acc := &Account{
+		ID:       "acc-nv",
+		Email:    "nv@example.com",
+		Provider: "nvidia",
+		Enabled:  true,
+	}
+	m.AddAccount(acc)
+
+	// 模拟 fetchNvidiaQuota 的满额 buckets：Group 含 NVIDIA，满额不耗尽。
+	fullNvidiaBuckets := []QuotaBucket{
+		{
+			Group:             "NVIDIA 第三方 API Key",
+			ModelID:           "可用模型数 10 个 / 10 models",
+			RemainingFraction: 1,
+			RemainPercent:     100,
+		},
+	}
+
+	restoredCh := make(chan []string, 4)
+	m.OnQuotaRestored = func(accountId string, categories []string) {
+		restoredCh <- append([]string(nil), categories...)
+	}
+
+	// 场景一：账号此前无任何冷却键，满额刷新不应触发 OnQuotaRestored。
+	changed := m.UpdateAccountCooldownFromQuota("acc-nv", fullNvidiaBuckets)
+	if changed {
+		t.Errorf("expected changed=false for never-cooled nvidia full-quota refresh, got true")
+	}
+	// 短暂等待确认无异步回调命中
+	select {
+	case cats := <-restoredCh:
+		t.Errorf("expected no OnQuotaRestored call for never-cooled nvidia account, got %v", cats)
+	case <-time.After(100 * time.Millisecond):
+		// 期望：超时未收到任何恢复回调
+	}
+
+	// 场景二：账号先因 429 写入 nvidia 冷却，再满额刷新应触发一次 OnQuotaRestored，
+	// 且 categories 仅含 "nvidia"，绝不包含 "gemini"/"claude"。
+	until := time.Now().UnixNano()/1e6 + 60*1000
+	m.SetAccountCooldownForChannel("acc-nv", until, "nvidia", "z-ai/glm-5.2")
+	changed = m.UpdateAccountCooldownFromQuota("acc-nv", fullNvidiaBuckets)
+	if !changed {
+		t.Errorf("expected changed=true after nvidia cooldown cleared, got false")
+	}
+	select {
+	case cats := <-restoredCh:
+		if len(cats) != 1 || cats[0] != "nvidia" {
+			t.Errorf("expected restored categories [nvidia], got %v", cats)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected OnQuotaRestored call after nvidia cooldown cleared, but timed out")
+	}
+	got := m.GetAccountByID("acc-nv")
+	if got == nil {
+		t.Fatal("failed to find acc-nv after restore")
+	}
+	m.RLock()
+	_, hasNvidia := got.Cooldowns["nvidia"]
+	_, hasGemini := got.Cooldowns["gemini"]
+	m.RUnlock()
+	if hasNvidia {
+		t.Errorf("expected Cooldowns[nvidia] removed after full-quota restore, still present")
+	}
+	if hasGemini {
+		t.Errorf("unexpected Cooldowns[gemini] leaked into nvidia account")
+	}
+}

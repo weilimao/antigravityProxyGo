@@ -31,6 +31,7 @@ type ModelQuota struct {
 type UserQuotas struct {
 	Gemini ModelQuota `json:"gemini"`
 	Claude ModelQuota `json:"claude"`
+	Nvidia ModelQuota `json:"nvidia"`
 	ValidDuration int `json:"validDuration"`
 	ValidUnit     string `json:"validUnit"` // "days", "months", "years"
 	ExpireAt      int64  `json:"expireAt"`
@@ -44,8 +45,10 @@ type UserAPIKey struct {
 	CreatedAt         time.Time `json:"createdAt"`
 	LimitGeminiTokens int64     `json:"limitGeminiTokens"`
 	LimitClaudeTokens int64     `json:"limitClaudeTokens"`
-	UsedGeminiTokens   int64     `json:"usedGeminiTokens"`
-	UsedClaudeTokens   int64     `json:"usedClaudeTokens"`
+	LimitNvidiaTokens int64     `json:"limitNvidiaTokens"`
+	UsedGeminiTokens  int64     `json:"usedGeminiTokens"`
+	UsedClaudeTokens  int64     `json:"usedClaudeTokens"`
+	UsedNvidiaTokens  int64     `json:"usedNvidiaTokens"`
 }
 
 type RelayUser struct {

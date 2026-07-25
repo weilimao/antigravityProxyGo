@@ -1,211 +1,204 @@
 <template>
-<div class="fixed inset-0 bg-slate-950/75 z-50 flex items-center justify-center opacity-0 pointer-events-none transition-opacity duration-200" id="autoTriggerModal">
-    <div class="bg-white dark:bg-[#1e2538] w-[800px] max-w-[95vw] rounded-2xl border border-outline-variant/60 shadow-2xl flex flex-col max-h-[85vh] transform scale-95 transition-transform duration-200" id="autoTriggerModalContainer">
-        <!-- Modal 头部 -->
-        <div class="px-6 py-4 border-b border-outline-variant/30 flex justify-between items-center bg-slate-50/50 dark:bg-white/5 rounded-t-2xl">
-            <div class="flex items-center gap-2">
-                <span class="material-symbols-outlined text-primary text-[20px]">timer</span>
-                <span class="text-sm font-bold text-on-surface dark:text-white" id="autoTriggerModalTitle" data-i18n="autoTriggerModalTitle">自动化触发任务管理</span>
-            </div>
-            <button class="text-outline hover:text-primary transition-colors flex items-center justify-center p-1 rounded-full hover:bg-slate-100 dark:hover:bg-white/5" id="btnAutoTriggerModalClose">
-                <span class="material-symbols-outlined text-[18px]">close</span>
-            </button>
+  <BaseModal
+    id="autoTriggerModal"
+    containerId="autoTriggerModalContainer"
+    closeBtnId="btnAutoTriggerModalClose"
+    title="自动化触发任务管理"
+    titleI18n="autoTriggerModalTitle"
+    icon="timer"
+    maxWidth="w-[800px] max-w-[95vw]"
+    maxHeight="max-h-[85vh]"
+    bodyClass="p-0 overflow-hidden flex flex-col flex-grow"
+  >
+    <!-- 任务列表面板 -->
+    <div id="panelTaskList" class="p-6 overflow-y-auto flex-grow flex flex-col max-h-[65vh]">
+      <div class="flex justify-between items-center mb-4">
+        <div class="text-[11px] text-outline leading-relaxed max-w-[55%]" data-i18n="autoTriggerDesc">
+          配置自动刷新机制，在定时到达或配额刷新完成后执行指定的测试回复，从而保持账号冷静期和额度可用性。
         </div>
-
-        <!-- 任务列表面板 -->
-        <div id="panelTaskList" class="p-6 overflow-y-auto flex-grow flex flex-col max-h-[65vh]">
-            <div class="flex justify-between items-center mb-4">
-                <div class="text-[11px] text-outline leading-relaxed max-w-[55%]" data-i18n="autoTriggerDesc">
-                    配置自动刷新机制，在定时到达或配额刷新完成后执行指定的测试回复，从而保持账号冷静期和额度可用性。
-                </div>
-                <div class="flex gap-2">
-                    <button class="flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg text-[12px] font-bold transition-all cursor-pointer select-none border border-outline-variant/40" id="btnViewTriggerHistory">
-                        <span class="material-symbols-outlined text-[15px]">history</span>
-                        <span data-i18n="btnViewHistory">查看历史记录</span>
-                    </button>
-                    <button class="flex items-center gap-1 px-3.5 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-lg text-[12px] font-bold transition-all cursor-pointer select-none" id="btnCreateNewTask">
-                        <span class="material-symbols-outlined text-[15px]">add</span>
-                        <span data-i18n="btnCreateNewTask">新建任务包</span>
-                    </button>
-                </div>
-            </div>
-
-            <!-- 表格列表 -->
-            <div class="overflow-x-auto rounded-xl border border-outline-variant/30 bg-slate-50/30 dark:bg-slate-950/20 max-h-[380px] overflow-y-auto">
-                <table class="w-full text-left border-collapse table-fixed text-[11.5px]">
-                    <thead>
-                        <tr class="bg-slate-50 dark:bg-[#1a1f30] text-outline border-b border-outline-variant/30 sticky top-0 z-10">
-                            <th class="p-3 font-bold w-[25%]" data-i18n="thTaskName">任务名称</th>
-                            <th class="p-3 font-bold w-[20%]" data-i18n="thTriggerType">触发方式</th>
-                            <th class="p-3 font-bold w-[12%]" data-i18n="thAccountCount">账号数</th>
-                            <th class="p-3 font-bold w-[12%]" data-i18n="thModelCount">模型数</th>
-                            <th class="p-3 font-bold text-center w-[15%]" data-i18n="thEnabledStatus">启用状态</th>
-                            <th class="p-3 font-bold text-center w-[16%]" data-i18n="thAction">操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="autoTriggerTasksTableBody" class="divide-y divide-outline-variant/10 text-on-surface dark:text-slate-200">
-                        <!-- 动态渲染 -->
-                        <tr>
-                            <td class="p-8 text-center text-outline dark:text-outline-variant italic" colspan="6" data-i18n="loadingTasks">
-                                ⏳ 正在加载定时任务列表...
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
+        <div class="flex gap-2">
+          <button class="flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg text-[12px] font-bold transition-all cursor-pointer select-none border border-outline-variant/40" id="btnViewTriggerHistory">
+            <span class="material-symbols-outlined text-[15px]">history</span>
+            <span data-i18n="btnViewHistory">查看历史记录</span>
+          </button>
+          <button class="flex items-center gap-1 px-3.5 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-lg text-[12px] font-bold transition-all cursor-pointer select-none" id="btnCreateNewTask">
+            <span class="material-symbols-outlined text-[15px]">add</span>
+            <span data-i18n="btnCreateNewTask">新建任务包</span>
+          </button>
         </div>
+      </div>
 
-        <!-- 历史记录面板 -->
-        <div id="panelTaskHistory" class="hidden p-6 overflow-y-auto flex-grow flex flex-col max-h-[65vh]">
-            <div class="flex justify-between items-center mb-4">
-                <div class="flex items-center gap-2">
-                    <button class="flex items-center justify-center p-1 rounded-full hover:bg-slate-100 dark:hover:bg-white/5 text-outline hover:text-primary transition-colors cursor-pointer" id="btnHistoryBackToList">
-                        <span class="material-symbols-outlined text-[18px]">arrow_back</span>
-                    </button>
-                    <span class="text-sm font-bold text-on-surface dark:text-white" data-i18n="historyModalTitle">任务触发历史记录</span>
-                </div>
-                <button class="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg text-[12px] font-bold transition-all cursor-pointer select-none border border-red-500/20" id="btnClearTriggerHistory">
-                    <span class="material-symbols-outlined text-[15px]">delete_sweep</span>
-                    <span data-i18n="btnClearHistory">清空历史</span>
-                </button>
-            </div>
-
-            <!-- 历史表格列表 -->
-            <div class="overflow-x-auto rounded-xl border border-outline-variant/30 bg-slate-50/30 dark:bg-slate-950/20 max-h-[330px] overflow-y-auto flex-grow">
-                <table class="w-full text-left border-collapse table-fixed text-[11px]">
-                    <thead>
-                        <tr class="bg-slate-50 dark:bg-[#1a1f30] text-outline border-b border-outline-variant/30 sticky top-0 z-10">
-                            <th class="p-3 font-bold w-[19%]" data-i18n="thTriggerTime">触发时间</th>
-                            <th class="p-3 font-bold w-[19%]" data-i18n="thTaskName">任务名称</th>
-                            <th class="p-3 font-bold w-[14%]" data-i18n="thTriggerType">触发方式</th>
-                            <th class="p-3 font-bold w-[18%]" data-i18n="thResultAccount">账号</th>
-                            <th class="p-3 font-bold w-[12%]" data-i18n="thResultModel">模型</th>
-                            <th class="p-3 font-bold text-center w-[10%]" data-i18n="thResultStatus">状态</th>
-                            <th class="p-3 font-bold w-[18%]" data-i18n="thResultDetail">详情/错误</th>
-                        </tr>
-                    </thead>
-                    <tbody id="autoTriggerHistoryTableBody" class="divide-y divide-outline-variant/10 text-on-surface dark:text-slate-200">
-                        <tr>
-                            <td class="p-8 text-center text-outline dark:text-outline-variant italic" colspan="7" data-i18n="loadingHistory">
-                                ⏳ 正在加载触发历史记录...
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <!-- 分页栏 -->
-            <div class="flex justify-between items-center mt-4 text-[11px] text-outline select-none">
-                <div id="historyPageStatus">
-                    <!-- 动态渲染 -->
-                </div>
-                <div class="flex gap-2">
-                    <button class="px-3 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded border border-outline-variant/30 cursor-pointer disabled:opacity-50 disabled:pointer-events-none transition-all" id="btnHistoryPrevPage">
-                        <span data-i18n="usage_prevPage">上一页</span>
-                    </button>
-                    <button class="px-3 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded border border-outline-variant/30 cursor-pointer disabled:opacity-50 disabled:pointer-events-none transition-all" id="btnHistoryNextPage">
-                        <span data-i18n="usage_nextPage">下一页</span>
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- 任务编辑面板 -->
-        <div id="panelTaskEdit" class="hidden p-6 overflow-y-auto flex-grow space-y-4 max-h-[65vh]">
-            <input type="hidden" id="editTaskId" value="" />
-            
-            <div class="grid grid-cols-2 gap-4">
-                <div>
-                    <label class="block class text-[11px] font-bold text-outline dark:text-outline-variant mb-1" data-i18n="labelTaskName">任务名称</label>
-                    <input type="text" id="editTaskName" class="w-full px-3 py-1.5 bg-slate-50 dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" placeholder="例如：Gemini定时刷新任务" data-i18n-placeholder="placeholderTaskName" />
-                </div>
-                <div>
-                    <label class="block text-[11px] font-bold text-outline dark:text-outline-variant mb-1" data-i18n="labelTaskPrompt">测试回复触发词 (Prompt)</label>
-                    <input type="text" id="editTaskPrompt" class="w-full px-3 py-1.5 bg-slate-50 dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" placeholder="默认使用 ok" data-i18n-placeholder="placeholderTaskPrompt" value="ok" />
-                </div>
-            </div>
-
-            <div class="grid grid-cols-2 gap-4 border-t border-outline-variant/20 pt-3">
-                <div>
-                    <label class="block text-[11px] font-bold text-outline dark:text-outline-variant mb-1" data-i18n="labelTriggerType">触发方式选择</label>
-                    <select id="editTaskTriggerType" class="w-full px-3 py-1.5 bg-slate-50 dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all cursor-pointer">
-                        <option value="timer" data-i18n="optionTimer">定时触发 (Timer)</option>
-                        <option value="quota_refreshed" data-i18n="optionQuotaRefreshed">到达配额重置时间触发 (Quota Reset Time)</option>
-                    </select>
-                </div>
-                <div id="containerTaskInterval">
-                    <label class="block text-[11px] font-bold text-outline dark:text-outline-variant mb-1" data-i18n="labelInterval">触发时间间隔 (分钟)</label>
-                    <input type="number" id="editTaskInterval" class="w-full px-3 py-1.5 bg-slate-50 dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" value="60" min="5" />
-                </div>
-            </div>
-
-            <!-- 选择账号 -->
-            <div class="border-t border-outline-variant/20 pt-3">
-                <div class="flex items-center justify-between mb-1.5">
-                    <label class="block text-[11px] font-bold text-outline dark:text-outline-variant" data-i18n="labelSelectAccounts">选择关联账号</label>
-                    <div class="flex items-center gap-2 text-[10px]">
-                        <button type="button" id="btnEditSelectAllAccounts" class="text-primary dark:text-primary-fixed-dim hover:underline font-medium cursor-pointer" data-i18n="btnSelectAll">全选</button>
-                        <span class="text-outline/30">|</span>
-                        <button type="button" id="btnEditClearAllAccounts" class="text-outline hover:text-primary hover:underline font-medium cursor-pointer" data-i18n="btnClearAll">清空</button>
-                    </div>
-                </div>
-                <div id="editAccountsGrid" class="grid grid-cols-2 gap-2 p-3 bg-slate-50/50 dark:bg-slate-900/20 border border-outline-variant/30 rounded-xl max-h-36 overflow-y-auto text-[11px] text-on-surface dark:text-slate-200">
-                    <!-- 动态生成当前系统中的所有账号列表复选框 -->
-                </div>
-            </div>
-
-            <!-- 选择模型 -->
-            <div class="border-t border-outline-variant/20 pt-3">
-                <div class="flex items-center justify-between mb-1.5">
-                    <label class="block text-[11px] font-bold text-outline dark:text-outline-variant" data-i18n="labelSelectModels">选择触发测试模型</label>
-                    <div class="flex items-center gap-2 text-[10px]">
-                        <button type="button" id="btnEditSelectAllModels" class="text-primary dark:text-primary-fixed-dim hover:underline font-medium cursor-pointer" data-i18n="btnSelectAll">全选</button>
-                        <span class="text-outline/30">|</span>
-                        <button type="button" id="btnEditClearAllModels" class="text-outline hover:text-primary hover:underline font-medium cursor-pointer" data-i18n="btnClearAll">清空</button>
-                    </div>
-                </div>
-                <!-- 模型选择网格 -->
-                <div class="grid grid-cols-3 gap-3 p-3 bg-slate-50/50 dark:bg-slate-900/20 border border-outline-variant/30 rounded-xl max-h-36 overflow-y-auto text-[11px] text-on-surface dark:text-slate-200">
-                    <!-- Gemini -->
-                    <div class="space-y-1">
-                        <div class="font-bold text-[10px] text-outline uppercase tracking-wider pb-0.5 border-b border-outline-variant/10">Gemini Models</div>
-                        <div class="space-y-0.5 mt-1 animate-fadeIn" id="editModelsGemini">
-                        </div>
-                    </div>
-                    <!-- Claude -->
-                    <div class="space-y-1">
-                        <div class="font-bold text-[10px] text-outline uppercase tracking-wider pb-0.5 border-b border-outline-variant/10">Claude Models</div>
-                        <div class="space-y-0.5 mt-1 animate-fadeIn" id="editModelsClaude">
-                        </div>
-                    </div>
-                    <!-- Others -->
-                    <div class="space-y-1">
-                        <div class="font-bold text-[10px] text-outline uppercase tracking-wider pb-0.5 border-b border-outline-variant/10">Others</div>
-                        <div class="space-y-0.5 mt-1 animate-fadeIn" id="editModelsOthers">
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Modal 底部 -->
-        <div class="px-6 py-4 border-t border-outline-variant/30 bg-slate-50/50 dark:bg-white/5 flex justify-between items-center rounded-b-2xl">
-            <!-- 列表面板的底部 -->
-            <div id="footerTaskList" class="flex justify-end w-full">
-                <button class="px-4 py-1.5 text-[12px] font-bold bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40 cursor-pointer select-none" id="btnAutoTriggerModalCloseSecondary" data-i18n="btnClose">关闭</button>
-            </div>
-            <!-- 编辑面板的底部 -->
-            <div id="footerTaskEdit" class="hidden flex justify-between w-full">
-                <button class="px-4 py-1.5 text-[12px] font-bold bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40 cursor-pointer select-none" id="btnCancelEditTask" data-i18n="btnCancelEditTask">返回列表</button>
-                <button class="px-4 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-lg text-[12px] font-bold transition-all shadow-sm cursor-pointer select-none" id="btnSaveTask" data-i18n="btnSaveTask">保存任务</button>
-            </div>
-        </div>
+      <!-- 表格列表 -->
+      <div class="overflow-x-auto rounded-xl border border-outline-variant/30 bg-slate-50/30 dark:bg-slate-950/20 max-h-[380px] overflow-y-auto">
+        <table class="w-full text-left border-collapse table-fixed text-[11.5px]">
+          <thead>
+            <tr class="bg-slate-50 dark:bg-[#1a1f30] text-outline border-b border-outline-variant/30 sticky top-0 z-10">
+              <th class="p-3 font-bold w-[25%]" data-i18n="thTaskName">任务名称</th>
+              <th class="p-3 font-bold w-[20%]" data-i18n="thTriggerType">触发方式</th>
+              <th class="p-3 font-bold w-[12%]" data-i18n="thAccountCount">账号数</th>
+              <th class="p-3 font-bold w-[12%]" data-i18n="thModelCount">模型数</th>
+              <th class="p-3 font-bold text-center w-[15%]" data-i18n="thEnabledStatus">启用状态</th>
+              <th class="p-3 font-bold text-center w-[16%]" data-i18n="thAction">操作</th>
+            </tr>
+          </thead>
+          <tbody id="autoTriggerTasksTableBody" class="divide-y divide-outline-variant/10 text-on-surface dark:text-slate-200">
+            <tr>
+              <td class="p-8 text-center text-outline dark:text-outline-variant italic" colspan="6" data-i18n="loadingTasks">
+                ⏳ 正在加载定时任务列表...
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
-</div>
+
+    <!-- 历史记录面板 -->
+    <div id="panelTaskHistory" class="hidden p-6 overflow-y-auto flex-grow flex flex-col max-h-[65vh]">
+      <div class="flex justify-between items-center mb-4">
+        <div class="flex items-center gap-2">
+          <button class="flex items-center justify-center p-1 rounded-full hover:bg-slate-100 dark:hover:bg-white/5 text-outline hover:text-primary transition-colors cursor-pointer" id="btnHistoryBackToList">
+            <span class="material-symbols-outlined text-[18px]">arrow_back</span>
+          </button>
+          <span class="text-sm font-bold text-on-surface dark:text-white" data-i18n="historyModalTitle">任务触发历史记录</span>
+        </div>
+        <button class="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg text-[12px] font-bold transition-all cursor-pointer select-none border border-red-500/20" id="btnClearTriggerHistory">
+          <span class="material-symbols-outlined text-[15px]">delete_sweep</span>
+          <span data-i18n="btnClearHistory">清空历史</span>
+        </button>
+      </div>
+
+      <!-- 历史表格列表 -->
+      <div class="overflow-x-auto rounded-xl border border-outline-variant/30 bg-slate-50/30 dark:bg-slate-950/20 max-h-[330px] overflow-y-auto flex-grow">
+        <table class="w-full text-left border-collapse table-fixed text-[11px]">
+          <thead>
+            <tr class="bg-slate-50 dark:bg-[#1a1f30] text-outline border-b border-outline-variant/30 sticky top-0 z-10">
+              <th class="p-3 font-bold w-[19%]" data-i18n="thTriggerTime">触发时间</th>
+              <th class="p-3 font-bold w-[19%]" data-i18n="thTaskName">任务名称</th>
+              <th class="p-3 font-bold w-[14%]" data-i18n="thTriggerType">触发方式</th>
+              <th class="p-3 font-bold w-[18%]" data-i18n="thResultAccount">账号</th>
+              <th class="p-3 font-bold w-[12%]" data-i18n="thResultModel">模型</th>
+              <th class="p-3 font-bold text-center w-[10%]" data-i18n="thResultStatus">状态</th>
+              <th class="p-3 font-bold w-[18%]" data-i18n="thResultDetail">详情/错误</th>
+            </tr>
+          </thead>
+          <tbody id="autoTriggerHistoryTableBody" class="divide-y divide-outline-variant/10 text-on-surface dark:text-slate-200">
+            <tr>
+              <td class="p-8 text-center text-outline dark:text-outline-variant italic" colspan="7" data-i18n="loadingHistory">
+                ⏳ 正在加载触发历史记录...
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 分页栏 -->
+      <div class="flex justify-between items-center mt-4 text-[11px] text-outline select-none">
+        <div id="historyPageStatus">
+          <!-- 动态渲染 -->
+        </div>
+        <div class="flex gap-2">
+          <button class="px-3 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded border border-outline-variant/30 cursor-pointer disabled:opacity-50 disabled:pointer-events-none transition-all" id="btnHistoryPrevPage">
+            <span data-i18n="usage_prevPage">上一页</span>
+          </button>
+          <button class="px-3 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded border border-outline-variant/30 cursor-pointer disabled:opacity-50 disabled:pointer-events-none transition-all" id="btnHistoryNextPage">
+            <span data-i18n="usage_nextPage">下一页</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 任务编辑面板 -->
+    <div id="panelTaskEdit" class="hidden p-6 overflow-y-auto flex-grow space-y-4 max-h-[65vh]">
+      <input type="hidden" id="editTaskId" value="" />
+      
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-[11px] font-bold text-outline dark:text-outline-variant mb-1" data-i18n="labelTaskName">任务名称</label>
+          <input type="text" id="editTaskName" class="w-full px-3 py-1.5 bg-slate-50 dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" placeholder="例如：Gemini定时刷新任务" data-i18n-placeholder="placeholderTaskName" />
+        </div>
+        <div>
+          <label class="block text-[11px] font-bold text-outline dark:text-outline-variant mb-1" data-i18n="labelTaskPrompt">测试回复触发词 (Prompt)</label>
+          <input type="text" id="editTaskPrompt" class="w-full px-3 py-1.5 bg-slate-50 dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" placeholder="默认使用 ok" data-i18n-placeholder="placeholderTaskPrompt" value="ok" />
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4 border-t border-outline-variant/20 pt-3">
+        <div>
+          <label class="block text-[11px] font-bold text-outline dark:text-outline-variant mb-1" data-i18n="labelTriggerType">触发方式选择</label>
+          <select id="editTaskTriggerType" class="w-full px-3 py-1.5 bg-slate-50 dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all cursor-pointer">
+            <option value="timer" data-i18n="optionTimer">定时触发 (Timer)</option>
+            <option value="quota_refreshed" data-i18n="optionQuotaRefreshed">到达配额重置时间触发 (Quota Reset Time)</option>
+          </select>
+        </div>
+        <div id="containerTaskInterval">
+          <label class="block text-[11px] font-bold text-outline dark:text-outline-variant mb-1" data-i18n="labelInterval">触发时间间隔 (分钟)</label>
+          <input type="number" id="editTaskInterval" class="w-full px-3 py-1.5 bg-slate-50 dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" value="60" min="5" />
+        </div>
+      </div>
+
+      <!-- 选择账号 -->
+      <div class="border-t border-outline-variant/20 pt-3">
+        <div class="flex items-center justify-between mb-1.5">
+          <label class="block text-[11px] font-bold text-outline dark:text-outline-variant" data-i18n="labelSelectAccounts">选择关联账号</label>
+          <div class="flex items-center gap-2 text-[10px]">
+            <button type="button" id="btnEditSelectAllAccounts" class="text-primary dark:text-primary-fixed-dim hover:underline font-medium cursor-pointer" data-i18n="btnSelectAll">全选</button>
+            <span class="text-outline/30">|</span>
+            <button type="button" id="btnEditClearAllAccounts" class="text-outline hover:text-primary hover:underline font-medium cursor-pointer" data-i18n="btnClearAll">清空</button>
+          </div>
+        </div>
+        <div id="editAccountsGrid" class="grid grid-cols-2 gap-2 p-3 bg-slate-50/50 dark:bg-slate-900/20 border border-outline-variant/30 rounded-xl max-h-36 overflow-y-auto text-[11px] text-on-surface dark:text-slate-200">
+          <!-- 动态生成当前系统中的所有账号列表复选框 -->
+        </div>
+      </div>
+
+      <!-- 选择模型 -->
+      <div class="border-t border-outline-variant/20 pt-3">
+        <div class="flex items-center justify-between mb-1.5">
+          <label class="block text-[11px] font-bold text-outline dark:text-outline-variant" data-i18n="labelSelectModels">选择触发测试模型</label>
+          <div class="flex items-center gap-2 text-[10px]">
+            <button type="button" id="btnEditSelectAllModels" class="text-primary dark:text-primary-fixed-dim hover:underline font-medium cursor-pointer" data-i18n="btnSelectAll">全选</button>
+            <span class="text-outline/30">|</span>
+            <button type="button" id="btnEditClearAllModels" class="text-outline hover:text-primary hover:underline font-medium cursor-pointer" data-i18n="btnClearAll">清空</button>
+          </div>
+        </div>
+        <!-- 模型选择网格 -->
+        <div class="grid grid-cols-3 gap-3 p-3 bg-slate-50/50 dark:bg-slate-900/20 border border-outline-variant/30 rounded-xl max-h-36 overflow-y-auto text-[11px] text-on-surface dark:text-slate-200">
+          <!-- Gemini -->
+          <div class="space-y-1">
+            <div class="font-bold text-[10px] text-outline uppercase tracking-wider pb-0.5 border-b border-outline-variant/10">Gemini Models</div>
+            <div class="space-y-0.5 mt-1 animate-fadeIn" id="editModelsGemini">
+            </div>
+          </div>
+          <!-- Claude -->
+          <div class="space-y-1">
+            <div class="font-bold text-[10px] text-outline uppercase tracking-wider pb-0.5 border-b border-outline-variant/10">Claude Models</div>
+            <div class="space-y-0.5 mt-1 animate-fadeIn" id="editModelsClaude">
+            </div>
+          </div>
+          <!-- Others -->
+          <div class="space-y-1">
+            <div class="font-bold text-[10px] text-outline uppercase tracking-wider pb-0.5 border-b border-outline-variant/10">Others</div>
+            <div class="space-y-0.5 mt-1 animate-fadeIn" id="editModelsOthers">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <template #footer>
+      <div id="footerTaskList" class="flex justify-end w-full">
+        <button class="px-4 py-1.5 text-[12px] font-bold bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40 cursor-pointer select-none" id="btnAutoTriggerModalCloseSecondary" data-i18n="btnClose">关闭</button>
+      </div>
+      <div id="footerTaskEdit" class="hidden flex justify-between w-full">
+        <button class="px-4 py-1.5 text-[12px] font-bold bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-white rounded-lg transition-colors border border-outline-variant/40 cursor-pointer select-none" id="btnCancelEditTask" data-i18n="btnCancelEditTask">返回列表</button>
+        <button class="px-4 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-lg text-[12px] font-bold transition-all shadow-sm cursor-pointer select-none" id="btnSaveTask" data-i18n="btnSaveTask">保存任务</button>
+      </div>
+    </template>
+  </BaseModal>
 </template>
 
 <script setup lang="ts">
-// Logic handled inside accountsController.ts to maintain structure
+import BaseModal from './BaseModal.vue';
 </script>
 
 <style scoped>

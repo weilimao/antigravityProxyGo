@@ -32,6 +32,12 @@ type Account struct {
 	CooldownUntil    int64            `json:"cooldownUntil"` // min(cooldowns)
 	TwoFASecret      string           `json:"twofa_secret,omitempty"`
 	TokenRefreshedAt int64            `json:"token_refreshed_at"`
+	BaseURL          string           `json:"baseUrl,omitempty"`
+	DefaultModel     string           `json:"defaultModel,omitempty"`
+	ModelSonnet      string           `json:"modelSonnet,omitempty"`
+	ModelOpus        string           `json:"modelOpus,omitempty"`
+	ModelHaiku       string           `json:"modelHaiku,omitempty"`
+	ModelFable       string           `json:"modelFable,omitempty"`
 }
 
 // GetAccessToken safely reads the access token under read lock.
@@ -91,6 +97,8 @@ type Manager struct {
 	poolMode          bool
 	projectPoolMode   bool
 	geminiCliPoolMode bool
+	nvidiaPoolMode    bool
+	nvidiaLBMode      string
 	activeChannel     string
 	currentIndex      int
 	errorCounts        map[string]int // accountId -> error count
@@ -238,6 +246,13 @@ func (m *Manager) LoadAccounts() {
 		}
 	}
 	m.accounts = activePoolAccounts
+
+	// 兜底修复：为从旧版 JSON 加载的 NVIDIA 账号补全缺失的 BaseURL 字段
+	for _, acc := range m.accounts {
+		if acc.Provider == "nvidia" && acc.BaseURL == "" {
+			acc.BaseURL = DefaultNvidiaBaseURL
+		}
+	}
 }
 
 func (m *Manager) SaveAccounts(silent bool) error {
@@ -661,6 +676,7 @@ func (m *Manager) SetPoolMode(enabled bool) {
 	m.poolMode = enabled
 	if enabled {
 		m.projectPoolMode = false
+		m.nvidiaPoolMode = false
 		m.geminiCliPoolMode = false
 		m.activeChannel = "antigravity"
 	}
@@ -679,6 +695,7 @@ func (m *Manager) SetProjectPoolMode(enabled bool) {
 	m.projectPoolMode = enabled
 	if enabled {
 		m.poolMode = false
+		m.nvidiaPoolMode = false
 		m.geminiCliPoolMode = false
 		m.activeChannel = "project"
 	}
@@ -693,22 +710,9 @@ func (m *Manager) GetProjectPoolMode() bool {
 }
 
 func (m *Manager) SetGeminiCliPoolMode(enabled bool) {
-	// Gemini CLI 服务已停用，不执行任何操作
-	/*
-	m.Lock()
-	m.geminiCliPoolMode = enabled
-	if enabled {
-		m.poolMode = false
-		m.projectPoolMode = false
-		m.activeChannel = "gemini-cli"
-	}
-	m.Unlock()
-	_ = m.SaveAccounts(false)
-	*/
 }
 
 func (m *Manager) GetGeminiCliPoolMode() bool {
-	// Gemini CLI 服务已停用，始终返回 false
 	return false
 }
 
@@ -720,20 +724,24 @@ func (m *Manager) IsPoolModeForActiveChannel() bool {
 		return m.poolMode
 	case "project":
 		return m.projectPoolMode
-	/* case "gemini-cli":
-		return m.geminiCliPoolMode */
+	case "nvidia":
+		return m.nvidiaPoolMode
 	}
 	return false
 }
 
 func (m *Manager) SetActiveChannel(channel string) {
 	m.Lock()
-	if channel == "antigravity" || channel == "project" /* || channel == "gemini-cli" */ {
+	if channel == "antigravity" || channel == "project" || channel == "nvidia" {
 		if channel == "project" && m.poolMode {
 			m.Unlock()
 			return
 		}
 		if channel == "antigravity" && m.projectPoolMode {
+			m.Unlock()
+			return
+		}
+		if channel == "nvidia" && (m.poolMode || m.projectPoolMode) {
 			m.Unlock()
 			return
 		}
@@ -755,6 +763,18 @@ func (m *Manager) GetModelCategory(modelName string) string {
 		return "claude"
 	}
 	return "gemini"
+}
+
+// GetModelCategoryByProvider 根据账号 provider 与模型名共同确定冷却类别。
+// NVIDIA 号池走独立的 "nvidia" 冷却类别，与 gemini/claude 解耦：
+// 避免把满额 NVIDIA 配额误判为 "gemini 配额恢复"，进而在 OnQuotaRestored
+// 回调里刷屏打印无关的自动触发日志。其余 provider 维持原 gemini/claude 二分。
+func (m *Manager) GetModelCategoryByProvider(provider, modelName string) string {
+	p := strings.ToLower(strings.TrimSpace(provider))
+	if p == "nvidia" {
+		return "nvidia"
+	}
+	return m.GetModelCategory(modelName)
 }
 
 func (m *Manager) GetNextAccount(modelName string) *Account {
@@ -868,10 +888,11 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 
 func (m *Manager) SetAccountCooldown(id string, untilTimeMs int64, modelName string) {
 	m.Lock()
-	category := m.GetModelCategory(modelName)
+	category := ""
 	changed := false
 	for _, a := range m.accounts {
 		if a.ID == id {
+			category = m.GetModelCategoryByProvider(a.Provider, modelName)
 			if a.Cooldowns == nil {
 				a.Cooldowns = make(map[string]int64)
 			}
@@ -954,8 +975,12 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 
 	m.ResetAccountError(id)
 
-	var geminiExhausted, claudeExhausted bool
-	var geminiResetTime, claudeResetTime int64
+	// 冷却类别与 gemini/claude/nvidia 三族解耦：
+	// NVIDIA 号池走独立 "nvidia" 冷却键，避免其满额配额被误判为 gemini 恢复。
+	isNvidiaAcc := strings.EqualFold(acc.Provider, "nvidia")
+
+	var geminiExhausted, claudeExhausted, nvidiaExhausted bool
+	var geminiResetTime, claudeResetTime, nvidiaResetTime int64
 
 	nowMs := time.Now().UnixNano() / int64(time.Millisecond)
 
@@ -973,26 +998,46 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 		return t.UnixNano() / int64(time.Millisecond)
 	}
 
-	for _, b := range buckets {
-		isClaude := strings.Contains(strings.ToLower(b.Group), "claude") || strings.Contains(strings.ToLower(b.ModelID), "claude")
-		category := "gemini"
-		if isClaude {
-			category = "claude"
+	// classifyBucket 按 bucket 归属与账号 provider 判定冷却类别。
+	// NVIDIA bucket 含 "nvidia" 标识；其余按 claude/gemini 二分。
+	classifyBucket := func(b QuotaBucket) string {
+		lowerGroup := strings.ToLower(b.Group)
+		lowerModelID := strings.ToLower(b.ModelID)
+		if strings.Contains(lowerGroup, "nvidia") || strings.Contains(lowerModelID, "nvidia") {
+			return "nvidia"
 		}
+		if strings.Contains(lowerGroup, "claude") || strings.Contains(lowerModelID, "claude") {
+			return "claude"
+		}
+		// NVIDIA 账号的 bucket 在缺少显式标识时也归 nvidia，保持与冷却写入端一致
+		if isNvidiaAcc {
+			return "nvidia"
+		}
+		return "gemini"
+	}
 
+	for _, b := range buckets {
+		category := classifyBucket(b)
 		isExhausted := b.RemainingFraction == 0 || b.RemainPercent == 0
-		if isExhausted {
-			resetMs := parseTime(b.ResetTime)
-			if category == "claude" {
-				claudeExhausted = true
-				if resetMs > claudeResetTime {
-					claudeResetTime = resetMs
-				}
-			} else {
-				geminiExhausted = true
-				if resetMs > geminiResetTime {
-					geminiResetTime = resetMs
-				}
+		if !isExhausted {
+			continue
+		}
+		resetMs := parseTime(b.ResetTime)
+		switch category {
+		case "claude":
+			claudeExhausted = true
+			if resetMs > claudeResetTime {
+				claudeResetTime = resetMs
+			}
+		case "nvidia":
+			nvidiaExhausted = true
+			if resetMs > nvidiaResetTime {
+				nvidiaResetTime = resetMs
+			}
+		default:
+			geminiExhausted = true
+			if resetMs > geminiResetTime {
+				geminiResetTime = resetMs
 			}
 		}
 	}
@@ -1041,6 +1086,14 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 	updateCatCooldown("gemini", geminiExhausted, geminiResetTime)
 	updateCatCooldown("claude", claudeExhausted, claudeResetTime)
 
+	// NVIDIA 号池走独立的 "nvidia" 冷却类别，与 gemini/claude 解耦：
+	// 仅当本次刷新观察到"nvidia 冷却键实际存在且本次配额已满额恢复"时，
+	// updateCatCooldown 才会记入 restoredCategories 并触发 OnQuotaRestored；
+	// 无前置冷却的常态满额刷新不再误触发自动刷新日志。
+	if isNvidiaAcc {
+		updateCatCooldown("nvidia", nvidiaExhausted, nvidiaResetTime)
+	}
+
 	var minCooldown int64 = 0
 	for _, v := range acc.Cooldowns {
 		if minCooldown == 0 || v < minCooldown {
@@ -1073,6 +1126,103 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 	}
 
 	return changed
+}
+
+func (m *Manager) GetNvidiaLBMode() string {
+	m.RLock()
+	defer m.RUnlock()
+	if m.nvidiaLBMode == "" {
+		return "round-robin"
+	}
+	return m.nvidiaLBMode
+}
+
+func (m *Manager) SetNvidiaLBMode(mode string) {
+	m.Lock()
+	defer m.Unlock()
+	m.nvidiaLBMode = mode
+}
+
+func (m *Manager) GetNvidiaPoolMode() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.nvidiaPoolMode
+}
+
+func (m *Manager) SetNvidiaPoolMode(enabled bool) {
+	m.Lock()
+	m.nvidiaPoolMode = enabled
+	if enabled {
+		m.poolMode = false
+		m.projectPoolMode = false
+		m.geminiCliPoolMode = false
+		m.activeChannel = "nvidia"
+	}
+	m.Unlock()
+	_ = m.SaveAccounts(false)
+}
+
+func (m *Manager) GetRawAccountsByProvider(provider string) []*Account {
+	m.RLock()
+	defer m.RUnlock()
+	p := strings.ToLower(strings.TrimSpace(provider))
+	if p == "" || p == "all" {
+		res := make([]*Account, len(m.accounts))
+		copy(res, m.accounts)
+		return res
+	}
+	var res []*Account
+	for _, acc := range m.accounts {
+		if strings.ToLower(acc.Provider) == p {
+			res = append(res, acc)
+		}
+	}
+	return res
+}
+
+func (m *Manager) GetAccountEmailMap() map[string]string {
+	m.RLock()
+	defer m.RUnlock()
+	res := make(map[string]string)
+	for _, acc := range m.accounts {
+		if acc != nil {
+			res[acc.ID] = acc.Email
+		}
+	}
+	return res
+}
+
+// GetAccountProviderMap 返回 AccountID -> Provider 的映射。
+// 用于会话绑定/会话路由等需要按账号所属号池类型(provider)进行筛选或归类的场景，
+// 复用与 GetAccountEmailMap 相同的只读遍历方式，不引入额外的并发风险。
+func (m *Manager) GetAccountProviderMap() map[string]string {
+	m.RLock()
+	defer m.RUnlock()
+	res := make(map[string]string)
+	for _, acc := range m.accounts {
+		if acc != nil {
+			res[acc.ID] = acc.Provider
+		}
+	}
+	return res
+}
+
+func (m *Manager) SetAccountCooldownForChannel(id string, cooldownUntil int64, channel string, model string) {
+	m.SetAccountCooldown(id, cooldownUntil, model)
+}
+
+// GetEnabledNvidiaAccounts 返回所有已启用且配置有效的 NVIDIA 账号（不受 CooldownUntil 过滤影响）。
+// 专供模型列表拉取等不消耗 Token 的只读探针接口使用。
+func (m *Manager) GetEnabledNvidiaAccounts() []*Account {
+	m.RLock()
+	defer m.RUnlock()
+	var result []*Account
+	for _, acc := range m.accounts {
+		if acc != nil && acc.Provider == "nvidia" && acc.Enabled && acc.AccessToken != "" && acc.BaseURL != "" {
+			result = append(result, acc)
+		}
+	}
+	return result
 }
 
 func (m *Manager) StartCooldownMonitor() {

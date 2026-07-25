@@ -14,6 +14,7 @@ export interface DashboardState {
     customEndDate: number | null;
     quotaCache: { [accountId: string]: any[] };
     quotaLoadingState: { [accountId: string]: 'loading' | 'success' | 'error' };
+    nvidiaQuotaError: { [accountId: string]: string };
     currentAccountsList: any[];
     currentActiveChannel: string;
     lastBackendData: any;
@@ -82,6 +83,7 @@ const state: DashboardState = {
     customEndDate: null,
     quotaCache: {},
     quotaLoadingState: {},
+    nvidiaQuotaError: {},
     currentAccountsList: [],
     currentActiveChannel: 'antigravity',
     lastBackendData: null,

@@ -23,6 +23,19 @@ let lblPoolMode: HTMLElement | null;
 let btnChannelAntigravity: HTMLButtonElement | null;
 let btnChannelProject: HTMLButtonElement | null;
 let btnChannelGeminiCli: HTMLButtonElement | null;
+let btnChannelNvidia: HTMLButtonElement | null;
+let nvidiaPoolModeContainer: HTMLDivElement | null;
+let nvidiaPoolModeToggle: HTMLInputElement | null;
+let nvidiaLBModeContainer: HTMLDivElement | null;
+let nvidiaLBModeSelect: HTMLSelectElement | null;
+let btnAddNvidiaAccount: HTMLButtonElement | null;
+let nvidiaAccountModal: HTMLDivElement | null;
+let nvidiaAccountModalContainer: HTMLDivElement | null;
+let btnNvidiaModalSave: HTMLButtonElement | null;
+let btnNvidiaModalCancel: HTMLButtonElement | null;
+let btnNvidiaModalClose: HTMLButtonElement | null;
+let nvidiaModalError: HTMLDivElement | null;
+let btnNvidiaFetchModels: HTMLButtonElement | null;
 let btnExportAccounts: HTMLButtonElement | null;
 let btnImportAccounts: HTMLButtonElement | null;
 let btnLayoutGrid: HTMLButtonElement | null;
@@ -143,8 +156,10 @@ export function updateViewTabUI() {
             btnChannelAntigravity.className = activeClass;
             btnChannelProject.className = inactiveClass;
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
-            
+            if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
+
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
+            if (nvidiaPoolModeContainer) nvidiaPoolModeContainer.classList.add('hidden');
             if (lblPoolMode) lblPoolMode.innerText = dict.poolLoadBalance || '账号负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.poolMode;
@@ -153,18 +168,32 @@ export function updateViewTabUI() {
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = activeClass;
             btnChannelAntigravity.className = inactiveClass;
             btnChannelProject.className = inactiveClass;
-            
+
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (lblPoolMode) lblPoolMode.innerText = 'CLI号池负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.geminiCliPoolMode;
             } */
+        } else if (state.currentViewTab === 'nvidia') {
+            if (btnChannelNvidia) btnChannelNvidia.className = activeClass;
+            btnChannelAntigravity.className = inactiveClass;
+            btnChannelProject.className = inactiveClass;
+            if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
+
+            // NVIDIA 用独立算法选择框
+            if (poolModeContainer) poolModeContainer.classList.add('hidden');
+            if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.remove('hidden');
+            if (nvidiaLBModeSelect && state.lastBackendData) {
+                nvidiaLBModeSelect.value = state.lastBackendData.nvidiaLBMode || 'round-robin';
+            }
         } else {
             btnChannelProject.className = activeClass;
             btnChannelAntigravity.className = inactiveClass;
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
-            
+            if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
+
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
+            if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (lblPoolMode) lblPoolMode.innerText = dict.projectLoadBalancing || '项目负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.projectPoolMode;
@@ -176,19 +205,26 @@ export function updateViewTabUI() {
     const btnAntigravityLogin = document.getElementById('btnAntigravityLogin');
     const btnGeminiCliLogin = document.getElementById('btnGeminiCliLogin');
     const btnProjectLogin = document.getElementById('btnProjectLogin');
-    
+
     if (state.currentViewTab === 'antigravity') {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.remove('hidden');
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
         if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
+        if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
     /* } else if (state.currentViewTab === 'gemini-cli') {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.remove('hidden');
         if (btnProjectLogin) btnProjectLogin.classList.add('hidden'); */
+    } else if (state.currentViewTab === 'nvidia') {
+        if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
+        if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
+        if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
+        if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.remove('hidden');
     } else {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
         if (btnProjectLogin) btnProjectLogin.classList.remove('hidden');
+        if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
     }
 }
 
@@ -203,17 +239,36 @@ export async function refreshAllQuotas() {
     }
 
     try {
+        // 收集容器内所有账号卡片的刷新按钮，并按当前页签(currentViewTab)二次过滤，
+        // 即便 DOM 因极端时序残留其它 tab 卡片，也只刷新当前 tab 账号，绝不跨 tab。
         const cardRefreshBtns = accountsList ? accountsList.querySelectorAll('[data-quota-refresh-btn]') : [];
-        if (cardRefreshBtns.length === 0) {
-            state.quotaCache = {};
-            const accounts = await ipcRenderer.invoke('accounts:list');
-            renderAccounts(accounts);
-        } else {
-            for (let i = 0; i < cardRefreshBtns.length; i++) {
-                const btn = cardRefreshBtns[i] as HTMLButtonElement;
-                btn.click();
-                await new Promise(r => setTimeout(r, 200));
+        const activeTab = state.currentViewTab;
+        // 用当前账号列表建立 id -> provider 映射，用于二次判过滤
+        const accList = state.currentAccountsList || [];
+        const idToProvider: Record<string, string> = {};
+        for (const a of accList) {
+            if (a && a.id) idToProvider[a.id] = a.provider;
+        }
+
+        const pendingBtns: HTMLButtonElement[] = [];
+        for (let i = 0; i < cardRefreshBtns.length; i++) {
+            const btn = cardRefreshBtns[i] as HTMLButtonElement;
+            const card = btn.closest('[data-account-id]') as HTMLElement | null;
+            const accId = card ? card.getAttribute('data-account-id') : null;
+            // 严格白名单：仅刷新“明确属于当前 tab”的账号卡片。
+            // 未在 idToProvider 命中的卡片视为跨 tab 残留(如异步 re-render 竞态下遗留的
+            // 上一个 tab 卡片)，一律跳过，避免在当前 tab 误刷到其它 provider 的账号。
+            if (!accId || !idToProvider[accId] || idToProvider[accId] !== activeTab) {
+                continue;
             }
+            pendingBtns.push(btn);
+        }
+
+        // 无卡片可刷新时直接结束，不再回退到 accounts:list（后端无该 handler，
+        // 调用会静默失败且无意义），避免历史死代码引发歧义。
+        for (let i = 0; i < pendingBtns.length; i++) {
+            pendingBtns[i].click();
+            await new Promise(r => setTimeout(r, 200));
         }
     } finally {
         await new Promise(r => setTimeout(r, 800));
@@ -279,8 +334,8 @@ export async function refreshAllAccountsQuotas() {
 
     try {
         for (const acc of state.currentAccountsList) {
-            // 自动过滤并跳过已停用的灰色账号
-            if (!acc.enabled) {
+            // 自动过滤并跳过已停用的灰色账号及 NVIDIA 账号
+            if (!acc.enabled || acc.provider === 'nvidia') {
                 continue;
             }
             try {
@@ -395,6 +450,19 @@ export function initAccountsEvents() {
     btnChannelAntigravity = document.getElementById('btnChannelAntigravity') as HTMLButtonElement | null;
     btnChannelProject = document.getElementById('btnChannelProject') as HTMLButtonElement | null;
     btnChannelGeminiCli = document.getElementById('btnChannelGeminiCli') as HTMLButtonElement | null;
+    btnChannelNvidia = document.getElementById('btnChannelNvidia') as HTMLButtonElement | null;
+    nvidiaPoolModeContainer = document.getElementById('nvidiaPoolModeContainer') as HTMLDivElement | null;
+    nvidiaPoolModeToggle = document.getElementById('nvidiaPoolModeToggle') as HTMLInputElement | null;
+    nvidiaLBModeContainer = document.getElementById('nvidiaLBModeContainer') as HTMLDivElement | null;
+    nvidiaLBModeSelect = document.getElementById('nvidiaLBModeSelect') as HTMLSelectElement | null;
+    btnAddNvidiaAccount = document.getElementById('btnAddNvidiaAccount') as HTMLButtonElement | null;
+    nvidiaAccountModal = document.getElementById('nvidiaAccountModal') as HTMLDivElement | null;
+    nvidiaAccountModalContainer = document.getElementById('nvidiaAccountModalContainer') as HTMLDivElement | null;
+    btnNvidiaModalSave = document.getElementById('btnNvidiaModalSave') as HTMLButtonElement | null;
+    btnNvidiaModalCancel = document.getElementById('btnNvidiaModalCancel') as HTMLButtonElement | null;
+    btnNvidiaModalClose = document.getElementById('btnNvidiaModalClose') as HTMLButtonElement | null;
+    nvidiaModalError = document.getElementById('nvidiaModalError') as HTMLDivElement | null;
+    btnNvidiaFetchModels = document.getElementById('btnNvidiaFetchModels') as HTMLButtonElement | null;
     btnExportAccounts = document.getElementById('btnExportAccounts') as HTMLButtonElement | null;
     btnImportAccounts = document.getElementById('btnImportAccounts') as HTMLButtonElement | null;
 
@@ -571,6 +639,28 @@ export function initAccountsEvents() {
         }
     }
 
+    // NVIDIA 通道切换 Tab
+    if (btnChannelNvidia) {
+        btnChannelNvidia.addEventListener('click', () => {
+            state.selectedAccountIds = [];
+            state.currentViewTab = 'nvidia';
+            updateViewTabUI();
+            if (state.currentAccountsList) {
+                renderAccounts(state.currentAccountsList);
+            }
+            updateAggregateQuotaUI();
+            updateBatchActionBarUI();
+        });
+    }
+
+    // NVIDIA 添加账号下拉项 → 打开 NVIDIA 账号模态
+    if (btnAddNvidiaAccount) {
+        btnAddNvidiaAccount.addEventListener('click', () => {
+            if (addAccountDropdown) addAccountDropdown.classList.add('hidden');
+            openNvidiaAccountModal();
+        });
+    }
+
     if (poolModeToggle) {
         poolModeToggle.addEventListener('change', (e: any) => {
             if (state.currentViewTab === 'project') {
@@ -585,9 +675,29 @@ export function initAccountsEvents() {
         });
     }
 
+    // NVIDIA 池算法选择框
+    if (nvidiaLBModeSelect) {
+        nvidiaLBModeSelect.addEventListener('change', (e: any) => {
+            ipcRenderer.send('nvidia:set-lb-mode', e.target.value);
+            updateViewTabUI();
+        });
+    }
+
+    // NVIDIA 账号模态：关闭/取消/保存
+    if (btnNvidiaModalClose) btnNvidiaModalClose.addEventListener('click', closeNvidiaAccountModal);
+    if (btnNvidiaModalCancel) btnNvidiaModalCancel.addEventListener('click', closeNvidiaAccountModal);
+    if (nvidiaAccountModal) {
+        nvidiaAccountModal.addEventListener('click', (e: MouseEvent) => {
+            if (e.target === nvidiaAccountModal) closeNvidiaAccountModal();
+        });
+    }
+    if (btnNvidiaModalSave) btnNvidiaModalSave.addEventListener('click', submitNvidiaAccount);
+    if (btnNvidiaFetchModels) btnNvidiaFetchModels.addEventListener('click', fetchNvidiaModels);
+
     if (btnExportAccounts) {
         btnExportAccounts.addEventListener('click', () => {
-            ipcRenderer.send('accounts:export-all');
+            const provider = state.currentViewTab || 'antigravity';
+            ipcRenderer.send('accounts:export-all', provider);
         });
     }
 
@@ -601,7 +711,6 @@ export function initAccountsEvents() {
         btnChannelAntigravity.addEventListener('click', () => {
             state.currentViewTab = 'antigravity';
             state.selectedAccountIds = [];
-            ipcRenderer.send('channel:switch', 'antigravity');
             updateViewTabUI();
             if (state.currentAccountsList) {
                 renderAccounts(state.currentAccountsList);
@@ -614,7 +723,6 @@ export function initAccountsEvents() {
         btnChannelProject.addEventListener('click', () => {
             state.selectedAccountIds = [];
             state.currentViewTab = 'project';
-            ipcRenderer.send('channel:switch', 'project');
             updateViewTabUI();
             if (state.currentAccountsList) {
                 renderAccounts(state.currentAccountsList);
@@ -736,7 +844,7 @@ export async function refreshAllAccountsQuotasSilently() {
     if (!state.currentAccountsList || state.currentAccountsList.length === 0) return;
     try {
         for (const acc of state.currentAccountsList) {
-            if (!acc.enabled) {
+            if (!acc.enabled || acc.provider === 'nvidia') {
                 continue;
             }
             try {
@@ -876,10 +984,11 @@ async function loadSessionBindings() {
     `;
     
     try {
-        const list = await ipcRenderer.invoke('sessions:get') as Array<{
+        const list = await ipcRenderer.invoke('sessions:get', state.currentViewTab || '') as Array<{
             sessionKey: string;
             accountId: string;
             accountEmail: string;
+            provider?: string;
             lastActive: number;
         }>;
         
@@ -1459,6 +1568,197 @@ function initAutoTriggerModalEvents() {
             cbs?.forEach(cb => cb.checked = false);
         });
     }
+}
+
+function openNvidiaAccountModal() {
+    if (!nvidiaAccountModal || !nvidiaAccountModalContainer) return;
+
+    // Clear previous inputs
+    const inputBaseUrl = document.getElementById('inputNvidiaBaseUrl') as HTMLInputElement;
+    const inputApiKey = document.getElementById('inputNvidiaApiKey') as HTMLInputElement;
+    const inputLabel = document.getElementById('inputNvidiaLabel') as HTMLInputElement;
+    const inputModelSonnet = document.getElementById('inputNvidiaModelSonnet') as HTMLInputElement;
+    const inputModelOpus = document.getElementById('inputNvidiaModelOpus') as HTMLInputElement;
+    const inputModelHaiku = document.getElementById('inputNvidiaModelHaiku') as HTMLInputElement;
+    const inputModelFable = document.getElementById('inputNvidiaModelFable') as HTMLInputElement;
+    const inputModelDefault = document.getElementById('inputNvidiaModelDefault') as HTMLInputElement;
+
+    if (inputBaseUrl) inputBaseUrl.value = '';
+    if (inputApiKey) inputApiKey.value = '';
+    if (inputLabel) inputLabel.value = '';
+    if (inputModelSonnet) inputModelSonnet.value = '';
+    if (inputModelOpus) inputModelOpus.value = '';
+    if (inputModelHaiku) inputModelHaiku.value = '';
+    if (inputModelFable) inputModelFable.value = '';
+    if (inputModelDefault) inputModelDefault.value = '';
+
+    if (nvidiaModalError) {
+        nvidiaModalError.classList.add('hidden');
+        nvidiaModalError.textContent = '';
+    }
+
+    const selectIds = [
+        'selectNvidiaModelSonnet',
+        'selectNvidiaModelOpus',
+        'selectNvidiaModelHaiku',
+        'selectNvidiaModelFable',
+        'selectNvidiaModelDefault'
+    ];
+    selectIds.forEach(id => {
+        const selectEl = document.getElementById(id) as HTMLSelectElement | null;
+        if (selectEl) {
+            selectEl.classList.add('hidden');
+            selectEl.innerHTML = '<option value="">选择模型...</option>';
+        }
+    });
+
+    nvidiaAccountModal.classList.remove('opacity-0', 'pointer-events-none');
+    nvidiaAccountModalContainer.classList.remove('scale-95');
+    nvidiaAccountModalContainer.classList.add('scale-100');
+}
+
+function closeNvidiaAccountModal() {
+    if (!nvidiaAccountModal || !nvidiaAccountModalContainer) return;
+    nvidiaAccountModalContainer.classList.remove('scale-100');
+    nvidiaAccountModalContainer.classList.add('scale-95');
+    nvidiaAccountModal.classList.add('opacity-0', 'pointer-events-none');
+}
+
+async function submitNvidiaAccount() {
+    const inputBaseUrl = document.getElementById('inputNvidiaBaseUrl') as HTMLInputElement;
+    const inputApiKey = document.getElementById('inputNvidiaApiKey') as HTMLInputElement;
+    const inputLabel = document.getElementById('inputNvidiaLabel') as HTMLInputElement;
+    const inputModelSonnet = document.getElementById('inputNvidiaModelSonnet') as HTMLInputElement;
+    const inputModelOpus = document.getElementById('inputNvidiaModelOpus') as HTMLInputElement;
+    const inputModelHaiku = document.getElementById('inputNvidiaModelHaiku') as HTMLInputElement;
+    const inputModelFable = document.getElementById('inputNvidiaModelFable') as HTMLInputElement;
+    const inputModelDefault = document.getElementById('inputNvidiaModelDefault') as HTMLInputElement;
+
+    if (!inputBaseUrl || !inputApiKey) return;
+
+    let baseUrl = inputBaseUrl.value.trim();
+    const apiKey = inputApiKey.value.trim();
+
+    if (!baseUrl) {
+        baseUrl = 'https://integrate.api.nvidia.com/v1';
+    }
+    if (!apiKey) {
+        if (nvidiaModalError) {
+            nvidiaModalError.textContent = '请输入 API Key';
+            nvidiaModalError.classList.remove('hidden');
+        }
+        return;
+    }
+
+    try {
+        if (btnNvidiaModalSave) {
+            btnNvidiaModalSave.disabled = true;
+            btnNvidiaModalSave.textContent = '正在添加...';
+        }
+
+        const res = await ipcRenderer.invoke('nvidia:add',
+            baseUrl,
+            apiKey,
+            inputLabel?.value.trim() || '',
+            inputModelDefault?.value.trim() || '',
+            inputModelSonnet?.value.trim() || '',
+            inputModelOpus?.value.trim() || '',
+            inputModelHaiku?.value.trim() || '',
+            inputModelFable?.value.trim() || ''
+        );
+
+        if (res && res.success) {
+            closeNvidiaAccountModal();
+            ipcRenderer.send('accounts:get');
+        } else {
+            if (nvidiaModalError) {
+                nvidiaModalError.textContent = res?.error || '添加失败';
+                nvidiaModalError.classList.remove('hidden');
+            }
+        }
+    } catch (err: any) {
+        if (nvidiaModalError) {
+            nvidiaModalError.textContent = err.message || '系统错误';
+            nvidiaModalError.classList.remove('hidden');
+        }
+    } finally {
+        if (btnNvidiaModalSave) {
+            btnNvidiaModalSave.disabled = false;
+            btnNvidiaModalSave.textContent = '添加账号';
+        }
+    }
+}
+
+async function fetchNvidiaModels() {
+    const inputBaseUrl = document.getElementById('inputNvidiaBaseUrl') as HTMLInputElement | null;
+    const inputApiKey = document.getElementById('inputNvidiaApiKey') as HTMLInputElement | null;
+    if (!btnNvidiaFetchModels) return;
+
+    const baseUrl = inputBaseUrl ? inputBaseUrl.value.trim() : '';
+    const apiKey = inputApiKey ? inputApiKey.value.trim() : '';
+
+    if (nvidiaModalError) {
+        nvidiaModalError.classList.add('hidden');
+        nvidiaModalError.textContent = '';
+    }
+
+    const origHTML = btnNvidiaFetchModels.innerHTML;
+    btnNvidiaFetchModels.disabled = true;
+    btnNvidiaFetchModels.innerHTML = `<span class="material-symbols-outlined text-[14px] animate-spin">refresh</span><span>获取中...</span>`;
+
+    try {
+        const res = await ipcRenderer.invoke('nvidia:fetch-models', baseUrl, apiKey);
+        if (res && res.success && Array.isArray(res.models)) {
+            populateNvidiaModelSelects(res.models);
+        } else {
+            if (nvidiaModalError) {
+                nvidiaModalError.textContent = (res && res.error) ? res.error : '获取模型列表失败';
+                nvidiaModalError.classList.remove('hidden');
+            }
+        }
+    } catch (err: any) {
+        if (nvidiaModalError) {
+            nvidiaModalError.textContent = err.message || '网络或接口请求出错';
+            nvidiaModalError.classList.remove('hidden');
+        }
+    } finally {
+        if (btnNvidiaFetchModels) {
+            btnNvidiaFetchModels.disabled = false;
+            btnNvidiaFetchModels.innerHTML = origHTML;
+        }
+    }
+}
+
+function populateNvidiaModelSelects(models: string[]) {
+    const targetMap: Array<{ inputId: string; selectId: string }> = [
+        { inputId: 'inputNvidiaModelSonnet', selectId: 'selectNvidiaModelSonnet' },
+        { inputId: 'inputNvidiaModelOpus', selectId: 'selectNvidiaModelOpus' },
+        { inputId: 'inputNvidiaModelHaiku', selectId: 'selectNvidiaModelHaiku' },
+        { inputId: 'inputNvidiaModelFable', selectId: 'selectNvidiaModelFable' },
+        { inputId: 'inputNvidiaModelDefault', selectId: 'selectNvidiaModelDefault' }
+    ];
+
+    targetMap.forEach(item => {
+        const inputEl = document.getElementById(item.inputId) as HTMLInputElement | null;
+        const selectEl = document.getElementById(item.selectId) as HTMLSelectElement | null;
+        if (!inputEl || !selectEl) return;
+
+        selectEl.innerHTML = '<option value="">选择模型...</option>';
+        models.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m;
+            opt.textContent = m;
+            selectEl.appendChild(opt);
+        });
+
+        selectEl.classList.remove('hidden');
+
+        selectEl.onchange = () => {
+            if (selectEl.value) {
+                inputEl.value = selectEl.value;
+            }
+        };
+    });
 }
 
 function openAutoTriggerModal() {

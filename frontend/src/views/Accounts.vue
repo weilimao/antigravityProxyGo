@@ -24,6 +24,9 @@
                 <button class="px-3 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 whitespace-nowrap" id="btnChannelProject" type="button">
                     <span data-i18n="gcpProjectApi">谷歌云项目 API</span>
                 </button>
+                <button class="px-3 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 whitespace-nowrap" id="btnChannelNvidia" type="button">
+                    <span data-i18n="nvidiaPool">NVIDIA 号池</span>
+                </button>
             </div>
         </div>
         <!-- 右侧：负载均衡开关与操作按钮组 -->
@@ -34,6 +37,14 @@
                     <input class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out" id="poolModeToggle" type="checkbox">
                     <label class="toggle-label block overflow-hidden h-5 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer" for="poolModeToggle"></label>
                 </div>
+            </div>
+
+            <div class="flex items-center gap-2 bg-slate-50/50 dark:bg-white/5 px-3 py-1.5 rounded-lg border border-outline-variant/30 flex-shrink-0 hidden" id="nvidiaLBModeContainer">
+                <span class="text-[13px] font-medium text-on-surface dark:text-white">轮询算法</span>
+                <select class="bg-transparent text-[13px] font-medium text-on-surface dark:text-white border border-outline-variant/40 rounded px-1.5 py-0.5 focus:outline-none cursor-pointer" id="nvidiaLBModeSelect">
+                    <option value="round-robin" class="dark:bg-[#1a1f30] text-slate-800 dark:text-white">游标轮询 (默认)</option>
+                    <option value="sticky" class="dark:bg-[#1a1f30] text-slate-800 dark:text-white">粘性会话</option>
+                </select>
             </div>
             <button class="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/50 rounded-md text-[13px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors shadow-sm cursor-pointer whitespace-nowrap flex-shrink-0" id="btnExportAccounts">
                 <span class="material-symbols-outlined text-[16px]">download</span>
@@ -56,6 +67,13 @@
                         <div>
                             <div class="font-bold" data-i18n="antigravityRecommended">Antigravity (推荐)</div>
                             <div class="text-[10px] text-outline" data-i18n="authOfficialPlugin">使用官方插件凭证授权</div>
+                        </div>
+                    </button>
+                    <button class="w-full text-left px-4 py-2 text-[13px] text-on-surface dark:text-white hover:bg-slate-50 dark:hover:bg-white/5 transition-colors flex items-center gap-2" id="btnAddNvidiaAccount">
+                        <span class="material-symbols-outlined text-amber-500 text-[16px]">bolt</span>
+                        <div>
+                            <div class="font-bold" data-i18n="nvidiaItemTitle">NVIDIA (API Key)</div>
+                            <div class="text-[10px] text-outline" data-i18n="nvidiaItemDesc">填写上游端点与 API Key 接入</div>
                         </div>
                     </button>
                 </div>
@@ -110,7 +128,7 @@
                     <span class="material-symbols-outlined text-[14px]">cleaning_services</span>
                     <span data-i18n="btnClearSessionsLabel">清空绑定</span>
                 </button>
-                <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim bg-outline-variant/10 hover:bg-primary/10 border border-outline-variant/20 hover:border-primary/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none" id="btnRefreshAllQuota" title="刷新所有账号配额" data-i18n-title="btnRefreshAllQuotaTitle">
+                <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim bg-outline-variant/10 hover:bg-primary/10 border border-outline-variant/20 hover:border-primary/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none" id="btnRefreshAllQuota" title="刷新当前页签账号配额" data-i18n-title="btnRefreshAllQuotaTitle">
                     <span class="material-symbols-outlined text-[14px]" id="btnRefreshAllIcon">sync</span>
                     <span data-i18n="btnRefreshAllQuotaLabel">刷新配额</span>
                 </button>

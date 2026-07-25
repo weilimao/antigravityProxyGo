@@ -9,6 +9,31 @@ let searchQuery = '';
 let currentPage = 1;
 const pageSize = 10;
 
+// 当前选中的账号类型 Tab，默认展示“全部”。
+let currentTab = 'all';
+
+// Tab 固定顺序：all 永远在首位，其余按 provider 优先级排列。
+// 未在数据中出现的 provider 不会渲染对应 Tab。
+const TAB_ORDER = ['all', 'antigravity', 'project', 'nvidia', 'direct'] as const;
+
+// Tab 与 i18n key 的映射，用于查找字典中的文案。
+const TAB_I18N_KEYS: Record<string, string> = {
+    all: 'usage_tabAll',
+    antigravity: 'usage_tabAntigravity',
+    project: 'usage_tabProject',
+    nvidia: 'usage_tabNvidia',
+    direct: 'usage_tabDirect',
+};
+
+// 各 Tab 在 badge / 激活态下的主色（与现有 account badge 配色保持一致）。
+const TAB_TONE: Record<string, string> = {
+    all: '',
+    antigravity: 'primary',
+    project: 'emerald',
+    nvidia: 'amber',
+    direct: 'slate',
+};
+
 export function escapeHtml(value: any): string {
     return String(value == null ? '' : value)
         .replace(/&/g, '&amp;')
@@ -63,6 +88,64 @@ export function sortModelsByTokens(items: any[]): any[] {
     });
 }
 
+// 规整账号 provider 字段：空串与未知值统一兜底为 direct，
+// 保持与其他页面对“直连”账号的处理一致。
+export function normalizeProvider(value: any): string {
+    const p = String(value == null ? '' : value).trim();
+    if (p === '' || p === 'unknown') return 'direct';
+
+    // 仅识别项目内已知 provider，其余归入 direct，避免显示脏 Tab。
+    const known: Record<string, boolean> = {
+        antigravity: true,
+        project: true,
+        nvidia: true,
+        direct: true,
+    };
+    return known[p] ? p : 'direct';
+}
+
+// 统计各 provider 下的账号数量，用于 Tab 徽标渲染。
+export function computeProviderCounts(accounts: any[]): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const acc of accounts) {
+        const p = normalizeProvider(acc ? acc.provider : '');
+        counts[p] = (counts[p] || 0) + 1;
+    }
+    return counts;
+}
+
+// 按当前 Tab 过滤账号；all 表示不过滤。
+export function filterByTab(accounts: any[], tab: string): any[] {
+    if (tab === 'all') return accounts;
+    const target = normalizeProvider(tab);
+    return accounts.filter((acc: any) => normalizeProvider(acc ? acc.provider : '') === target);
+}
+
+// 基于给定账号集合聚合一份对等结构 totals，
+// 使每个 Tab 的汇总芯片独立反映该类型的成本与命中率。
+export function computeTabSummary(accounts: any[]): any {
+    let requestCount = 0;
+    let inputTokens = 0;
+    let cachedTokens = 0;
+    let cacheHitRequests = 0;
+    let totalCost = 0;
+    for (const acc of accounts) {
+        if (!acc) continue;
+        requestCount += Number(acc.requestCount) || 0;
+        inputTokens += Number(acc.inputTokens) || 0;
+        cachedTokens += Number(acc.cachedTokens) || 0;
+        cacheHitRequests += Number(acc.cacheHitRequests) || 0;
+        totalCost += Number(acc.totalCost) || 0;
+    }
+    return {
+        requestCount,
+        inputTokens,
+        cachedTokens,
+        cacheHitRequests,
+        totalCost,
+    };
+}
+
 export function ensurePanel(): HTMLElement | null {
     let panel = document.getElementById(PANEL_ID);
     if (panel) return panel;
@@ -84,6 +167,34 @@ export function renderSummaryChip(label: string, value: string, tone = 'slate'):
             <span class="text-[13px] font-bold ${getToneClasses(tone)}">${escapeHtml(value)}</span>
         </div>
     `;
+}
+
+// 渲染账号类型 Tab 栏：仅展示数据中实际出现的 provider，
+// “全部” Tab 永远在首位。每个 Tab 附带该类型下的账号数量徽标。
+export function renderTabBar(counts: Record<string, number>, activeTab: string): string {
+    const dict = i18n[state.currentLanguage] || i18n.zh;
+    const tabs: string[] = [];
+    for (const key of TAB_ORDER) {
+        if (key !== 'all' && !(counts[key] && counts[key] > 0)) continue;
+
+        const label = dict[TAB_I18N_KEYS[key]] || key;
+        const count = key === 'all'
+            ? Object.values(counts).reduce((s: number, c: number) => s + (c || 0), 0)
+            : (counts[key] || 0);
+
+        const isActive = key === activeTab;
+        const base = 'btn-usage-tab group inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all whitespace-nowrap border';
+        const cls = isActive
+            ? 'bg-primary text-white border-primary shadow-sm'
+            : 'text-outline hover:text-primary hover:bg-primary/5 hover:border-primary/30 bg-white/60 dark:bg-white/5 border-outline-variant/30';
+        tabs.push(`
+            <button class="${base} ${cls}" data-tab="${escapeHtml(key)}">
+                <span>${escapeHtml(label)}</span>
+                <span class="${isActive ? 'bg-white/20' : 'bg-outline-variant/15'} px-1.5 py-0.5 rounded-full text-[10px] font-bold">${count}</span>
+            </button>
+        `);
+    }
+    return tabs.join('');
 }
 
 export function renderModelRows(models: any): string {
@@ -115,11 +226,14 @@ export function renderAccountBlock(account: any): string {
     const dict = i18n[state.currentLanguage] || i18n.zh;
     const tokens = (Number(account.inputTokens) || 0) + (Number(account.outputTokens) || 0);
     const provider = account.provider || 'direct';
+    // NVIDIA 号池账号使用专属 badge 配色，区分直连/项目账号。
     const badgeClass = provider === 'antigravity'
         ? 'bg-primary/10 text-primary border-primary/20'
         : provider === 'project'
             ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-            : 'bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 border-outline-variant/30';
+            : provider === 'nvidia'
+                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                : 'bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 border-outline-variant/30';
 
     const accountKey = account.email || account.accountId || 'Direct';
     const isOpen = openAccounts.has(accountKey);
@@ -227,12 +341,26 @@ export function render(usage?: any) {
         return;
     }
 
-    const totals = currentUsageData.totals || {};
     const sortedAccounts = sortUsageItems(allAccounts);
+
+    // 统计各 provider 下的账号数量，决定 Tab 栏显示哪些类型。
+    const providerCounts = computeProviderCounts(sortedAccounts);
+
+    // 若当前选中的 Tab 在数据中没有对应账号且非“全部”，则回退到“全部”，避免空选中。
+    if (currentTab !== 'all' && !(providerCounts[currentTab] && providerCounts[currentTab] > 0)) {
+        currentTab = 'all';
+    }
+
+    // 按 Tab 过滤后再叠加搜索过滤，分页与汇总均基于该结果集。
+    const tabAccounts = filterByTab(sortedAccounts, currentTab);
+
+    // 汇总芯片使用当前 Tab 内聚合的 totals，而非全局 totals，
+    // 使各账号类型的成本与命中率彼此独立呈现。
+    const totals = computeTabSummary(tabAccounts);
 
     // 过滤账号列表
     const query = searchQuery.trim().toLowerCase();
-    const filteredAccounts = sortedAccounts.filter((acc: any) => {
+    const filteredAccounts = tabAccounts.filter((acc: any) => {
         if (!query) return true;
         const name = (acc.email || acc.accountId || '').toLowerCase();
         return name.includes(query);
@@ -267,8 +395,15 @@ export function render(usage?: any) {
         panel.classList.remove('hidden');
         panel.innerHTML = `
             <div id="usageContainerCard" class="glass-card rounded-xl flex flex-col flex-1 border border-outline-variant/30 min-h-[400px]">
+                <!-- 账号类型 Tab 栏 -->
+                <div class="px-4 pt-4 pb-2 border-b border-outline-variant/20 bg-slate-50/50 dark:bg-white/5 rounded-t-xl">
+                    <div class="flex flex-wrap items-center gap-2" id="usageTabBar">
+                        ${renderTabBar(providerCounts, currentTab)}
+                    </div>
+                </div>
+
                 <!-- 工具栏与统计汇总 -->
-                <div class="p-4 border-b border-outline-variant/30 flex flex-wrap items-center justify-between gap-4 bg-slate-50/50 dark:bg-white/5 rounded-t-xl">
+                <div class="p-4 border-b border-outline-variant/30 flex flex-wrap items-center justify-between gap-4">
                     <div class="flex items-center gap-3">
                         <div class="relative flex items-center">
                             <span class="material-symbols-outlined absolute left-2.5 text-[16px] text-outline pointer-events-none">search</span>
@@ -276,20 +411,20 @@ export function render(usage?: any) {
                         </div>
                     </div>
                     <div class="flex items-center gap-4 text-right" id="usageSummaryChips">
-                        ${renderSummaryChip(dict.usage_accounts || '账号数', String(totalItems), 'primary')}
+                        ${renderSummaryChip(dict.usage_accounts || '账号数', String(totalItems), TAB_TONE[currentTab] || 'primary')}
                         ${renderSummaryChip(dict.usage_callsCount || '调用次数', formatNumber(totals.requestCount), 'slate')}
                         ${renderSummaryChip(dict.usage_totalCost || '总成本', formatMoney(totals.totalCost), 'emerald')}
                         ${renderSummaryChip(dict.usage_hitRate || '命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
                     </div>
                 </div>
-                
+
                 <!-- 账号用量数据块列表 -->
                 <div class="p-4 flex flex-col gap-3 flex-grow overflow-y-auto" id="usageAccountsList">
-                    ${pageAccounts.length > 0 
+                    ${pageAccounts.length > 0
                         ? pageAccounts.map(renderAccountBlock).join('')
                         : `<div class="flex flex-col items-center justify-center py-12 text-outline/50">
                              <span class="material-symbols-outlined text-[48px] mb-2">search_off</span>
-                             <span class="text-[13px]">${dict.usage_noMatchingData || '未找到符合条件的账号用量数据'}</span>
+                             <span class="text-[13px]">${query ? (dict.usage_noMatchingData || '未找到符合条件的账号用量数据') : (dict.usage_tabEmpty || '该类型下暂无账号用量')}</span>
                            </div>`
                     }
                 </div>
@@ -322,11 +457,17 @@ export function render(usage?: any) {
             });
         }
     } else {
-        // 更新汇总芯片
+        // 更新 Tab 栏（provider 分布或当前选中变化时重新渲染）
+        const tabBarEl = document.getElementById('usageTabBar');
+        if (tabBarEl) {
+            tabBarEl.innerHTML = renderTabBar(providerCounts, currentTab);
+        }
+
+        // 更新汇总芯片：tone 跟随当前 Tab 主色，使其与 Tab 选中态视觉呼应。
         const chipsEl = document.getElementById('usageSummaryChips');
         if (chipsEl) {
             chipsEl.innerHTML = `
-                ${renderSummaryChip(dict.usage_accounts || '账号数', String(totalItems), 'primary')}
+                ${renderSummaryChip(dict.usage_accounts || '账号数', String(totalItems), TAB_TONE[currentTab] || 'primary')}
                 ${renderSummaryChip(dict.usage_callsCount || '调用次数', formatNumber(totals.requestCount), 'slate')}
                 ${renderSummaryChip(dict.usage_totalCost || '总成本', formatMoney(totals.totalCost), 'emerald')}
                 ${renderSummaryChip(dict.usage_hitRate || '命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
@@ -336,11 +477,11 @@ export function render(usage?: any) {
         // 更新账号列表内容
         const listEl = document.getElementById('usageAccountsList');
         if (listEl) {
-            listEl.innerHTML = pageAccounts.length > 0 
+            listEl.innerHTML = pageAccounts.length > 0
                 ? pageAccounts.map(renderAccountBlock).join('')
                 : `<div class="flex flex-col items-center justify-center py-12 text-outline/50">
                      <span class="material-symbols-outlined text-[48px] mb-2">search_off</span>
-                     <span class="text-[13px]">${dict.usage_noMatchingData || '未找到符合条件的账号用量数据'}</span>
+                     <span class="text-[13px]">${query ? (dict.usage_noMatchingData || '未找到符合条件的账号用量数据') : (dict.usage_tabEmpty || '该类型下暂无账号用量')}</span>
                    </div>`;
         }
 
@@ -387,6 +528,18 @@ export function init() {
     panel.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;
 
+        // 账号类型 Tab 切换（优先判断，避免被其他分支误吞）
+        const tabBtn = target.closest('.btn-usage-tab');
+        if (tabBtn) {
+            const tab = tabBtn.getAttribute('data-tab');
+            if (tab && tab !== currentTab) {
+                currentTab = tab;
+                currentPage = 1;
+                render();
+            }
+            return;
+        }
+
         // 上一页
         const prevBtn = target.closest('#btnPrevUsagePage');
         if (prevBtn && currentPage > 1 && !(prevBtn as HTMLButtonElement).disabled) {
@@ -395,12 +548,14 @@ export function init() {
             return;
         }
 
-        // 下一页
+        // 下一页：基于当前 Tab 过滤集重新计算总页数，保证与渲染口径一致。
         const nextBtn = target.closest('#btnNextUsagePage');
         if (nextBtn && !(nextBtn as HTMLButtonElement).disabled) {
             const allAccounts = currentUsageData && currentUsageData.accounts ? Object.values(currentUsageData.accounts) : [];
+            const sortedAccounts = sortUsageItems(allAccounts);
+            const tabAccounts = filterByTab(sortedAccounts, currentTab);
             const query = searchQuery.trim().toLowerCase();
-            const filteredAccounts = allAccounts.filter((acc: any) => {
+            const filteredAccounts = tabAccounts.filter((acc: any) => {
                 if (!query) return true;
                 const name = (acc.email || acc.accountId || '').toLowerCase();
                 return name.includes(query);

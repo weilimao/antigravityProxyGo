@@ -598,9 +598,107 @@ func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]accou
 	return nil, nil
 }
 
+// fetchNvidiaQuota 通过真实请求上游 /v1/models 验证 NVIDIA 第三方 API Key 是否可用，
+// 并返回账号当前可调用的模型数量。成功时把模型数编码进一个语义 QuotaBucket：
+//   - Group: "NVIDIA 第三方 API Key"（前端气泡主标题）
+//   - ModelID: "可用模型数 N 个"（前端气泡副文案，由前端直接渲染）
+//   - RemainingFraction=1 / RemainPercent=100（语义：可用，非配额度量）
+// 失败时返回带 error 的 QuotaResult，error 文案带上游失败原因供前端红泡展示。
+// 请求拼接与 app_account_ipc.go 的 nvidia:fetch-models 保持一致，确保上游端点命中。
+func fetchNvidiaQuota(acc *account.Account) (*account.QuotaResult, error) {
+	baseURL := strings.TrimSpace(acc.BaseURL)
+	if baseURL == "" {
+		return nil, errors.New("账号未配置 Base URL")
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+
+	endpoint := baseURL + "/v1/models"
+	if strings.HasSuffix(baseURL, "/v1") {
+		endpoint = baseURL + "/models"
+	}
+
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("配额请求失败: 构造请求失败 %v", err)
+	}
+	if acc.AccessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+acc.AccessToken)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	client := netutil.NewClient(15 * time.Second)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("配额请求失败: 网络请求失败 %v", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("配额请求失败: 读取响应失败 %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		bodySnip := truncateNvidiaErrBody(bodyBytes)
+		return nil, fmt.Errorf("配额请求失败: 上游 HTTP %d %s", resp.StatusCode, bodySnip)
+	}
+
+	// 兼容 {"data":[...]} 与 {"models":[...]} 两种模型清单结构，去重计数。
+	var parsed struct {
+		Data   []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Models []struct {
+			ID string `json:"id"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
+		return nil, fmt.Errorf("配额请求失败: 解析模型数据失败 %v", err)
+	}
+
+	modelSet := make(map[string]bool)
+	for _, m := range parsed.Data {
+		if m.ID != "" {
+			modelSet[m.ID] = true
+		}
+	}
+	for _, m := range parsed.Models {
+		if m.ID != "" {
+			modelSet[m.ID] = true
+		}
+	}
+	count := len(modelSet)
+
+	credits := float64(count)
+	return &account.QuotaResult{
+		Tier: "NVIDIA",
+		Buckets: []account.QuotaBucket{
+			{
+				Group: "NVIDIA 第三方 API Key",
+				// 前端按 Group 渲染气泡主标题，ModelID 作为数量副文案直接展示
+				ModelID:           fmt.Sprintf("可用模型数 %d 个 / %d models", count, count),
+				RemainingFraction: 1,
+				RemainPercent:     100,
+			},
+		},
+		Credits: &credits,
+	}, nil
+}
+
+// truncateNvidiaErrBody 截断失败响应体用于错误信息，避免超长报错污染 UI。
+func truncateNvidiaErrBody(body []byte) string {
+	const maxLen = 200
+	if len(body) <= maxLen {
+		return string(body)
+	}
+	return string(body[:maxLen]) + "...(truncated)"
+}
+
 func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*account.Account) (string, error), updateTokenCallback func(string, string)) (*account.QuotaResult, error) {
+	if acc.Provider == "nvidia" {
+		return fetchNvidiaQuota(acc)
+	}
 	if acc.Provider == "project" {
-		// Project account is Pay-As-You-Go: return empty buckets list
 		return &account.QuotaResult{
 			Tier:    "Project Pay-As-You-Go",
 			Buckets: []account.QuotaBucket{},

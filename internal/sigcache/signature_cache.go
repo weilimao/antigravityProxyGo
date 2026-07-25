@@ -52,6 +52,11 @@ func GetGlobal() *Cache {
 	return globalCache
 }
 
+// StopGlobal 供应用优雅关闭时使用
+func StopGlobal() {
+	// SigCache 无长连接无损写，为防泄漏预留
+}
+
 // New 创建独立实例（主要用于测试）
 func New() *Cache {
 	return &Cache{entries: make(map[string]sigEntry)}

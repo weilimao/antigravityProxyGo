@@ -249,7 +249,7 @@ export function show2FAKeyModal(
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
         // REMOVED backdrop-blur-sm for maximum CPU rendering performance ( butter-smooth input )
-        overlay.className = 'fixed inset-0 bg-slate-950/70 z-[100] flex items-center justify-center transition-opacity duration-200';
+        overlay.className = 'fixed inset-0 bg-slate-950/75 z-50 flex items-center justify-center transition-opacity duration-200';
         overlay.style.opacity = '0';
 
         const card = document.createElement('div');
@@ -353,7 +353,7 @@ export function showAdd2FAModal(
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
         // REMOVED backdrop-blur-sm for maximum CPU rendering performance ( butter-smooth input )
-        overlay.className = 'fixed inset-0 bg-slate-950/70 z-[100] flex items-center justify-center transition-opacity duration-200';
+        overlay.className = 'fixed inset-0 bg-slate-950/75 z-50 flex items-center justify-center transition-opacity duration-200';
         overlay.style.opacity = '0';
 
         const card = document.createElement('div');

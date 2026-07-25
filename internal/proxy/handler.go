@@ -425,7 +425,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isPoolReq := isRealModelRequest(targetPath) || isAgentRequest(targetPath) || targetHost == "aiplatform.googleapis.com"
 	poolChannel := "antigravity"
 	if isPoolReq {
-		poolChannel = h.accountMgr.GetActiveChannel()
+		poolChannel = h.getGoogleChannel()
 	}
 
 	sessionKey := rawSessionKey
@@ -598,7 +598,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if isPoolReq {
 			usePool = true
-			poolChannel = h.accountMgr.GetActiveChannel()
+			poolChannel = h.getGoogleChannel()
 		}
 
 		if usePool {
@@ -1398,7 +1398,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		isPoolReq := isRealModelRequest(targetPath) || isAgentRequest(targetPath) || targetHost == "aiplatform.googleapis.com"
 		if isPoolReq {
 			usePoolForRetry = true
-			retryChannel = h.accountMgr.GetActiveChannel()
+			retryChannel = h.getGoogleChannel()
 		}
 
 		if usePoolForRetry {
@@ -1409,6 +1409,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			isPoolEnabled := false
 			if retryChannel == "project" {
 				isPoolEnabled = h.accountMgr.GetProjectPoolMode()
+			} else if retryChannel == "nvidia" {
+				isPoolEnabled = h.accountMgr.GetNvidiaPoolMode()
 			} else {
 				isPoolEnabled = h.accountMgr.GetPoolMode()
 			}
@@ -1579,7 +1581,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		shouldRetry := isRetryable && attempt < maxRetries
 		if errAttempt.Error() == "QUOTA_EXHAUSTED" {
 			// If all active accounts of the target channel are cooled down, do not retry further
-			targetChan := h.accountMgr.GetActiveChannel()
+			targetChan := h.getGoogleChannel()
 			if targetHost == "aiplatform.googleapis.com" {
 				targetChan = "project"
 			}
@@ -1925,4 +1927,18 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 				r.Method, targetHost, targetPath, "remote_session", time.Since(startTime).Milliseconds(), resp.StatusCode, reqID)
 		}
 	}
+}
+
+// getGoogleChannel 返回用于谷歌 Cloud AI / Antigravity 渠道请求（18443）的有效通道名称。
+// 当前端 UI 当前处于 "nvidia" 选项卡时，自动回退到 "antigravity"（或 "project"），
+// 确保本地 CLI (agy) 和扩展发往 Google 的请求绝不会误用 NVIDIA 账号。
+func (h *ProxyHandler) getGoogleChannel() string {
+	ch := h.accountMgr.GetActiveChannel()
+	if ch == "nvidia" {
+		if h.accountMgr.GetProjectPoolMode() {
+			return "project"
+		}
+		return "antigravity"
+	}
+	return ch
 }

@@ -106,7 +106,7 @@ func TestTranslateAnthropicToGemini(t *testing.T) {
 
 // TestHandleModelsEndpoint 验证 models 模型拉取端点的输出格式自适应
 func TestHandleModelsEndpoint(t *testing.T) {
-	handler := NewAPICompatHandler(nil, nil, nil, nil, nil, nil)
+	handler := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
 
 	// 1. 模拟 OpenAI 客户端拉取模型列表（不带 anthropic-version 头）
 	reqOpenAI := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -457,7 +457,7 @@ func TestOpenAIToolCallsCompat(t *testing.T) {
 	}
 	respBytes, _ := json.Marshal(gemResp)
 
-	handler := NewAPICompatHandler(nil, nil, nil, nil, nil, nil)
+	handler := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
 	rr := httptest.NewRecorder()
 	handler.handleNormalResponse(rr, bytes.NewReader(respBytes), nil, "gpt-4o", "openai", time.Now(), "/v1/chat/completions", "req_123")
 
@@ -529,7 +529,7 @@ func TestHandleV1Internal(t *testing.T) {
 	localProxyAddr = strings.TrimPrefix(mockServer.URL, "http://")
 	defer func() { localProxyAddr = origAddr }()
 
-	handler := NewAPICompatHandler(nil, nil, nil, nil, nil, nil)
+	handler := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
 	session := &RelaySession{
 		UserID:  "user_123",
 		UserKey: "key_123",

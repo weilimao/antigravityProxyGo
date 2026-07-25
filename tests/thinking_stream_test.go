@@ -3,8 +3,6 @@ package tests
 import (
 	"encoding/json"
 	"testing"
-
-	"antigravity-proxy/internal/relay"
 )
 
 func TestGeminiPartThoughtFlag(t *testing.T) {
@@ -27,22 +25,32 @@ func TestGeminiPartThoughtFlag(t *testing.T) {
 		]
 	}`
 
-	var resp relay.GeminiResponse
-	if err := json.Unmarshal([]byte(rawJSON), &resp); err != nil {
-		t.Fatalf("Failed to unmarshal GeminiResponse: %v", err)
+	var parsed struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text    string `json:"text"`
+					Thought bool   `json:"thought"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
 	}
 
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) != 2 {
-		t.Fatalf("Expected 2 parts in candidate")
+	if err := json.Unmarshal([]byte(rawJSON), &parsed); err != nil {
+		t.Fatalf("Failed to unmarshal JSON: %v", err)
 	}
 
-	p1 := resp.Candidates[0].Content.Parts[0]
-	p2 := resp.Candidates[0].Content.Parts[1]
-
-	if !p1.Thought {
-		t.Errorf("Expected p1.Thought to be true, got false")
+	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) != 2 {
+		t.Fatalf("Unexpected structure length")
 	}
+
+	p1 := parsed.Candidates[0].Content.Parts[0]
+	if !p1.Thought || p1.Text != "Thinking step 1..." {
+		t.Errorf("Part 1 failed thought check")
+	}
+
+	p2 := parsed.Candidates[0].Content.Parts[1]
 	if p2.Thought {
-		t.Errorf("Expected p2.Thought to be false, got true")
+		t.Errorf("Part 2 should not be marked as thought")
 	}
 }

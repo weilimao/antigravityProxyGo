@@ -31,7 +31,7 @@ func TestHeaderSanitizationAndSpoofing(t *testing.T) {
 	headers.Del("x-antigravity-original-method")
 	headers.Del("x-antigravity-req-id")
 
-	// 剥离多余的 Content-Length 与 Host 标头，使其与图一完全一致
+	// 剥离多余的 Content-Length 与 Host 标头
 	headers.Del("Content-Length")
 	headers.Del("content-length")
 	headers.Del("Host")
@@ -52,7 +52,7 @@ func TestHeaderSanitizationAndSpoofing(t *testing.T) {
 		t.Errorf("Content-Length or Host header was not stripped properly! Got Host=%s, Content-Length=%s", headers.Get("Host"), headers.Get("Content-Length"))
 	}
 
-	// 验证 User-Agent 伪装结果与图一要求完全一致
+	// 验证 User-Agent 伪装结果
 	expectedUA := "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)"
 	if headers.Get("User-Agent") != expectedUA {
 		t.Errorf("User-Agent spoofing mismatch. Expected: %s, Got: %s", expectedUA, headers.Get("User-Agent"))

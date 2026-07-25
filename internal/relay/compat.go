@@ -18,6 +18,7 @@ import (
 	"antigravity-proxy/internal/session"
 	"antigravity-proxy/internal/settings"
 	"antigravity-proxy/internal/sigcache"
+	"antigravity-proxy/internal/stats"
 )
 
 var localProxyAddr = "127.0.0.1:18443"
@@ -27,11 +28,23 @@ type APICompatHandler struct {
 	accountMgr    *account.Manager
 	sessionRouter *session.Router
 	statsTracker  *StatsTracker
+	// usageTracker 用于把号池成员账号维度的请求/Token/成本/模型用量计入
+	// “账号使用统计”(usage.json)，与 Gemini/claude 直连链路口径一致。
+	// NVIDIA 中继链路在 recordNvidiaUsage 内调用它，使每个号池账号
+	// (AccountMeta.ID/Email/Provider/ProjectID/ScopeType) 在前端账号使用统计页可见。
+	usageTracker  *stats.UsageTracker
 	logFn         func(string)
 	client        *http.Client
 	streamClient  *http.Client // 流式请求专用，不设全局超时，避免长生成被截断
 	settingsMgr   settings.ManagerInterface
 	rateLimiter   *RateLimiter
+	// nvidiaCursor 是 round-robin 模式下用于打破"最少计数平局"的全局游标, 单调递增。
+	// 历史上它是纯取模轮询游标; 接入 nvidiaStats 后退化为"候选集合内取模打破平局"用。
+	nvidiaCursor uint64
+	// nvidiaStats 是 NVIDIA 号池"每账号最近 1 分钟请求计数盘", 供选号时优先挑
+	// 计数最少的账号, 把突发高并发洪流摊到负载最轻的账号上, 降低单账号 1 分钟内
+	// >40 次必然 429 的概率。纯内存易失, 不持久化, 重启清零。详见 nvidia_counter.go。
+	nvidiaStats *nvidiaReqStats
 }
 
 func NewAPICompatHandler(
@@ -39,6 +52,7 @@ func NewAPICompatHandler(
 	accountMgr *account.Manager,
 	sessionRouter *session.Router,
 	statsTracker *StatsTracker,
+	usageTracker *stats.UsageTracker,
 	settingsMgr settings.ManagerInterface,
 	logFn func(string),
 ) *APICompatHandler {
@@ -47,11 +61,13 @@ func NewAPICompatHandler(
 		accountMgr:    accountMgr,
 		sessionRouter: sessionRouter,
 		statsTracker:  statsTracker,
+		usageTracker:  usageTracker,
 		settingsMgr:   settingsMgr,
 		logFn:         logFn,
 		client:        netutil.NewClient(5 * time.Minute),
 		streamClient:  &http.Client{Transport: netutil.NewTransport(), Timeout: 0},
 		rateLimiter:   NewRateLimiter(),
+		nvidiaStats:   newNvidiaReqStats(),
 	}
 }
 
@@ -69,21 +85,24 @@ func (h *APICompatHandler) log(format string, args ...interface{}) {
 }
 
 func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+
 	// 校验 Token（支持 Authorization Bearer 和 X-API-Key 两种形式）
 	token := extractToken(r)
 	if token == "" {
-		h.log("🔑 Authentication failed: missing API Key / Token in request headers (URL: %s)", r.URL.Path)
+		h.log("🔑 Authentication failed: missing API Key / Token in request headers (URL: %s)", path)
 		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing API Key"})
 		return
 	}
+
+	h.log("📥 [请求接入] %s %s | Token: %s", r.Method, path, token)
+
 	session, err := h.authMgr.ValidateToken(token)
 	if err != nil {
-		h.log("🔑 Authentication failed: invalid API Key %q: %v (URL: %s)", token, err, r.URL.Path)
+		h.log("🔑 Authentication failed: invalid API Key %q: %v (URL: %s)", token, err, path)
 		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "invalid API Key: " + err.Error()})
 		return
 	}
-
-	path := r.URL.Path
 
 	// 校验速率限制 (每分钟最多请求次数，默认为30次)
 	if r.Method == http.MethodPost && (path == "/v1/chat/completions" || path == "/v1/responses" || path == "/responses" || path == "/responses/compact" || path == "/v1/messages") {
@@ -123,7 +142,13 @@ func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. v1internal 接口 (支持 /v1internal:generateContent 或 /v1internal:streamGenerateContent)
+	// 4. NVIDIA 专属号池接口 (/nvidia/v1/models, /nvidia/v1/chat/completions, /nvidia/v1/messages)
+	if strings.HasPrefix(path, "/nvidia") {
+		h.handleNvidia(w, r, session)
+		return
+	}
+
+	// 5. v1internal 接口 (支持 /v1internal:generateContent 或 /v1internal:streamGenerateContent)
 	if strings.HasPrefix(path, "/v1internal:") && r.Method == http.MethodPost {
 		h.handleV1Internal(w, r, session)
 		return

@@ -331,14 +331,14 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 			return marshalResponse(nil)
 		}
 		stats := a.relayStatsMgr.GetUserStats(userId)
-		var geminiLifetime, claudeLifetime int64
+		var geminiLifetime, claudeLifetime, nvidiaLifetime int64
 		user := a.relayUserMgr.GetUserByID(userId)
 		if user != nil {
 			if user.Quotas.Gemini.ResetAt != "" {
 				geminiLifetime, _ = db.GetTokensForUserModelFamilySince(userId, "gemini", user.Quotas.Gemini.ResetAt)
 			} else if stats != nil {
 				for mName, mStats := range stats.Models {
-					if !strings.Contains(strings.ToLower(mName), "claude") {
+					if relay.MatchModelFamily(mName, relay.FamilyGemini) {
 						geminiLifetime += int64(mStats.InputTokens + mStats.OutputTokens)
 					}
 				}
@@ -348,16 +348,29 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 				claudeLifetime, _ = db.GetTokensForUserModelFamilySince(userId, "claude", user.Quotas.Claude.ResetAt)
 			} else if stats != nil {
 				for mName, mStats := range stats.Models {
-					if strings.Contains(strings.ToLower(mName), "claude") {
+					if relay.MatchModelFamily(mName, relay.FamilyClaude) {
 						claudeLifetime += int64(mStats.InputTokens + mStats.OutputTokens)
+					}
+				}
+			}
+
+			if user.Quotas.Nvidia.ResetAt != "" {
+				nvidiaLifetime, _ = db.GetTokensForUserModelFamilySince(userId, relay.NvidiaQuotaFamily, user.Quotas.Nvidia.ResetAt)
+			} else if stats != nil {
+				for mName, mStats := range stats.Models {
+					if relay.MatchModelFamily(mName, relay.FamilyNvidia) {
+						nvidiaLifetime += int64(mStats.InputTokens + mStats.OutputTokens)
 					}
 				}
 			}
 		} else if stats != nil {
 			for mName, mStats := range stats.Models {
-				if strings.Contains(strings.ToLower(mName), "claude") {
+				switch {
+				case relay.MatchModelFamily(mName, relay.FamilyNvidia):
+					nvidiaLifetime += int64(mStats.InputTokens + mStats.OutputTokens)
+				case relay.MatchModelFamily(mName, relay.FamilyClaude):
 					claudeLifetime += int64(mStats.InputTokens + mStats.OutputTokens)
-				} else {
+				default:
 					geminiLifetime += int64(mStats.InputTokens + mStats.OutputTokens)
 				}
 			}
@@ -365,8 +378,9 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 
 		var geminiHourlyUsed, geminiDailyUsed int64
 		var claudeHourlyUsed, claudeDailyUsed int64
-		var geminiHourlyResetAt, claudeHourlyResetAt string
-		var geminiDailyResetAt, claudeDailyResetAt string
+		var nvidiaHourlyUsed, nvidiaDailyUsed int64
+		var geminiHourlyResetAt, claudeHourlyResetAt, nvidiaHourlyResetAt string
+		var geminiDailyResetAt, claudeDailyResetAt, nvidiaDailyResetAt string
 		if user != nil {
 			if user.Quotas.Gemini.EnableHourly && user.Quotas.Gemini.HourlyHours > 0 {
 				var resetStr string
@@ -397,6 +411,21 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 					claudeDailyResetAt = resetStr
 				}
 			}
+
+			if user.Quotas.Nvidia.EnableHourly && user.Quotas.Nvidia.HourlyHours > 0 {
+				var resetStr string
+				nvidiaHourlyUsed, resetStr, _ = relay.GetActiveWindow(userId, relay.NvidiaQuotaFamily, "nvidia_hourly", user.Quotas.Nvidia.HourlyHours, false)
+				if resetStr != "" {
+					nvidiaHourlyResetAt = resetStr
+				}
+			}
+			if user.Quotas.Nvidia.EnableDaily && user.Quotas.Nvidia.DailyDays > 0 {
+				var resetStr string
+				nvidiaDailyUsed, resetStr, _ = relay.GetActiveWindow(userId, relay.NvidiaQuotaFamily, "nvidia_daily", user.Quotas.Nvidia.DailyDays*24, false)
+				if resetStr != "" {
+					nvidiaDailyResetAt = resetStr
+				}
+			}
 		}
 
 		return marshalResponse(map[string]interface{}{
@@ -408,10 +437,15 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 			"claudeLifetime":      claudeLifetime,
 			"claudeHourlyUsed":    claudeHourlyUsed,
 			"claudeDailyUsed":     claudeDailyUsed,
+			"nvidiaLifetime":      nvidiaLifetime,
+			"nvidiaHourlyUsed":    nvidiaHourlyUsed,
+			"nvidiaDailyUsed":     nvidiaDailyUsed,
 			"geminiHourlyResetAt": geminiHourlyResetAt,
 			"claudeHourlyResetAt": claudeHourlyResetAt,
+			"nvidiaHourlyResetAt": nvidiaHourlyResetAt,
 			"geminiDailyResetAt":  geminiDailyResetAt,
 			"claudeDailyResetAt":  claudeDailyResetAt,
+			"nvidiaDailyResetAt":  nvidiaDailyResetAt,
 		})
 
 	// ========== Remote Connection (Client Mode) ==========
@@ -623,6 +657,7 @@ func (a *App) ensureRelayInitialized() {
 		a.accountMgr,
 		a.sessionRouter,
 		a.relayStatsMgr,
+		a.usageTracker,
 		a.settingsMgr,
 		a.AddLog,
 	)

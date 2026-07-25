@@ -7,7 +7,7 @@ export function showOneStopAuthModal(): Promise<{ success: boolean; email: strin
         const dict = i18n[state.currentLanguage] || i18n.zh;
 
         const overlay = document.createElement('div');
-        overlay.className = 'fixed inset-0 bg-slate-950/60 z-[100] flex items-center justify-center transition-opacity duration-200';
+        overlay.className = 'fixed inset-0 bg-slate-950/75 z-50 flex items-center justify-center transition-opacity duration-200';
         overlay.style.opacity = '0';
 
         const card = document.createElement('div');

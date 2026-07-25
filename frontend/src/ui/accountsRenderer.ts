@@ -65,6 +65,99 @@ export function formatCooldownTime(cooldownTime: any): string {
     }
 }
 
+// renderNvidiaAccountQuota 渲染 NVIDIA 第三方 API Key 账号的配额探活气泡。
+// 状态优先级：停用 > 刷新失败 > 刷新成功(带模型数) > 未刷新兜底。
+// 与后端 fetchNvidiaQuota 的语义 QuotaBucket(GROUP=NVIDIA 第三方 API Key, ModelID="可用模型数 N 个")配合：
+// 成功时直接展示 cache[0].modelId 文案作为模型数副标题。
+function renderNvidiaAccountQuota(containerEl: HTMLElement, acc: any, isZH: boolean, dict: any) {
+    if (!containerEl) return;
+    const isEnabled = acc && acc.enabled !== false;
+
+    // 1. 停用账号：灰泡，不参与探活
+    if (!isEnabled) {
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-slate-500/10 dark:bg-slate-500/5 border border-slate-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                <span class="text-[10px] font-medium text-slate-500 dark:text-slate-400" data-i18n="nvidiaAccountDisabled">${isZH ? '账号已停用' : (dict.accountDisabled || 'Account Disabled')}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 2. 刷新失败：红泡"配额请求失败"+原因(来自 state.nvidiaQuotaError[acc.id])
+    const loadState = state.quotaLoadingState ? state.quotaLoadingState[acc.id] : undefined;
+    const errMsg = state.nvidiaQuotaError ? state.nvidiaQuotaError[acc.id] : '';
+    if (loadState === 'error' || errMsg) {
+        const reason = errMsg || (isZH ? '未知错误' : 'Unknown error');
+        containerEl.innerHTML = `
+            <div class="flex flex-col gap-1 bg-red-500/10 dark:bg-red-500/5 border border-red-500/20 rounded-lg p-2.5 mt-1">
+                <div class="flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                    <span class="text-[10px] font-bold text-red-600 dark:text-red-400" data-i18n="nvidiaQuotaFail">${isZH ? '配额请求失败' : 'Quota Probe Failed'}</span>
+                </div>
+                <span class="text-[9px] text-red-500/80 dark:text-red-400/70 truncate" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 3. 刷新成功：绿泡"账号可用"+可用模型数(取 cache[0].modelId 文案或 credits)
+    const buckets = state.quotaCache ? state.quotaCache[acc.id] : undefined;
+    if (loadState === 'success' && buckets && buckets.length > 0) {
+        let modelCountText = '';
+        if (typeof buckets[0].modelId === 'string' && buckets[0].modelId) {
+            modelCountText = buckets[0].modelId;
+        } else if (typeof buckets[0].credits === 'number') {
+            modelCountText = isZH ? `可用模型数 ${buckets[0].credits} 个` : `${buckets[0].credits} models`;
+        }
+        const countBadge = modelCountText
+            ? `<span class="text-[10px] font-medium text-emerald-700 dark:text-emerald-300">${escapeHtml(modelCountText)}</span>`
+            : '';
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400" data-i18n="nvidiaAccountAvailable">${isZH ? '账号可用 (NVIDIA 第三方 API Key)' : 'Account Available (NVIDIA API Key)'}</span>
+                ${countBadge}
+            </div>
+        `;
+        return;
+    }
+
+    // 4. 未刷新过(首次渲染/loading 中)：绿泡"账号可用"+灰色提示"点击刷新验证"
+    if (loadState === 'loading') {
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">${isZH ? '正在请求上游验证...' : 'Probing upstream...'}</span>
+            </div>
+        `;
+        return;
+    }
+    containerEl.innerHTML = `
+        <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400" data-i18n="nvidiaAccountAvailable">${isZH ? '账号可用 (NVIDIA 第三方 API Key)' : 'Account Available (NVIDIA API Key)'}</span>
+            <span class="text-[9px] text-emerald-500/60 dark:text-emerald-400/50">${isZH ? '点击刷新验证' : 'Click refresh to verify'}</span>
+        </div>
+    `;
+}
+
+// escapeHtml 转义 HTML 特殊字符，避免把上游错误体直接 innerHTML 注入导致 XSS/样式破坏。
+// 实体采用显式 String.fromCharCode / 拼接构造，规避编辑器对实体的反转义。
+function escapeHtml(s: string): string {
+    const AMP = String.fromCharCode(38);      // &
+    const LT = String.fromCharCode(60);       // <
+    const GT = String.fromCharCode(62);       // >
+    const QUOT = String.fromCharCode(34);     // "
+    const APOS = String.fromCharCode(39);     // '
+    return String(s)
+        .replace(new RegExp(AMP, 'g'), AMP + 'amp;')
+        .replace(new RegExp(LT, 'g'), AMP + 'lt;')
+        .replace(new RegExp(GT, 'g'), AMP + 'gt;')
+        .replace(new RegExp(QUOT, 'g'), AMP + 'quot;')
+        .replace(new RegExp(APOS, 'g'), AMP + '#39;');
+}
+
 // Render account quota progress bars
 export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[], cooldowns: any = {}) {
     if (!containerEl) return;
@@ -72,9 +165,13 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
     const dict = i18n[state.currentLanguage] || i18n.zh;
     const isZH = state.currentLanguage === 'zh';
 
-    // 针对 Project 渠道（API 级别/按量付费项目）进行特殊展示，不显示假周限额进度条
+    // 针对非官方渠道进行特殊展示，不显示假周限额进度条
     const accountId = containerEl.id ? containerEl.id.replace('quotaBars-', '') : '';
     const acc = state.currentAccountsList?.find(a => a.id === accountId);
+    if (acc && acc.provider === 'nvidia') {
+        renderNvidiaAccountQuota(containerEl, acc, isZH, dict);
+        return;
+    }
     if (acc && acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli') {
         containerEl.innerHTML = `
             <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
@@ -104,8 +201,14 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
 
         Object.keys(groups).forEach((groupName, idx) => {
             const groupBuckets = groups[groupName];
-            const isClaude = groupName.toLowerCase().includes('claude');
-            const category = isClaude ? 'claude' : 'gemini';
+            const lowerGroup = groupName.toLowerCase();
+            // 冷却类别与后端 account.go 解耦为三族：gemini / claude / nvidia。
+            // NVIDIA 号池走独立 "nvidia" 冷却键，避免误读 gemini 冷静条。
+            const category = lowerGroup.includes('claude')
+                ? 'claude'
+                : lowerGroup.includes('nvidia')
+                    ? 'nvidia'
+                    : 'gemini';
             
             let isCategoryCooling = false;
             let categoryCooldownUntil = 0;
@@ -204,6 +307,12 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
         state.quotaLoadingState = {};
     }
 
+    // NVIDIA 账号同样需要向后端 quota:fetch 发起探活请求(/v1/models)以校验可用性并
+    // 取得可用模型数。此前这里对 nvidia provider 提前 return 导致刷新按钮对 NVIDIA
+    // 账号"什么也不做"，且当其它 tab 残留卡片被误触发时反而刷到了 antigravity 账号。
+    // 统一流程后，特定 provider 的差异化渲染由下方 success/error 分支中的
+    // accForProbe.provider === 'nvidia' 判定负责。
+
     if (!force && state.quotaCache[accountId]) {
         const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
         renderQuotaBars(activeContainer, state.quotaCache[accountId], cooldowns);
@@ -229,16 +338,28 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
     if (icon) icon.classList.add('animate-spin');
     const initContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
     if (initContainer) initContainer.innerHTML = `<span class="text-[10px] text-outline/50">${isZH ? '加载中...' : 'Loading...'}</span>`;
-    
+
     state.quotaLoadingState[accountId] = 'loading';
+    // 清除上轮 NVIDIA 探活失败原因，避免成功后被误判为失败
+    if (state.nvidiaQuotaError) delete state.nvidiaQuotaError[accountId];
+
+    // 当前账号对象，用于 nvidia 分支判定 provider
+    const accForProbe = state.currentAccountsList?.find(a => a.id === accountId);
 
     try {
         const result = await ipcRenderer.invoke('quota:fetch', accountId);
         const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
-        
+
         if (result.error) {
             state.quotaLoadingState[accountId] = 'error';
-            if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">${result.error}</span>`;
+            if (accForProbe && accForProbe.provider === 'nvidia') {
+                // NVIDIA 失败：记失败原因并走红泡渲染(展示上游 HTTP/错误简述)
+                if (!state.nvidiaQuotaError) state.nvidiaQuotaError = {};
+                state.nvidiaQuotaError[accountId] = String(result.error);
+                renderQuotaBars(activeContainer, [], cooldowns);
+            } else {
+                if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">${result.error}</span>`;
+            }
         } else {
             state.quotaLoadingState[accountId] = 'success';
             state.quotaCache[accountId] = result.buckets;
@@ -248,7 +369,14 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
     } catch (e) {
         state.quotaLoadingState[accountId] = 'error';
         const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
-        if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">${isZH ? '请求失败' : 'Request failed'}</span>`;
+        if (accForProbe && accForProbe.provider === 'nvidia') {
+            const reason = (e && (e as any).message) ? String((e as any).message) : (isZH ? '请求失败' : 'Request failed');
+            if (!state.nvidiaQuotaError) state.nvidiaQuotaError = {};
+            state.nvidiaQuotaError[accountId] = reason;
+            renderQuotaBars(activeContainer, [], cooldowns);
+        } else {
+            if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">${isZH ? '请求失败' : 'Request failed'}</span>`;
+        }
     } finally {
         // 实时从当前最新的 DOM 中获取按钮元素，防止因为页面重绘导致闭包内的旧 DOM 节点已被销毁而无法清除旋转动画的问题
         const currentCard = document.querySelector(`[data-account-id="${accountId}"]`);
@@ -430,9 +558,9 @@ export function renderAccounts(accounts: any[]) {
                 ? '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 ml-2 mt-0.5 self-center">Antigravity</span>'
                 : (acc.provider === 'gemini-cli'
                     ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Gemini CLI</span>'
-                    : '');
+                    : (acc.provider === 'nvidia' ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 dark:text-amber-400 text-[9px] font-bold border border-amber-500/20 ml-2 mt-0.5 self-center">NVIDIA</span>' : ''));
 
-            const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.projectId)
+            const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.provider !== 'nvidia' && acc.projectId)
                 ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center">Project</span>'
                 : '';
 
@@ -603,7 +731,11 @@ export function renderAccounts(accounts: any[]) {
             
             checkbox.addEventListener('change', (e: any) => {
                 const enabled = e.target.checked;
-                ipcRenderer.send('accounts:toggle-enabled', acc.id, enabled);
+                if (acc.provider === 'nvidia') {
+                    ipcRenderer.send('nvidia:toggle-enabled', acc.id, enabled);
+                } else {
+                    ipcRenderer.send('accounts:toggle-enabled', acc.id, enabled);
+                }
                 acc.enabled = enabled;
                 if (enabled) {
                     checkbox.className = 'toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-2 border-primary appearance-none cursor-pointer translate-x-4 transition-transform duration-200 ease-in-out';
@@ -643,7 +775,11 @@ export function renderAccounts(accounts: any[]) {
             btnDelete.innerHTML = `<span class="material-symbols-outlined text-[14px]">delete</span> ${dict.btnRemove || '移除'}`;
             btnDelete.onclick = async () => {
                 if (await $confirm((dict.removeAccountConfirm || '确定要移除账号 {email} 吗？').replace('{email}', acc.email))) {
-                    ipcRenderer.send('accounts:remove', acc.id);
+                    if (acc.provider === 'nvidia') {
+                        ipcRenderer.send('nvidia:remove', acc.id);
+                    } else {
+                        ipcRenderer.send('accounts:remove', acc.id);
+                    }
                 }
             };
             
@@ -870,6 +1006,8 @@ export function updateAggregateQuotaUI() {
             isPool = !!state.lastBackendData.geminiCliPoolMode;
         } else if (state.currentActiveChannel === 'project') {
             isPool = !!state.lastBackendData.projectPoolMode;
+        } else if (state.currentActiveChannel === 'nvidia') {
+            isPool = !!state.lastBackendData.nvidiaPoolMode;
         }
     } else if (poolModeToggle) {
         isPool = poolModeToggle.checked;
@@ -884,8 +1022,8 @@ export function updateAggregateQuotaUI() {
         return;
     }
     
-    // 第二优先级：如果没有开远程，且（没开负载均衡，或当前账户列表为空，或处于项目通道），则隐藏面板
-    if (!isRemote && (!isPool || !state.currentAccountsList || state.currentAccountsList.length === 0 || state.currentActiveChannel === 'project')) {
+    // 第二优先级：如果没有开远程，且（没开负载均衡，或当前账户列表为空，或处于项目通道/Nvidia通道），则隐藏面板
+    if (!isRemote && (!isPool || !state.currentAccountsList || state.currentAccountsList.length === 0 || state.currentActiveChannel === 'project' || state.currentActiveChannel === 'nvidia')) {
         panel.classList.add('hidden');
         panel.classList.remove('flex');
         return;
