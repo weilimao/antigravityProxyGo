@@ -1,0 +1,10 @@
+[log] 本运行日志将写入: logs\nvidia_probe_20260726_125517_stream.log
+==== NVIDIA 上游流式探测 ====
+BaseURL  : https://integrate.api.nvidia.com/v1
+Target   : https://integrate.api.nvidia.com/v1/chat/completions
+Model    : z-ai/glm-5.2
+Prompt   : "分析下面这段 Go 代码的并发安全问题,详述你的推理过程,最后给结论。\n\nfunc (s *Store) Update(key string, fn func(int) int) {\n    s.m.RLock()\n    v, ok := s.data[key]\n    s.m.RUnlock()\n    if !ok { v = 0 }\n    nv := fn(v)\n    s.m.Lock()\n    s.data[key] = nv\n    s.m.Unlock()\n}\n"
+Token    : nvapi-sKF9nA1t...
+Mode     : stream
+
+[上游请求失败] 已耗时 5.0283295s | Post "https://integrate.api.nvidia.com/v1/chat/completions": EOF

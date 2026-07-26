@@ -1,0 +1,2056 @@
+[log] 本运行日志将写入: logs\nvidia_probe_20260726_125600_stream.log
+==== NVIDIA 上游流式探测 ====
+BaseURL  : https://integrate.api.nvidia.com/v1
+Target   : https://integrate.api.nvidia.com/v1/chat/completions
+Model    : z-ai/glm-5.2
+Prompt   : "分析下面这段 Go 代码的并发安全问题,详述你的推理过程,最后给结论。\n\nfunc (s *Store) Update(key string, fn func(int) int) {\n    s.m.RLock()\n    v, ok := s.data[key]\n    s.m.RUnlock()\n    if !ok { v = 0 }\n    nv := fn(v)\n    s.m.Lock()\n    s.data[key] = nv\n    s.m.Unlock()\n}\n"
+Token    : nvapi-sKF9nA1t...
+Mode     : stream
+
+[响应状态码] 200 | 发起后 4.1751833s
+[响应头 Content-Type] "text/event-stream"
+[响应头 Transfer-Encoding] ""
+[响应头 Cache-Control] "no-cache"
+[流式] 开始逐行读取 SSE, 下面每行带 [行号 | 相对启动ms | 累计字节]:
+  [#1    |   4175ms | cum=306B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"这段","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "这段"
+      · role = "assistant"
+  [#2    |   4175ms | cum=307B] 
+  [#3    |   4425ms | cum=617B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" Go 代码","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " Go 代码"
+      · role = "assistant"
+  [#4    |   4425ms | cum=618B] 
+  [#5    |   4425ms | cum=935B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"存在**严重的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "存在**严重的"
+      · role = "assistant"
+  [#6    |   4425ms | cum=936B] 
+  [#7    |   4486ms | cum=1256B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"并发安全问题**","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "并发安全问题**"
+      · role = "assistant"
+  [#8    |   4486ms | cum=1257B] 
+  [#9    |   4486ms | cum=1560B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"。","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "。"
+      · role = "assistant"
+  [#10   |   4486ms | cum=1561B] 
+  [#11   |   4513ms | cum=1867B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"核心","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "核心"
+      · role = "assistant"
+  [#12   |   4513ms | cum=1868B] 
+  [#13   |   8384ms | cum=2183B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"问题在于它","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "问题在于它"
+      · role = "assistant"
+  [#14   |   8384ms | cum=2184B] 
+  [#15   |   8424ms | cum=2490B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"实现","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "实现"
+      · role = "assistant"
+  [#16   |   8424ms | cum=2491B] 
+  [#17   |   8454ms | cum=2809B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"了一个典型的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "了一个典型的"
+      · role = "assistant"
+  [#18   |   8454ms | cum=2810B] 
+  [#19   |   8484ms | cum=3121B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"**“检查","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "**“检查"
+      · role = "assistant"
+  [#20   |   8484ms | cum=3122B] 
+  [#21   |   8524ms | cum=3429B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"-更新","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "-更新"
+      · role = "assistant"
+  [#22   |   8524ms | cum=3430B] 
+  [#23   |   8554ms | cum=3736B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"”（","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "”（"
+      · role = "assistant"
+  [#24   |   8554ms | cum=3737B] 
+  [#25   |   8585ms | cum=4041B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"Read","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "Read"
+      · role = "assistant"
+  [#26   |   8585ms | cum=4042B] 
+  [#27   |   8835ms | cum=4350B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"-Modify-","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "-Modify-"
+      · role = "assistant"
+  [#28   |   8835ms | cum=4351B] 
+  [#29   |   8835ms | cum=4658B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"Write /","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "Write /"
+      · role = "assistant"
+  [#30   |   8835ms | cum=4659B] 
+  [#31   |   8835ms | cum=4962B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" TO","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " TO"
+      · role = "assistant"
+  [#32   |   8835ms | cum=4963B] 
+  [#33   |   8835ms | cum=5270B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"CTOU）","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "CTOU）"
+      · role = "assistant"
+  [#34   |   8835ms | cum=5271B] 
+  [#35   |   8835ms | cum=5574B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"竞","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "竞"
+      · role = "assistant"
+  [#36   |   8835ms | cum=5575B] 
+  [#37   |   8835ms | cum=5884B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"态条件","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "态条件"
+      · role = "assistant"
+  [#38   |   8835ms | cum=5885B] 
+  [#39   |   8835ms | cum=6203B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"**。\n\n以下是","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "**。\n\n以下是"
+      · role = "assistant"
+  [#40   |   8835ms | cum=6204B] 
+  [#41   |   8862ms | cum=6513B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"详述的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "详述的"
+      · role = "assistant"
+  [#42   |   8862ms | cum=6514B] 
+  [#43   |   8893ms | cum=6833B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"推理过程：\n\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "推理过程：\n\n"
+      · role = "assistant"
+  [#44   |   8893ms | cum=6834B] 
+  [#45   |   8934ms | cum=7137B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"###","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "###"
+      · role = "assistant"
+  [#46   |   8934ms | cum=7138B] 
+  [#47   |   8963ms | cum=7451B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 推理过程","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 推理过程"
+      · role = "assistant"
+  [#48   |   8963ms | cum=7452B] 
+  [#49   |   9005ms | cum=7758B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"分析","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "分析"
+      · role = "assistant"
+  [#50   |   9005ms | cum=7759B] 
+  [#51   |   9033ms | cum=8068B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"\n\n#### ","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "\n\n#### "
+      · role = "assistant"
+  [#52   |   9033ms | cum=8069B] 
+  [#53   |   9064ms | cum=8371B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"1.","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "1."
+      · role = "assistant"
+  [#54   |   9064ms | cum=8372B] 
+  [#55   |   9103ms | cum=8682B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 破坏了","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 破坏了"
+      · role = "assistant"
+  [#56   |   9103ms | cum=8683B] 
+  [#57   |   9132ms | cum=8993B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"“检查-","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "“检查-"
+      · role = "assistant"
+  [#58   |   9132ms | cum=8994B] 
+  [#59   |   9164ms | cum=9301B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"执行-","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "执行-"
+      · role = "assistant"
+  [#60   |   9164ms | cum=9302B] 
+  [#61   |   9204ms | cum=9608B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"更新","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "更新"
+      · role = "assistant"
+  [#62   |   9204ms | cum=9609B] 
+  [#63   |   9234ms | cum=9921B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"”的原子","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "”的原子"
+      · role = "assistant"
+  [#64   |   9234ms | cum=9922B] 
+  [#65   |   9265ms | cum=10230B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"性\n该","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "性\n该"
+      · role = "assistant"
+  [#66   |   9265ms | cum=10231B] 
+  [#67   |  10364ms | cum=10546B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"函数的逻辑","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "函数的逻辑"
+      · role = "assistant"
+  [#68   |  10364ms | cum=10547B] 
+  [#69   |  11074ms | cum=10856B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"分为三","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "分为三"
+      · role = "assistant"
+  [#70   |  11074ms | cum=10857B] 
+  [#71   |  11314ms | cum=11166B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"步：\n1","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "步：\n1"
+      · role = "assistant"
+  [#72   |  11314ms | cum=11167B] 
+  [#73   |  11314ms | cum=11474B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":". **读","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = ". **读"
+      · role = "assistant"
+  [#74   |  11314ms | cum=11475B] 
+  [#75   |  11314ms | cum=11778B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"（","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "（"
+      · role = "assistant"
+  [#76   |  11314ms | cum=11779B] 
+  [#77   |  11314ms | cum=12087B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"Check）","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "Check）"
+      · role = "assistant"
+  [#78   |  11314ms | cum=12088B] 
+  [#79   |  11314ms | cum=12399B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"**：获取","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "**：获取"
+      · role = "assistant"
+  [#80   |  11314ms | cum=12400B] 
+  [#81   |  11314ms | cum=12709B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"读锁，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "读锁，"
+      · role = "assistant"
+  [#82   |  11314ms | cum=12710B] 
+  [#83   |  11314ms | cum=13016B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"查询","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "查询"
+      · role = "assistant"
+  [#84   |  11314ms | cum=13017B] 
+  [#85   |  12424ms | cum=13323B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"当前","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "当前"
+      · role = "assistant"
+  [#86   |  12424ms | cum=13324B] 
+  [#87   |  13464ms | cum=13630B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `key`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `key`"
+      · role = "assistant"
+  [#88   |  13464ms | cum=13631B] 
+  [#89   |  13464ms | cum=13940B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 的值 `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 的值 `"
+      · role = "assistant"
+  [#90   |  13464ms | cum=13941B] 
+  [#91   |  13464ms | cum=14246B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"v`，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "v`，"
+      · role = "assistant"
+  [#92   |  13464ms | cum=14247B] 
+  [#93   |  13464ms | cum=14553B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"释放","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "释放"
+      · role = "assistant"
+  [#94   |  13464ms | cum=14554B] 
+  [#95   |  13464ms | cum=14865B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"读锁。\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "读锁。\n"
+      · role = "assistant"
+  [#96   |  13464ms | cum=14866B] 
+  [#97   |  13613ms | cum=15171B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"2. **","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "2. **"
+      · role = "assistant"
+  [#98   |  13613ms | cum=15172B] 
+  [#99   |  13613ms | cum=15485B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"算（Execute","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "算（Execute"
+      · role = "assistant"
+  [#100  |  13613ms | cum=15486B] 
+  [#101  |  13723ms | cum=15794B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"）**：","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "）**："
+      · role = "assistant"
+  [#102  |  13723ms | cum=15795B] 
+  [#103  |  13723ms | cum=16104B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"在没有","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "在没有"
+      · role = "assistant"
+  [#104  |  13723ms | cum=16105B] 
+  [#105  |  13723ms | cum=16414B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁保护","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁保护"
+      · role = "assistant"
+  [#106  |  13723ms | cum=16415B] 
+  [#107  |  13723ms | cum=16736B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"的情况下，调用","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "的情况下，调用"
+      · role = "assistant"
+  [#108  |  13723ms | cum=16737B] 
+  [#109  |  13723ms | cum=17043B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"传入","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "传入"
+      · role = "assistant"
+  [#110  |  13723ms | cum=17044B] 
+  [#111  |  13723ms | cum=17347B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "的"
+      · role = "assistant"
+  [#112  |  13723ms | cum=17348B] 
+  [#113  |  13723ms | cum=17660B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"闭包函数","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "闭包函数"
+      · role = "assistant"
+  [#114  |  13723ms | cum=17661B] 
+  [#115  |  13723ms | cum=17967B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `fn(v","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `fn(v"
+      · role = "assistant"
+  [#116  |  13723ms | cum=17968B] 
+  [#117  |  13735ms | cum=18270B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":")`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = ")`"
+      · role = "assistant"
+  [#118  |  13735ms | cum=18271B] 
+  [#119  |  13773ms | cum=18581B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 计算新","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 计算新"
+      · role = "assistant"
+  [#120  |  13773ms | cum=18582B] 
+  [#121  |  13802ms | cum=18889B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"值 `nv","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "值 `nv"
+      · role = "assistant"
+  [#122  |  13802ms | cum=18890B] 
+  [#123  |  14892ms | cum=19197B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"`。\n3","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "`。\n3"
+      · role = "assistant"
+  [#124  |  14892ms | cum=19198B] 
+  [#125  |  15884ms | cum=19505B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":". **写","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = ". **写"
+      · role = "assistant"
+  [#126  |  15884ms | cum=19506B] 
+  [#127  |  15914ms | cum=19815B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"（Update","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "（Update"
+      · role = "assistant"
+  [#128  |  15914ms | cum=19816B] 
+  [#129  |  15954ms | cum=20124B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"）**：","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "）**："
+      · role = "assistant"
+  [#130  |  15954ms | cum=20125B] 
+  [#131  |  15984ms | cum=20437B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"获取写锁","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "获取写锁"
+      · role = "assistant"
+  [#132  |  15984ms | cum=20438B] 
+  [#133  |  16224ms | cum=20747B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"，将新","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "，将新"
+      · role = "assistant"
+  [#134  |  16224ms | cum=20748B] 
+  [#135  |  16224ms | cum=21055B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"值 `nv","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "值 `nv"
+      · role = "assistant"
+  [#136  |  16224ms | cum=21056B] 
+  [#137  |  16304ms | cum=21364B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"` 写回","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "` 写回"
+      · role = "assistant"
+  [#138  |  16304ms | cum=21365B] 
+  [#139  |  16304ms | cum=21671B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `data","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `data"
+      · role = "assistant"
+  [#140  |  16304ms | cum=21672B] 
+  [#141  |  16364ms | cum=21978B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"[key]`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "[key]`"
+      · role = "assistant"
+  [#142  |  16364ms | cum=21979B] 
+  [#143  |  16364ms | cum=22291B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"，释放写","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "，释放写"
+      · role = "assistant"
+  [#144  |  16364ms | cum=22292B] 
+  [#145  |  16418ms | cum=22608B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁。\n\n问题","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁。\n\n问题"
+      · role = "assistant"
+  [#146  |  16418ms | cum=22609B] 
+  [#147  |  16514ms | cum=22912B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"出","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "出"
+      · role = "assistant"
+  [#148  |  16514ms | cum=22913B] 
+  [#149  |  16906ms | cum=23225B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"在第一步","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "在第一步"
+      · role = "assistant"
+  [#150  |  16906ms | cum=23226B] 
+  [#151  |  16963ms | cum=23535B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"释放读","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "释放读"
+      · role = "assistant"
+  [#152  |  16964ms | cum=23536B] 
+  [#153  |  16993ms | cum=23842B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁和","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁和"
+      · role = "assistant"
+  [#154  |  16994ms | cum=23843B] 
+  [#155  |  17024ms | cum=24158B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"第三步获取","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "第三步获取"
+      · role = "assistant"
+  [#156  |  17024ms | cum=24159B] 
+  [#157  |  17064ms | cum=24477B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"写锁之间存在","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "写锁之间存在"
+      · role = "assistant"
+  [#158  |  17064ms | cum=24478B] 
+  [#159  |  17094ms | cum=24792B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"**时间窗口","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "**时间窗口"
+      · role = "assistant"
+  [#160  |  17094ms | cum=24793B] 
+  [#161  |  17124ms | cum=25104B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"**。在这","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "**。在这"
+      · role = "assistant"
+  [#162  |  17124ms | cum=25105B] 
+  [#163  |  17164ms | cum=25420B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"段时间内，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "段时间内，"
+      · role = "assistant"
+  [#164  |  17164ms | cum=25421B] 
+  [#165  |  17194ms | cum=25730B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"其他的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "其他的"
+      · role = "assistant"
+  [#166  |  17194ms | cum=25731B] 
+  [#167  |  17224ms | cum=26035B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" Gor","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " Gor"
+      · role = "assistant"
+  [#168  |  17224ms | cum=26036B] 
+  [#169  |  17264ms | cum=26349B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"outine 可以","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "outine 可以"
+      · role = "assistant"
+  [#170  |  17264ms | cum=26350B] 
+  [#171  |  17294ms | cum=26656B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"随意","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "随意"
+      · role = "assistant"
+  [#172  |  17294ms | cum=26657B] 
+  [#173  |  17334ms | cum=26963B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"读写","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "读写"
+      · role = "assistant"
+  [#174  |  17334ms | cum=26964B] 
+  [#175  |  17653ms | cum=27275B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"这个 `key","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "这个 `key"
+      · role = "assistant"
+  [#176  |  17653ms | cum=27276B] 
+  [#177  |  17882ms | cum=27588B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"`。\n\n####","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "`。\n\n####"
+      · role = "assistant"
+  [#178  |  17882ms | cum=27589B] 
+  [#179  |  17916ms | cum=27892B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 2.","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 2."
+      · role = "assistant"
+  [#180  |  17916ms | cum=27893B] 
+  [#181  |  17943ms | cum=28197B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 竞","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 竞"
+      · role = "assistant"
+  [#182  |  17943ms | cum=28198B] 
+  [#183  |  17983ms | cum=28507B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"态场景","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "态场景"
+      · role = "assistant"
+  [#184  |  17983ms | cum=28508B] 
+  [#185  |  18012ms | cum=28811B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"推","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "推"
+      · role = "assistant"
+  [#186  |  18012ms | cum=28812B] 
+  [#187  |  18042ms | cum=29123B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"演\n假设","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "演\n假设"
+      · role = "assistant"
+  [#188  |  18042ms | cum=29124B] 
+  [#189  |  18084ms | cum=29426B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `"
+      · role = "assistant"
+  [#190  |  18084ms | cum=29427B] 
+  [#191  |  18114ms | cum=29737B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"Store` 中","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "Store` 中"
+      · role = "assistant"
+  [#192  |  18114ms | cum=29738B] 
+  [#193  |  18346ms | cum=30041B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"键","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "键"
+      · role = "assistant"
+  [#194  |  18346ms | cum=30042B] 
+  [#195  |  18346ms | cum=30346B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `\"","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `\""
+      · role = "assistant"
+  [#196  |  18346ms | cum=30347B] 
+  [#197  |  18346ms | cum=30654B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"counter","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "counter"
+      · role = "assistant"
+  [#198  |  18346ms | cum=30655B] 
+  [#199  |  18346ms | cum=30968B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"\"` 的初始","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "\"` 的初始"
+      · role = "assistant"
+  [#200  |  18346ms | cum=30969B] 
+  [#201  |  18346ms | cum=31278B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"值为 `0","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "值为 `0"
+      · role = "assistant"
+  [#202  |  18346ms | cum=31279B] 
+  [#203  |  18346ms | cum=31589B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"`，并且","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "`，并且"
+      · role = "assistant"
+  [#204  |  18346ms | cum=31590B] 
+  [#205  |  18346ms | cum=31896B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"传入","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "传入"
+      · role = "assistant"
+  [#206  |  18346ms | cum=31897B] 
+  [#207  |  18373ms | cum=32206B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"的更新","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "的更新"
+      · role = "assistant"
+  [#208  |  18373ms | cum=32207B] 
+  [#209  |  18411ms | cum=32518B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"函数是 `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "函数是 `"
+      · role = "assistant"
+  [#210  |  18411ms | cum=32519B] 
+  [#211  |  18441ms | cum=32823B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"func","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "func"
+      · role = "assistant"
+  [#212  |  18441ms | cum=32824B] 
+  [#213  |  18484ms | cum=33126B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"(v","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "(v"
+      · role = "assistant"
+  [#214  |  18484ms | cum=33127B] 
+  [#215  |  18514ms | cum=33436B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" int) int","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " int) int"
+      · role = "assistant"
+  [#216  |  18514ms | cum=33437B] 
+  [#217  |  18548ms | cum=33748B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" { return v","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " { return v"
+      · role = "assistant"
+  [#218  |  18548ms | cum=33749B] 
+  [#219  |  18772ms | cum=34053B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" + 1","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " + 1"
+      · role = "assistant"
+  [#220  |  18772ms | cum=34054B] 
+  [#221  |  18772ms | cum=34360B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" }`（","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " }`（"
+      · role = "assistant"
+  [#222  |  18772ms | cum=34361B] 
+  [#223  |  18772ms | cum=34670B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"即自增","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "即自增"
+      · role = "assistant"
+  [#224  |  18772ms | cum=34671B] 
+  [#225  |  18772ms | cum=34987B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"操作）。\n\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "操作）。\n\n"
+      · role = "assistant"
+  [#226  |  18772ms | cum=34988B] 
+  [#227  |  18772ms | cum=35306B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"现在有两个并","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "现在有两个并"
+      · role = "assistant"
+  [#228  |  18772ms | cum=35307B] 
+  [#229  |  18772ms | cum=35623B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"发的 Goroutine","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "发的 Goroutine"
+      · role = "assistant"
+  [#230  |  18772ms | cum=35624B] 
+  [#231  |  19892ms | cum=35927B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `G","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `G"
+      · role = "assistant"
+  [#232  |  19892ms | cum=35928B] 
+  [#233  |  22873ms | cum=36234B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"1` 和","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "1` 和"
+      · role = "assistant"
+  [#234  |  22873ms | cum=36235B] 
+  [#235  |  22873ms | cum=36539B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `G2","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `G2"
+      · role = "assistant"
+  [#236  |  22873ms | cum=36540B] 
+  [#237  |  23303ms | cum=36854B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"` 同时调用","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "` 同时调用"
+      · role = "assistant"
+  [#238  |  23303ms | cum=36855B] 
+  [#239  |  23303ms | cum=37166B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `Update(\"","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `Update(\""
+      · role = "assistant"
+  [#240  |  23303ms | cum=37167B] 
+  [#241  |  23303ms | cum=37480B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"counter\", fn","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "counter\", fn"
+      · role = "assistant"
+  [#242  |  23303ms | cum=37481B] 
+  [#243  |  23303ms | cum=37786B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":")`，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = ")`，"
+      · role = "assistant"
+  [#244  |  23303ms | cum=37787B] 
+  [#245  |  23303ms | cum=38096B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"按以下","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "按以下"
+      · role = "assistant"
+  [#246  |  23303ms | cum=38097B] 
+  [#247  |  23303ms | cum=38406B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"时间线","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "时间线"
+      · role = "assistant"
+  [#248  |  23303ms | cum=38407B] 
+  [#249  |  23303ms | cum=38721B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"执行：\n\n*","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "执行：\n\n*"
+      · role = "assistant"
+  [#250  |  23303ms | cum=38722B] 
+  [#251  |  23303ms | cum=39025B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" **","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " **"
+      · role = "assistant"
+  [#252  |  23303ms | cum=39026B] 
+  [#253  |  23303ms | cum=39328B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"T0","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "T0"
+      · role = "assistant"
+  [#254  |  23303ms | cum=39329B] 
+  [#255  |  23303ms | cum=39632B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"**:","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "**:"
+      · role = "assistant"
+  [#256  |  23303ms | cum=39633B] 
+  [#257  |  23433ms | cum=39937B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `G1","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `G1"
+      · role = "assistant"
+  [#258  |  23434ms | cum=39938B] 
+  [#259  |  23434ms | cum=40246B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"` 获取","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "` 获取"
+      · role = "assistant"
+  [#260  |  23434ms | cum=40247B] 
+  [#261  |  23434ms | cum=40556B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"读锁，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "读锁，"
+      · role = "assistant"
+  [#262  |  23434ms | cum=40557B] 
+  [#263  |  23434ms | cum=40863B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"读取","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "读取"
+      · role = "assistant"
+  [#264  |  23434ms | cum=40864B] 
+  [#265  |  23434ms | cum=41170B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"到 `v","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "到 `v"
+      · role = "assistant"
+  [#266  |  23434ms | cum=41171B] 
+  [#267  |  23434ms | cum=41475B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" = 0","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " = 0"
+      · role = "assistant"
+  [#268  |  23434ms | cum=41476B] 
+  [#269  |  23434ms | cum=41786B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"`，释放","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "`，释放"
+      · role = "assistant"
+  [#270  |  23434ms | cum=41787B] 
+  [#271  |  23434ms | cum=42098B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"读锁。\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "读锁。\n"
+      · role = "assistant"
+  [#272  |  23434ms | cum=42099B] 
+  [#273  |  23504ms | cum=42404B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"* **T","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "* **T"
+      · role = "assistant"
+  [#274  |  23504ms | cum=42405B] 
+  [#275  |  23703ms | cum=42711B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"1**: `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "1**: `"
+      · role = "assistant"
+  [#276  |  23703ms | cum=42712B] 
+  [#277  |  24183ms | cum=43015B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"G2`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "G2`"
+      · role = "assistant"
+  [#278  |  24183ms | cum=43016B] 
+  [#279  |  24183ms | cum=43326B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 获取读","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 获取读"
+      · role = "assistant"
+  [#280  |  24183ms | cum=43327B] 
+  [#281  |  24183ms | cum=43639B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁，读取","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁，读取"
+      · role = "assistant"
+  [#282  |  24183ms | cum=43640B] 
+  [#283  |  24183ms | cum=43946B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"到 `v","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "到 `v"
+      · role = "assistant"
+  [#284  |  24183ms | cum=43947B] 
+  [#285  |  24183ms | cum=44251B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" = 0","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " = 0"
+      · role = "assistant"
+  [#286  |  24183ms | cum=44252B] 
+  [#287  |  24183ms | cum=44562B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"`，释放","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "`，释放"
+      · role = "assistant"
+  [#288  |  24183ms | cum=44563B] 
+  [#289  |  24363ms | cum=44874B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"读锁。\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "读锁。\n"
+      · role = "assistant"
+  [#290  |  24363ms | cum=44875B] 
+  [#291  |  24363ms | cum=45180B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"* **T","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "* **T"
+      · role = "assistant"
+  [#292  |  24363ms | cum=45181B] 
+  [#293  |  24363ms | cum=45487B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"2**: `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "2**: `"
+      · role = "assistant"
+  [#294  |  24363ms | cum=45488B] 
+  [#295  |  24363ms | cum=45791B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"G1`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "G1`"
+      · role = "assistant"
+  [#296  |  24363ms | cum=45792B] 
+  [#297  |  24363ms | cum=46101B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 执行 `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 执行 `"
+      · role = "assistant"
+  [#298  |  24363ms | cum=46102B] 
+  [#299  |  24363ms | cum=46405B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"fn(","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "fn("
+      · role = "assistant"
+  [#300  |  24363ms | cum=46406B] 
+  [#301  |  24363ms | cum=46712B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"0)`，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "0)`，"
+      · role = "assistant"
+  [#302  |  24363ms | cum=46713B] 
+  [#303  |  24568ms | cum=47026B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"计算出 `nv","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "计算出 `nv"
+      · role = "assistant"
+  [#304  |  24568ms | cum=47027B] 
+  [#305  |  24568ms | cum=47331B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" = 1","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " = 1"
+      · role = "assistant"
+  [#306  |  24568ms | cum=47332B] 
+  [#307  |  24568ms | cum=47639B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"`。\n*","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "`。\n*"
+      · role = "assistant"
+  [#308  |  24568ms | cum=47640B] 
+  [#309  |  24568ms | cum=47945B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" **T3","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " **T3"
+      · role = "assistant"
+  [#310  |  24568ms | cum=47946B] 
+  [#311  |  24568ms | cum=48252B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"**: `G","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "**: `G"
+      · role = "assistant"
+  [#312  |  24568ms | cum=48253B] 
+  [#313  |  24568ms | cum=48555B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"2`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "2`"
+      · role = "assistant"
+  [#314  |  24568ms | cum=48556B] 
+  [#315  |  24568ms | cum=48867B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 执行 `fn","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 执行 `fn"
+      · role = "assistant"
+  [#316  |  24568ms | cum=48868B] 
+  [#317  |  24606ms | cum=49172B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"(0)`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "(0)`"
+      · role = "assistant"
+  [#318  |  24606ms | cum=49173B] 
+  [#319  |  24606ms | cum=49487B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"，计算出 `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "，计算出 `"
+      · role = "assistant"
+  [#320  |  24606ms | cum=49488B] 
+  [#321  |  24951ms | cum=49793B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"nv = ","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "nv = "
+      · role = "assistant"
+  [#322  |  24951ms | cum=49794B] 
+  [#323  |  24951ms | cum=50101B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"1`。\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "1`。\n"
+      · role = "assistant"
+  [#324  |  24951ms | cum=50102B] 
+  [#325  |  24951ms | cum=50407B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"* **T","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "* **T"
+      · role = "assistant"
+  [#326  |  24951ms | cum=50408B] 
+  [#327  |  24951ms | cum=50714B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"4**: `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "4**: `"
+      · role = "assistant"
+  [#328  |  24951ms | cum=50715B] 
+  [#329  |  25133ms | cum=51018B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"G1`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "G1`"
+      · role = "assistant"
+  [#330  |  25133ms | cum=51019B] 
+  [#331  |  25133ms | cum=51329B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 获取写","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 获取写"
+      · role = "assistant"
+  [#332  |  25133ms | cum=51330B] 
+  [#333  |  25133ms | cum=51642B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁，写入","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁，写入"
+      · role = "assistant"
+  [#334  |  25133ms | cum=51643B] 
+  [#335  |  25133ms | cum=51949B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `data","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `data"
+      · role = "assistant"
+  [#336  |  25133ms | cum=51950B] 
+  [#337  |  25282ms | cum=52263B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"[\"counter\"]","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "[\"counter\"]"
+      · role = "assistant"
+  [#338  |  25282ms | cum=52264B] 
+  [#339  |  25695ms | cum=52568B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" = 1","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " = 1"
+      · role = "assistant"
+  [#340  |  25695ms | cum=52569B] 
+  [#341  |  25724ms | cum=52879B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"`，释放","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "`，释放"
+      · role = "assistant"
+  [#342  |  25724ms | cum=52880B] 
+  [#343  |  25753ms | cum=53191B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"写锁。\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "写锁。\n"
+      · role = "assistant"
+  [#344  |  25753ms | cum=53192B] 
+  [#345  |  25784ms | cum=53497B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"* **T","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "* **T"
+      · role = "assistant"
+  [#346  |  25784ms | cum=53498B] 
+  [#347  |  26012ms | cum=53804B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"5**: `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "5**: `"
+      · role = "assistant"
+  [#348  |  26012ms | cum=53805B] 
+  [#349  |  26083ms | cum=54108B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"G2`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "G2`"
+      · role = "assistant"
+  [#350  |  26083ms | cum=54109B] 
+  [#351  |  26112ms | cum=54419B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 获取写","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 获取写"
+      · role = "assistant"
+  [#352  |  26112ms | cum=54420B] 
+  [#353  |  26149ms | cum=54732B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁，写入","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁，写入"
+      · role = "assistant"
+  [#354  |  26149ms | cum=54733B] 
+  [#355  |  26184ms | cum=55042B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `data[\"","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `data[\""
+      · role = "assistant"
+  [#356  |  26184ms | cum=55043B] 
+  [#357  |  26433ms | cum=55355B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"counter\"] =","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "counter\"] ="
+      · role = "assistant"
+  [#358  |  26433ms | cum=55356B] 
+  [#359  |  26433ms | cum=55659B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 1`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 1`"
+      · role = "assistant"
+  [#360  |  26433ms | cum=55660B] 
+  [#361  |  26433ms | cum=55972B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"，释放写","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "，释放写"
+      · role = "assistant"
+  [#362  |  26433ms | cum=55973B] 
+  [#363  |  27382ms | cum=56285B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁。\n\n**","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁。\n\n**"
+      · role = "assistant"
+  [#364  |  27382ms | cum=56286B] 
+  [#365  |  28733ms | cum=56592B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"结果","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "结果"
+      · role = "assistant"
+  [#366  |  28733ms | cum=56593B] 
+  [#367  |  28733ms | cum=56904B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"**：两次","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "**：两次"
+      · role = "assistant"
+  [#368  |  28733ms | cum=56905B] 
+  [#369  |  29674ms | cum=57217B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"自增操作","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "自增操作"
+      · role = "assistant"
+  [#370  |  29674ms | cum=57218B] 
+  [#371  |  32604ms | cum=57524B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"最终","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "最终"
+      · role = "assistant"
+  [#372  |  32604ms | cum=57525B] 
+  [#373  |  32614ms | cum=57831B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"只使","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "只使"
+      · role = "assistant"
+  [#374  |  32614ms | cum=57832B] 
+  [#375  |  32864ms | cum=58135B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"值","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "值"
+      · role = "assistant"
+  [#376  |  32864ms | cum=58136B] 
+  [#377  |  33823ms | cum=58447B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"增加了 `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "增加了 `"
+      · role = "assistant"
+  [#378  |  33823ms | cum=58448B] 
+  [#379  |  37494ms | cum=58753B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"1`。","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "1`。"
+      · role = "assistant"
+  [#380  |  37494ms | cum=58754B] 
+  [#381  |  37544ms | cum=59063B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"这就是","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "这就是"
+      · role = "assistant"
+  [#382  |  37544ms | cum=59064B] 
+  [#383  |  37564ms | cum=59370B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"并发","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "并发"
+      · role = "assistant"
+  [#384  |  37564ms | cum=59371B] 
+  [#385  |  37601ms | cum=59680B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"环境下","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "环境下"
+      · role = "assistant"
+  [#386  |  37601ms | cum=59681B] 
+  [#387  |  37635ms | cum=59990B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"经典的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "经典的"
+      · role = "assistant"
+  [#388  |  37635ms | cum=59991B] 
+  [#389  |  37664ms | cum=60300B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"“更新","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "“更新"
+      · role = "assistant"
+  [#390  |  37664ms | cum=60301B] 
+  [#391  |  37704ms | cum=60616B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"丢失”问题","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "丢失”问题"
+      · role = "assistant"
+  [#392  |  37704ms | cum=60617B] 
+  [#393  |  37744ms | cum=60924B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"。\n\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "。\n\n"
+      · role = "assistant"
+  [#394  |  37744ms | cum=60925B] 
+  [#395  |  38074ms | cum=61231B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"#### 3","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "#### 3"
+      · role = "assistant"
+  [#396  |  38074ms | cum=61232B] 
+  [#397  |  38074ms | cum=61540B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":". 关于","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = ". 关于"
+      · role = "assistant"
+  [#398  |  38074ms | cum=61541B] 
+  [#399  |  38074ms | cum=61844B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁"
+      · role = "assistant"
+  [#400  |  38074ms | cum=61845B] 
+  [#401  |  38074ms | cum=62151B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"的降","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "的降"
+      · role = "assistant"
+  [#402  |  38074ms | cum=62152B] 
+  [#403  |  38074ms | cum=62461B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"级考虑","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "级考虑"
+      · role = "assistant"
+  [#404  |  38074ms | cum=62462B] 
+  [#405  |  38074ms | cum=62765B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"（","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "（"
+      · role = "assistant"
+  [#406  |  38074ms | cum=62766B] 
+  [#407  |  38074ms | cum=63072B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"是否","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "是否"
+      · role = "assistant"
+  [#408  |  38074ms | cum=63073B] 
+  [#409  |  38074ms | cum=63382B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"可以不","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "可以不"
+      · role = "assistant"
+  [#410  |  38074ms | cum=63383B] 
+  [#411  |  38074ms | cum=63692B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"释放读","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "释放读"
+      · role = "assistant"
+  [#412  |  38074ms | cum=63693B] 
+  [#413  |  38084ms | cum=64005B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁直接转","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁直接转"
+      · role = "assistant"
+  [#414  |  38084ms | cum=64006B] 
+  [#415  |  38125ms | cum=64315B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"写锁？","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "写锁？"
+      · role = "assistant"
+  [#416  |  38125ms | cum=64316B] 
+  [#417  |  38384ms | cum=64627B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"）\n有人","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "）\n有人"
+      · role = "assistant"
+  [#418  |  38384ms | cum=64628B] 
+  [#419  |  38384ms | cum=64940B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"可能会问","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "可能会问"
+      · role = "assistant"
+  [#420  |  38384ms | cum=64941B] 
+  [#421  |  38384ms | cum=65253B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"：为什么","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "：为什么"
+      · role = "assistant"
+  [#422  |  38384ms | cum=65254B] 
+  [#423  |  38384ms | cum=65560B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"不在","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "不在"
+      · role = "assistant"
+  [#424  |  38384ms | cum=65561B] 
+  [#425  |  38384ms | cum=65867B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"持有","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "持有"
+      · role = "assistant"
+  [#426  |  38384ms | cum=65868B] 
+  [#427  |  38774ms | cum=66186B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"读锁的情况下","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "读锁的情况下"
+      · role = "assistant"
+  [#428  |  38774ms | cum=66187B] 
+  [#429  |  38774ms | cum=66493B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"直接","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "直接"
+      · role = "assistant"
+  [#430  |  38774ms | cum=66494B] 
+  [#431  |  38774ms | cum=66800B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"计算","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "计算"
+      · role = "assistant"
+  [#432  |  38774ms | cum=66801B] 
+  [#433  |  38774ms | cum=67104B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"并","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "并"
+      · role = "assistant"
+  [#434  |  38774ms | cum=67105B] 
+  [#435  |  38935ms | cum=67411B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"获取","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "获取"
+      · role = "assistant"
+  [#436  |  38936ms | cum=67412B] 
+  [#437  |  38936ms | cum=67723B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"写锁？\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "写锁？\n"
+      · role = "assistant"
+  [#438  |  38936ms | cum=67724B] 
+  [#439  |  38936ms | cum=68034B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"在 Go 的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "在 Go 的"
+      · role = "assistant"
+  [#440  |  38936ms | cum=68035B] 
+  [#441  |  38936ms | cum=68343B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `sync.R","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `sync.R"
+      · role = "assistant"
+  [#442  |  38936ms | cum=68344B] 
+  [#443  |  38936ms | cum=68651B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"WMutex`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "WMutex`"
+      · role = "assistant"
+  [#444  |  38936ms | cum=68652B] 
+  [#445  |  38936ms | cum=68959B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 实现","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 实现"
+      · role = "assistant"
+  [#446  |  38936ms | cum=68960B] 
+  [#447  |  38936ms | cum=69268B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"中，**","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "中，**"
+      · role = "assistant"
+  [#448  |  38936ms | cum=69269B] 
+  [#449  |  38936ms | cum=69584B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"如果持有读","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "如果持有读"
+      · role = "assistant"
+  [#450  |  38936ms | cum=69585B] 
+  [#451  |  39154ms | cum=69894B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁，再","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁，再"
+      · role = "assistant"
+  [#452  |  39154ms | cum=69895B] 
+  [#453  |  39194ms | cum=70210B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"尝试获取写","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "尝试获取写"
+      · role = "assistant"
+  [#454  |  39194ms | cum=70211B] 
+  [#455  |  39224ms | cum=70523B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁会导致","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁会导致"
+      · role = "assistant"
+  [#456  |  39224ms | cum=70524B] 
+  [#457  |  39454ms | cum=70832B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"死锁**","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "死锁**"
+      · role = "assistant"
+  [#458  |  39454ms | cum=70833B] 
+  [#459  |  41833ms | cum=71136B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"。","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "。"
+      · role = "assistant"
+  [#460  |  41833ms | cum=71137B] 
+  [#461  |  47636ms | cum=71446B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"因为写","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "因为写"
+      · role = "assistant"
+  [#462  |  47636ms | cum=71447B] 
+  [#463  |  47673ms | cum=71753B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁会","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁会"
+      · role = "assistant"
+  [#464  |  47673ms | cum=71754B] 
+  [#465  |  47704ms | cum=72069B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"等待所有读","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "等待所有读"
+      · role = "assistant"
+  [#466  |  47704ms | cum=72070B] 
+  [#467  |  47744ms | cum=72382B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁释放，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁释放，"
+      · role = "assistant"
+  [#468  |  47744ms | cum=72383B] 
+  [#469  |  47774ms | cum=72699B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"如果当前 Gor","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "如果当前 Gor"
+      · role = "assistant"
+  [#470  |  47774ms | cum=72700B] 
+  [#471  |  47813ms | cum=73010B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"outine 既","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "outine 既"
+      · role = "assistant"
+  [#472  |  47813ms | cum=73011B] 
+  [#473  |  47883ms | cum=73320B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"持有读","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "持有读"
+      · role = "assistant"
+  [#474  |  47883ms | cum=73321B] 
+  [#475  |  47923ms | cum=73633B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁又等待","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁又等待"
+      · role = "assistant"
+  [#476  |  47923ms | cum=73634B] 
+  [#477  |  48174ms | cum=73943B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"写锁，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "写锁，"
+      · role = "assistant"
+  [#478  |  48174ms | cum=73944B] 
+  [#479  |  48174ms | cum=74256B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"就会自己","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "就会自己"
+      · role = "assistant"
+  [#480  |  48174ms | cum=74257B] 
+  [#481  |  48174ms | cum=74560B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"等","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "等"
+      · role = "assistant"
+  [#482  |  48174ms | cum=74561B] 
+  [#483  |  48174ms | cum=74870B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"自己，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "自己，"
+      · role = "assistant"
+  [#484  |  48174ms | cum=74871B] 
+  [#485  |  48174ms | cum=75183B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"造成死锁","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "造成死锁"
+      · role = "assistant"
+  [#486  |  48174ms | cum=75184B] 
+  [#487  |  48174ms | cum=75502B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"。所以原作者","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "。所以原作者"
+      · role = "assistant"
+  [#488  |  48174ms | cum=75503B] 
+  [#489  |  48605ms | cum=75806B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"才","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "才"
+      · role = "assistant"
+  [#490  |  48606ms | cum=75807B] 
+  [#491  |  48606ms | cum=76113B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"释放","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "释放"
+      · role = "assistant"
+  [#492  |  48606ms | cum=76114B] 
+  [#493  |  48606ms | cum=76423B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"了读锁","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "了读锁"
+      · role = "assistant"
+  [#494  |  48606ms | cum=76424B] 
+  [#495  |  48606ms | cum=76727B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "，"
+      · role = "assistant"
+  [#496  |  48606ms | cum=76728B] 
+  [#497  |  48606ms | cum=77040B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"但这恰恰","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "但这恰恰"
+      · role = "assistant"
+  [#498  |  48606ms | cum=77041B] 
+  [#499  |  48606ms | cum=77347B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"引入","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "引入"
+      · role = "assistant"
+  [#500  |  48606ms | cum=77348B] 
+  [#501  |  48606ms | cum=77657B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"了竞态","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "了竞态"
+      · role = "assistant"
+  [#502  |  48606ms | cum=77658B] 
+  [#503  |  48606ms | cum=77964B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"窗口","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "窗口"
+      · role = "assistant"
+  [#504  |  48606ms | cum=77965B] 
+  [#505  |  48606ms | cum=78277B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"。\n\n#### ","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "。\n\n#### "
+      · role = "assistant"
+  [#506  |  48606ms | cum=78278B] 
+  [#507  |  48606ms | cum=78582B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"4. `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "4. `"
+      · role = "assistant"
+  [#508  |  48606ms | cum=78583B] 
+  [#509  |  48606ms | cum=78886B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"fn`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "fn`"
+      · role = "assistant"
+  [#510  |  48606ms | cum=78887B] 
+  [#511  |  48606ms | cum=79206B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 函数的副作用","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 函数的副作用"
+      · role = "assistant"
+  [#512  |  48606ms | cum=79207B] 
+  [#513  |  48606ms | cum=79513B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"问题","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "问题"
+      · role = "assistant"
+  [#514  |  48606ms | cum=79514B] 
+  [#515  |  48606ms | cum=79822B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"\n由于","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "\n由于"
+      · role = "assistant"
+  [#516  |  48606ms | cum=79823B] 
+  [#517  |  49074ms | cum=80129B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `fn(v","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `fn(v"
+      · role = "assistant"
+  [#518  |  49074ms | cum=80130B] 
+  [#519  |  49074ms | cum=80436B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":")` 是","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = ")` 是"
+      · role = "assistant"
+  [#520  |  49074ms | cum=80437B] 
+  [#521  |  49074ms | cum=80743B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"在锁","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "在锁"
+      · role = "assistant"
+  [#522  |  49074ms | cum=80744B] 
+  [#523  |  49074ms | cum=81056B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"外执行的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "外执行的"
+      · role = "assistant"
+  [#524  |  49074ms | cum=81057B] 
+  [#525  |  49074ms | cum=81368B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"，如果 `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "，如果 `"
+      · role = "assistant"
+  [#526  |  49074ms | cum=81369B] 
+  [#527  |  49074ms | cum=81676B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"fn` 内","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "fn` 内"
+      · role = "assistant"
+  [#528  |  49074ms | cum=81677B] 
+  [#529  |  49074ms | cum=81992B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"部有副作用","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "部有副作用"
+      · role = "assistant"
+  [#530  |  49074ms | cum=81993B] 
+  [#531  |  49074ms | cum=82302B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"（比如","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "（比如"
+      · role = "assistant"
+  [#532  |  49074ms | cum=82303B] 
+  [#533  |  49074ms | cum=82618B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"打印日志、","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "打印日志、"
+      · role = "assistant"
+  [#534  |  49074ms | cum=82619B] 
+  [#535  |  49074ms | cum=82937B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"访问外部状态","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "访问外部状态"
+      · role = "assistant"
+  [#536  |  49074ms | cum=82938B] 
+  [#537  |  49074ms | cum=83244B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"），","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "），"
+      · role = "assistant"
+  [#538  |  49074ms | cum=83245B] 
+  [#539  |  49604ms | cum=83548B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"在","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "在"
+      · role = "assistant"
+  [#540  |  49604ms | cum=83549B] 
+  [#541  |  49604ms | cum=83861B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"并发调用","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "并发调用"
+      · role = "assistant"
+  [#542  |  49604ms | cum=83862B] 
+  [#543  |  49604ms | cum=84174B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"时，这些","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "时，这些"
+      · role = "assistant"
+  [#544  |  49604ms | cum=84175B] 
+  [#545  |  49604ms | cum=84478B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"副","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "副"
+      · role = "assistant"
+  [#546  |  49604ms | cum=84479B] 
+  [#547  |  49604ms | cum=84800B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"作用的执行顺序","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "作用的执行顺序"
+      · role = "assistant"
+  [#548  |  49604ms | cum=84801B] 
+  [#549  |  49604ms | cum=85107B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"和频","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "和频"
+      · role = "assistant"
+  [#550  |  49604ms | cum=85108B] 
+  [#551  |  49604ms | cum=85420B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"次可能与","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "次可能与"
+      · role = "assistant"
+  [#552  |  49604ms | cum=85421B] 
+  [#553  |  49604ms | cum=85733B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"预期不符","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "预期不符"
+      · role = "assistant"
+  [#554  |  49604ms | cum=85734B] 
+  [#555  |  51054ms | cum=86041B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"。\n\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "。\n\n"
+      · role = "assistant"
+  [#556  |  51054ms | cum=86042B] 
+  [#557  |  51534ms | cum=86345B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"###","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "###"
+      · role = "assistant"
+  [#558  |  51534ms | cum=86346B] 
+  [#559  |  51534ms | cum=86660B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 结论\n\n该","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 结论\n\n该"
+      · role = "assistant"
+  [#560  |  51534ms | cum=86661B] 
+  [#561  |  51534ms | cum=86973B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"代码存在","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "代码存在"
+      · role = "assistant"
+  [#562  |  51534ms | cum=86974B] 
+  [#563  |  51534ms | cum=87288B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"**并发临界","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "**并发临界"
+      · role = "assistant"
+  [#564  |  51534ms | cum=87289B] 
+  [#565  |  51534ms | cum=87592B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"区","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "区"
+      · role = "assistant"
+  [#566  |  51534ms | cum=87593B] 
+  [#567  |  51534ms | cum=87904B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"被破坏**","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "被破坏**"
+      · role = "assistant"
+  [#568  |  51534ms | cum=87905B] 
+  [#569  |  51744ms | cum=88214B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"的竞态","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "的竞态"
+      · role = "assistant"
+  [#570  |  51744ms | cum=88215B] 
+  [#571  |  51744ms | cum=88524B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"条件，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "条件，"
+      · role = "assistant"
+  [#572  |  51744ms | cum=88525B] 
+  [#573  |  51744ms | cum=88831B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"无法","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "无法"
+      · role = "assistant"
+  [#574  |  51744ms | cum=88832B] 
+  [#575  |  51744ms | cum=89140B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"保证 `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "保证 `"
+      · role = "assistant"
+  [#576  |  51744ms | cum=89141B] 
+  [#577  |  51894ms | cum=89444B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"fn`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "fn`"
+      · role = "assistant"
+  [#578  |  51894ms | cum=89445B] 
+  [#579  |  51894ms | cum=89761B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 函数操作的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 函数操作的"
+      · role = "assistant"
+  [#580  |  51894ms | cum=89762B] 
+  [#581  |  51894ms | cum=90074B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"原子性和","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "原子性和"
+      · role = "assistant"
+  [#582  |  51894ms | cum=90075B] 
+  [#583  |  51894ms | cum=90387B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"隔离性，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "隔离性，"
+      · role = "assistant"
+  [#584  |  51894ms | cum=90388B] 
+  [#585  |  51894ms | cum=90697B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"会导致","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "会导致"
+      · role = "assistant"
+  [#586  |  51894ms | cum=90698B] 
+  [#587  |  52054ms | cum=91010B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"数据更新","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "数据更新"
+      · role = "assistant"
+  [#588  |  52054ms | cum=91011B] 
+  [#589  |  54224ms | cum=91320B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"丢失或","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "丢失或"
+      · role = "assistant"
+  [#590  |  54224ms | cum=91321B] 
+  [#591  |  54264ms | cum=91627B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"结果","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "结果"
+      · role = "assistant"
+  [#592  |  54264ms | cum=91628B] 
+  [#593  |  54304ms | cum=91937B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"不一致","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "不一致"
+      · role = "assistant"
+  [#594  |  54304ms | cum=91938B] 
+  [#595  |  54335ms | cum=92248B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"。\n\n###","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "。\n\n###"
+      · role = "assistant"
+  [#596  |  54335ms | cum=92249B] 
+  [#597  |  54625ms | cum=92553B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 正","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 正"
+      · role = "assistant"
+  [#598  |  54625ms | cum=92554B] 
+  [#599  |  54625ms | cum=92863B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"确修复","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "确修复"
+      · role = "assistant"
+  [#600  |  54625ms | cum=92864B] 
+  [#601  |  54625ms | cum=93180B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"方案\n\n修复","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "方案\n\n修复"
+      · role = "assistant"
+  [#602  |  54625ms | cum=93181B] 
+  [#603  |  54704ms | cum=93484B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"此","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "此"
+      · role = "assistant"
+  [#604  |  54704ms | cum=93485B] 
+  [#605  |  54704ms | cum=93806B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"问题的核心原则","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "问题的核心原则"
+      · role = "assistant"
+  [#606  |  54704ms | cum=93807B] 
+  [#607  |  54704ms | cum=94115B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"是：**","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "是：**"
+      · role = "assistant"
+  [#608  |  54704ms | cum=94116B] 
+  [#609  |  54704ms | cum=94418B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"fn","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "fn"
+      · role = "assistant"
+  [#610  |  54704ms | cum=94419B] 
+  [#611  |  54704ms | cum=94735B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 函数的执行","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 函数的执行"
+      · role = "assistant"
+  [#612  |  54704ms | cum=94736B] 
+  [#613  |  54704ms | cum=95042B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"以及","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "以及"
+      · role = "assistant"
+  [#614  |  54704ms | cum=95043B] 
+  [#615  |  54734ms | cum=95349B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"读取","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "读取"
+      · role = "assistant"
+  [#616  |  54734ms | cum=95350B] 
+  [#617  |  54763ms | cum=95653B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"、","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "、"
+      · role = "assistant"
+  [#618  |  54764ms | cum=95654B] 
+  [#619  |  55024ms | cum=95966B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"写入数据","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "写入数据"
+      · role = "assistant"
+  [#620  |  55024ms | cum=95967B] 
+  [#621  |  55024ms | cum=96285B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"的过程必须在","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "的过程必须在"
+      · role = "assistant"
+  [#622  |  55024ms | cum=96286B] 
+  [#623  |  55024ms | cum=96598B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"同一个写","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "同一个写"
+      · role = "assistant"
+  [#624  |  55024ms | cum=96599B] 
+  [#625  |  55126ms | cum=96911B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁的保护","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁的保护"
+      · role = "assistant"
+  [#626  |  55126ms | cum=96912B] 
+  [#627  |  55126ms | cum=97215B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"下","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "下"
+      · role = "assistant"
+  [#628  |  55126ms | cum=97216B] 
+  [#629  |  55126ms | cum=97522B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"进行","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "进行"
+      · role = "assistant"
+  [#630  |  55126ms | cum=97523B] 
+  [#631  |  55126ms | cum=97826B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"。","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "。"
+      · role = "assistant"
+  [#632  |  55126ms | cum=97827B] 
+  [#633  |  55126ms | cum=98138B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"**\n\n#### ","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "**\n\n#### "
+      · role = "assistant"
+  [#634  |  55126ms | cum=98139B] 
+  [#635  |  55126ms | cum=98454B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"修复方案一","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "修复方案一"
+      · role = "assistant"
+  [#636  |  55126ms | cum=98455B] 
+  [#637  |  55126ms | cum=98770B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"：直接使用","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "：直接使用"
+      · role = "assistant"
+  [#638  |  55126ms | cum=98771B] 
+  [#639  |  55362ms | cum=99080B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"写锁（","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "写锁（"
+      · role = "assistant"
+  [#640  |  55362ms | cum=99081B] 
+  [#641  |  55362ms | cum=99387B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"简单","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "简单"
+      · role = "assistant"
+  [#642  |  55362ms | cum=99388B] 
+  [#643  |  55362ms | cum=99694B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"粗暴","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "粗暴"
+      · role = "assistant"
+  [#644  |  55362ms | cum=99695B] 
+  [#645  |  55362ms | cum=100009B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"，推荐）\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "，推荐）\n"
+      · role = "assistant"
+  [#646  |  55362ms | cum=100010B] 
+  [#647  |  55362ms | cum=100319B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"如果对","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "如果对"
+      · role = "assistant"
+  [#648  |  55362ms | cum=100320B] 
+  [#649  |  55544ms | cum=100638B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"性能要求不是","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "性能要求不是"
+      · role = "assistant"
+  [#650  |  55544ms | cum=100639B] 
+  [#651  |  55544ms | cum=100945B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"极致","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "极致"
+      · role = "assistant"
+  [#652  |  55544ms | cum=100946B] 
+  [#653  |  55544ms | cum=101261B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"苛刻，直接","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "苛刻，直接"
+      · role = "assistant"
+  [#654  |  55544ms | cum=101262B] 
+  [#655  |  55544ms | cum=101568B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"全程","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "全程"
+      · role = "assistant"
+  [#656  |  55544ms | cum=101569B] 
+  [#657  |  55544ms | cum=101878B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"使用写","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "使用写"
+      · role = "assistant"
+  [#658  |  55544ms | cum=101879B] 
+  [#659  |  55544ms | cum=102188B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁是最","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁是最"
+      · role = "assistant"
+  [#660  |  55544ms | cum=102189B] 
+  [#661  |  55544ms | cum=102495B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"安全","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "安全"
+      · role = "assistant"
+  [#662  |  55544ms | cum=102496B] 
+  [#663  |  55574ms | cum=102811B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"、最简单的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "、最简单的"
+      · role = "assistant"
+  [#664  |  55574ms | cum=102812B] 
+  [#665  |  56075ms | cum=103128B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"做法。\n\n```","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "做法。\n\n```"
+      · role = "assistant"
+  [#666  |  56075ms | cum=103129B] 
+  [#667  |  56075ms | cum=103437B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"go\nfunc","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "go\nfunc"
+      · role = "assistant"
+  [#668  |  56075ms | cum=103438B] 
+  [#669  |  56075ms | cum=103743B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" (s *","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " (s *"
+      · role = "assistant"
+  [#670  |  56075ms | cum=103744B] 
+  [#671  |  56075ms | cum=104057B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"Store) Update","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "Store) Update"
+      · role = "assistant"
+  [#672  |  56075ms | cum=104058B] 
+  [#673  |  56075ms | cum=104370B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"(key string,","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "(key string,"
+      · role = "assistant"
+  [#674  |  56075ms | cum=104371B] 
+  [#675  |  56075ms | cum=104683B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" fn func(int","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " fn func(int"
+      · role = "assistant"
+  [#676  |  56075ms | cum=104684B] 
+  [#677  |  56075ms | cum=104990B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":") int)","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = ") int)"
+      · role = "assistant"
+  [#678  |  56075ms | cum=104991B] 
+  [#679  |  56075ms | cum=105300B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" {\n    s","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " {\n    s"
+      · role = "assistant"
+  [#680  |  56075ms | cum=105301B] 
+  [#681  |  56075ms | cum=105610B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":".m.Lock()","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = ".m.Lock()"
+      · role = "assistant"
+  [#682  |  56075ms | cum=105611B] 
+  [#683  |  56075ms | cum=105921B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" // 直接","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " // 直接"
+      · role = "assistant"
+  [#684  |  56076ms | cum=105922B] 
+  [#685  |  56076ms | cum=106234B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"获取写锁","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "获取写锁"
+      · role = "assistant"
+  [#686  |  56076ms | cum=106235B] 
+  [#687  |  56076ms | cum=106546B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"\n    defer","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "\n    defer"
+      · role = "assistant"
+  [#688  |  56076ms | cum=106547B] 
+  [#689  |  56076ms | cum=106858B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" s.m.Unlock","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " s.m.Unlock"
+      · role = "assistant"
+  [#690  |  56076ms | cum=106859B] 
+  [#691  |  56076ms | cum=107172B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"()\n    \n   ","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "()\n    \n   "
+      · role = "assistant"
+  [#692  |  56076ms | cum=107173B] 
+  [#693  |  56103ms | cum=107479B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" v, ok","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " v, ok"
+      · role = "assistant"
+  [#694  |  56103ms | cum=107480B] 
+  [#695  |  56145ms | cum=107790B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" := s.data","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " := s.data"
+      · role = "assistant"
+  [#696  |  56145ms | cum=107791B] 
+  [#697  |  56394ms | cum=108101B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"[key]\n   ","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "[key]\n   "
+      · role = "assistant"
+  [#698  |  56394ms | cum=108102B] 
+  [#699  |  56394ms | cum=108409B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" if !ok","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " if !ok"
+      · role = "assistant"
+  [#700  |  56394ms | cum=108410B] 
+  [#701  |  56464ms | cum=108722B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" { \n       ","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " { \n       "
+      · role = "assistant"
+  [#702  |  56464ms | cum=108723B] 
+  [#703  |  56464ms | cum=109028B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" v = ","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " v = "
+      · role = "assistant"
+  [#704  |  56464ms | cum=109029B] 
+  [#705  |  56575ms | cum=109336B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"0 \n   ","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "0 \n   "
+      · role = "assistant"
+  [#706  |  56575ms | cum=109337B] 
+  [#707  |  56575ms | cum=109644B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" }\n   ","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " }\n   "
+      · role = "assistant"
+  [#708  |  56575ms | cum=109645B] 
+  [#709  |  56594ms | cum=109951B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" // fn","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " // fn"
+      · role = "assistant"
+  [#710  |  56594ms | cum=109952B] 
+  [#711  |  56594ms | cum=110259B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 在写","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 在写"
+      · role = "assistant"
+  [#712  |  56594ms | cum=110260B] 
+  [#713  |  56594ms | cum=110569B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"锁保护","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "锁保护"
+      · role = "assistant"
+  [#714  |  56594ms | cum=110570B] 
+  [#715  |  56823ms | cum=110882B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"下执行，","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "下执行，"
+      · role = "assistant"
+  [#716  |  56823ms | cum=110883B] 
+  [#717  |  57284ms | cum=111192B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"保证了","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "保证了"
+      · role = "assistant"
+  [#718  |  57284ms | cum=111193B] 
+  [#719  |  57334ms | cum=111504B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"原子性\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "原子性\n"
+      · role = "assistant"
+  [#720  |  57334ms | cum=111505B] 
+  [#721  |  57374ms | cum=111815B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"    s.data","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "    s.data"
+      · role = "assistant"
+  [#722  |  57374ms | cum=111816B] 
+  [#723  |  57414ms | cum=112123B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"[key] =","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "[key] ="
+      · role = "assistant"
+  [#724  |  57414ms | cum=112124B] 
+  [#725  |  57444ms | cum=112432B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" fn(v)\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " fn(v)\n"
+      · role = "assistant"
+  [#726  |  57444ms | cum=112433B] 
+  [#727  |  57484ms | cum=112743B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"}\n```\n\n","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "}\n```\n\n"
+      · role = "assistant"
+  [#728  |  57484ms | cum=112744B] 
+  [#729  |  57974ms | cum=113055B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"#### 修复","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "#### 修复"
+      · role = "assistant"
+  [#730  |  57974ms | cum=113056B] 
+  [#731  |  57974ms | cum=113368B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"方案二：","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "方案二："
+      · role = "assistant"
+  [#732  |  57974ms | cum=113369B] 
+  [#733  |  57974ms | cum=113675B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"Double","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "Double"
+      · role = "assistant"
+  [#734  |  57974ms | cum=113676B] 
+  [#735  |  57974ms | cum=113982B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"-Check","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "-Check"
+      · role = "assistant"
+  [#736  |  57974ms | cum=113983B] 
+  [#737  |  57974ms | cum=114289B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"（读","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "（读"
+      · role = "assistant"
+  [#738  |  57974ms | cum=114290B] 
+  [#739  |  57974ms | cum=114593B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"多","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "多"
+      · role = "assistant"
+  [#740  |  57974ms | cum=114594B] 
+  [#741  |  57974ms | cum=114903B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"写少且","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "写少且"
+      · role = "assistant"
+  [#742  |  57974ms | cum=114904B] 
+  [#743  |  57974ms | cum=115207B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" fn","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " fn"
+      · role = "assistant"
+  [#744  |  57974ms | cum=115208B] 
+  [#745  |  57974ms | cum=115518B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 计算极","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 计算极"
+      · role = "assistant"
+  [#746  |  57974ms | cum=115519B] 
+  [#747  |  58064ms | cum=115822B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"慢","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "慢"
+      · role = "assistant"
+  [#748  |  58064ms | cum=115823B] 
+  [#749  |  58064ms | cum=116129B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"时才","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "时才"
+      · role = "assistant"
+  [#750  |  58064ms | cum=116130B] 
+  [#751  |  58125ms | cum=116447B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"考虑）\n如果","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "考虑）\n如果"
+      · role = "assistant"
+  [#752  |  58125ms | cum=116448B] 
+  [#753  |  58125ms | cum=116753B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" `fn`","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " `fn`"
+      · role = "assistant"
+  [#754  |  58125ms | cum=116754B] 
+  [#755  |  58125ms | cum=117067B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 执行极其","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 执行极其"
+      · role = "assistant"
+  [#756  |  58125ms | cum=117068B] 
+  [#757  |  58125ms | cum=117380B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"耗时，且","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "耗时，且"
+      · role = "assistant"
+  [#758  |  58125ms | cum=117381B] 
+  [#759  |  58125ms | cum=117693B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"绝大多数","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "绝大多数"
+      · role = "assistant"
+  [#760  |  58125ms | cum=117694B] 
+  [#761  |  58125ms | cum=118005B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"情况下 `","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "情况下 `"
+      · role = "assistant"
+  [#762  |  58125ms | cum=118006B] 
+  [#763  |  58125ms | cum=118312B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"Update","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "Update"
+      · role = "assistant"
+  [#764  |  58125ms | cum=118313B] 
+  [#765  |  58833ms | cum=118618B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"` 并","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "` 并"
+      · role = "assistant"
+  [#766  |  58833ms | cum=118619B] 
+  [#767  |  58833ms | cum=118922B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"不","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "不"
+      · role = "assistant"
+  [#768  |  58833ms | cum=118923B] 
+  [#769  |  58833ms | cum=119229B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"修改","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "修改"
+      · role = "assistant"
+  [#770  |  58833ms | cum=119230B] 
+  [#771  |  58833ms | cum=119533B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"值","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "值"
+      · role = "assistant"
+  [#772  |  58833ms | cum=119534B] 
+  [#773  |  58833ms | cum=119843B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"（虽然","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "（虽然"
+      · role = "assistant"
+  [#774  |  58833ms | cum=119844B] 
+  [#775  |  58833ms | cum=120150B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"你的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "你的"
+      · role = "assistant"
+  [#776  |  58833ms | cum=120151B] 
+  [#777  |  58833ms | cum=120457B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"代码","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "代码"
+      · role = "assistant"
+  [#778  |  58833ms | cum=120458B] 
+  [#779  |  58833ms | cum=120764B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"逻辑","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "逻辑"
+      · role = "assistant"
+  [#780  |  58834ms | cum=120765B] 
+  [#781  |  59534ms | cum=121074B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"里没有","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "里没有"
+      · role = "assistant"
+  [#782  |  59534ms | cum=121075B] 
+  [#783  |  63784ms | cum=121381B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"体现","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "体现"
+      · role = "assistant"
+  [#784  |  63784ms | cum=121382B] 
+  [#785  |  63815ms | cum=121688B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"这种","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "这种"
+      · role = "assistant"
+  [#786  |  63815ms | cum=121689B] 
+  [#787  |  63854ms | cum=122010B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"判断），才可以","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "判断），才可以"
+      · role = "assistant"
+  [#788  |  63854ms | cum=122011B] 
+  [#789  |  63884ms | cum=122317B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"考虑","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "考虑"
+      · role = "assistant"
+  [#790  |  63884ms | cum=122318B] 
+  [#791  |  63924ms | cum=122627B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"复杂的","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "复杂的"
+      · role = "assistant"
+  [#792  |  63924ms | cum=122628B] 
+  [#793  |  64165ms | cum=122935B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" Double","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " Double"
+      · role = "assistant"
+  [#794  |  64165ms | cum=122936B] 
+  [#795  |  64204ms | cum=123242B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"-Check","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "-Check"
+      · role = "assistant"
+  [#796  |  64204ms | cum=123243B] 
+  [#797  |  64204ms | cum=123553B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":" 模式。","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = " 模式。"
+      · role = "assistant"
+  [#798  |  64204ms | cum=123554B] 
+  [#799  |  64484ms | cum=123860B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"但就","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "但就"
+      · role = "assistant"
+  [#800  |  64484ms | cum=123861B] 
+  [#801  |  64484ms | cum=124167B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"当前","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "当前"
+      · role = "assistant"
+  [#802  |  64484ms | cum=124168B] 
+  [#803  |  64484ms | cum=124474B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"给定","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "给定"
+      · role = "assistant"
+  [#804  |  64484ms | cum=124475B] 
+  [#805  |  64484ms | cum=124787B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"代码而言","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "代码而言"
+      · role = "assistant"
+  [#806  |  64484ms | cum=124788B] 
+  [#807  |  64484ms | cum=125097B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"，方案","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "，方案"
+      · role = "assistant"
+  [#808  |  64484ms | cum=125098B] 
+  [#809  |  64484ms | cum=125407B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"一已经","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "一已经"
+      · role = "assistant"
+  [#810  |  64484ms | cum=125408B] 
+  [#811  |  64484ms | cum=125717B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"足够且","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "足够且"
+      · role = "assistant"
+  [#812  |  64484ms | cum=125718B] 
+  [#813  |  64484ms | cum=126024B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"绝对","role":"assistant"},"finish_reason":null,"logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ✓ delta 字段: [content, role]
+      · content = "绝对"
+      · role = "assistant"
+  [#814  |  64484ms | cum=126025B] 
+  [#815  |  64484ms | cum=126336B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[{"index":0,"delta":{"content":"正确。","role":"assistant"},"finish_reason":"stop","logprobs":null}],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":null}
+  ↑ 本帧 finish_reason=stop
+  ✓ delta 字段: [content, role]
+      · content = "正确。"
+      · role = "assistant"
+  [#816  |  64484ms | cum=126337B] 
+  [#817  |  64484ms | cum=126607B] data: {"id":"chatcmpl-e4b1181d-74ae-467e-bc04-144a96f9209d","choices":[],"created":1785041763,"model":"z-ai/glm-5.2","service_tier":null,"system_fingerprint":null,"object":"chat.completion.chunk","usage":{"prompt_tokens":99,"completion_tokens":933,"total_tokens":1032}}

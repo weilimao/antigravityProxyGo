@@ -123,9 +123,12 @@ export function filterByTab(accounts: any[], tab: string): any[] {
 
 // 基于给定账号集合聚合一份对等结构 totals，
 // 使每个 Tab 的汇总芯片独立反映该类型的成本与命中率。
+// totalTokens = inputTokens + outputTokens，与账号卡片行内 Tokens 口径保持一致，
+// 避免顶部看板与列表行出现两套 Token 口径。
 export function computeTabSummary(accounts: any[]): any {
     let requestCount = 0;
     let inputTokens = 0;
+    let outputTokens = 0;
     let cachedTokens = 0;
     let cacheHitRequests = 0;
     let totalCost = 0;
@@ -133,6 +136,7 @@ export function computeTabSummary(accounts: any[]): any {
         if (!acc) continue;
         requestCount += Number(acc.requestCount) || 0;
         inputTokens += Number(acc.inputTokens) || 0;
+        outputTokens += Number(acc.outputTokens) || 0;
         cachedTokens += Number(acc.cachedTokens) || 0;
         cacheHitRequests += Number(acc.cacheHitRequests) || 0;
         totalCost += Number(acc.totalCost) || 0;
@@ -140,6 +144,8 @@ export function computeTabSummary(accounts: any[]): any {
     return {
         requestCount,
         inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
         cachedTokens,
         cacheHitRequests,
         totalCost,
@@ -413,6 +419,7 @@ export function render(usage?: any) {
                     <div class="flex items-center gap-4 text-right" id="usageSummaryChips">
                         ${renderSummaryChip(dict.usage_accounts || '账号数', String(totalItems), TAB_TONE[currentTab] || 'primary')}
                         ${renderSummaryChip(dict.usage_callsCount || '调用次数', formatNumber(totals.requestCount), 'slate')}
+                        ${renderSummaryChip(dict.usage_totalTokens || 'Token 总数', formatNumber(totals.totalTokens), 'slate')}
                         ${renderSummaryChip(dict.usage_totalCost || '总成本', formatMoney(totals.totalCost), 'emerald')}
                         ${renderSummaryChip(dict.usage_hitRate || '命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
                     </div>
@@ -469,6 +476,7 @@ export function render(usage?: any) {
             chipsEl.innerHTML = `
                 ${renderSummaryChip(dict.usage_accounts || '账号数', String(totalItems), TAB_TONE[currentTab] || 'primary')}
                 ${renderSummaryChip(dict.usage_callsCount || '调用次数', formatNumber(totals.requestCount), 'slate')}
+                ${renderSummaryChip(dict.usage_totalTokens || 'Token 总数', formatNumber(totals.totalTokens), 'slate')}
                 ${renderSummaryChip(dict.usage_totalCost || '总成本', formatMoney(totals.totalCost), 'emerald')}
                 ${renderSummaryChip(dict.usage_hitRate || '命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
             `;

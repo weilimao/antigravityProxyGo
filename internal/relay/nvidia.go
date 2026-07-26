@@ -605,6 +605,9 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(w http.ResponseWriter, r
 	}
 
 	// 流式：逐行嗅探 SSE，逐行原样透传，末帧 usage 为权威。
+	// X-Accel-Buffering: no 禁止 Nginx / 反代缓冲 SSE，避免下游体感"攒一批再发"被误判非流式，
+	// 与 antigravity 链路 internal/relay/compat.go:835 对齐。
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
 	scanner := bufio.NewScanner(resp.Body)

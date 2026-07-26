@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"antigravity-proxy/internal/account"
 )
@@ -296,8 +298,11 @@ func OpenAIChatSSEToAnthropicSSE(reader io.Reader, writer *bufio.Writer, model s
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
+	// 为本次流式会话生成唯一消息 ID，用于 message_start 的 id 字段
+	streamID := fmt.Sprintf("msg_nvidia_%d", time.Now().UnixNano())
+
 	// message_start
-	fw.writeEvent("message_start", messageStartPayload(model))
+	fw.writeEvent("message_start", messageStartPayload(streamID, model))
 
 	blockStates := &sseBlockStates{blocks: map[int]*sseBlock{}}
 
@@ -347,18 +352,29 @@ func OpenAIChatSSEToAnthropicSSE(reader io.Reader, writer *bufio.Writer, model s
 }
 
 // messageStartPayload 生成 message_start 事件的 data 负载。
-func messageStartPayload(model string) string {
+// 严格对齐 Anthropic 官方流式协议：顶层 type 必须是 "message_start"，且包含嵌套的 message 对象，
+// 否则 VS Code Claude 扩展 SDK 的 MessageAccumulator 解析不到 message.id / message.content，
+// 会报 "Message not found" 并降级为非流式模式——这正是 NVIDIA 中继流式持久失败而 antigravity(Gemini)
+// 链正常工作的根因差异所在（antigravity 链 compat.go:870-882 已按正确嵌套实现）。
+func messageStartPayload(streamID, model string) string {
 	if model == "" {
 		model = "nvidia"
 	}
+	if streamID == "" {
+		streamID = fmt.Sprintf("msg_nvidia_%d", time.Now().UnixNano())
+	}
 	payload, _ := json.Marshal(map[string]interface{}{
-		"type": "message",
-		"role": "assistant",
-		"model": model,
-		"content": []interface{}{},
-		"stop_reason": nil,
-		"stop_sequence": nil,
-		"usage": map[string]interface{}{"input_tokens": 0, "output_tokens": 0},
+		"type": "message_start",
+		"message": map[string]interface{}{
+			"id":            streamID,
+			"type":          "message",
+			"role":          "assistant",
+			"model":         model,
+			"content":       []interface{}{},
+			"stop_reason":   nil,
+			"stop_sequence": nil,
+			"usage": map[string]interface{}{"input_tokens": 0, "output_tokens": 0},
+		},
 	})
 	return string(payload)
 }
@@ -391,6 +407,11 @@ type sseBlockStates struct {
 	mu     sync.Mutex
 	blocks map[int]*sseBlock
 	next   int
+	// textEmitted 标记本轮是否已发出过文本块，用于决定工具块在 content 数组中的 output index，
+	// 保证 index 从 0 起连续递增、与官方协议"index 对应 content 数组位置"对齐：
+	//   - 有前置文本：文本占 index 0，工具块从 index 1 起；
+	//   - 无前置文本（上游首帧就调工具、零文本）：工具块从 index 0 起，不跳号。
+	textEmitted bool
 }
 
 // emitTextDelta 把一条 OpenAI 文本增量转成 Anthropic content_block_delta(text_delta)。
@@ -405,6 +426,7 @@ func (s *sseBlockStates) emitTextDelta(text string, fw *flushWriter) {
 	}
 	if !b.textStarted {
 		b.textStarted = true
+		s.textEmitted = true
 		fw.writeEvent("content_block_start", contentBlockStartPayload(b.index, "text", "", ""))
 	}
 	fw.writeEvent("content_block_delta", contentBlockTextDeltaPayload(b.index, text))
@@ -412,14 +434,27 @@ func (s *sseBlockStates) emitTextDelta(text string, fw *flushWriter) {
 
 // emitToolCallDelta 处理 OpenAI tool_calls 增量(index 指向上游分块的工具调用编号)，
 // 映射成 Anthropic 的 content_block_start(tool_use) + content_block_delta(input_json_delta)。
+//
+// 存储与输出 index 约定（保证 content 数组 index 从 0 起连续合规、且 map key 不冲突）：
+//   - 工具块在 content 数组中的位置由是否有前置文本块决定：
+//     有前置文本(textEmitted=true)→工具块从 index 1 起；无前置文本→从 index 0 起。
+//   - 存储 key 与 output index 一致：base = b2i(textEmitted)（0 或 1），key = base + idx。
+//     这样天然避开文本块的 key=0 冲突：有文本时工具 base=1（工具 key≥1）、
+//     无文本时工具 base=0（此时 map 里没有文本块，工具 key 从 0 起也安全）。
+//   - 工具块 toolID 兜底命名仍按上游 idx 命名，不受 base 影响。
 func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw *flushWriter) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	idx := tc.Index
-	b, ok := s.blocks[idx]
+	base := 0
+	if s.textEmitted {
+		base = 1
+	}
+	key := base + idx
+	b, ok := s.blocks[key]
 	if !ok {
-		b = &sseBlock{index: idx + 1, kind: "tool_use", toolID: tc.ID, toolName: tc.Function.Name}
-		s.blocks[idx] = b
+		b = &sseBlock{index: key, kind: "tool_use", toolID: tc.ID, toolName: tc.Function.Name}
+		s.blocks[key] = b
 	}
 	if !b.toolStarted {
 		b.toolStarted = true
@@ -435,10 +470,21 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw *flushWriter) {
 }
 
 // closeAll 关闭所有已打开的文本/工具块，发出 content_block_stop。
+// 必须按 block index 升序关闭：map 无序遍历会导致 content_block_stop 顺序乱跳，
+// 与 content_block_start 的出现次序不一致，新版严格客户端(Claude Code/Cursor 插件)的状态机会错乱。
+// blocks 的 map key 语义：文本块=0、工具块=上游 tool_calls 的 idx+1（见 emitToolCallDelta，
+// 用 idx+1 而非 idx 是为了与文本块 key=0 不冲突），key 升序恰好等价于
+// "先文本后工具、工具按上游 index 顺序"，与 emitTextDelta/emitToolCallDelta 发出 start 的次序一致。
 func (s *sseBlockStates) closeAll(fw *flushWriter) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, b := range s.blocks {
+	keys := make([]int, 0, len(s.blocks))
+	for k := range s.blocks {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	for _, k := range keys {
+		b := s.blocks[k]
 		if b.textStarted || b.toolStarted {
 			fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
 		}
@@ -479,17 +525,24 @@ func (f *flushWriter) flush() {
 
 // ===== Anthropic SSE payload 构造 =====
 
+// contentBlockStartPayload 构造 content_block_start 事件 data 负载。
+// 严格对齐 Anthropic 官方流式协议：文本块 content_block 必须带 "text":"" 字段，
+// 否则新版 Claude Code / Cursor 插件的 MessageAccumulator 解析时无法建立 current text block，
+// 紧接着的 content_block_delta(text_delta) 会报 "Received content_block_delta without a current message"。
+// 工具块则需带 id/name/input 三字段。
 func contentBlockStartPayload(index int, kind, id, name string) string {
-	m := map[string]interface{}{
-		"type":  "content_block_start",
-		"index": index,
-		"content_block": map[string]interface{}{"type": kind},
-	}
-	if kind == "tool_use" {
-		cb := m["content_block"].(map[string]interface{})
+	cb := map[string]interface{}{"type": kind}
+	if kind == "text" {
+		cb["text"] = ""
+	} else if kind == "tool_use" {
 		cb["id"] = id
 		cb["name"] = name
 		cb["input"] = map[string]interface{}{}
+	}
+	m := map[string]interface{}{
+		"type":          "content_block_start",
+		"index":         index,
+		"content_block": cb,
 	}
 	b, _ := json.Marshal(m)
 	return string(b)

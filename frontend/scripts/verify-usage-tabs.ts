@@ -29,12 +29,12 @@ function assert(name: string, actual: unknown, expected: unknown) {
 
 // 样例账号：覆盖 antigravity / project / nvidia / direct（含空 provider 兜底）
 const sampleAccounts = [
-    { email: 'a@x.com', provider: 'antigravity', requestCount: 10, inputTokens: 100, cachedTokens: 20, cacheHitRequests: 2, totalCost: 1.2 },
-    { email: 'b@x.com', provider: 'antigravity', requestCount: 5, inputTokens: 50, cachedTokens: 0, cacheHitRequests: 0, totalCost: 0.6 },
-    { email: 'c@x.com', provider: 'project', requestCount: 8, inputTokens: 80, cachedTokens: 40, cacheHitRequests: 4, totalCost: 0.9 },
-    { email: 'd@x.com', provider: 'nvidia', requestCount: 3, inputTokens: 30, cachedTokens: 5, cacheHitRequests: 1, totalCost: 0.3 },
-    { email: 'direct@x.com', provider: '', requestCount: 2, inputTokens: 20, cachedTokens: 0, cacheHitRequests: 0, totalCost: 0.1 },
-    { email: 'weird@x.com', provider: 'unknown', requestCount: 1, inputTokens: 10, cachedTokens: 0, cacheHitRequests: 0, totalCost: 0.05 },
+    { email: 'a@x.com', provider: 'antigravity', requestCount: 10, inputTokens: 100, outputTokens: 12, cachedTokens: 20, cacheHitRequests: 2, totalCost: 1.2 },
+    { email: 'b@x.com', provider: 'antigravity', requestCount: 5, inputTokens: 50, outputTokens: 8, cachedTokens: 0, cacheHitRequests: 0, totalCost: 0.6 },
+    { email: 'c@x.com', provider: 'project', requestCount: 8, inputTokens: 80, outputTokens: 6, cachedTokens: 40, cacheHitRequests: 4, totalCost: 0.9 },
+    { email: 'd@x.com', provider: 'nvidia', requestCount: 3, inputTokens: 30, outputTokens: 4, cachedTokens: 5, cacheHitRequests: 1, totalCost: 0.3 },
+    { email: 'direct@x.com', provider: '', requestCount: 2, inputTokens: 20, outputTokens: 2, cachedTokens: 0, cacheHitRequests: 0, totalCost: 0.1 },
+    { email: 'weird@x.com', provider: 'unknown', requestCount: 1, inputTokens: 10, outputTokens: 1, cachedTokens: 0, cacheHitRequests: 0, totalCost: 0.05 },
 ];
 
 console.log('normalizeProvider:');
@@ -63,6 +63,8 @@ console.log('computeTabSummary:');
 const agSummary = computeTabSummary(filterByTab(sampleAccounts, 'antigravity'));
 assert('antigravity requestCount 累加', agSummary.requestCount, 15);
 assert('antigravity inputTokens 累加', agSummary.inputTokens, 150);
+assert('antigravity outputTokens 累加', agSummary.outputTokens, 20);
+assert('antigravity totalTokens = input + output', agSummary.totalTokens, 170);
 assert('antigravity cachedTokens 累加', agSummary.cachedTokens, 20);
 assert('antigravity cacheHitRequests 累加', agSummary.cacheHitRequests, 2);
 assert('antigravity totalCost 累加', Math.round(agSummary.totalCost * 1000) / 1000, 1.8);
@@ -73,7 +75,8 @@ assert('direct totalCost 累加', Math.round(directSummary.totalCost * 1000) / 1
 
 const emptySummary = computeTabSummary([]);
 assert('空集 summary 全 0', emptySummary, {
-    requestCount: 0, inputTokens: 0, cachedTokens: 0, cacheHitRequests: 0, totalCost: 0,
+    requestCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0,
+    cachedTokens: 0, cacheHitRequests: 0, totalCost: 0,
 });
 
 console.log(`\n总计：${pass} 通过，${fail} 失败。`);
