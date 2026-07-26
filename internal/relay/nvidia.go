@@ -220,8 +220,16 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 	}
 	r.Body.Close()
 
+	reqID := fmt.Sprintf("nv_%d", time.Now().UnixNano())
+	if h.settingsMgr != nil {
+		enabled := h.settingsMgr.GetEnableDebuggerMode()
+		logPath := h.settingsMgr.GetResolvedDebuggerLogPath()
+		GetGlobalDebugger().Configure(enabled, logPath)
+	}
+	GetGlobalDebugger().LogClientRequest(reqID, r.Method, r.URL.Path, r.Header, bodyBytes)
+
 	// 入站协议判定：按路径决定（三选一）
-	inboundAnthropic  := strings.HasSuffix(path, "/v1/messages")
+	inboundAnthropic := strings.HasSuffix(path, "/v1/messages")
 	inboundOpenAI     := strings.HasSuffix(path, "/v1/chat/completions")
 	inboundResponses  := strings.HasSuffix(path, "/v1/responses")
 	if !inboundAnthropic && !inboundOpenAI && !inboundResponses {
@@ -264,6 +272,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		isStreaming = req.Stream
 	}
 	// 流式也可能通过 Accept: text/event-stream 或 stream=true 表达，此处仅以 body.stream 为准。
+
 
 	// NVIDIA family 配额预扣额校验（独立于 gemini/claude）
 	if h.authMgr != nil && h.authMgr.userMgr != nil {
@@ -410,6 +419,10 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		var activeResp *http.Response
 		accountSuccess := false
 		const maxSingleAcc429Retries = 5
+		// 压缩断路器：单请求服务端就地压缩重试计数（文档 §3 MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES=3）。
+		singleCompressFailures := 0
+		// 首次 ResourceExhausted 帧的原始文本，用于压缩救不活时判定是否回写 400 引导客户端自压（治本）。
+		var resentExhaustedFrame string
 
 		for singleAttempt := 1; singleAttempt <= maxSingleAcc429Retries; singleAttempt++ {
 			req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
@@ -488,6 +501,63 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			}
 
 			// 成功 HTTP 200
+			if isStreaming {
+				bufReader := bufio.NewReader(resp.Body)
+				peekBytes, _ := bufReader.Peek(1024)
+				peekStr := string(peekBytes)
+				if strings.Contains(peekStr, `"error"`) && (strings.Contains(peekStr, `"ResourceExhausted"`) || strings.Contains(peekStr, `"internal_server_error"`) || strings.Contains(peekStr, `"Internal server error"`)) {
+					// 上游流内首帧抛出 ResourceExhausted / internal_server_error(500)：
+					// 根因多为 worker 缓冲打满，单请求体积过大是诱因之一；换号无效（同端点簇）。
+					// 先尝试服务端就地压缩请求体并原地复用当前号重试（救当前请求）。
+					h.log("⚠️ [NVIDIA 中继] 账号 %s 上游流内首帧抛出 ResourceExhausted/500，先尝试就地压缩请求体重试...", poolAccount.Email)
+					resp.Body.Close()
+					lastResp = nil
+					lastErr = fmt.Errorf("nvidia upstream sse error: %s", truncateBody(peekBytes, 200))
+					if resentExhaustedFrame == "" {
+						resentExhaustedFrame = peekStr
+					}
+
+					// 压缩断路器：最多 3 轮
+					if singleCompressFailures < 3 {
+						compReq, compOK, compEnabled := h.tryCompressNvidiaRequest(upstreamReq)
+						if compEnabled && compOK && compReq != nil {
+							if newBody, e := json.Marshal(compReq); e == nil && len(newBody) < len(upstreamBody) {
+								h.log("🧩 [NVIDIA 中继] 已压缩请求体 %d → %d 字节，原地复用账号 %s 重试...", len(upstreamBody), len(newBody), poolAccount.Email)
+								upstreamBody, upstreamReq = newBody, compReq
+								singleCompressFailures++
+								continue // 复用当前号、不冷冻、不 break 到外层换号
+							}
+						}
+						// 压缩无效或不可压缩：计一次失败，仍在本号重试（给上游 worker 可能短暂的限流恢复机会）
+						singleCompressFailures++
+						if singleCompressFailures < 3 {
+							continue
+						}
+					}
+
+					// 压缩 3 轮仍失败：判定是否"上下文超窗/无可恢复"语义。
+					// 若是 → 回写 Anthropic 标准 invalid_request_error 400，引导客户端本地 /compact 自压（治本）。
+					// 否则 → 保留原冷冻换号路径。
+					if looksLikeContextTooLong(resentExhaustedFrame) {
+						h.log("🛑 [NVIDIA 中继] 账号 %s 压缩 3 轮仍失败且首帧含上下文超窗语义，回写 400 invalid_request_error 引导客户端自压...", poolAccount.Email)
+						h.replyAnthropicContextTooLong(w, inboundAnthropic, upstreamModel)
+						return
+					}
+					h.log("⚠️ [NVIDIA 中继] 账号 %s 压缩重试耗尽，冷冻该账号并换号...", poolAccount.Email)
+					skippedAccounts[poolAccount.ID] = true
+					h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, time.Now().UnixNano()/1e6+60*1000, nvidiaChannel, inModel)
+					h.sessionRouter.UnbindSession(sessionKey)
+					break
+				}
+				resp.Body = struct {
+					io.Reader
+					io.Closer
+				}{
+					Reader: bufReader,
+					Closer: resp.Body,
+				}
+			}
+
 			activeResp = resp
 			accountSuccess = true
 			break
@@ -681,6 +751,9 @@ func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, res
 }
 
 // writeNvidiaAnthropicStream 处理流式 Anthropic 入站：上游 OpenAI Chat SSE → Anthropic SSE。
+// 响应头对齐 compat.go:826-837(Gemini 链路)保证 SSE 不被反代/框架缓冲:
+//   - X-Accel-Buffering: no 禁止 Nginx 聚合 SSE;
+//   - http.Flusher 逐帧 push 到 TCP socket,避免仅写到 http.ResponseWriter 内部缓冲。
 func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account) {
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
@@ -689,13 +762,24 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, res
 		_, _ = w.Write(bodyBytes)
 		return
 	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		h.log("⚠️ [NVIDIA Anthropic 流式] http.ResponseWriter 不支持 Flusher, 降级为仅 bufio flush (SSE 实时性可能打折)")
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	if ok {
+		flusher.Flush() // 立即把响应头推给客户端, 让其尽早进入 SSE 等待状态
+	}
 	bw := bufio.NewWriter(w)
-	in, out, _ := OpenAIChatSSEToAnthropicSSE(resp.Body, bw, model)
+	in, out, _ := OpenAIChatSSEToAnthropicSSE(resp.Body, bw, model, flusher)
 	bw.Flush()
+	if ok {
+		flusher.Flush() // 收尾刷净, 确保 message_stop 落盘
+	}
 	h.recordNvidiaUsage(userSession, model, in, out, poolAccount)
 }
 

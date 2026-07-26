@@ -67,6 +67,10 @@ type Config struct {
 	CompressionStrategy     string `json:"compressionStrategy"`
 	SummaryModel            string `json:"summaryModel"`
 	KeepRecentTurns         int    `json:"keepRecentTurns"`
+	// NVIDIA 号池 ResourceExhausted 时的服务端就地压缩参数（公共 chatcompress 引擎）。
+	NvidiaCompressEnabled        bool `json:"nvidiaCompressEnabled"`
+	NvidiaCompressThresholdTokens int  `json:"nvidiaCompressThresholdTokens"`
+	NvidiaCompressKeepToolResults int  `json:"nvidiaCompressKeepToolResults"`
 	PromptPrefix            string `json:"promptPrefix"`
 	CustomModelOverrideEnabled    bool   `json:"customModelOverrideEnabled"`
 	CustomModelOverrideID         string `json:"customModelOverrideID"`
@@ -75,6 +79,8 @@ type Config struct {
 	CustomThinkingBudget          int    `json:"customThinkingBudget"`
 	CustomThinkingMinBudget       int    `json:"customThinkingMinBudget"`
 	CustomMaxOutputTokens         int    `json:"customMaxOutputTokens"`
+	EnableDebuggerMode            bool   `json:"enableDebuggerMode"`
+	DebuggerLogPath               string `json:"debuggerLogPath"`
 }
 
 func GetDefaultModelMappings() []ModelMappingEntry {
@@ -187,6 +193,9 @@ func (m *Manager) Init(defaultPath string) {
 		CompressionStrategy:     "summarize",
 		SummaryModel:            "gemini-2.5-flash-lite",
 		KeepRecentTurns:         5,
+		NvidiaCompressEnabled:         true,
+		NvidiaCompressThresholdTokens: 80000,
+		NvidiaCompressKeepToolResults: 4,
 		CustomModelOverrideEnabled:    false,
 		CustomModelOverrideID:         "",
 		CustomThinkingOverrideEnabled: false,
@@ -194,6 +203,8 @@ func (m *Manager) Init(defaultPath string) {
 		CustomThinkingBudget:          0,
 		CustomThinkingMinBudget:       32,
 		CustomMaxOutputTokens:         65536,
+		EnableDebuggerMode:            false,
+		DebuggerLogPath:               "logs/debugger",
 	}
 
 	m.loadConfig()
@@ -223,12 +234,17 @@ func (m *Manager) loadConfig() {
 	}
 
 	parsed := Config{
-		EnablePacketCapture:  true,
+		EnablePacketCapture:     true,
 		EnableCustomCompression: true,
-		MaxTokensThreshold:   100000,
-		CompressionStrategy:  "summarize",
-		SummaryModel:         "gemini-2.5-flash-lite",
-		KeepRecentTurns:      5,
+		MaxTokensThreshold:      100000,
+		CompressionStrategy:     "summarize",
+		SummaryModel:            "gemini-2.5-flash-lite",
+		KeepRecentTurns:         5,
+		NvidiaCompressEnabled:         true,
+		NvidiaCompressThresholdTokens: 80000,
+		NvidiaCompressKeepToolResults: 4,
+		EnableDebuggerMode:      false,
+		DebuggerLogPath:         "logs/debugger",
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return
@@ -251,6 +267,13 @@ func (m *Manager) loadConfig() {
 		if _, exists := rawMap["customThinkingSupports"]; !exists {
 			parsed.CustomThinkingSupports = false
 		}
+		if _, exists := rawMap["enableDebuggerMode"]; !exists {
+			parsed.EnableDebuggerMode = false
+		}
+	}
+
+	if parsed.DebuggerLogPath == "" {
+		parsed.DebuggerLogPath = "logs/debugger"
 	}
 
 	if parsed.CustomThinkingMinBudget <= 0 {
@@ -1167,17 +1190,31 @@ type SessionOptimizationConfig struct {
 	CompressionStrategy     string `json:"compressionStrategy"`
 	SummaryModel            string `json:"summaryModel"`
 	KeepRecentTurns         int    `json:"keepRecentTurns"`
+	// NVIDIA 号池服务端就地压缩参数（公共 chatcompress 引擎）。
+	NvidiaCompressEnabled        bool `json:"nvidiaCompressEnabled"`
+	NvidiaCompressThresholdTokens int  `json:"nvidiaCompressThresholdTokens"`
+	NvidiaCompressKeepToolResults int  `json:"nvidiaCompressKeepToolResults"`
 }
+
+// ChatCompressDefaults 集中暴露 chatcompress 引擎的默认值,供 relay 包 settings 缺字段时兜底。
+const (
+	ChatCompressDefaultEnabled    = true
+	ChatCompressDefaultThreshold  = 80000
+	ChatCompressDefaultKeepN      = 4
+)
 
 func (m *Manager) GetSessionOptimization() SessionOptimizationConfig {
 	m.RLock()
 	defer m.RUnlock()
 	return SessionOptimizationConfig{
-		EnableCustomCompression: m.config.EnableCustomCompression,
-		MaxTokensThreshold:      m.config.MaxTokensThreshold,
-		CompressionStrategy:     m.config.CompressionStrategy,
-		SummaryModel:            m.config.SummaryModel,
-		KeepRecentTurns:         m.config.KeepRecentTurns,
+		EnableCustomCompression:        m.config.EnableCustomCompression,
+		MaxTokensThreshold:             m.config.MaxTokensThreshold,
+		CompressionStrategy:            m.config.CompressionStrategy,
+		SummaryModel:                   m.config.SummaryModel,
+		KeepRecentTurns:                m.config.KeepRecentTurns,
+		NvidiaCompressEnabled:          m.config.NvidiaCompressEnabled,
+		NvidiaCompressThresholdTokens:  m.config.NvidiaCompressThresholdTokens,
+		NvidiaCompressKeepToolResults:  m.config.NvidiaCompressKeepToolResults,
 	}
 }
 
@@ -1189,6 +1226,9 @@ func (m *Manager) SetSessionOptimization(cfg SessionOptimizationConfig) error {
 	m.config.CompressionStrategy = cfg.CompressionStrategy
 	m.config.SummaryModel = cfg.SummaryModel
 	m.config.KeepRecentTurns = cfg.KeepRecentTurns
+	m.config.NvidiaCompressEnabled = cfg.NvidiaCompressEnabled
+	m.config.NvidiaCompressThresholdTokens = cfg.NvidiaCompressThresholdTokens
+	m.config.NvidiaCompressKeepToolResults = cfg.NvidiaCompressKeepToolResults
 	return m.SaveConfig()
 }
 
@@ -1268,6 +1308,11 @@ type ManagerInterface interface {
 	SetCustomThinkingMinBudget(val int) error
 	GetCustomMaxOutputTokens() int
 	SetCustomMaxOutputTokens(val int) error
+	GetEnableDebuggerMode() bool
+	SetEnableDebuggerMode(enable bool) error
+	GetDebuggerLogPath() string
+	SetDebuggerLogPath(val string) error
+	GetResolvedDebuggerLogPath() string
 	SaveConfig() error
 	MigrateData(
 		targetPath string,
@@ -1278,4 +1323,50 @@ type ManagerInterface interface {
 		redirectPaths func(string),
 	) error
 }
+func (m *Manager) GetEnableDebuggerMode() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.EnableDebuggerMode
+}
+
+func (m *Manager) SetEnableDebuggerMode(enable bool) error {
+	m.Lock()
+	m.config.EnableDebuggerMode = enable
+	m.Unlock()
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetDebuggerLogPath() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.DebuggerLogPath
+}
+
+func (m *Manager) SetDebuggerLogPath(val string) error {
+	m.Lock()
+	m.config.DebuggerLogPath = val
+	m.Unlock()
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetResolvedDebuggerLogPath() string {
+	m.RLock()
+	defer m.RUnlock()
+	p := m.config.DebuggerLogPath
+	if p == "" {
+		p = "logs/debugger"
+	}
+	if filepath.IsAbs(p) {
+		return p
+	}
+	baseDir := m.activeDataDirectory
+	if baseDir == "" {
+		baseDir = m.defaultUserDataPath
+	}
+	if baseDir == "" {
+		baseDir = "."
+	}
+	return filepath.Join(baseDir, p)
+}
+
 var _ ManagerInterface = (*Manager)(nil)

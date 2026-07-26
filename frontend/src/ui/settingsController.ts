@@ -248,6 +248,65 @@ export function initSettings() {
             });
         }
 
+        const chkEnableDebuggerMode = document.getElementById('chkEnableDebuggerMode') as HTMLInputElement | null;
+        const txtDebuggerLogPath = document.getElementById('txtDebuggerLogPath') as HTMLInputElement | null;
+        const btnBrowseDebuggerDir = document.getElementById('btnBrowseDebuggerDir');
+
+        if (chkEnableDebuggerMode) {
+            chkEnableDebuggerMode.addEventListener('change', (e: any) => {
+                const enabled = e.target.checked;
+                try {
+                    ipcRenderer.send('settings:set-debugger-mode', enabled);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save debugger mode settings:', err);
+                }
+            });
+        }
+
+        if (txtDebuggerLogPath) {
+            txtDebuggerLogPath.addEventListener('change', (e: any) => {
+                const pathVal = e.target.value;
+                try {
+                    ipcRenderer.send('settings:set-debugger-log-path', pathVal);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save debugger log path:', err);
+                }
+            });
+        }
+
+        if (btnBrowseDebuggerDir) {
+            btnBrowseDebuggerDir.addEventListener('click', () => {
+                try {
+                    ipcRenderer.send('settings:select-debugger-log-dir');
+                } catch (err) {
+                    console.error('[SettingsController] Failed to browse debugger log dir:', err);
+                }
+            });
+        }
+
+        ipcRenderer.on('settings:debugger-mode-res', (_: any, res: any) => {
+            if (res) {
+                if (chkEnableDebuggerMode) {
+                    chkEnableDebuggerMode.checked = res.enabled ?? false;
+                }
+                if (txtDebuggerLogPath) {
+                    txtDebuggerLogPath.value = res.path || 'logs/debugger';
+                }
+            }
+        });
+
+        ipcRenderer.on('settings:debugger-log-path-res', (_: any, newPath: string) => {
+            if (txtDebuggerLogPath && newPath) {
+                txtDebuggerLogPath.value = newPath;
+            }
+        });
+
+        try {
+            ipcRenderer.send('settings:get-debugger-mode');
+        } catch (e) {
+            console.error('[SettingsController] Failed to get debugger mode:', e);
+        }
+
         const chkCustomSocks5Enabled = document.getElementById('chkCustomSocks5Enabled') as HTMLInputElement | null;
         const txtCustomSocks5Address = document.getElementById('txtCustomSocks5Address') as HTMLInputElement | null;
         const txtCustomSocks5Username = document.getElementById('txtCustomSocks5Username') as HTMLInputElement | null;

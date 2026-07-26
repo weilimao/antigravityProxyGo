@@ -80,7 +80,10 @@ func main() {
 	token := flag.String("token", hardcodedToken, "NVIDIA AccessToken(默认硬编码值)")
 	model := flag.String("model", defaultModel, "上游模型 ID")
 	prompt := flag.String("prompt", defaultPrompt, "测试 prompt")
-	mode := flag.String("mode", "both", "both | stream | nostream")
+	mode := flag.String("mode", "both", "both | stream | nostream | compare")
+	// compare 专用:指定要对照的 Accept-Encoding 取值,逗号分隔。
+	// 默认 "identity,gzip,auto" 三组对照。auto=不显式设头(等价于 Go 默认自动 gzip)。
+	compareEnc := flag.String("compare-enc", "identity,gzip,auto", "compare 模式下要对照的 Accept-Encoding 取值(逗号分隔)")
 	// 日志文件路径:默认写当前工作目录 logs/ 子目录,带时间戳与 mode;可用 -log-file 覆盖。
 	logFile := flag.String("log-file", "", "日志文件输出路径(不填则自动写到 ./logs/nvidia_probe_<时间>_<mode>.log)")
 	flag.Parse()
@@ -119,8 +122,19 @@ func main() {
 		fmt.Println()
 		fmt.Println("######## 分支 B: stream=true  ########")
 		runOnce(targetURL, *token, *model, *prompt, true)
+	case "compare":
+		// 压缩对照实验:验证上游是不是真的对 text/event-stream 返回 gzip,
+		// 以及不同 Accept-Encoding 下流式逐帧到达的差异(用于坐实/排除 gzip 缓冲根因)。
+		var encs []string
+		for _, e := range strings.Split(*compareEnc, ",") {
+			e = strings.TrimSpace(e)
+			if e != "" {
+				encs = append(encs, e)
+			}
+		}
+		runCompare(targetURL, *token, *model, *prompt, encs)
 	default:
-		fmt.Printf("未知 mode: %s (允许 both|stream|nostream)\n", *mode)
+		fmt.Printf("未知 mode: %s (允许 both|stream|nostream|compare)\n", *mode)
 	}
 
 	// 退出前 flush: 关 pipe 写端让 tee goroutine 读到 EOF 并把残留 buffer 刷进日志文件,
@@ -411,7 +425,193 @@ func dupStdout() *os.File {
 	return os.Stdout
 }
 
-// startTee 把标准输出 tee 到一个带时间戳的日志文件:
+// runCompare 对给定 Accept-Encoding 取值列表逐个发起流式请求, 收集每帧相对毫秒,
+// 计算间隔分布(攒批指纹), 跨组对比 — 用于坐实/排除"gzip 缓冲使 SSE 攒批"根因。
+//
+// 每组输出:
+//   - 响应头 Content-Encoding / Content-Type(判断该编码下上游是否真压缩);
+//   - 首帧相对启动 ms;
+//   - 帧间隔的 min / max / p50 / 同毫秒并帧次数;
+//   - 总帧数与总耗时。
+//
+// 关键判读:
+//   - 某组 Content-Encoding 非空且 max 间隔 ≫ p50、并帧次数高 → 该编码下 SSE 被攒批;
+//   - identity 组帧间隔均匀、首帧快 → 明文逐帧, 禁压缩可恢复实时流。
+func runCompare(targetURL, token, model, prompt string, encs []string) {
+	fmt.Println("==== Accept-Encoding 对照实验(stream=true)====")
+	fmt.Printf("对照值: %v\n\n", encs)
+
+	type groupStat struct {
+		enc            string
+		contentEnc     string
+		contentType    string
+		status         int
+		err            string
+		firstFrameMs   int64
+		frames         []int64 // 每帧相对启动 ms
+		totalMs        int64
+	}
+	var stats []*groupStat
+
+	for _, enc := range encs {
+		st := &groupStat{enc: enc, status: -1, firstFrameMs: -1}
+		stats = append(stats, st)
+		fmt.Printf("######## 对照组 Accept-Encoding: %q ########\n", enc)
+
+		chatReq := &OpenAIChatRequest{
+			Model:    model,
+			Messages: []ChatMessage{{Role: "user", Content: prompt}},
+			Stream:   true,
+			StreamOptions: &ChatStreamOptions{IncludeUsage: true},
+		}
+		body, _ := json.Marshal(chatReq)
+
+		req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(body))
+		if err != nil {
+			st.err = "构造请求失败: " + err.Error()
+			fmt.Printf("  [错误] %s\n\n", st.err)
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		// 与 nvidia.go 流式分支一致: Accept: application/json(中继向 NVIDIA 上游就是这么发的)。
+		req.Header.Set("Accept", "application/json")
+		// Accept-Encoding:
+		//   - "auto" => 不显式设(等价 Go http.Transport 默认自动加 gzip, CloseText/streamClient 现状);
+		//   - 其它 => 显式设该值, 同时 req.Header.Set 会触发 Go transport 把响应当成"客户端已知编码"不复写。
+		//     注意: 显式设 Accept-Encoding 会让 net/http 不自动解压, 这里本就是要看原始是否压缩, 故行为符合预期。
+		if enc != "auto" {
+			req.Header.Set("Accept-Encoding", enc)
+		}
+
+		// 用普通 client(Timeout 0), 不关压缩(等价中继 streamClient 现状), 真实复现中继侧 Reading 体感。
+		client := &http.Client{Timeout: 0}
+		start := time.Now()
+		resp, err := client.Do(req)
+		if err != nil {
+			st.err = "上游请求失败: " + err.Error()
+			fmt.Printf("  [请求失败] %s\n\n", st.err)
+			continue
+		}
+		st.status = resp.StatusCode
+		st.contentEnc = resp.Header.Get("Content-Encoding")
+		st.contentType = resp.Header.Get("Content-Type")
+		fmt.Printf("  [状态码] %d\n", resp.StatusCode)
+		fmt.Printf("  [响应头 Content-Type]     %q\n", st.contentType)
+		fmt.Printf("  [响应头 Content-Encoding] %q\n", st.contentEnc)
+		fmt.Printf("  [响应头 Transfer-Encoding] %q\n", resp.Header.Get("Transfer-Encoding"))
+		if resp.StatusCode != http.StatusOK {
+			errBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			fmt.Printf("  [非 200 错误体] %s\n\n", truncate(string(errBytes), 500))
+			continue
+		}
+
+		// 逐行读 SSE, 记录每帧到达的相对 ms(只数 data: 行, 跳过空行/注释/divider)。
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if dataStr == "[DONE]" {
+				break
+			}
+			ms := time.Since(start).Milliseconds()
+			if st.firstFrameMs < 0 {
+				st.firstFrameMs = ms
+			}
+			st.frames = append(st.frames, ms)
+		}
+		if e := scanner.Err(); e != nil && st.err == "" {
+			st.err = "扫描出错: " + e.Error()
+		}
+		resp.Body.Close()
+		st.totalMs = time.Since(start).Milliseconds()
+
+		// 计算间隔分布。
+		intervals := frameIntervalsMs(st.frames)
+		// 同毫秒"并帧"次数: 间隔 == 0 的帧数, 越高越像被攒批一次性蹦出。
+		coalesced := 0
+		for _, d := range intervals {
+			if d == 0 {
+				coalesced++
+			}
+		}
+		p50, mx, mn := intervalStats(intervals)
+		fmt.Printf("  [计数] 帧数=%d  总耗时=%dms\n", len(st.frames), st.totalMs)
+		fmt.Printf("  [时延] 首帧=%dms  帧间隔 min=%d / p50=%d / max=%d  并帧(间隔=0)=%d\n",
+			st.firstFrameMs, mn, p50, mx, coalesced)
+		// 攒批指纹: max ≫ p50 且并帧多 = 典型缓冲; 否则均匀逐帧。
+		if len(intervals) > 4 && mx > p50*5 && coalesced*3 > len(intervals) {
+			fmt.Printf("  [判读] ★ 疑似缓冲攒批: max/p50=%.1f, 并帧占比高 → 该 Accept-Encoding 下流被憋住\n", float64(mx)/float64(maxInt(1, p50)))
+		} else if len(st.frames) > 2 {
+			fmt.Printf("  [判读] ✓ 帧间隔较均匀 → 该编码下逐帧实时到达\n")
+		}
+		fmt.Println()
+	}
+
+	// 汇总对照表。
+	fmt.Println("==================== 汇总对照表 ====================")
+	fmt.Printf("%-10s %-22s %-22s %-9s %-9s %-10s %-9s %-9s\n",
+		"Enc", "Content-Encoding", "Content-Type", "frames", "firstMs", "p50Ms", "maxMs", "coalesced")
+	for _, st := range stats {
+		intervals := frameIntervalsMs(st.frames)
+		p50, mx, _ := intervalStats(intervals)
+		coalesced := 0
+		for _, d := range intervals {
+			if d == 0 {
+				coalesced++
+			}
+		}
+		ct := st.contentType
+		ce := st.contentEnc
+		if st.err != "" {
+			fmt.Printf("%-10s %s\n", st.enc, st.err)
+			continue
+		}
+		fmt.Printf("%-10s %-22s %-22s %-9d %-9d %-10d %-9d %-9d\n",
+			st.enc, ce, ct, len(st.frames), st.firstFrameMs, p50, mx, coalesced)
+	}
+	fmt.Println("====================================================")
+}
+
+// frameIntervalsMs 由每帧相对 ms 序列算出相邻帧间隔(ms)序列。
+func frameIntervalsMs(frames []int64) []int64 {
+	if len(frames) < 2 {
+		return nil
+	}
+	out := make([]int64, 0, len(frames)-1)
+	for i := 1; i < len(frames); i++ {
+		out = append(out, frames[i]-frames[i-1])
+	}
+	return out
+}
+
+// intervalStats 返回 p50 / max / min。空序列返回 0,0,0。
+func intervalStats(ds []int64) (p50, mx, mn int64) {
+	if len(ds) == 0 {
+		return 0, 0, 0
+	}
+	cp := append([]int64(nil), ds...)
+	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
+	p50 = cp[len(cp)/2]
+	mx = cp[len(cp)-1]
+	mn = cp[0]
+	return
+}
+
+// maxInt 返回两者较大值(小工具, 用于打印避免除零)。
+func maxInt(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+
 //   1. 解析日志文件路径(默认 ./logs/nvidia_probe_<时间戳>_<mode>.log,可用 logFile 覆盖);
 //   2. 建 os.Pipe(),把 os.Stdout 指向 pipe 写端;
 //   3. goroutine 从 pipe 读端读出所有 stdout 内容, 同时写回 realscreen 与日志文件;

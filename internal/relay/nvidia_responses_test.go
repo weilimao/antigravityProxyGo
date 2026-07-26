@@ -254,7 +254,7 @@ func TestOpenAIChatSSEToResponsesSSE_TextStream(t *testing.T) {
 	sse.WriteString("data: [DONE]\n\n")
 
 	buf := &flushBuffer{}
-	fw := newFlushWriter(bufio.NewWriter(buf))
+	fw := newFlushWriter("test_resp", bufio.NewWriter(buf))
 	in, out := OpenAIChatSSEToResponsesSSE(strings.NewReader(sse.String()), fw, "moonshotai/kimi-k2.5")
 	fw.flush()
 
@@ -342,7 +342,7 @@ func TestOpenAIChatSSEToResponsesSSE_ToolCallStream(t *testing.T) {
 	sse.WriteString("data: [DONE]\n\n")
 
 	buf := &flushBuffer{}
-	fw := newFlushWriter(bufio.NewWriter(buf))
+	fw := newFlushWriter("test_resp", bufio.NewWriter(buf))
 	in, out := OpenAIChatSSEToResponsesSSE(strings.NewReader(sse.String()), fw, "z-ai/glm-5.2")
 	fw.flush()
 

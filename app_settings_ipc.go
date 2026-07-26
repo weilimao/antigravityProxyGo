@@ -186,6 +186,41 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 			a.AddLog(fmt.Sprintf("⚙️ 系统语言已更改为: %s", lang))
 		}
 		return true
+
+	case "settings:get-debugger-mode":
+		wailsRuntime.EventsEmit(a.ctx, "settings:debugger-mode-res", map[string]interface{}{
+			"enabled":      a.settingsMgr.GetEnableDebuggerMode(),
+			"path":         a.settingsMgr.GetDebuggerLogPath(),
+			"resolvedPath": a.settingsMgr.GetResolvedDebuggerLogPath(),
+		})
+		return true
+
+	case "settings:set-debugger-mode":
+		enabled := getBoolArg(0)
+		_ = a.settingsMgr.SetEnableDebuggerMode(enabled)
+		status := "禁用"
+		if enabled {
+			status = "启用"
+		}
+		a.AddLog(fmt.Sprintf("⚙️ Debugger 调试模式已更新: %s", status))
+		return true
+
+	case "settings:set-debugger-log-path":
+		pathVal := getStringArg(0)
+		_ = a.settingsMgr.SetDebuggerLogPath(pathVal)
+		a.AddLog(fmt.Sprintf("⚙️ Debugger 调试日志存储路径已更新: %s", pathVal))
+		return true
+
+	case "settings:select-debugger-log-dir":
+		dir, err := wailsRuntime.OpenDirectoryDialog(a.ctx, wailsRuntime.OpenDialogOptions{
+			Title: "选择 Debugger 调试日志保存目录",
+		})
+		if err == nil && dir != "" {
+			_ = a.settingsMgr.SetDebuggerLogPath(dir)
+			wailsRuntime.EventsEmit(a.ctx, "settings:debugger-log-path-res", dir)
+			a.AddLog(fmt.Sprintf("⚙️ Debugger 调试日志目录已选择: %s", dir))
+		}
+		return true
 	}
 	return false
 }

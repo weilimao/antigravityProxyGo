@@ -260,12 +260,21 @@ func (h *APICompatHandler) writeNvidiaResponsesStream(w http.ResponseWriter, res
 		writeResponsesError(w, resp.StatusCode, bodyBytes)
 		return
 	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		h.log("⚠️ [NVIDIA Responses 流式] http.ResponseWriter 不支持 Flusher, 降级为仅 bufio flush")
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	if ok {
+		flusher.Flush()
+	}
 
-	fw := newFlushWriter(bufio.NewWriter(w))
+	reqID := fmt.Sprintf("nv_resp_%d", time.Now().UnixNano())
+	fw := newFlushWriter(reqID, bufio.NewWriter(w), flusher)
 	in, out := OpenAIChatSSEToResponsesSSE(resp.Body, fw, model)
 	fw.flush()
 

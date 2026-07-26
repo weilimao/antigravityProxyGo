@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -157,6 +159,87 @@ func TestHandleNvidia_StreamAnthropic(t *testing.T) {
 	}
 	if rr.Header().Get("Content-Type") != "text/event-stream" {
 		t.Errorf("content type wrong: %s", rr.Header().Get("Content-Type"))
+	}
+}
+
+// ===== 流式 flush 验证：X-Accel-Buffering + http.Flusher 逐帧 flush =====
+
+// flushCounter 包装 httptest.ResponseRecorder 并记录 Flush() 调用次数。
+type flushCounter struct {
+	*httptest.ResponseRecorder
+	flushCount int
+	mu         sync.Mutex
+}
+
+func (f *flushCounter) Flush() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.flushCount++
+}
+
+func (f *flushCounter) FlushCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.flushCount
+}
+
+// TestWriteNvidiaAnthropicStream_FlusherInvoked 验证 writeNvidiaAnthropicStream:
+//   - 响应头含 X-Accel-Buffering: no;
+//   - http.Flusher.Flush() 至少被调用一次(每帧 + 收尾);
+//   - 流式 SSE 事件序列完整(message_start→...→message_stop)。
+func TestWriteNvidiaAnthropicStream_FlusherInvoked(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"}}]}`,
+		`data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"content":" world"}}]}`,
+		`data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`data: {"id":"1","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n")
+
+	mockResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(sse)),
+	}
+
+	rr := httptest.NewRecorder()
+	fc := &flushCounter{ResponseRecorder: rr}
+
+	handler, _, _, _ := newNvidiaTestHandler(t, nil)
+	handler.writeNvidiaAnthropicStream(fc, mockResp, "z-ai/glm-5.2", &RelaySession{UserID: "u-flush"}, nil)
+
+	// 1) X-Accel-Buffering: no
+	if fc.Header().Get("X-Accel-Buffering") != "no" {
+		t.Errorf("缺少 X-Accel-Buffering: no, 实际=%q", fc.Header().Get("X-Accel-Buffering"))
+	}
+
+	// 2) Content-Type: text/event-stream
+	if fc.Header().Get("Content-Type") != "text/event-stream" {
+		t.Errorf("Content-Type 期望 text/event-stream, 实际=%q", fc.Header().Get("Content-Type"))
+	}
+
+	// 3) Flush() 至少被调过(>=1 帧 + 收尾 = 至少 8 次: message_start + 2 content_block_start + 2 delta + 2 stop + message_delta + message_stop + 收尾一次)
+	if fc.FlushCount() < 3 {
+		t.Errorf("Flush() 调用次数 = %d, 期望至少 3 次", fc.FlushCount())
+	}
+
+	// 4) SSE 事件序列认证: 检查输出含必须事件
+	out := fc.Body.String()
+	for _, ev := range []string{"message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"} {
+		if !strings.Contains(out, "event: "+ev) {
+			t.Errorf("缺少事件 %q:\n%s", ev, out)
+		}
+	}
+
+	// 5) 文本 delta 正确回译
+	if !strings.Contains(out, `"text":"Hello"`) || !strings.Contains(out, `"text":" world"`) {
+		t.Errorf("文本 delta 缺失:\n%s", out)
+	}
+
+	// 6) 状态码 200
+	if fc.Code != http.StatusOK {
+		t.Errorf("期望 200, 实际 %d", fc.Code)
 	}
 }
 
@@ -781,4 +864,184 @@ func TestHandleNvidia_FirstRoundDegradesToRoundRobin(t *testing.T) {
 		t.Fatalf("first-round should degrade to round-robin alternating, got: %v", hitID)
 	}
 }
+
+// TestOpenAIChatSSEToAnthropicSSE_AnthropicUsageCompliance 验证回译流的 usage / message_stop
+// payload 严格对齐 Anthropic 官方流式协议，对应改动：
+//   - message_start.usage.output_tokens 初值为 1（官方惯例至少 1）；
+//   - message_delta.usage.{input_tokens,output_tokens} 用上游末帧的累计真实值
+//     （官方标注 "token counts shown in the usage field of the message_delta event are cumulative"）；
+//   - message_stop 的 data 必须为 {"type":"message_stop"}，而非早期 "{}"。
+// 这是对 "Claude Code CLI 等下次请求才整条显示" 的协议合规修正的回归保护。
+func TestOpenAIChatSSEToAnthropicSSE_AnthropicUsageCompliance(t *testing.T) {
+	sseInput := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":42,\"total_tokens\":142}}\n\n" +
+		"data: [DONE]\n\n"
+
+	reader := strings.NewReader(sseInput)
+	var buf bytes.Buffer
+	bw := bufio.NewWriter(&buf)
+	in, out, err := OpenAIChatSSEToAnthropicSSE(reader, bw, "z-ai/glm-5.2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bw.Flush()
+	out_str := buf.String()
+
+	// 1) message_start.usage.output_tokens 初值应为 1
+	if !strings.Contains(out_str, `"output_tokens":1`) {
+		t.Errorf("message_start 应含 output_tokens:1 (官方惯例初值), stream:\n%s", out_str)
+	}
+
+	// 2) message_delta.usage 用累计真实值: output_tokens=42, input_tokens=100
+	//    json.Marshal(map) 字段顺序不固定，故解析 message_delta 的 data 行而非字符串匹配。
+	{
+		idx := strings.Index(out_str, "event: message_delta\n")
+		if idx < 0 {
+			t.Fatalf("missing message_delta event, stream:\n%s", out_str)
+		}
+		dataIdx := strings.Index(out_str[idx:], "data: ")
+		if dataIdx < 0 {
+			t.Fatalf("missing message_delta data, stream:\n%s", out_str)
+		}
+		dataStart := idx + dataIdx + len("data: ")
+		dataEnd := strings.Index(out_str[dataStart:], "\n")
+		if dataEnd < 0 {
+			t.Fatalf("message_delta data 未闭合, stream:\n%s", out_str)
+		}
+		deltaJSON := out_str[dataStart : dataStart+dataEnd]
+		var parsed struct {
+			Type  string `json:"type"`
+			Delta struct {
+				StopReason   string `json:"stop_reason"`
+				StopSequence *string `json:"stop_sequence"`
+			} `json:"delta"`
+			Usage struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(deltaJSON), &parsed); err != nil {
+			t.Fatalf("message_delta JSON 解析失败: %v, raw=%s", err, deltaJSON)
+		}
+		if parsed.Type != "message_delta" {
+			t.Errorf("message_delta.type 期望 message_delta, 实际=%q", parsed.Type)
+		}
+		if parsed.Delta.StopReason != "end_turn" {
+			t.Errorf("message_delta.delta.stop_reason 期望 end_turn, 实际=%q", parsed.Delta.StopReason)
+		}
+		if parsed.Usage.InputTokens != 100 {
+			t.Errorf("message_delta.usage.input_tokens 期望 100(累计真实值), 实际=%d", parsed.Usage.InputTokens)
+		}
+		if parsed.Usage.OutputTokens != 42 {
+			t.Errorf("message_delta.usage.output_tokens 期望 42(累计真实值), 实际=%d", parsed.Usage.OutputTokens)
+		}
+	}
+
+	// 3) message_stop 的 data 必须是 {"type":"message_stop"}，而非 {}
+	if !strings.Contains(out_str, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n") {
+		t.Errorf("message_stop payload 应为 {\"type\":\"message_stop\"}, stream:\n%s", out_str)
+	}
+	if strings.Contains(out_str, "event: message_stop\ndata: {}\n") {
+		t.Errorf("message_stop 不应再用旧 payload {}, stream:\n%s", out_str)
+	}
+
+	// 4) 回传的真实 token 计数应为上游末帧的 100/42
+	if in != 100 || out != 42 {
+		t.Errorf("返回 token 计数期望 in=100 out=42, 实际 in=%d out=%d", in, out)
+	}
+}
+
+func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
+	t.Run("whitespace_content_preserved", func(t *testing.T) {
+		// 模拟上游吐出带有换行符和空格的 delta 块
+		sseInput := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\n\\n  hello\\n\"},\"finish_reason\":null}]}\n\n" +
+			"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+			"data: [DONE]\n\n"
+
+		reader := strings.NewReader(sseInput)
+		var buf bytes.Buffer
+		bw := bufio.NewWriter(&buf)
+		_, _, err := OpenAIChatSSEToAnthropicSSE(reader, bw, "test-model")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		bw.Flush()
+		out := buf.String()
+
+		if !strings.Contains(out, "content_block_start") {
+			t.Errorf("expected content_block_start event in stream")
+		}
+		if !strings.Contains(out, "\\n\\n  hello\\n") && !strings.Contains(out, "\n\n  hello\n") {
+			t.Errorf("expected whitespace/newlines preserved in text_delta, got:\n%s", out)
+		}
+	})
+
+	t.Run("zero_content_block_fallback", func(t *testing.T) {
+		// 模拟上游未发任何 content，直接返回 finish_reason
+		sseInput := "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+			"data: [DONE]\n\n"
+
+		reader := strings.NewReader(sseInput)
+		var buf bytes.Buffer
+		bw := bufio.NewWriter(&buf)
+		_, _, err := OpenAIChatSSEToAnthropicSSE(reader, bw, "test-model")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		bw.Flush()
+		out := buf.String()
+
+		if !strings.Contains(out, "message_start") {
+			t.Errorf("expected message_start")
+		}
+		if !strings.Contains(out, "content_block_start") {
+			t.Errorf("expected fallback content_block_start to avoid undefined text trim error in client")
+		}
+		if !strings.Contains(out, "content_block_stop") {
+			t.Errorf("expected content_block_stop")
+		}
+		if !strings.Contains(out, "message_stop") {
+			t.Errorf("expected message_stop")
+		}
+	})
+
+	t.Run("tool_calls_stop_reason_override", func(t *testing.T) {
+		// 模拟上游返回了 tool_calls，但 finish_reason 返回的是 "stop" 或 null
+		sseInput := "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_123\",\"type\":\"function\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"file\\\":\\\"main.go\\\"}\"}}]},\"finish_reason\":\"stop\"}]}\n\n" +
+			"data: [DONE]\n\n"
+
+		reader := strings.NewReader(sseInput)
+		var buf bytes.Buffer
+		bw := bufio.NewWriter(&buf)
+		_, _, err := OpenAIChatSSEToAnthropicSSE(reader, bw, "test-model")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		bw.Flush()
+		out := buf.String()
+
+		if !strings.Contains(out, "\"stop_reason\":\"tool_use\"") {
+			t.Errorf("expected stop_reason to be overridden to 'tool_use' when tool_calls emitted, got:\n%s", out)
+		}
+	})
+
+	t.Run("upstream_sse_error_detection", func(t *testing.T) {
+		// 模拟上游返回了包含 ResourceExhausted 的 SSE Error 帧
+		sseInput := "data: {\"error\":{\"message\":\"ResourceExhausted: Worker local total request limit reached (48/48)\",\"type\":\"internal_server_error\",\"code\":500}}\n\n" +
+			"data: [DONE]\n\n"
+
+		reader := strings.NewReader(sseInput)
+		var buf bytes.Buffer
+		bw := bufio.NewWriter(&buf)
+		_, _, err := OpenAIChatSSEToAnthropicSSE(reader, bw, "test-model")
+		if err == nil {
+			t.Fatalf("expected error when upstream SSE contains error frame, got nil")
+		}
+		if !strings.Contains(err.Error(), "ResourceExhausted") {
+			t.Errorf("expected error message to contain ResourceExhausted, got: %v", err)
+		}
+	})
+}
+
 

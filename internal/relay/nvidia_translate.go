@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -293,18 +294,19 @@ func MapNvidiaModel(inModel string, acc *account.Account) string {
 // OpenAIChatSSEToAnthropicSSE 实时把 NVIDIA(OpenAI Chat 兼容)的 SSE 流重写成 Anthropic Messages SSE 事件流。
 // reader 读上游 SSE，writer 写 Anthropic SSE。返回累计 input/output tokens。
 // 协议事件序列：message_start → (content_block_start/delta/stop × N) → message_delta(usage) → message_stop。
-func OpenAIChatSSEToAnthropicSSE(reader io.Reader, writer *bufio.Writer, model string) (input, output int, err error) {
-	fw := newFlushWriter(writer)
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-
+func OpenAIChatSSEToAnthropicSSE(reader io.Reader, writer *bufio.Writer, model string, flusher ...http.Flusher) (input, output int, err error) {
 	// 为本次流式会话生成唯一消息 ID，用于 message_start 的 id 字段
 	streamID := fmt.Sprintf("msg_nvidia_%d", time.Now().UnixNano())
+	fw := newFlushWriter(streamID, writer, flusher...)
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
 	// message_start
 	fw.writeEvent("message_start", messageStartPayload(streamID, model))
 
 	blockStates := &sseBlockStates{blocks: map[int]*sseBlock{}}
+	finishEmitted := false
+	stopReason := ""
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -318,6 +320,23 @@ func OpenAIChatSSEToAnthropicSSE(reader io.Reader, writer *bufio.Writer, model s
 		if data == "[DONE]" {
 			break
 		}
+
+		type sseErrorChunk struct {
+			Error *struct {
+				Message string      `json:"message"`
+				Type    string      `json:"type"`
+				Code    interface{} `json:"code"`
+			} `json:"error"`
+		}
+		var errChunk sseErrorChunk
+		if json.Unmarshal([]byte(data), &errChunk) == nil && errChunk.Error != nil && errChunk.Error.Message != "" {
+			errMsg := fmt.Sprintf("upstream sse error: %s (code: %v)", errChunk.Error.Message, errChunk.Error.Code)
+			if !blockStates.hasEmittedAnyBlock() {
+				return input, output, fmt.Errorf("%s", errMsg)
+			}
+			break
+		}
+
 		var chunk OpenAIChatStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			// 跳过无法解析的行，但不中断流
@@ -331,22 +350,39 @@ func OpenAIChatSSEToAnthropicSSE(reader io.Reader, writer *bufio.Writer, model s
 			continue
 		}
 		ch := chunk.Choices[0]
-		if strings.TrimSpace(ch.Delta.Content) != "" {
+		if ch.Delta.Content != "" {
 			blockStates.emitTextDelta(ch.Delta.Content, fw)
+		} else if ch.Delta.ReasoningContent != "" {
+			blockStates.emitTextDelta(ch.Delta.ReasoningContent, fw)
 		}
 		for _, tc := range ch.Delta.ToolCalls {
 			blockStates.emitToolCallDelta(tc, fw)
 		}
 		if ch.FinishReason != nil && ch.FinishReason != "" {
+			blockStates.ensureAtLeastOneBlock(fw)
 			blockStates.closeAll(fw)
-			fw.writeEvent("message_delta", messageDeltaPayload(openAIFinishToAnthropicStop(fmt.Sprintf("%v", ch.FinishReason))))
+			stopReason = blockStates.determineStopReason(fmt.Sprintf("%v", ch.FinishReason))
+			finishEmitted = true
 		}
 	}
 	if scanErr := scanner.Err(); scanErr != nil && scanErr != io.EOF {
 		err = scanErr
 	}
+	// message_delta 必须在循环结束后发出：Anthropic 官方要求 message_delta.usage 的 token
+	// 计数为累计值 (cumulative)，而上游 NIM 的 usage 帧 ({"choices":[],"usage":{...}}) 在
+	// finish_reason 帧之后、[DONE] 之前才送达。若在 finish_reason 帧时立即发 message_delta，
+	// input/output 仍为 0，会导致 Claude Code SDK 的 MessageAccumulator 误判流未正常结束，
+	// 触发"等连接关闭/下次请求才整条渲染"的退化路径。此处统一在循环外、usage 帧已落地后发出。
+	if !finishEmitted {
+		blockStates.ensureAtLeastOneBlock(fw)
+		blockStates.closeAll(fw)
+		stopReason = blockStates.determineStopReason("")
+	}
+	fw.writeEvent("message_delta", messageDeltaPayload(stopReason, input, output))
+
 	// message_stop
-	fw.writeEvent("message_stop", "{}")
+	// 对齐官方：data 必须为 {"type":"message_stop"}，而非 "{}"。
+	fw.writeEvent("message_stop", `{"type":"message_stop"}`)
 	fw.flush()
 	return input, output, err
 }
@@ -373,20 +409,30 @@ func messageStartPayload(streamID, model string) string {
 			"content":       []interface{}{},
 			"stop_reason":   nil,
 			"stop_sequence": nil,
-			"usage": map[string]interface{}{"input_tokens": 0, "output_tokens": 0},
+			"usage": map[string]interface{}{"input_tokens": 0, "output_tokens": 1},
 		},
 	})
 	return string(payload)
 }
 
-func messageDeltaPayload(stopReason string) string {
+// messageDeltaPayload 生成 message_delta 事件的 data 负载。
+// 对齐 Anthropic 官方流式协议：usage 字段的 token 计数为累计值(cumulative)，
+// 官方明确标注 "The token counts shown in the `usage` field of the `message_delta`
+// event are *cumulative*"，故 output_tokens 必须填本次流的真实累计输出 token 数，
+// input_tokens 填真实累计输入 token 数。早期的硬编码 {"output_tokens":0} 会让部分
+// Claude Code SDK 的 MessageAccumulator 误判流未正常结束，触发"等连接关闭/下次请求
+// 才整条渲染"的退化路径。
+func messageDeltaPayload(stopReason string, inputTokens, outputTokens int) string {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"type": "message_delta",
 		"delta": map[string]interface{}{
 			"stop_reason": stopReason,
 			"stop_sequence": nil,
 		},
-		"usage": map[string]interface{}{"output_tokens": 0},
+		"usage": map[string]interface{}{
+			"input_tokens":  inputTokens,
+			"output_tokens": outputTokens,
+		},
 	})
 	return string(payload)
 }
@@ -395,23 +441,20 @@ func messageDeltaPayload(stopReason string) string {
 
 // sseBlock 记录当前打开的内容块(文本或工具调用)在 Anthropic 流中的索引与身份。
 type sseBlock struct {
-	index    int
-	kind     string // "text" | "tool_use"
-	toolID   string
-	toolName string
+	index       int
+	kind        string // "text" | "tool_use"
+	toolID      string
+	toolName    string
 	textStarted bool
 	toolStarted bool
 }
 
 type sseBlockStates struct {
-	mu     sync.Mutex
-	blocks map[int]*sseBlock
-	next   int
-	// textEmitted 标记本轮是否已发出过文本块，用于决定工具块在 content 数组中的 output index，
-	// 保证 index 从 0 起连续递增、与官方协议"index 对应 content 数组位置"对齐：
-	//   - 有前置文本：文本占 index 0，工具块从 index 1 起；
-	//   - 无前置文本（上游首帧就调工具、零文本）：工具块从 index 0 起，不跳号。
+	mu          sync.Mutex
+	blocks      map[int]*sseBlock
+	next        int
 	textEmitted bool
+	hasToolCall bool
 }
 
 // emitTextDelta 把一条 OpenAI 文本增量转成 Anthropic content_block_delta(text_delta)。
@@ -434,17 +477,10 @@ func (s *sseBlockStates) emitTextDelta(text string, fw *flushWriter) {
 
 // emitToolCallDelta 处理 OpenAI tool_calls 增量(index 指向上游分块的工具调用编号)，
 // 映射成 Anthropic 的 content_block_start(tool_use) + content_block_delta(input_json_delta)。
-//
-// 存储与输出 index 约定（保证 content 数组 index 从 0 起连续合规、且 map key 不冲突）：
-//   - 工具块在 content 数组中的位置由是否有前置文本块决定：
-//     有前置文本(textEmitted=true)→工具块从 index 1 起；无前置文本→从 index 0 起。
-//   - 存储 key 与 output index 一致：base = b2i(textEmitted)（0 或 1），key = base + idx。
-//     这样天然避开文本块的 key=0 冲突：有文本时工具 base=1（工具 key≥1）、
-//     无文本时工具 base=0（此时 map 里没有文本块，工具 key 从 0 起也安全）。
-//   - 工具块 toolID 兜底命名仍按上游 idx 命名，不受 base 影响。
 func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw *flushWriter) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.hasToolCall = true
 	idx := tc.Index
 	base := 0
 	if s.textEmitted {
@@ -470,11 +506,6 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw *flushWriter) {
 }
 
 // closeAll 关闭所有已打开的文本/工具块，发出 content_block_stop。
-// 必须按 block index 升序关闭：map 无序遍历会导致 content_block_stop 顺序乱跳，
-// 与 content_block_start 的出现次序不一致，新版严格客户端(Claude Code/Cursor 插件)的状态机会错乱。
-// blocks 的 map key 语义：文本块=0、工具块=上游 tool_calls 的 idx+1（见 emitToolCallDelta，
-// 用 idx+1 而非 idx 是为了与文本块 key=0 不冲突），key 升序恰好等价于
-// "先文本后工具、工具按上游 index 顺序"，与 emitTextDelta/emitToolCallDelta 发出 start 的次序一致。
 func (s *sseBlockStates) closeAll(fw *flushWriter) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -493,21 +524,66 @@ func (s *sseBlockStates) closeAll(fw *flushWriter) {
 	}
 }
 
+// hasEmittedAnyBlock 检查本轮会话是否已发出过至少一个 content_block
+func (s *sseBlockStates) hasEmittedAnyBlock() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.blocks) > 0
+}
+
+// ensureAtLeastOneBlock 确保流结束前至少发出一个 content_block(若零 Block 则保底发空文本块)
+func (s *sseBlockStates) ensureAtLeastOneBlock(fw *flushWriter) {
+	if !s.hasEmittedAnyBlock() {
+		s.emitTextDelta("", fw)
+	}
+}
+
+// determineStopReason 根据本轮是否发出过工具块及上游 finishReason 精准计算 Anthropic stop_reason。
+// 若包含工具调用，必定返回 "tool_use"，确保 Claude Code 等 Agent 客户端能自动驱动后续工具执行。
+func (s *sseBlockStates) determineStopReason(rawFinishReason string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.hasToolCall {
+		return "tool_use"
+	}
+	switch rawFinishReason {
+	case "length":
+		return "max_tokens"
+	case "tool_calls", "function_call":
+		return "tool_use"
+	default:
+		return "end_turn"
+	}
+}
+
 // ===== flushwriter =====
 
 type flushWriter struct {
-	w  *bufio.Writer
-	mu sync.Mutex
+	w       *bufio.Writer
+	flusher http.Flusher
+	reqID   string
+	mu      sync.Mutex
 }
 
-func newFlushWriter(w *bufio.Writer) *flushWriter { return &flushWriter{w: w} }
+// newFlushWriter 创建 flushWriter。若 flusher 非 nil, writeEvent/writeRaw/flush 会在 bufio.Flush
+// 之后调 http.Flusher.Flush(), 把字节真正推到 TCP socket, 实现逐帧实时递送给客户端。
+func newFlushWriter(reqID string, w *bufio.Writer, flusher ...http.Flusher) *flushWriter {
+	fw := &flushWriter{w: w, reqID: reqID}
+	if len(flusher) > 0 {
+		fw.flusher = flusher[0]
+	}
+	return fw
+}
 
 func (f *flushWriter) writeEvent(event, data string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.w.WriteString("event: " + event + "\n")
 	f.w.WriteString("data: " + data + "\n\n")
-	f.w.Flush()
+	f.w.Flush() // 出 bufio 内部缓冲 → http.ResponseWriter
+	if f.flusher != nil {
+		f.flusher.Flush() // 出 http.ResponseWriter → socket
+	}
 }
 
 func (f *flushWriter) writeRaw(s string) {
@@ -515,12 +591,18 @@ func (f *flushWriter) writeRaw(s string) {
 	defer f.mu.Unlock()
 	f.w.WriteString(s)
 	f.w.Flush()
+	if f.flusher != nil {
+		f.flusher.Flush()
+	}
 }
 
 func (f *flushWriter) flush() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.w.Flush()
+	if f.flusher != nil {
+		f.flusher.Flush()
+	}
 }
 
 // ===== Anthropic SSE payload 构造 =====
@@ -681,9 +763,10 @@ type OpenAIChatStreamChoice struct {
 }
 
 type OpenAIChatDelta struct {
-	Role      string         `json:"role,omitempty"`
-	Content   string         `json:"content,omitempty"`
-	ToolCalls []ChatToolCall `json:"tool_calls,omitempty"`
+	Role             string         `json:"role,omitempty"`
+	Content          string         `json:"content,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []ChatToolCall `json:"tool_calls,omitempty"`
 }
 
 // mapNvidiaModel 按账号配置把入站模型名映射成上游模型 id。
