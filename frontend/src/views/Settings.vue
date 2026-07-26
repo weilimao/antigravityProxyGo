@@ -503,6 +503,7 @@
   <button id="btnRelaySubTabPackages" class="px-4 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg cursor-pointer transition-all duration-200" data-i18n="relaySubTabPackages">限额套餐</button>
   <button id="btnRelaySubTabSecurity" class="px-4 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg cursor-pointer transition-all duration-200" data-i18n="relaySubTabSecurity">中继配置</button>
   <button id="btnRelaySubTabModelMapping" class="px-4 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg cursor-pointer transition-all duration-200" data-i18n="relaySubTabModelMapping">模型映射</button>
+  <button id="btnRelaySubTabTutorial" class="px-4 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg cursor-pointer transition-all duration-200" data-i18n="relaySubTabTutorial">配置教程</button>
 </div>
 </div>
 
@@ -682,6 +683,160 @@
             </button>
         </div>
     </div>
+</div>
+<!-- 教程子面板(中继服务器子 tab) -->
+<div id="relay-sub-panel-tutorial" class="flex flex-col gap-6 w-full hidden">
+<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">menu_book</span>
+<span data-i18n="tutorialTitle">中继网关配置完全指南</span>
+</h2>
+<p class="text-xs text-outline leading-relaxed" data-i18n="tutorialIntro">
+本指南基于本软件真实代码整理，带你从零配置一个可对外提供服务的 AI 中继网关。按顺序完成下方 7 步即可。
+</p>
+<!-- 步骤 1 -->
+<div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
+<h3 class="text-[13px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[16px]">toggle_on</span>
+<span data-i18n="tutorialStep1Title">第 1 步：启用中继服务器</span>
+</h3>
+<p class="text-[12px] text-outline leading-relaxed" data-i18n="tutorialStep1Desc">
+进入「系统设置 → 中继服务器」子页，勾选顶部「启用中继服务器」开关。后端字段 RelayEnabled，开启后自动监听端口并接受外部连接；关闭时立即停止监听并踢掉所有现役连接。
+</p>
+</div>
+<!-- 步骤 2 -->
+<div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
+<h3 class="text-[13px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[16px]">router</span>
+<span data-i18n="tutorialStep2Title">第 2 步：设置监听端口</span>
+</h3>
+<p class="text-[12px] text-outline leading-relaxed" data-i18n="tutorialStep2Desc">
+同页端口输入框，默认 18444，留空时后端自动兜底为 18444。监听地址 0.0.0.0，意味着局域网/公网（需自行放行防火墙）均可访问。如端口被占用，改为其他空闲端口即可。
+</p>
+</div>
+<!-- 步骤 3 -->
+<div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
+<h3 class="text-[13px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[16px]">account_circle</span>
+<span data-i18n="tutorialStep3Title">第 3 步：往账号池添加上游账号</span>
+</h3>
+<p class="text-[12px] text-outline leading-relaxed" data-i18n="tutorialStep3Desc">
+账号池管理在「账号池」页面（不是本设置页），支持三种上游渠道，按页顶 Tab 切换：
+</p>
+<div class="flex flex-col gap-2 ml-1">
+<div class="text-[12px] text-outline leading-relaxed">
+<span class="font-bold text-on-surface dark:text-white">① Antigravity 官方账号</span>：走 OAuth 登录，凭据自动落库（需 access_token + refresh_token）。
+</div>
+<div class="text-[12px] text-outline leading-relaxed">
+<span class="font-bold text-on-surface dark:text-white">② GCP 项目通道（project）</span>：OAuth 登录或手动录入，比 Antigravity 多一个必填 ProjectID 字段。
+</div>
+<div class="text-[12px] text-outline leading-relaxed">
+<span class="font-bold text-on-surface dark:text-white">③ NVIDIA 号池（nvidia）</span>：手动录入 API Key，必填 BaseURL（必须是 https，留空默认 <code class="text-[11px]">https://integrate.api.nvidia.com/v1</code>）+ APIKey；模型字段全留空时默认模型为 <code class="text-[11px]">moonshotai/kimi-k2.5</code>。
+</div>
+</div>
+</div>
+<!-- 步骤 4 -->
+<div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
+<h3 class="text-[13px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[16px]">swap_horiz</span>
+<span data-i18n="tutorialStep4Title">第 4 步：配置模型映射</span>
+</h3>
+<p class="text-[12px] text-outline leading-relaxed" data-i18n="tutorialStep4Desc">
+在「中继服务器 → 模型映射」子页配置。每条映射含三项：ClientModel（客户端请求的模型名）→ TargetModel（真实上游模型名）+ Expose（是否在 /v1/models 列表对外公开）。例如把 <code class="text-[11px]">claude-sonnet-4-5</code> 映射到 <code class="text-[11px]">gemini-2.5-pro</code>，客户端用 Claude 模型名请求，后端自动转译到 Gemini 上游。映射为空时自动回退内置默认 70+ 条。
+</p>
+<p class="text-[12px] text-outline leading-relaxed" data-i18n="tutorialStep4Note">
+例外：NVIDIA 号池走自己的「四档位」解析（sonnet/opus/haiku/fable），按关键字命中后取账号上对应字段，不走全局模型映射。
+</p>
+</div>
+<!-- 步骤 5 -->
+<div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
+<h3 class="text-[13px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[16px]">hub</span>
+<span data-i18n="tutorialStep5Title">第 5 步：选择当前中继通道</span>
+</h3>
+<p class="text-[12px] text-outline leading-relaxed" data-i18n="tutorialStep5Desc">
+「中继通道」即账号池页顶部的 Antigravity / GCP / NVIDIA 三选一切换。它决定 /v1internal:* 直连请求从哪个通道选号。注意：/v1/messages、/v1/chat/completions 这类转译链路固定经本地回环到 ProxyEngine 再选号，与通道切换无关。
+</p>
+</div>
+<!-- 步骤 6 -->
+<div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
+<h3 class="text-[13px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[16px]">key</span>
+<span data-i18n="tutorialStep6Title">第 6 步：创建中继用户并分配套餐</span>
+</h3>
+<p class="text-[12px] text-outline leading-relaxed" data-i18n="tutorialStep6Desc">
+在「中继服务器 → 中继用户」子页添加下游用户，系统为其生成 API Key（格式 <code class="text-[11px]">sk-ant-</code> 开头）。额度模板在「用量套餐」子页维护（Pro / Pro 5x / Pro 20x 三档额度+有效期+限流），建用户时绑定套餐即可继承额度。鉴权时客户端凭此 API Key 通过。
+</p>
+</div>
+<!-- 步骤 7：客户端连入 -->
+<div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
+<h3 class="text-[13px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[16px]">link</span>
+<span data-i18n="tutorialStep7Title">第 7 步：客户端连入网关</span>
+</h3>
+<p class="text-[12px] text-outline leading-relaxed" data-i18n="tutorialStep7Desc">
+网关地址形如 <code class="text-[11px]">http://[中继主机IP]:18444</code>，API Key 通过 <code class="text-[11px]">Authorization: Bearer sk-ant-...</code> 或 <code class="text-[11px]">x-api-key: sk-ant-...</code> 传递。各客户端按入站协议选路径：
+</p>
+<pre class="text-[11px] bg-slate-50 dark:bg-black/30 border border-outline-variant/20 rounded-lg p-3 overflow-x-auto text-outline leading-relaxed font-mono"># Claude Code (Anthropic 协议)
+ANTHROPIC_BASE_URL=http://[host]:18444/v1/messages
+ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI SDK / Codex / Cherry Studio (Chat 协议)
+base_url=http://[host]:18444/v1/chat/completions
+
+# Codex Responses 模式
+base_url=http://[host]:18444/v1/responses
+
+# NVIDIA 兼容客户端（直连号池 NVIDIA 账号）
+base_url=http://[host]:18444/nvidia/v1/chat/completions
+# 也可 /nvidia/v1/messages 走 Anthropic 协议回译
+
+# antigravity v1internal 非流式接口（一次性返回完整 JSON）
+POST http://[host]:18444/v1internal:generateContent
+#   流式可在路径后加 ?alt=sse，或直接用 /v1internal:streamGenerateContent
+Authorization: Bearer sk-ant-...</pre>
+<p class="text-[12px] text-outline leading-relaxed" data-i18n="tutorialStep7Note">
+免登录体验：若未创建任何中继用户，只要请求头的 Key 以 sk-ant- / nvapi- / sk- 开头，后端会降级放行，方便快速裸跑验证（生产环境务必建用户管控）。
+</p>
+</div>
+<!-- 路由速查表 -->
+<div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
+<h3 class="text-[13px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[16px]">alt_route</span>
+<span data-i18n="tutorialRouteTableTitle">入站端点速查</span>
+</h3>
+<div class="overflow-x-auto">
+<table class="text-[11px] w-full border border-outline-variant/20 rounded-lg">
+<thead>
+<tr class="bg-slate-50 dark:bg-white/5 text-on-surface dark:text-white">
+<th class="text-left p-2 font-bold">入站路径</th>
+<th class="text-left p-2 font-bold">入站协议</th>
+<th class="text-left p-2 font-bold">上游去向</th>
+</tr>
+</thead>
+<tbody class="text-outline">
+<tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/v1/messages</td><td class="p-2">Anthropic</td><td class="p-2">转译→Gemini/Vertex 回环 ProxyEngine</td></tr>
+<tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/v1/chat/completions</td><td class="p-2">OpenAI Chat</td><td class="p-2">转译→Gemini/Vertex 回环 ProxyEngine</td></tr>
+<tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/v1/responses</td><td class="p-2">OpenAI Responses</td><td class="p-2">转译→Gemini/Vertex 回环 ProxyEngine</td></tr>
+<tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/nvidia/v1/*</td><td class="p-2">OpenAI Chat / Anthropic</td><td class="p-2">直连号池 NVIDIA 账号 BaseURL</td></tr>
+<tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/v1internal:generateContent</td><td class="p-2">antigravity 内部</td><td class="p-2">按当前通道直选号发包（非流式；加 ?alt=sse 升流）</td></tr>
+<tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/v1internal:streamGenerateContent</td><td class="p-2">antigravity 内部</td><td class="p-2">按当前通道直选号发包（流式 SSE）</td></tr>
+<tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">CONNECT</td><td class="p-2">HTTPS 隧道(MITM)</td><td class="p-2">透传 ProxyEngine 走原生直连</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+<!-- 安全加固 -->
+<div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
+<h3 class="text-[13px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[16px]">shield</span>
+<span data-i18n="tutorialSecurityTitle">公网部署安全加固（可选但推荐）</span>
+</h3>
+<p class="text-[12px] text-outline leading-relaxed" data-i18n="tutorialSecurityDesc">
+若部署到公网，强烈建议在「中继配置」子页开启 SSRF 拦截、端口黑名单、域名过滤/白名单，防止网关被滥用为开放代理隧道。并务必为每个中继用户配置合理的速率限制（默认 30 次/分钟）与 Token 配额。
+</p>
+</div>
+</div>
 </div>
 </div>
 </div>

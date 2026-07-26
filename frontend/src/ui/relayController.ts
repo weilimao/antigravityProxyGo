@@ -126,25 +126,29 @@ export function initRelayEvents() {
     const btnRelaySubTabPackages = document.getElementById('btnRelaySubTabPackages');
     const btnRelaySubTabSecurity = document.getElementById('btnRelaySubTabSecurity');
     const btnRelaySubTabModelMapping = document.getElementById('btnRelaySubTabModelMapping');
-    
+    const btnRelaySubTabTutorial = document.getElementById('btnRelaySubTabTutorial');
+
     const panelUsers = document.getElementById('relay-sub-panel-users');
     const panelPackages = document.getElementById('relay-sub-panel-packages');
     const panelSecurity = document.getElementById('relay-sub-panel-security');
     const panelModelMapping = document.getElementById('relay-sub-panel-modelmapping');
+    const panelTutorial = document.getElementById('relay-sub-panel-tutorial');
 
     const subTabActiveClass = 'px-4 py-1.5 text-[12px] font-bold bg-primary/10 text-primary dark:bg-primary/20 rounded-lg cursor-pointer transition-all duration-200';
     const subTabInactiveClass = 'px-4 py-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg cursor-pointer transition-all duration-200';
 
-    function switchSubTab(active: 'users' | 'packages' | 'security' | 'modelmapping') {
+    function switchSubTab(active: 'users' | 'packages' | 'security' | 'modelmapping' | 'tutorial') {
         if (panelUsers) panelUsers.classList.toggle('hidden', active !== 'users');
         if (panelPackages) panelPackages.classList.toggle('hidden', active !== 'packages');
         if (panelSecurity) panelSecurity.classList.toggle('hidden', active !== 'security');
         if (panelModelMapping) panelModelMapping.classList.toggle('hidden', active !== 'modelmapping');
+        if (panelTutorial) panelTutorial.classList.toggle('hidden', active !== 'tutorial');
 
         if (btnRelaySubTabUsers) btnRelaySubTabUsers.className = active === 'users' ? subTabActiveClass : subTabInactiveClass;
         if (btnRelaySubTabPackages) btnRelaySubTabPackages.className = active === 'packages' ? subTabActiveClass : subTabInactiveClass;
         if (btnRelaySubTabSecurity) btnRelaySubTabSecurity.className = active === 'security' ? subTabActiveClass : subTabInactiveClass;
         if (btnRelaySubTabModelMapping) btnRelaySubTabModelMapping.className = active === 'modelmapping' ? subTabActiveClass : subTabInactiveClass;
+        if (btnRelaySubTabTutorial) btnRelaySubTabTutorial.className = active === 'tutorial' ? subTabActiveClass : subTabInactiveClass;
 
         if (active === 'modelmapping') {
             loadModelMappings();
@@ -155,6 +159,7 @@ export function initRelayEvents() {
     if (btnRelaySubTabPackages) btnRelaySubTabPackages.addEventListener('click', () => switchSubTab('packages'));
     if (btnRelaySubTabSecurity) btnRelaySubTabSecurity.addEventListener('click', () => switchSubTab('security'));
     if (btnRelaySubTabModelMapping) btnRelaySubTabModelMapping.addEventListener('click', () => switchSubTab('modelmapping'));
+    if (btnRelaySubTabTutorial) btnRelaySubTabTutorial.addEventListener('click', () => switchSubTab('tutorial'));
 
     // 绑定安全拦截设置元素
     const chkSSRF = document.getElementById('chkRelaySSRFBlock') as HTMLInputElement | null;

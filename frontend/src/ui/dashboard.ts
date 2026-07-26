@@ -143,8 +143,10 @@ function applyConsoleClasses(entry: HTMLElement, log: string) {
 
 // Throttled trend-chart redraw: re-draw at most once per CHART_DRAW_MIN_INTERVAL,
 // with a trailing draw so the final state is always reflected. Range changes
-// draw immediately; within-range data updates are coalesced. Skips entirely
-// when the filtered trends signature has not changed.
+// draw immediately (with left-to-right animation); within-range polling updates
+// are coalesced and drawn SILENTLY (no animation) so staying on the page does
+// not cause the chart to animate every few seconds. Skips entirely when the
+// filtered trends signature has not changed.
 function maybeDrawTrendChart() {
     if (!state.trendsData || state.trendsData.length === 0) return;
     const filteredTrends = chartRenderer.getFilteredTrends(state.trendsData, state.currentRange);
@@ -155,7 +157,9 @@ function maybeDrawTrendChart() {
     const rangeChanged = state.currentRange !== lastChartRange;
     const now = Date.now();
     if (rangeChanged || now - lastChartDrawTs >= CHART_DRAW_MIN_INTERVAL) {
-        chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange);
+        // rangeChanged=true：切范围/首进 app → 播左到右动画；
+        // 仅 tick 到期但范围未变 → 轮询静默重画，不动画。
+        chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange, rangeChanged);
         lastTrendsSig = sig;
         lastChartRange = state.currentRange;
         lastChartDrawTs = now;
@@ -168,6 +172,23 @@ function maybeDrawTrendChart() {
             chartRedrawTimer = null;
             maybeDrawTrendChart();
         }, CHART_DRAW_MIN_INTERVAL - (now - lastChartDrawTs));
+    }
+}
+
+// 强制带动画重画趋势图：跳过 sig 短路与节流，供 switchView 切回 dashboard 时调用，
+// 保证每次切回仪表盘都看到一次左到右画线动画（即使 trends 签名未变也不会被短路）。
+export function redrawTrendChartAnimated() {
+    if (!state.trendsData || state.trendsData.length === 0) return;
+    const filteredTrends = chartRenderer.getFilteredTrends(state.trendsData, state.currentRange);
+    chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange, true);
+    const last = filteredTrends[filteredTrends.length - 1];
+    const sig = `${state.currentRange}:${filteredTrends.length}:${last ? `${last.time}_${last.requests}_${last.input}` : ''}`;
+    lastTrendsSig = sig;
+    lastChartRange = state.currentRange;
+    lastChartDrawTs = Date.now();
+    if (chartRedrawTimer) {
+        clearTimeout(chartRedrawTimer);
+        chartRedrawTimer = null;
     }
 }
 
@@ -664,6 +685,13 @@ export function switchView(viewName: string) {
     }
 
     renderActiveView();
+
+    // 切回 dashboard view 时强制带动画重画一次趋势图。
+    // renderActiveView 内的 maybeDrawTrendChart 会因趋势签名未变而短路跳过重画，
+    // 故这里补一次"跳过短路、强制动画"的重绘，保证每次切回仪表盘都看到左到右画线。
+    if (viewName === 'dashboard' && state.trendsData && state.trendsData.length > 0) {
+        redrawTrendChartAnimated();
+    }
 }
 
 export function initDashboardEvents() {

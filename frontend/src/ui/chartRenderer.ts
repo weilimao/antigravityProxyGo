@@ -84,7 +84,7 @@ export function updateMemoryChart() {
 }
 
 // Draw SVG Line Chart
-export function drawTrendChartSVG(trends: any[], range = '7d') {
+export function drawTrendChartSVG(trends: any[], range = '7d', animate = true) {
     const trendSvg = document.getElementById('trendSvg');
     const costPath = document.getElementById('chartPathCost');
     const inputPath = document.getElementById('chartPathInput');
@@ -394,6 +394,26 @@ export function drawTrendChartSVG(trends: any[], range = '7d') {
         cachedArea.setAttribute('d', cachedAreaD);
     }
 
+    // 6. 左到右画线动画（类 ECharts line drawing）
+    //    - 4 条实线：stroke-dashoffset 从路径总长过渡到 0，线条从左到右"画出"
+    //    - Cost 虚线：不能改它的 stroke-dasharray="3,3"，改用 clipPath 从左到右擦出
+    //    - 2 个面积块：线条画完后（1400ms）opacity 淡入
+    //    （上游 getElementById 返回 HTMLElement|null，断言为 SVG 子类型以满足动画函数签名；
+    //     L103 守门已保证走到此处的 path 非空。）
+    //    animate=true  播左到右动画（进 app / 切范围 / 切回 dashboard view）；
+    //    animate=false 静默复位为全显（轮询 stats-updated 增量刷新不动画，避免每次轮询都"重画抖动"）。
+    const animOpts = {
+        solidPaths: [requestsPath, cachedPath, inputPath, outputPath] as unknown as SVGPathElement[],
+        clipPath: costPath as unknown as SVGPathElement,
+        areas: [inputArea, cachedArea] as unknown as SVGPathElement[],
+        clipViewWidth: xMax // viewBox 宽度 1000
+    };
+    if (animate) {
+        animatePathsDrawIn(animOpts);
+    } else {
+        resetChartToStatic(animOpts);
+    }
+
     // 6. Interactive Hover Tooltip & Points
     const hoverLine = document.getElementById('chartHoverLine');
     const hoverPointsGroup = document.getElementById('chartHoverPoints');
@@ -693,3 +713,211 @@ export function initChartFilters() {
         drawTrendChartSVG(filtered, state.currentRange);
     });
 }
+
+// ============================================================================
+// 趋势图"左到右画线"动画（类 ECharts line drawing），纯 SVG/CSS，零依赖。
+// 原理：SVG path.getTotalLength() 得路径总长 L；设 stroke-dasharray=L、
+//   stroke-dashoffset=L（整条线被 dash 藏到看不见）→ 强制 reflow →
+//   stroke-dashoffset=0，可见段从起点平移到全显，视觉即从左到右"画出"。
+// Cost 虚线本身 break 成 3,3，不能动它的 dasharray，改走 clipPath：
+//   在 trendSvg 动态挂一个 clipPath 包一个 rect，rect 宽度从 0 过渡到
+//   viewBox 宽度，把虚线从左到右"擦出来"；动画结束卸载 clip-path 还原虚线。
+// 面积块：动画启动置 opacity=0，线条画完（800ms）后加 area-shown 类淡入。
+// ============================================================================
+
+const CHART_DRAW_DURATION = 1400; // ms，与 dashboard.css 中 .chart-line-draw transition 一致（放慢，类 ECharts 舒展感）
+const CHART_AREA_FADE_DURATION = 420; // ms，与 .chart-area-anim transition 一致
+
+// 模块级持久 timer id：每次重画前清掉上一次未触发的面积淡入回调，避免快速切范围时
+// 旧 timer 把已经清零的面积又拉亮，造成闪烁残留。
+let chartAreaFadeTimer: ReturnType<typeof setTimeout> | null = null;
+let chartCostClipCleanupTimer: ReturnType<typeof setTimeout> | null = null;
+
+interface DrawInConfig {
+    solidPaths: SVGPathElement[];   // 实线（走 dashoffset 方案）
+    clipPath: SVGPathElement;       // Cost 虚线（走 clipPath 方案）
+    areas: SVGPathElement[];        // 渐变面积块（画完后淡入）
+    clipViewWidth: number;          // clipRect 目标宽度（viewBox 宽，1000）
+}
+
+export function animatePathsDrawIn(cfg: DrawInConfig) {
+    // 1. 复位/清理上轮动画
+    if (chartAreaFadeTimer !== null) {
+        clearTimeout(chartAreaFadeTimer);
+        chartAreaFadeTimer = null;
+    }
+    if (chartCostClipCleanupTimer !== null) {
+        clearTimeout(chartCostClipCleanupTimer);
+        chartCostClipCleanupTimer = null;
+    }
+
+    // 2. 实线：设 dasharray/dashoffset 初始隐藏，强制 reflow 后归零触发过渡。
+    //    复用路径下 .chart-line-draw 的 transition 始终挂着，直接写 strokeDashoffset=len
+    //    会触发 0→len 反向过渡（线先缩成隐藏），再写 0 又过渡回来，整条线先消失再画出 =
+    //    闪屏。故：设初始隐藏值前临时关 transition，reflow 提交“静止隐藏”状态后再开
+    //    transition 并设归零目标，保证只有这一次 len→0 的正向“画出”过渡。
+    const solidInit: { path: SVGPathElement; len: number }[] = [];
+    for (const path of cfg.solidPaths) {
+        let len = 0;
+        try {
+            len = path.getTotalLength();
+        } catch {
+            len = 0;
+        }
+        if (len <= 0) {
+            // 空路径或异常：直接显示，跳过动画（不破坏渲染）
+            path.style.removeProperty('stroke-dasharray');
+            path.style.removeProperty('stroke-dashoffset');
+            continue;
+        }
+        const prevTransition = path.style.transition;
+        path.style.transition = 'none';
+        path.style.strokeDasharray = String(len);
+        path.style.strokeDashoffset = String(len);
+        void path.getBBox(); // 强制提交“静止隐藏”状态
+        path.style.transition = prevTransition;
+        solidInit.push({ path, len });
+    }
+    // 强制同步布局回流：读取几何属性迫使浏览器提交上面两步样式，否则
+    // 后面的归零会被合并、过渡跳过、动画不出现。
+    for (const { path, len } of solidInit) {
+        if (len > 0) void path.getBBox();
+    }
+    for (const { path, len } of solidInit) {
+        if (len > 0) path.style.strokeDashoffset = '0';
+    }
+
+    // 3. Cost 虚线：clipPath 从左到右擦出
+    setupCostClip(cfg.clipPath, cfg.clipViewWidth);
+
+    // 4. 面积块：先归无（CSS .chart-area-anim 已 opacity:0），画完后淡入。
+    //    复用路径下 .chart-area-anim 的 opacity transition 始终挂着，直接 remove('area-shown')
+    //    会触发 1→0 过渡（面积先淡出），800ms 后再 add 又过渡回来，视觉为“淡出再淡入”。
+    //    故复位时临时关 transition，瞬时归零，确保只有结尾一次 0→1 的正向淡入。
+    for (const area of cfg.areas) {
+        const prevTransition = area.style.transition;
+        area.style.transition = 'none';
+        area.classList.remove('area-shown');
+        void area.getBBox(); // 强制提交“静止隐藏”
+        area.style.transition = prevTransition;
+    }
+    chartAreaFadeTimer = setTimeout(() => {
+        for (const area of cfg.areas) {
+            area.classList.add('area-shown');
+        }
+        chartAreaFadeTimer = null;
+    }, CHART_DRAW_DURATION);
+
+    // 5. 动画结束后清理实线 dash 内联样式（避免长期占用 stroke-dashoffset 导致
+    //    后续 hover/重画时样式残留；虚线 clipPath 也在此时卸载还原 3,3 虚线）
+    const cleanupTotal = Math.max(CHART_DRAW_DURATION, CHART_DRAW_DURATION + 50);
+    chartCostClipCleanupTimer = setTimeout(() => {
+        for (const { path, len } of solidInit) {
+            if (len > 0) {
+                path.style.removeProperty('stroke-dasharray');
+                path.style.removeProperty('stroke-dashoffset');
+            }
+        }
+        teardownCostClip(cfg.clipPath);
+        chartCostClipCleanupTimer = null;
+    }, cleanupTotal);
+}
+
+// 静默复位：轮询 stats-updated 增量刷新时（animate=false）不播左到右动画，
+// 但必须把上次动画可能残留的"隐藏/dashoffset/clip/未淡入"状态瞬时清为全显，
+// 否则会留半截隐藏线或一直不可见的面积。复位采用"临时关 transition → 改属性 →
+// reflow 提交 → 开回 transition"手法，避免复位动作本身触发过渡抖动。
+function resetChartToStatic(cfg: DrawInConfig) {
+    // 取消可能正在排队的面积淡入回调，避免它把刚复位的面积又改一次
+    if (chartAreaFadeTimer !== null) {
+        clearTimeout(chartAreaFadeTimer);
+        chartAreaFadeTimer = null;
+    }
+    if (chartCostClipCleanupTimer !== null) {
+        clearTimeout(chartCostClipCleanupTimer);
+        chartCostClipCleanupTimer = null;
+    }
+
+    // 4 条实线：清掉 dasharray/dashoffset 内联样式（回到 path 默认全显）
+    for (const path of cfg.solidPaths) {
+        const prevTransition = path.style.transition;
+        path.style.transition = 'none';
+        path.style.removeProperty('stroke-dasharray');
+        path.style.removeProperty('stroke-dashoffset');
+        void path.getBBox(); // 强制提交“静止全显”，避免开回 transition 时反向过渡
+        path.style.transition = prevTransition;
+    }
+
+    // Cost 虚线：移除 clip-path，还原其 3,3 虚线
+    teardownCostClip(cfg.clipPath);
+
+    // 2 个面积块：直接置 opacity=1（加 area-shown），瞬时无过渡
+    for (const area of cfg.areas) {
+        const prevTransition = area.style.transition;
+        area.style.transition = 'none';
+        area.classList.add('area-shown');
+        void area.getBBox();
+        area.style.transition = prevTransition;
+    }
+}
+
+// Cost 虚线 clipPath 动画：在 trendSvg 内动态创建/复用 clipPath + rect，
+// rect 宽度从 0 过渡到 clipViewWidth。
+function setupCostClip(costPath: SVGPathElement, clipViewWidth: number) {
+    const svg = document.getElementById('trendSvg') as SVGSVGElement | null;
+    if (!svg) return;
+
+    const CLIP_ID = 'chartCostClipRuntime';
+    let clip = svg.querySelector(`#${CLIP_ID}`) as SVGClipPathElement | null;
+    let rect: SVGRectElement | null;
+
+    if (!clip) {
+        // 首次：创建 clipPath + rect，挂到 svg 顶部（无须 <defs>，SVG 规范允许
+        // clipPath 定义在 svg 任意子树位置）。
+        clip = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath') as SVGClipPathElement;
+        clip.setAttribute('id', CLIP_ID);
+        rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect') as SVGRectElement;
+        rect.setAttribute('x', '0');
+        rect.setAttribute('y', '0');
+        rect.setAttribute('height', '300');
+        rect.setAttribute('width', '0');
+        // rect width 过渡：CSS 控制不到 SVG attribute 在所有引擎下的解析，
+        // 这里直接对 rect 的 width 属性用 transition（现代浏览器支持 SVG
+        // presentation attribute 的 CSS 过渡；为兼容性同时用 style.width 兜底无效，
+        // 故只设 attribute + CSS transition）。
+        rect.style.transition = `width ${CHART_DRAW_DURATION}ms cubic-bezier(0.25,0.46,0.45,0.94)`;
+        clip.appendChild(rect);
+        svg.appendChild(clip);
+    } else {
+        rect = clip.querySelector('rect');
+        if (!rect) {
+            rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect') as SVGRectElement;
+            rect.setAttribute('x', '0');
+            rect.setAttribute('y', '0');
+            rect.setAttribute('height', '300');
+            rect.setAttribute('width', '0');
+            rect.style.transition = `width ${CHART_DRAW_DURATION}ms cubic-bezier(0.25,0.46,0.45,0.94)`;
+            clip.appendChild(rect);
+        }
+    }
+
+    // 复位 width=0 → 强制 reflow → 设目标宽度触发过渡。
+    // 注意：rect 上的 transition 在复用路径下会一直挂着。直接 setAttribute('width','0')
+    // 会触发一次 1000→0 的反向过渡，紧接着设目标宽度时浏览器因中间 reflow 合并两次
+    // 赋值，动画丢失。故复位前先关掉 transition，复位并 reflow 后再挂上 transition，
+    // 最后设目标宽度，确保只有这一次 0→1000 的正向过渡。
+    const prevTransition = rect!.style.transition;
+    rect!.style.transition = 'none';
+    rect!.setAttribute('width', '0');
+    void (rect as any).getBBox();                                  // 强制提交复位
+    rect!.style.transition = prevTransition || `width ${CHART_DRAW_DURATION}ms cubic-bezier(0.25,0.46,0.45,0.94)`;
+    costPath.setAttribute('clip-path', `url(#${CLIP_ID})`);
+    void (rect as any).getBBox();                                  // 强制提交"无过渡"状态，下一帧才设目标
+    rect!.setAttribute('width', String(clipViewWidth));
+}
+
+// 动画结束后卸载 clip-path，还原 Cost 虚线本身的 3,3 效果（clipPath 节点留作下次复用）。
+function teardownCostClip(costPath: SVGPathElement) {
+    costPath.removeAttribute('clip-path');
+}
+

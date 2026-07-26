@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -294,12 +295,23 @@ func MapNvidiaModel(inModel string, acc *account.Account) string {
 // OpenAIChatSSEToAnthropicSSE 实时把 NVIDIA(OpenAI Chat 兼容)的 SSE 流重写成 Anthropic Messages SSE 事件流。
 // reader 读上游 SSE，writer 写 Anthropic SSE。返回累计 input/output tokens。
 // 协议事件序列：message_start → (content_block_start/delta/stop × N) → message_delta(usage) → message_stop。
-func OpenAIChatSSEToAnthropicSSE(reader io.Reader, writer *bufio.Writer, model string, flusher ...http.Flusher) (input, output int, err error) {
+//
+// ctx 为入站请求的 r.Context()：客户端主动取消时 ctx 被撤销，watchCancel 立即 Close 上游 body,
+// 使阻塞的 scanner.Scan() 退出读循环，随后在循环外统一补发 message_delta + message_stop 尾帧。
+// body 为上游响应体(用于 ctx 取消时主动 Close 触发 scanner 退出);body 为 nil 时仅退化兼容旧行为,
+// 不接入"取消即断"(留给调用方保证非空)。
+func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.ReadCloser, writer *bufio.Writer, model string, flusher ...http.Flusher) (input, output int, err error) {
 	// 为本次流式会话生成唯一消息 ID，用于 message_start 的 id 字段
 	streamID := fmt.Sprintf("msg_nvidia_%d", time.Now().UnixNano())
 	fw := newFlushWriter(streamID, writer, flusher...)
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+
+	// 客户端取消即断：ctx.Done() → Close 上游 body → scanner.Scan() 立即返回
+	if ctx != nil && body != nil {
+		stop := watchCancel(ctx, body)
+		defer stop()
+	}
 
 	// message_start
 	fw.writeEvent("message_start", messageStartPayload(streamID, model))
@@ -366,7 +378,12 @@ func OpenAIChatSSEToAnthropicSSE(reader io.Reader, writer *bufio.Writer, model s
 		}
 	}
 	if scanErr := scanner.Err(); scanErr != nil && scanErr != io.EOF {
-		err = scanErr
+		// ctx 取消触发的 body.Close() 会让 Scan() 返回 "read on closed *" 类错误,
+		// 这属于"客户端主动取消"的正常收尾路径,不应作为 err 上抛(避免调用方误判为上游故障),
+		// 走尾帧补发即可。
+		if ctx == nil || ctx.Err() == nil {
+			err = scanErr
+		}
 	}
 	// message_delta 必须在循环结束后发出：Anthropic 官方要求 message_delta.usage 的 token
 	// 计数为累计值 (cumulative)，而上游 NIM 的 usage 帧 ({"choices":[],"usage":{...}}) 在
@@ -377,6 +394,11 @@ func OpenAIChatSSEToAnthropicSSE(reader io.Reader, writer *bufio.Writer, model s
 		blockStates.ensureAtLeastOneBlock(fw)
 		blockStates.closeAll(fw)
 		stopReason = blockStates.determineStopReason("")
+	}
+	// 客户端主动取消(ctx 被撤销)且上游未给出 finish_reason:补 end_turn 语义尾帧,
+	// 让 Claude Code SDK 的 MessageAccumulator 视为"本轮正常结束",不触发失败重试、不卡等尾帧。
+	if ctx != nil && ctx.Err() != nil && stopReason == "" {
+		stopReason = "end_turn"
 	}
 	fw.writeEvent("message_delta", messageDeltaPayload(stopReason, input, output))
 
@@ -553,6 +575,44 @@ func (s *sseBlockStates) determineStopReason(rawFinishReason string) string {
 		return "tool_use"
 	default:
 		return "end_turn"
+	}
+}
+
+// watchCancel 监听 ctx 取消：一旦 ctx 被撤销(客户端主动断开 / 请求超时),
+// 立即 Close 上游 resp.Body,使阻塞在 bufio.Scanner.Scan() 上的读循环以
+// "read on closed body" 错误立即返回,从而跳出逐帧回写的主循环。
+//
+// 这是 NVIDIA 流式链路"取消即断"的唯一可靠触发点 —— 不依赖下游写错检测
+// (存在竞态:客户端断开时若 scanner 正好在两帧之间阻塞读,写错不会触发)。
+// ctx.Done() 由 net/http 在客户端 TCP 半关闭时确定性触发,无竞态。
+//
+// 对齐谷歌链路 handler.go:1131-1140 的 cancelChan 监听协程,但抽成可复用 helper,
+// 供 NVIDIA 三条流式回写路径(Anthropic / Responses / OpenAI 透传)统一接入。
+//
+// 返回 stop 函数:defer 调用以释放监听 goroutine,避免泄漏。
+//   body 为上游响应体;调用方负责保证只在 ctx 取消时由本 helper 触发 Close,
+//   正常流式读完时 scanner 先返回 EOF,主循环退出后 defer stop() 释放 goroutine,
+//   body 的最终 Close 仍由各路径既有 defer resp.Body.Close() 负责。
+func watchCancel(ctx context.Context, body io.ReadCloser) (stop func()) {
+	stopped := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			// 客户端已断开:主动切断上游连接,让阻塞的 Scan() 立即返回
+			_ = body.Close()
+		case <-stopped:
+			// 正常收尾:主循环已退出,无需 Close(由既有的 defer resp.Body.Close() 兜底)
+		}
+		close(done)
+	}()
+	return func() {
+		select {
+		case <-stopped:
+		default:
+			close(stopped)
+		}
+		<-done
 	}
 }
 

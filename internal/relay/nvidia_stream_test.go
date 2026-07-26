@@ -3,6 +3,7 @@ package relay
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -34,7 +35,7 @@ func runAnthropicSSE(t *testing.T, upstream string) []sseEvent {
 	t.Helper()
 	var out bytes.Buffer
 	bw := bufio.NewWriter(&out)
-	OpenAIChatSSEToAnthropicSSE(strings.NewReader(upstream), bw, "z-ai/glm-5.2")
+	OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstream), nil, bw, "z-ai/glm-5.2")
 	bw.Flush()
 	return parseSSEEvents(out.String())
 }

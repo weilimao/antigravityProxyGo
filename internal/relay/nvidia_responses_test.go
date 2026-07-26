@@ -3,6 +3,7 @@ package relay
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -255,7 +256,7 @@ func TestOpenAIChatSSEToResponsesSSE_TextStream(t *testing.T) {
 
 	buf := &flushBuffer{}
 	fw := newFlushWriter("test_resp", bufio.NewWriter(buf))
-	in, out := OpenAIChatSSEToResponsesSSE(strings.NewReader(sse.String()), fw, "moonshotai/kimi-k2.5")
+	in, out := OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "moonshotai/kimi-k2.5")
 	fw.flush()
 
 	if in != 7 || out != 2 {
@@ -343,7 +344,7 @@ func TestOpenAIChatSSEToResponsesSSE_ToolCallStream(t *testing.T) {
 
 	buf := &flushBuffer{}
 	fw := newFlushWriter("test_resp", bufio.NewWriter(buf))
-	in, out := OpenAIChatSSEToResponsesSSE(strings.NewReader(sse.String()), fw, "z-ai/glm-5.2")
+	in, out := OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "z-ai/glm-5.2")
 	fw.flush()
 
 	if in != 3 || out != 1 {

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -253,7 +254,7 @@ func (h *APICompatHandler) writeNvidiaResponsesNormal(w http.ResponseWriter, res
 }
 
 // writeNvidiaResponsesStream 处理流式 Responses 入站：上游 OpenAI Chat SSE → Responses SSE 事件序列。
-func (h *APICompatHandler) writeNvidiaResponsesStream(w http.ResponseWriter, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account) {
+func (h *APICompatHandler) writeNvidiaResponsesStream(w http.ResponseWriter, r *http.Request, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account) {
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		h.log("⚠️ [NVIDIA Responses 流式] 上游状态码 %d 非透传 | body: %s", resp.StatusCode, truncateBody(bodyBytes, 500))
@@ -275,7 +276,9 @@ func (h *APICompatHandler) writeNvidiaResponsesStream(w http.ResponseWriter, res
 
 	reqID := fmt.Sprintf("nv_resp_%d", time.Now().UnixNano())
 	fw := newFlushWriter(reqID, bufio.NewWriter(w), flusher)
-	in, out := OpenAIChatSSEToResponsesSSE(resp.Body, fw, model)
+	// 透传 r.Context() 与 resp.Body：客户端取消时 watchCancel 立即 Close 上游,
+	// scanner 退出后循环外既有 response.completed 尾帧自动补发(stop 语义)。
+	in, out := OpenAIChatSSEToResponsesSSE(r.Context(), resp.Body, resp.Body, fw, model)
 	fw.flush()
 
 	h.recordNvidiaUsage(userSession, model, in, out, poolAccount)
@@ -289,9 +292,18 @@ func (h *APICompatHandler) writeNvidiaResponsesStream(w http.ResponseWriter, res
 //   (response.output_item.added → response.function_call_arguments.delta×N →
 //    response.function_call_arguments.done → response.output_item.done)  // 工具调用，按上游 tool_calls index
 //   → response.completed(带 usage)。
-func OpenAIChatSSEToResponsesSSE(reader io.Reader, fw *flushWriter, model string) (input, output int) {
+//
+// ctx 为入站请求的 r.Context()：客户端取消时 watchCancel Close 上游 body 让 scanner 退出,
+// 循环外既有 response.completed 尾帧自动补发,body 为 nil 时退化兼容旧行为(不接入取消即断)。
+func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.ReadCloser, fw *flushWriter, model string) (input, output int) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+
+	// 客户端取消即断：ctx.Done() → Close 上游 body → scanner.Scan() 立即返回
+	if ctx != nil && body != nil {
+		stop := watchCancel(ctx, body)
+		defer stop()
+	}
 
 	// streamID 与 createdAt 用于 created/in_progress/completed 的 id/created_at 字段
 	streamID := fmt.Sprintf("resp_%d", time.Now().UnixNano())

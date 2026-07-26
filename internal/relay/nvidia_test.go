@@ -3,6 +3,7 @@ package relay
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -207,7 +208,8 @@ func TestWriteNvidiaAnthropicStream_FlusherInvoked(t *testing.T) {
 	fc := &flushCounter{ResponseRecorder: rr}
 
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
-	handler.writeNvidiaAnthropicStream(fc, mockResp, "z-ai/glm-5.2", &RelaySession{UserID: "u-flush"}, nil)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", strings.NewReader(""))
+	handler.writeNvidiaAnthropicStream(fc, req, mockResp, "z-ai/glm-5.2", &RelaySession{UserID: "u-flush"}, nil)
 
 	// 1) X-Accel-Buffering: no
 	if fc.Header().Get("X-Accel-Buffering") != "no" {
@@ -881,7 +883,7 @@ func TestOpenAIChatSSEToAnthropicSSE_AnthropicUsageCompliance(t *testing.T) {
 	reader := strings.NewReader(sseInput)
 	var buf bytes.Buffer
 	bw := bufio.NewWriter(&buf)
-	in, out, err := OpenAIChatSSEToAnthropicSSE(reader, bw, "z-ai/glm-5.2")
+	in, out, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "z-ai/glm-5.2")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -962,7 +964,7 @@ func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
 		reader := strings.NewReader(sseInput)
 		var buf bytes.Buffer
 		bw := bufio.NewWriter(&buf)
-		_, _, err := OpenAIChatSSEToAnthropicSSE(reader, bw, "test-model")
+		_, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -985,7 +987,7 @@ func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
 		reader := strings.NewReader(sseInput)
 		var buf bytes.Buffer
 		bw := bufio.NewWriter(&buf)
-		_, _, err := OpenAIChatSSEToAnthropicSSE(reader, bw, "test-model")
+		_, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1014,7 +1016,7 @@ func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
 		reader := strings.NewReader(sseInput)
 		var buf bytes.Buffer
 		bw := bufio.NewWriter(&buf)
-		_, _, err := OpenAIChatSSEToAnthropicSSE(reader, bw, "test-model")
+		_, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1034,7 +1036,7 @@ func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
 		reader := strings.NewReader(sseInput)
 		var buf bytes.Buffer
 		bw := bufio.NewWriter(&buf)
-		_, _, err := OpenAIChatSSEToAnthropicSSE(reader, bw, "test-model")
+		_, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model")
 		if err == nil {
 			t.Fatalf("expected error when upstream SSE contains error frame, got nil")
 		}

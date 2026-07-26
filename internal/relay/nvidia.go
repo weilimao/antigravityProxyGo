@@ -3,6 +3,7 @@ package relay
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -570,7 +571,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			} else if inboundResponses {
 				inboundKind = "responses"
 			}
-			h.writeNvidiaResponse(w, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount)
+			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount)
 			return
 		}
 	}
@@ -601,14 +602,15 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 
 // writeNvidiaResponse 把上游 OpenAI Chat 响应回译成入站协议并写回客户端。
 // inboundKind: "openai_chat"（透传）| "anthropic"（回译为 Messages）| "responses"（回译为 Responses API）。
-func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account) {
+// r 为入站请求,供流式分支透传 r.Context() 到 watchCancel,实现客户端取消即断 + 尾帧补发。
+func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account) {
 	defer resp.Body.Close()
 
 	switch inboundKind {
 	case "anthropic":
 		// 入站是 Anthropic：需要把上游 OpenAI Chat 响应回译成 Anthropic Messages
 		if isStreaming {
-			h.writeNvidiaAnthropicStream(w, resp, model, userSession, poolAccount)
+			h.writeNvidiaAnthropicStream(w, r, resp, model, userSession, poolAccount)
 			return
 		}
 		h.writeNvidiaAnthropicNormal(w, resp, model, userSession, poolAccount)
@@ -618,7 +620,7 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, resp *http
 		// 入站是 Responses API(codex /v1/responses)：把上游 OpenAI Chat 响应回译成 Responses 格式。
 		// 非流式聚合后回译；流式逐 SSE chunk 重写成 Responses 事件序列。
 		if isStreaming {
-			h.writeNvidiaResponsesStream(w, resp, model, userSession, poolAccount)
+			h.writeNvidiaResponsesStream(w, r, resp, model, userSession, poolAccount)
 			return
 		}
 		h.writeNvidiaResponsesNormal(w, resp, model, userSession, poolAccount)
@@ -628,7 +630,7 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, resp *http
 		// 入站是 OpenAI Chat：直接透传上游响应（含流式 SSE）。
 		// 方案 A：边透传边嗅探 usage，非流式从全量 JSON 提 usage，
 		// 流式从 SSE 末帧 data:{...usage...} 提 usage，统计口径与 Anthropic 入站一致。
-		inUsage, outUsage := h.proxyNvidiaOpenAIPassthrough(w, resp, isStreaming)
+		inUsage, outUsage := h.proxyNvidiaOpenAIPassthrough(r.Context(), w, resp, isStreaming)
 		h.recordNvidiaUsage(userSession, model, inUsage, outUsage, poolAccount)
 	}
 }
@@ -639,7 +641,11 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, resp *http
 // 流式逐行读 SSE 帧、逐帧原样透传，顺带解析每个 chunk 的 usage 字段(OpenAI 末帧 usage 字段为权威值)。
 // 上游非 200(错误/限流/鉴权失败等)直接透传原 body，usage 返回 0 不计入号池账号成本。
 // 返回 (inTokens, outTokens)。
-func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(w http.ResponseWriter, resp *http.Response, isStreaming bool) (int, int) {
+//
+// ctx 为入站请求 r.Context()：流式透传时客户端取消 → watchCancel 捕获 ctx.Done() 立即
+// Close 上游 resp.Body → scanner.Scan() 退出；随后在循环外补发一帧 data: [DONE]\n\n,
+// 给 OpenAI 客户端 SDK 明确的流结束语义(避免客户端卡等上游末帧)。
+func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w http.ResponseWriter, resp *http.Response, isStreaming bool) (int, int) {
 	// 复制上游响应头(保留 Content-Type 等给客户端)，再写状态码。
 	for k, values := range resp.Header {
 		for _, v := range values {
@@ -680,10 +686,16 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(w http.ResponseWriter, r
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
+	// 客户端取消即断：ctx.Done() → Close 上游 body → scanner.Scan() 立即返回
+	if ctx != nil {
+		stop := watchCancel(ctx, resp.Body)
+		defer stop()
+	}
 	scanner := bufio.NewScanner(resp.Body)
 	// 单帧可能较大(尤其带工具调用/长内容)，放宽单行上限避免截断丢 usage。
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	var inUsage, outUsage int
+	doneSent := false // 是否已向下游透传过 [DONE] 终止帧
 	for scanner.Scan() {
 		line := scanner.Text()
 		// SSE 规范：每帧以单个 \n 结尾为边界；OpenAI 上游多以 \n\n 分隔事件，
@@ -706,6 +718,7 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(w http.ResponseWriter, r
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
+			doneSent = true
 			continue
 		}
 		var chunk OpenAIChatStreamChunk
@@ -715,6 +728,15 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(w http.ResponseWriter, r
 		if chunk.Usage != nil {
 			inUsage = chunk.Usage.PromptTokens
 			outUsage = chunk.Usage.CompletionTokens
+		}
+	}
+	// 上游未发出 [DONE](常见于客户端取消触发 body.Close 后 scanner 提前退出):
+	// 补发一帧 data: [DONE]\n\n,给 OpenAI 客户端 SDK 明确的流结束语义。
+	// ctx 取消或上游异常截断均走此兜底,确保下游不卡在"等末帧"状态。
+	if !doneSent {
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		if flusher != nil {
+			flusher.Flush()
 		}
 	}
 	return inUsage, outUsage
@@ -754,7 +776,9 @@ func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, res
 // 响应头对齐 compat.go:826-837(Gemini 链路)保证 SSE 不被反代/框架缓冲:
 //   - X-Accel-Buffering: no 禁止 Nginx 聚合 SSE;
 //   - http.Flusher 逐帧 push 到 TCP socket,避免仅写到 http.ResponseWriter 内部缓冲。
-func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account) {
+// r 为入站请求:透传 r.Context() 到 OpenAIChatSSEToAnthropicSSE,客户端取消时 watchCancel
+// 立即 Close 上游,scanner 退出后循环外既有 message_delta + message_stop 尾帧自动补发(end_turn 语义)。
+func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *http.Request, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account) {
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		w.Header().Set("Content-Type", "application/json")
@@ -775,7 +799,7 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, res
 		flusher.Flush() // 立即把响应头推给客户端, 让其尽早进入 SSE 等待状态
 	}
 	bw := bufio.NewWriter(w)
-	in, out, _ := OpenAIChatSSEToAnthropicSSE(resp.Body, bw, model, flusher)
+	in, out, _ := OpenAIChatSSEToAnthropicSSE(r.Context(), resp.Body, resp.Body, bw, model, flusher)
 	bw.Flush()
 	if ok {
 		flusher.Flush() // 收尾刷净, 确保 message_stop 落盘

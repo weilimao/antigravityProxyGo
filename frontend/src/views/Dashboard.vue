@@ -275,19 +275,19 @@
 <!-- 网格虚线组 -->
 <g id="chartGridLines"></g>
 <!-- 渐变填充路径 -->
-<path d="" fill="url(#gradInput)" id="chartAreaInput"></path>
-<path d="" fill="url(#gradCached)" id="chartAreaCached"></path>
+<path d="" fill="url(#gradInput)" class="chart-area-anim" id="chartAreaInput"></path>
+<path d="" fill="url(#gradCached)" class="chart-area-anim" id="chartAreaCached"></path>
 <!-- 趋势线条 -->
-<!-- Cost Line (dashed red) -->
-<path class="chart-line" fill="none" id="chartPathCost" stroke="#ef4444" stroke-dasharray="3,3"></path>
+<!-- Cost Line (dashed red，虚线走 clipPath 方案不破坏 dasharray) -->
+<path class="chart-line chart-line-clip" fill="none" id="chartPathCost" stroke="#ef4444" stroke-dasharray="3,3"></path>
 <!-- Requests Line (orange) -->
-<path class="chart-line" fill="none" id="chartPathRequests" stroke="#f97316"></path>
+<path class="chart-line chart-line-draw" fill="none" id="chartPathRequests" stroke="#f97316"></path>
 <!-- Cached Line (purple) -->
-<path class="chart-line" fill="none" id="chartPathCached" stroke="#a855f7"></path>
+<path class="chart-line chart-line-draw" fill="none" id="chartPathCached" stroke="#a855f7"></path>
 <!-- Input Line (blue) -->
-<path class="chart-line" fill="none" id="chartPathInput" stroke="#3b82f6"></path>
+<path class="chart-line chart-line-draw" fill="none" id="chartPathInput" stroke="#3b82f6"></path>
 <!-- Output Line (green) -->
-<path class="chart-line" fill="none" id="chartPathOutput" stroke="#10b981"></path>
+<path class="chart-line chart-line-draw" fill="none" id="chartPathOutput" stroke="#10b981"></path>
 <!-- 悬停指示垂直虚线 -->
 <line id="chartHoverLine" opacity="0" stroke="#94a3b8" stroke-dasharray="3,3" stroke-width="1" x1="-10" x2="-10" y1="20" y2="265"></line>
 <!-- 交互感应透明矩形 -->
