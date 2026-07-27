@@ -41,6 +41,12 @@ type ProxyConfig struct {
 	CustomSocks5Enabled  bool
 	CustomSocks5Username string
 	CustomSocks5Password string
+	// FallbackProxy* 是 NVIDIA 上游蓄流重试耗尽后的兜底出站代理配置(独立于 CustomSocks5)。
+	// 仅由 netutil.GetFallbackClient 读取并构造独立 transport,不参与 GetSystemProxy 三级链。
+	FallbackProxyAddress  string
+	FallbackProxyEnabled  bool
+	FallbackProxyUsername string
+	FallbackProxyPassword string
 }
 
 var (

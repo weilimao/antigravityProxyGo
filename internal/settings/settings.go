@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"antigravity-proxy/internal/netutil"
@@ -59,6 +60,15 @@ type Config struct {
 	CustomSocks5Enabled  bool   `json:"customSocks5Enabled"`
 	CustomSocks5Username string `json:"customSocks5Username"`
 	CustomSocks5Password string `json:"customSocks5Password"`
+	// FallbackProxy* 是"NVIDIA 上游蓄流重试耗尽后的兜底出站代理",独立于上方 CustomSocks5(专属全局代理)。
+	// 两者语义界限:CustomSocks5 开启后覆盖一切出站链(系统 IE 代理 + 本地端口探测全绕过);
+	// FallbackProxy 仅在 NVIDIA 链路、直连 5s×5 重试全部耗尽后,切此代理再试 1 轮(单次请求级,不记忆状态)。
+	// 字段为单 URL 区分协议:填 "socks5://host:port" 或 "http://host:port",http/socks5 二选一由 URL scheme 区分,
+	// Username/Password 仅 socks5 或需要鉴权的 http 代理才用。
+	FallbackProxyAddress  string `json:"fallbackProxyAddress"`
+	FallbackProxyEnabled  bool   `json:"fallbackProxyEnabled"`
+	FallbackProxyUsername string `json:"fallbackProxyUsername"`
+	FallbackProxyPassword string `json:"fallbackProxyPassword"`
 	Language             string `json:"language"`
 	MaxRequestBodyMB     int    `json:"maxRequestBodyMB"`
 	RequestTimeout       int    `json:"requestTimeout"`
@@ -81,6 +91,9 @@ type Config struct {
 	CustomMaxOutputTokens         int    `json:"customMaxOutputTokens"`
 	EnableDebuggerMode            bool   `json:"enableDebuggerMode"`
 	DebuggerLogPath               string `json:"debuggerLogPath"`
+	// NvidiaPreferredModels 是全局级"NVIDIA 专属模型清单",所有 NVIDIA 账号共用。
+	// 配置后,前端"获取模型"直接返回该清单(不请求远端);为空时才请求远端 /v1/models。
+	NvidiaPreferredModels []string `json:"nvidiaPreferredModels"`
 }
 
 func GetDefaultModelMappings() []ModelMappingEntry {
@@ -186,6 +199,10 @@ func (m *Manager) Init(defaultPath string) {
 		CustomSocks5Enabled:  false,
 		CustomSocks5Username: "",
 		CustomSocks5Password: "",
+		FallbackProxyAddress:  "",
+		FallbackProxyEnabled:  false,
+		FallbackProxyUsername: "",
+		FallbackProxyPassword: "",
 		Language:             "zh",
 		RequestTimeout:       300,
 		EnableCustomCompression: true,
@@ -214,6 +231,10 @@ func (m *Manager) Init(defaultPath string) {
 		CustomSocks5Enabled:  m.config.CustomSocks5Enabled,
 		CustomSocks5Username: m.config.CustomSocks5Username,
 		CustomSocks5Password: m.config.CustomSocks5Password,
+		FallbackProxyAddress:  m.config.FallbackProxyAddress,
+		FallbackProxyEnabled:  m.config.FallbackProxyEnabled,
+		FallbackProxyUsername: m.config.FallbackProxyUsername,
+		FallbackProxyPassword: m.config.FallbackProxyPassword,
 	})
 }
 
@@ -857,6 +878,10 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			FallbackProxyPorts:   "",
 			CustomSocks5Address:  "",
 			CustomSocks5Enabled:  false,
+			FallbackProxyAddress:  "",
+			FallbackProxyEnabled:  false,
+			FallbackProxyUsername: "",
+			FallbackProxyPassword: "",
 			RequestTimeout:       300,
 		}
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")
@@ -1006,6 +1031,76 @@ func (m *Manager) SetCustomSocks5Password(val string) error {
 	return err
 }
 
+// FallbackProxy* 的 Getter/Setter:与 CustomSocks5* 同款(SaveConfig + updateNetutilConfig 热下推),
+// 但语义独立——仅 NVIDIA 上游蓄流重试耗尽后的兜底出站代理,不参与全局 GetSystemProxy 三级链。
+func (m *Manager) GetFallbackProxyAddress() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.FallbackProxyAddress
+}
+
+func (m *Manager) SetFallbackProxyAddress(val string) error {
+	m.Lock()
+	m.config.FallbackProxyAddress = val
+	err := m.SaveConfig()
+	m.Unlock()
+	if err == nil {
+		m.updateNetutilConfig()
+	}
+	return err
+}
+
+func (m *Manager) GetFallbackProxyEnabled() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.FallbackProxyEnabled
+}
+
+func (m *Manager) SetFallbackProxyEnabled(val bool) error {
+	m.Lock()
+	m.config.FallbackProxyEnabled = val
+	err := m.SaveConfig()
+	m.Unlock()
+	if err == nil {
+		m.updateNetutilConfig()
+	}
+	return err
+}
+
+func (m *Manager) GetFallbackProxyUsername() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.FallbackProxyUsername
+}
+
+func (m *Manager) SetFallbackProxyUsername(val string) error {
+	m.Lock()
+	m.config.FallbackProxyUsername = val
+	err := m.SaveConfig()
+	m.Unlock()
+	if err == nil {
+		m.updateNetutilConfig()
+	}
+	return err
+}
+
+func (m *Manager) GetFallbackProxyPassword() string {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.FallbackProxyPassword
+}
+
+func (m *Manager) SetFallbackProxyPassword(val string) error {
+	m.Lock()
+	m.config.FallbackProxyPassword = val
+	err := m.SaveConfig()
+	m.Unlock()
+	if err == nil {
+		m.updateNetutilConfig()
+	}
+	return err
+}
+
 func (m *Manager) updateNetutilConfig() {
 	m.RLock()
 	ports := m.config.FallbackProxyPorts
@@ -1013,6 +1108,10 @@ func (m *Manager) updateNetutilConfig() {
 	socks5Enabled := m.config.CustomSocks5Enabled
 	socks5User := m.config.CustomSocks5Username
 	socks5Pass := m.config.CustomSocks5Password
+	fbAddr := m.config.FallbackProxyAddress
+	fbEnabled := m.config.FallbackProxyEnabled
+	fbUser := m.config.FallbackProxyUsername
+	fbPass := m.config.FallbackProxyPassword
 	m.RUnlock()
 
 	netutil.UpdateConfig(netutil.ProxyConfig{
@@ -1021,6 +1120,10 @@ func (m *Manager) updateNetutilConfig() {
 		CustomSocks5Enabled:  socks5Enabled,
 		CustomSocks5Username: socks5User,
 		CustomSocks5Password: socks5Pass,
+		FallbackProxyAddress:  fbAddr,
+		FallbackProxyEnabled:  fbEnabled,
+		FallbackProxyUsername: fbUser,
+		FallbackProxyPassword: fbPass,
 	})
 }
 
@@ -1288,6 +1391,15 @@ type ManagerInterface interface {
 	SetCustomSocks5Username(val string) error
 	GetCustomSocks5Password() string
 	SetCustomSocks5Password(val string) error
+	// FallbackProxy: NVIDIA 上游蓄流重试耗尽后的兜底出站代理(独立于 CustomSocks5)。
+	GetFallbackProxyAddress() string
+	SetFallbackProxyAddress(val string) error
+	GetFallbackProxyEnabled() bool
+	SetFallbackProxyEnabled(val bool) error
+	GetFallbackProxyUsername() string
+	SetFallbackProxyUsername(val string) error
+	GetFallbackProxyPassword() string
+	SetFallbackProxyPassword(val string) error
 	GetLanguage() string
 	SetLanguage(lang string) error
 	GetRequestTimeout() int
@@ -1313,6 +1425,8 @@ type ManagerInterface interface {
 	GetDebuggerLogPath() string
 	SetDebuggerLogPath(val string) error
 	GetResolvedDebuggerLogPath() string
+	GetNvidiaPreferredModels() []string
+	SetNvidiaPreferredModels(val []string) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,
@@ -1369,4 +1483,36 @@ func (m *Manager) GetResolvedDebuggerLogPath() string {
 	return filepath.Join(baseDir, p)
 }
 
+// GetNvidiaPreferredModels 返回全局级 NVIDIA 专属模型清单;nil 时返回空切片。
+func (m *Manager) GetNvidiaPreferredModels() []string {
+	m.RLock()
+	defer m.RUnlock()
+	if m.config.NvidiaPreferredModels == nil {
+		return []string{}
+	}
+	// 返回副本,避免外部误改内存态
+	out := make([]string, len(m.config.NvidiaPreferredModels))
+	copy(out, m.config.NvidiaPreferredModels)
+	return out
+}
+
+// SetNvidiaPreferredModels 去空去重后存入并持久化。
+func (m *Manager) SetNvidiaPreferredModels(val []string) error {
+	m.Lock()
+	defer m.Unlock()
+	seen := make(map[string]bool)
+	cleaned := make([]string, 0, len(val))
+	for _, v := range val {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		cleaned = append(cleaned, v)
+	}
+	m.config.NvidiaPreferredModels = cleaned
+	return m.SaveConfig()
+}
+
 var _ ManagerInterface = (*Manager)(nil)
+

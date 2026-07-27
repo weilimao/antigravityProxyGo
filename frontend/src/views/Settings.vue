@@ -202,6 +202,34 @@
 </div>
 </div>
 <div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
+<div class="flex items-center justify-between">
+<div class="flex flex-col gap-0.5">
+<label class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="fallbackProxyEnabledLabel">启用 NVIDIA 断流兜底出站代理</label>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="fallbackProxyEnabledDesc">仅 NVIDIA 上游链路：直连 5s×5 蓄流重试全部耗尽后，换此代理再试 1 轮（单次请求级，不记忆，不换号）。系统代理与虚拟网卡优先，仅当它们都不通才走此兜底。配置独立于上方专属 SOCKS5。</span>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="chkFallbackProxyEnabled" type="checkbox"/>
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
+<div class="flex flex-col gap-3 mt-1" id="divFallbackProxyAddress">
+<div class="flex flex-col gap-1.5">
+<label class="text-[12px] font-bold text-outline" data-i18n="fallbackProxyAddressLabel">兜底代理地址 (协议必须显式配置，如 http:// 或 socks5://)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtFallbackProxyAddress" placeholder="例如：http://127.0.0.1:8080 或 socks5://127.0.0.1:1080" data-i18n-placeholder="fallbackProxyAddressPlaceholder" type="text"/>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+<div class="flex flex-col gap-1.5">
+<label class="text-[12px] font-bold text-outline" data-i18n="fallbackProxyUsernameLabel">兜底代理用户名 (可选)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtFallbackProxyUsername" placeholder="无" data-i18n-placeholder="optionalPlaceholder" type="text"/>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="text-[12px] font-bold text-outline" data-i18n="fallbackProxyPasswordLabel">兜底代理密码 (可选)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtFallbackProxyPassword" placeholder="无" data-i18n-placeholder="optionalPlaceholder" type="password"/>
+</div>
+</div>
+</div>
+</div>
+<div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
 <div class="flex flex-col gap-0.5">
 <span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="fallbackPortsLabel">Fallback 自定义探测端口</span>
 <span class="text-[11px] text-outline text-wrap" data-i18n="fallbackPortsDesc">当系统没有配置代理时（只开 TUN 模式），除了默认扫描常用端口（7890/7897等），还会扫描此处的端口做代理回退。多个端口用英文逗号分隔。</span>
@@ -368,7 +396,7 @@
             <span class="material-symbols-outlined text-primary text-[20px]">lan</span>
             <span data-i18n="netStatusTitle">当前本地代理状态</span>
         </h2>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-2">
             <div class="bg-slate-50 dark:bg-white/5 p-4 rounded-lg border border-outline-variant/20 flex flex-col gap-1">
                 <span class="text-[11px] text-outline font-bold" data-i18n="netStatusFallbackLabel">Fallback 探测代理</span>
                 <span class="text-[13px] font-mono font-bold text-on-surface dark:text-white" id="lblNetStatusFallback" data-i18n="netStatusDetecting">正在检测...</span>
@@ -376,6 +404,10 @@
             <div class="bg-slate-50 dark:bg-white/5 p-4 rounded-lg border border-outline-variant/20 flex flex-col gap-1">
                 <span class="text-[11px] text-outline font-bold" data-i18n="netStatusCustomSocksLabel">专属 SOCKS5 代理</span>
                 <span class="text-[13px] font-mono font-bold text-on-surface dark:text-white" id="lblNetStatusCustomSocks" data-i18n="netStatusDisabled">未启用</span>
+            </div>
+            <div class="bg-slate-50 dark:bg-white/5 p-4 rounded-lg border border-outline-variant/20 flex flex-col gap-1">
+                <span class="text-[11px] text-outline font-bold" data-i18n="netStatusFallbackProxyLabel">NVIDIA 兜底代理</span>
+                <span class="text-[13px] font-mono font-bold text-on-surface dark:text-white" id="lblNetStatusFallbackProxy" data-i18n="netStatusDisabled">未启用</span>
             </div>
             <div class="bg-slate-50 dark:bg-white/5 p-4 rounded-lg border border-outline-variant/20 flex flex-col gap-1">
                 <span class="text-[11px] text-outline font-bold" data-i18n="netStatusPeriodLabel">后台探测周期</span>

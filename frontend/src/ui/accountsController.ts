@@ -36,6 +36,40 @@ let btnNvidiaModalCancel: HTMLButtonElement | null;
 let btnNvidiaModalClose: HTMLButtonElement | null;
 let nvidiaModalError: HTMLDivElement | null;
 let btnNvidiaFetchModels: HTMLButtonElement | null;
+// ===== NVIDIA 全局专属模型清单 Modal (双列穿梭框) =====
+let btnNvidiaPreferredModels: HTMLButtonElement | null;
+let badgeNvidiaPreferredCount: HTMLSpanElement | null;
+let nvidiaPreferredModal: HTMLDivElement | null;
+let nvidiaPreferredModalContainer: HTMLDivElement | null;
+let btnNvidiaPreferredModalCancel: HTMLButtonElement | null;
+let btnNvidiaPreferredModalClose: HTMLButtonElement | null;
+let btnNvidiaPreferredSave: HTMLButtonElement | null;
+let btnNvidiaPreferredSrcLocal: HTMLButtonElement | null;
+let btnNvidiaPreferredSrcRemote: HTMLButtonElement | null;
+let nvidiaPreferredCurrentSource: 'local' | 'remote' = 'local';
+let btnNvidiaPreferredMoveLeft: HTMLButtonElement | null;
+let btnNvidiaPreferredMoveRight: HTMLButtonElement | null;
+let btnNvidiaPreferredMoveAllLeft: HTMLButtonElement | null;
+let btnNvidiaPreferredMoveAllRight: HTMLButtonElement | null;
+let btnNvidiaPreferredFetch: HTMLButtonElement | null;
+let iconNvidiaPreferredFetch: HTMLSpanElement | null;
+let inputNvidiaPreferredSearchLeft: HTMLInputElement | null;
+let inputNvidiaPreferredSearchRight: HTMLInputElement | null;
+let chkNvidiaPreferredSelectAllLeft: HTMLInputElement | null;
+let chkNvidiaPreferredSelectAllRight: HTMLInputElement | null;
+let nvidiaPreferredModelsListLeft: HTMLDivElement | null;
+let nvidiaPreferredModelsListRight: HTMLDivElement | null;
+let nvidiaPreferredEmptyLeft: HTMLDivElement | null;
+let nvidiaPreferredEmptyRight: HTMLDivElement | null;
+let lblNvidiaPreferredCount: HTMLSpanElement | null;
+let lblNvidiaPreferredSource: HTMLDivElement | null;
+let lblNvidiaPreferredVisibleLeft: HTMLSpanElement | null;
+let lblNvidiaPreferredVisibleRight: HTMLSpanElement | null;
+let nvidiaPreferredError: HTMLDivElement | null;
+let nvidiaPreferredSourceRespEventBound = false;
+// 穿梭框内存态:跨 Modal 打开/远端刷新保留。左列=已选(给客户端的清单),右列=上游候选全集。
+let nvidiaPreferredLeftIDs: string[] = [];
+let nvidiaPreferredRightIDs: string[] = [];
 let btnExportAccounts: HTMLButtonElement | null;
 let btnImportAccounts: HTMLButtonElement | null;
 let btnLayoutGrid: HTMLButtonElement | null;
@@ -183,6 +217,7 @@ export function updateViewTabUI() {
             // NVIDIA 用独立算法选择框
             if (poolModeContainer) poolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.remove('hidden');
+            if (btnNvidiaPreferredModels) btnNvidiaPreferredModels.classList.remove('hidden');
             if (nvidiaLBModeSelect && state.lastBackendData) {
                 nvidiaLBModeSelect.value = state.lastBackendData.nvidiaLBMode || 'round-robin';
             }
@@ -194,6 +229,7 @@ export function updateViewTabUI() {
 
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
+            if (btnNvidiaPreferredModels) btnNvidiaPreferredModels.classList.add('hidden');
             if (lblPoolMode) lblPoolMode.innerText = dict.projectLoadBalancing || '项目负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.projectPoolMode;
@@ -211,6 +247,7 @@ export function updateViewTabUI() {
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
         if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
         if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
+        if (btnNvidiaPreferredModels) btnNvidiaPreferredModels.classList.add('hidden');
     /* } else if (state.currentViewTab === 'gemini-cli') {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.remove('hidden');
@@ -225,6 +262,7 @@ export function updateViewTabUI() {
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
         if (btnProjectLogin) btnProjectLogin.classList.remove('hidden');
         if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
+        if (btnNvidiaPreferredModels) btnNvidiaPreferredModels.classList.add('hidden');
     }
 }
 
@@ -463,6 +501,34 @@ export function initAccountsEvents() {
     btnNvidiaModalClose = document.getElementById('btnNvidiaModalClose') as HTMLButtonElement | null;
     nvidiaModalError = document.getElementById('nvidiaModalError') as HTMLDivElement | null;
     btnNvidiaFetchModels = document.getElementById('btnNvidiaFetchModels') as HTMLButtonElement | null;
+    btnNvidiaPreferredModels = document.getElementById('btnNvidiaPreferredModels') as HTMLButtonElement | null;
+    badgeNvidiaPreferredCount = document.getElementById('badgeNvidiaPreferredCount') as HTMLSpanElement | null;
+    nvidiaPreferredModal = document.getElementById('nvidiaPreferredModelsModal') as HTMLDivElement | null;
+    nvidiaPreferredModalContainer = document.getElementById('nvidiaPreferredModelsModalContainer') as HTMLDivElement | null;
+    btnNvidiaPreferredModalCancel = document.getElementById('btnNvidiaPreferredModalCancel') as HTMLButtonElement | null;
+    btnNvidiaPreferredModalClose = document.getElementById('btnNvidiaPreferredModalClose') as HTMLButtonElement | null;
+    btnNvidiaPreferredSave = document.getElementById('btnNvidiaPreferredSave') as HTMLButtonElement | null;
+    btnNvidiaPreferredSrcLocal = document.getElementById('btnNvidiaPreferredSrcLocal') as HTMLButtonElement | null;
+    btnNvidiaPreferredSrcRemote = document.getElementById('btnNvidiaPreferredSrcRemote') as HTMLButtonElement | null;
+    btnNvidiaPreferredMoveLeft = document.getElementById('btnNvidiaPreferredMoveLeft') as HTMLButtonElement | null;
+    btnNvidiaPreferredMoveRight = document.getElementById('btnNvidiaPreferredMoveRight') as HTMLButtonElement | null;
+    btnNvidiaPreferredMoveAllLeft = document.getElementById('btnNvidiaPreferredMoveAllLeft') as HTMLButtonElement | null;
+    btnNvidiaPreferredMoveAllRight = document.getElementById('btnNvidiaPreferredMoveAllRight') as HTMLButtonElement | null;
+    btnNvidiaPreferredFetch = document.getElementById('btnNvidiaPreferredFetch') as HTMLButtonElement | null;
+    iconNvidiaPreferredFetch = document.getElementById('iconNvidiaPreferredFetch') as HTMLSpanElement | null;
+    inputNvidiaPreferredSearchLeft = document.getElementById('inputNvidiaPreferredSearchLeft') as HTMLInputElement | null;
+    inputNvidiaPreferredSearchRight = document.getElementById('inputNvidiaPreferredSearchRight') as HTMLInputElement | null;
+    chkNvidiaPreferredSelectAllLeft = document.getElementById('chkNvidiaPreferredSelectAllLeft') as HTMLInputElement | null;
+    chkNvidiaPreferredSelectAllRight = document.getElementById('chkNvidiaPreferredSelectAllRight') as HTMLInputElement | null;
+    nvidiaPreferredModelsListLeft = document.getElementById('nvidiaPreferredModelsListLeft') as HTMLDivElement | null;
+    nvidiaPreferredModelsListRight = document.getElementById('nvidiaPreferredModelsListRight') as HTMLDivElement | null;
+    nvidiaPreferredEmptyLeft = document.getElementById('nvidiaPreferredEmptyLeft') as HTMLDivElement | null;
+    nvidiaPreferredEmptyRight = document.getElementById('nvidiaPreferredEmptyRight') as HTMLDivElement | null;
+    lblNvidiaPreferredCount = document.getElementById('lblNvidiaPreferredCount') as HTMLSpanElement | null;
+    lblNvidiaPreferredSource = document.getElementById('lblNvidiaPreferredSource') as HTMLDivElement | null;
+    lblNvidiaPreferredVisibleLeft = document.getElementById('lblNvidiaPreferredVisibleLeft') as HTMLSpanElement | null;
+    lblNvidiaPreferredVisibleRight = document.getElementById('lblNvidiaPreferredVisibleRight') as HTMLSpanElement | null;
+    nvidiaPreferredError = document.getElementById('nvidiaPreferredError') as HTMLDivElement | null;
     btnExportAccounts = document.getElementById('btnExportAccounts') as HTMLButtonElement | null;
     btnImportAccounts = document.getElementById('btnImportAccounts') as HTMLButtonElement | null;
 
@@ -694,6 +760,36 @@ export function initAccountsEvents() {
     if (btnNvidiaModalSave) btnNvidiaModalSave.addEventListener('click', submitNvidiaAccount);
     if (btnNvidiaFetchModels) btnNvidiaFetchModels.addEventListener('click', fetchNvidiaModels);
 
+    // NVIDIA 全局专属模型清单 Modal:事件绑定 + 来源事件订阅(仅绑定一次)
+    if (!nvidiaPreferredSourceRespEventBound) {
+        ipcRenderer.on('settings:nvidia-preferred-models-res', (_e: any, res: any) => {
+            if (res && res.success) {
+                updateNvidiaPreferredBadge(res.count ?? 0);
+            }
+        });
+        nvidiaPreferredSourceRespEventBound = true;
+    }
+    if (btnNvidiaPreferredModels) btnNvidiaPreferredModels.addEventListener('click', openNvidiaPreferredModelsModal);
+    if (btnNvidiaPreferredModalClose) btnNvidiaPreferredModalClose.addEventListener('click', closeNvidiaPreferredModelsModal);
+    if (btnNvidiaPreferredModalCancel) btnNvidiaPreferredModalCancel.addEventListener('click', closeNvidiaPreferredModelsModal);
+    if (nvidiaPreferredModal) {
+        nvidiaPreferredModal.addEventListener('click', (e: MouseEvent) => {
+            if (e.target === nvidiaPreferredModal) closeNvidiaPreferredModelsModal();
+        });
+    }
+    if (btnNvidiaPreferredSrcLocal) btnNvidiaPreferredSrcLocal.addEventListener('click', () => switchNvidiaPreferredSource('local'));
+    if (btnNvidiaPreferredSrcRemote) btnNvidiaPreferredSrcRemote.addEventListener('click', () => switchNvidiaPreferredSource('remote'));
+    if (btnNvidiaPreferredFetch) btnNvidiaPreferredFetch.addEventListener('click', () => { void fetchAndRenderNvidiaPreferredModels(false, 'remote'); });
+    if (btnNvidiaPreferredSave) btnNvidiaPreferredSave.addEventListener('click', submitNvidiaPreferredModels);
+    if (btnNvidiaPreferredMoveLeft) btnNvidiaPreferredMoveLeft.addEventListener('click', moveNvidiaPreferredSelectedToLeft);
+    if (btnNvidiaPreferredMoveRight) btnNvidiaPreferredMoveRight.addEventListener('click', moveNvidiaPreferredSelectedToRight);
+    if (btnNvidiaPreferredMoveAllLeft) btnNvidiaPreferredMoveAllLeft.addEventListener('click', moveAllNvidiaPreferredToLeft);
+    if (btnNvidiaPreferredMoveAllRight) btnNvidiaPreferredMoveAllRight.addEventListener('click', moveAllNvidiaPreferredToRight);
+    if (inputNvidiaPreferredSearchLeft) inputNvidiaPreferredSearchLeft.addEventListener('input', applyNvidiaPreferredSearchLeft);
+    if (inputNvidiaPreferredSearchRight) inputNvidiaPreferredSearchRight.addEventListener('input', applyNvidiaPreferredSearchRight);
+    if (chkNvidiaPreferredSelectAllLeft) chkNvidiaPreferredSelectAllLeft.addEventListener('change', toggleNvidiaPreferredSelectAllLeft);
+    if (chkNvidiaPreferredSelectAllRight) chkNvidiaPreferredSelectAllRight.addEventListener('change', toggleNvidiaPreferredSelectAllRight);
+
     if (btnExportAccounts) {
         btnExportAccounts.addEventListener('click', () => {
             const provider = state.currentViewTab || 'antigravity';
@@ -832,6 +928,10 @@ export function initAccountsEvents() {
         }
         updateAggregateQuotaUI();
     }
+
+    // 首屏静默回读已保存的 NVIDIA 专属模型清单,刷新入口徽标计数(不打开 Modal)
+    // isOpening=true、force=undefined → 后端"cache 优先,空则回退远端";命中本地清单即刷徽标
+    void fetchAndRenderNvidiaPreferredModels(true, undefined);
 
     // 主动触发一次账号数据同步，确保在前端初始化完毕后拉取到最新数据
     ipcRenderer.send('accounts:get');
@@ -1759,6 +1859,372 @@ function populateNvidiaModelSelects(models: string[]) {
             }
         };
     });
+}
+
+// ===== NVIDIA 全局专属模型清单 Modal 逻辑 =====
+
+// 实时把模块级缓存的"已保存计数"刷到入口徽标 + Modal 顶部计数
+function updateNvidiaPreferredBadge(count: number): void {
+    if (badgeNvidiaPreferredCount) badgeNvidiaPreferredCount.textContent = String(count);
+    if (lblNvidiaPreferredCount) lblNvidiaPreferredCount.textContent = String(count);
+}
+
+function showNvidiaPreferredError(msg: string | null): void {
+    if (!nvidiaPreferredError) return;
+    if (msg) {
+        nvidiaPreferredError.textContent = msg;
+        nvidiaPreferredError.classList.remove('hidden');
+    } else {
+        nvidiaPreferredError.textContent = '';
+        nvidiaPreferredError.classList.add('hidden');
+    }
+}
+
+// 收集某列当前勾选行的 model id(保持 DOM 顺序)
+function collectNvidiaPreferredCheckedIn(list: HTMLDivElement | null): string[] {
+    if (!list) return [];
+    const checks = list.querySelectorAll<HTMLInputElement>('input[data-model-id]:checked');
+    return Array.from(checks).map(chk => chk.dataset.modelId || '').filter(Boolean);
+}
+
+// 收集左列全部行(已选清单=保存时落库的对象),不依赖勾选状态
+function collectNvidiaPreferredLeftIDs(): string[] {
+    if (!nvidiaPreferredModelsListLeft) return nvidiaPreferredLeftIDs.slice();
+    const rows = nvidiaPreferredModelsListLeft.querySelectorAll<HTMLLabelElement>('label[data-model-id]');
+    return Array.from(rows).map(r => r.dataset.modelId || '').filter(Boolean);
+}
+
+function openNvidiaPreferredModelsModal(): void {
+    if (!nvidiaPreferredModal || !nvidiaPreferredModalContainer) return;
+    // 每次打开重置搜索/全选/错误
+    if (inputNvidiaPreferredSearchLeft) inputNvidiaPreferredSearchLeft.value = '';
+    if (inputNvidiaPreferredSearchRight) inputNvidiaPreferredSearchRight.value = '';
+    if (chkNvidiaPreferredSelectAllLeft) chkNvidiaPreferredSelectAllLeft.checked = false;
+    if (chkNvidiaPreferredSelectAllRight) chkNvidiaPreferredSelectAllRight.checked = false;
+    showNvidiaPreferredError(null);
+    if (lblNvidiaPreferredSource) {
+        lblNvidiaPreferredSource.textContent = '';
+        lblNvidiaPreferredSource.classList.add('hidden');
+    }
+    // 默认来源=本地清单(空则后端自动回退远端)
+    nvidiaPreferredCurrentSource = 'local';
+    applySourceHighlightNvidiaPreferred();
+    void fetchAndRenderNvidiaPreferredModels(true, undefined);
+    nvidiaPreferredModal.classList.remove('opacity-0', 'pointer-events-none');
+    nvidiaPreferredModalContainer.classList.remove('scale-95');
+    nvidiaPreferredModalContainer.classList.add('scale-100');
+}
+
+function closeNvidiaPreferredModelsModal(): void {
+    if (!nvidiaPreferredModal || !nvidiaPreferredModalContainer) return;
+    nvidiaPreferredModalContainer.classList.remove('scale-100');
+    nvidiaPreferredModalContainer.classList.add('scale-95');
+    nvidiaPreferredModal.classList.add('opacity-0', 'pointer-events-none');
+}
+
+// 来源切换:local=本地清单(空则后端自动回退远端);remote=强制跳过 cache 打上游
+function switchNvidiaPreferredSource(src: 'local' | 'remote'): void {
+    if (src === nvidiaPreferredCurrentSource) return;
+    nvidiaPreferredCurrentSource = src;
+    applySourceHighlightNvidiaPreferred();
+    void fetchAndRenderNvidiaPreferredModels(false, src === 'remote' ? 'remote' : undefined);
+}
+
+function applySourceHighlightNvidiaPreferred(): void {
+    const activeCls = ['bg-primary', 'text-white'];
+    const idleCls = ['text-primary', 'bg-primary/10', 'hover:bg-primary/20'];
+    const setActive = (btn: HTMLButtonElement | null, active: boolean) => {
+        if (!btn) return;
+        if (active) { btn.classList.add(...activeCls); btn.classList.remove(...idleCls); }
+        else { btn.classList.remove(...activeCls); btn.classList.add(...idleCls); }
+    };
+    setActive(btnNvidiaPreferredSrcLocal, nvidiaPreferredCurrentSource === 'local');
+    setActive(btnNvidiaPreferredSrcRemote, nvidiaPreferredCurrentSource === 'remote');
+}
+
+// isOpening=true:首次进入 Modal,读本地清单(空则后端自动回退远端),作为左列已选回显
+// force='remote':强制跳过 cache 打上游,结果进右列候选(左列已选不重置)
+// force=undefined / 'local':cache 优先,空则回退远端;cache 命中→左列回显、右列保持现状
+async function fetchAndRenderNvidiaPreferredModels(isOpening: boolean, force?: 'remote'): Promise<void> {
+    if (!btnNvidiaPreferredFetch) return;
+    showNvidiaPreferredError(null);
+
+    const origIcon = iconNvidiaPreferredFetch ? iconNvidiaPreferredFetch.textContent : '';
+    const origDisabled = btnNvidiaPreferredFetch.disabled;
+    btnNvidiaPreferredFetch.disabled = true;
+    if (iconNvidiaPreferredFetch) iconNvidiaPreferredFetch.textContent = 'progress_activity';
+    if (iconNvidiaPreferredFetch) iconNvidiaPreferredFetch.classList.add('animate-spin');
+
+    try {
+        const res = await ipcRenderer.invoke('settings:get-nvidia-preferred-models', force ? { force } : {});
+        if (!res || !res.success) {
+            const errMsg = (res && res.error) ? res.error : '获取模型失败';
+            showNvidiaPreferredError(errMsg);
+            return;
+        }
+        const models: string[] = Array.isArray(res.models) ? res.models : [];
+        const source: string = res.source || (force === 'remote' ? 'remote' : 'cache');
+
+        if (lblNvidiaPreferredSource) {
+            const dl = (window as any).__nvidiaPreferredDict || {};
+            lblNvidiaPreferredSource.textContent = source === 'cache'
+                ? (dl.nvidiaPreferredModelsSourceCache || '来源:已保存清单')
+                : (dl.nvidiaPreferredModelsSourceRemote || '来源:远端实时');
+            lblNvidiaPreferredSource.classList.remove('hidden');
+        }
+
+        if (source === 'cache') {
+            // 本地清单命中:左列=清单本身(已选回显),右列保持现状(没拉上游)
+            nvidiaPreferredLeftIDs = models.slice();
+            renderNvidiaPreferredListLeft(nvidiaPreferredLeftIDs);
+            renderNvidiaPreferredListRight(nvidiaPreferredRightIDs);
+            // 本地清单命中即把"已保存计数"刷到入口徽标 + Modal 顶部计数
+            // 避免长时间停留在 HTML 写死的初值 0、与磁盘里实际保存的清单不同步
+            updateNvidiaPreferredBadge(models.length);
+        } else {
+            // 远端全量候选:进右列,剔除已在左列的 id;左列已选不重置
+            nvidiaPreferredRightIDs = models.filter(m => !nvidiaPreferredLeftIDs.includes(m));
+            renderNvidiaPreferredListRight(nvidiaPreferredRightIDs);
+            renderNvidiaPreferredListLeft(nvidiaPreferredLeftIDs);
+        }
+    } catch (err: any) {
+        showNvidiaPreferredError(err?.message || '获取模型失败');
+    } finally {
+        btnNvidiaPreferredFetch.disabled = origDisabled;
+        if (iconNvidiaPreferredFetch) {
+            iconNvidiaPreferredFetch.textContent = origIcon || 'cloud_download';
+            iconNvidiaPreferredFetch.classList.remove('animate-spin');
+        }
+    }
+}
+
+// 渲染左列(已选清单);checkedSet 为空=不勾选(左列勾选仅供"移出"用,默认不勾)
+function renderNvidiaPreferredListLeft(models: string[]): void {
+    if (!nvidiaPreferredModelsListLeft) return;
+    nvidiaPreferredModelsListLeft.innerHTML = '';
+    if (models.length === 0) {
+        if (nvidiaPreferredEmptyLeft) nvidiaPreferredEmptyLeft.classList.remove('hidden');
+        if (lblNvidiaPreferredVisibleLeft) lblNvidiaPreferredVisibleLeft.textContent = '0 / 0';
+        if (chkNvidiaPreferredSelectAllLeft) chkNvidiaPreferredSelectAllLeft.checked = false;
+        return;
+    }
+    if (nvidiaPreferredEmptyLeft) nvidiaPreferredEmptyLeft.classList.add('hidden');
+    for (const m of models) {
+        nvidiaPreferredModelsListLeft.appendChild(buildNvidiaPreferredRow(m, false));
+    }
+    applyNvidiaPreferredSearchLeft();
+    syncNvidiaPreferredSelectAllLeft();
+}
+
+// 渲染右列(上游候选),checkedSet 为空=不勾选
+function renderNvidiaPreferredListRight(models: string[]): void {
+    if (!nvidiaPreferredModelsListRight) return;
+    nvidiaPreferredModelsListRight.innerHTML = '';
+    if (models.length === 0) {
+        if (nvidiaPreferredEmptyRight) nvidiaPreferredEmptyRight.classList.remove('hidden');
+        if (lblNvidiaPreferredVisibleRight) lblNvidiaPreferredVisibleRight.textContent = '0 / 0';
+        if (chkNvidiaPreferredSelectAllRight) chkNvidiaPreferredSelectAllRight.checked = false;
+        return;
+    }
+    if (nvidiaPreferredEmptyRight) nvidiaPreferredEmptyRight.classList.add('hidden');
+    for (const m of models) {
+        nvidiaPreferredModelsListRight.appendChild(buildNvidiaPreferredRow(m, false));
+    }
+    applyNvidiaPreferredSearchRight();
+    syncNvidiaPreferredSelectAllRight();
+}
+
+// 构造一行:label>input[data-model-id]+span.mono;change 事件同步该列全选框
+function buildNvidiaPreferredRow(modelId: string, checked: boolean): HTMLLabelElement {
+    const row = document.createElement('label');
+    row.dataset.modelId = modelId;
+    row.className = 'flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-slate-50/60 dark:hover:bg-white/5 transition-colors select-none';
+
+    const chk = document.createElement('input');
+    chk.type = 'checkbox';
+    chk.dataset.modelId = modelId;
+    chk.className = 'w-3.5 h-3.5 rounded border-outline-variant/40 dark:border-white/20 text-primary focus:ring-primary cursor-pointer shrink-0';
+    chk.checked = checked;
+
+    const span = document.createElement('span');
+    span.className = 'flex-1 min-w-0 text-[12px] font-mono text-on-surface dark:text-white truncate';
+    span.textContent = modelId;
+    span.title = modelId;
+
+    row.appendChild(chk);
+    row.appendChild(span);
+    return row;
+}
+
+// 移入已选:右列勾选项 → 左列(保留左列已有顺序,新项追加),从右列移除
+function moveNvidiaPreferredSelectedToLeft(): void {
+    if (!nvidiaPreferredModelsListRight) return;
+    const chosen = collectNvidiaPreferredCheckedIn(nvidiaPreferredModelsListRight);
+    if (chosen.length === 0) return;
+    for (const id of chosen) {
+        if (!nvidiaPreferredLeftIDs.includes(id)) nvidiaPreferredLeftIDs.push(id);
+        nvidiaPreferredRightIDs = nvidiaPreferredRightIDs.filter(x => x !== id);
+    }
+    renderNvidiaPreferredListLeft(nvidiaPreferredLeftIDs);
+    renderNvidiaPreferredListRight(nvidiaPreferredRightIDs);
+}
+
+// 移出已选:左列勾选项 → 右列,从左列移除
+function moveNvidiaPreferredSelectedToRight(): void {
+    if (!nvidiaPreferredModelsListLeft) return;
+    const chosen = collectNvidiaPreferredCheckedIn(nvidiaPreferredModelsListLeft);
+    if (chosen.length === 0) return;
+    for (const id of chosen) {
+        if (!nvidiaPreferredRightIDs.includes(id)) nvidiaPreferredRightIDs.push(id);
+        nvidiaPreferredLeftIDs = nvidiaPreferredLeftIDs.filter(x => x !== id);
+    }
+    renderNvidiaPreferredListLeft(nvidiaPreferredLeftIDs);
+    renderNvidiaPreferredListRight(nvidiaPreferredRightIDs);
+}
+
+function moveAllNvidiaPreferredToLeft(): void {
+    if (nvidiaPreferredRightIDs.length === 0) return;
+    for (const id of nvidiaPreferredRightIDs) {
+        if (!nvidiaPreferredLeftIDs.includes(id)) nvidiaPreferredLeftIDs.push(id);
+    }
+    nvidiaPreferredRightIDs = [];
+    renderNvidiaPreferredListLeft(nvidiaPreferredLeftIDs);
+    renderNvidiaPreferredListRight(nvidiaPreferredRightIDs);
+}
+
+function moveAllNvidiaPreferredToRight(): void {
+    if (nvidiaPreferredLeftIDs.length === 0) return;
+    for (const id of nvidiaPreferredLeftIDs) {
+        if (!nvidiaPreferredRightIDs.includes(id)) nvidiaPreferredRightIDs.push(id);
+    }
+    nvidiaPreferredLeftIDs = [];
+    renderNvidiaPreferredListLeft(nvidiaPreferredLeftIDs);
+    renderNvidiaPreferredListRight(nvidiaPreferredRightIDs);
+}
+
+// 左列搜索过滤
+function applyNvidiaPreferredSearchLeft(): void {
+    applyNvidiaPreferredSearchOne(
+        nvidiaPreferredModelsListLeft,
+        inputNvidiaPreferredSearchLeft,
+        lblNvidiaPreferredVisibleLeft,
+        chkNvidiaPreferredSelectAllLeft,
+    );
+}
+
+// 右列搜索过滤
+function applyNvidiaPreferredSearchRight(): void {
+    applyNvidiaPreferredSearchOne(
+        nvidiaPreferredModelsListRight,
+        inputNvidiaPreferredSearchRight,
+        lblNvidiaPreferredVisibleRight,
+        chkNvidiaPreferredSelectAllRight,
+    );
+}
+
+// 单列搜索过滤:隐藏不匹配行,更新可见计数与全选框状态(基于可见行)
+function applyNvidiaPreferredSearchOne(
+    list: HTMLDivElement | null,
+    input: HTMLInputElement | null,
+    visibleLbl: HTMLSpanElement | null,
+    selectAllChk: HTMLInputElement | null,
+): void {
+    if (!list) return;
+    const kw = (input?.value || '').trim().toLowerCase();
+    const rows = list.querySelectorAll<HTMLLabelElement>('label');
+    let visible = 0;
+    let visibleChecked = 0;
+    rows.forEach(row => {
+        const chk = row.querySelector<HTMLInputElement>('input[type="checkbox"]');
+        const id = row.dataset.modelId || '';
+        const matched = !kw || id.toLowerCase().includes(kw);
+        row.classList.toggle('hidden', !matched);
+        if (matched) {
+            visible++;
+            if (chk?.checked) visibleChecked++;
+        }
+    });
+    if (visibleLbl) visibleLbl.textContent = `${visible} / ${rows.length}`;
+    if (selectAllChk) {
+        selectAllChk.checked = visible > 0 && (visibleChecked === visible);
+    }
+}
+
+// 左列全选框同步:基于可见行的勾选状态反向更新全选框
+function syncNvidiaPreferredSelectAllLeft(): void {
+    syncNvidiaPreferredSelectAllOne(nvidiaPreferredModelsListLeft, chkNvidiaPreferredSelectAllLeft, lblNvidiaPreferredVisibleLeft, inputNvidiaPreferredSearchLeft);
+}
+
+function syncNvidiaPreferredSelectAllRight(): void {
+    syncNvidiaPreferredSelectAllOne(nvidiaPreferredModelsListRight, chkNvidiaPreferredSelectAllRight, lblNvidiaPreferredVisibleRight, inputNvidiaPreferredSearchRight);
+}
+
+function syncNvidiaPreferredSelectAllOne(
+    list: HTMLDivElement | null,
+    selectAllChk: HTMLInputElement | null,
+    visibleLbl: HTMLSpanElement | null,
+    input: HTMLInputElement | null,
+): void {
+    if (!list || !selectAllChk) return;
+    const kw = (input?.value || '').trim().toLowerCase();
+    const rows = list.querySelectorAll<HTMLLabelElement>('label:not(.hidden)');
+    if (rows.length === 0) {
+        selectAllChk.checked = false;
+    } else {
+        let checkedCount = 0;
+        rows.forEach(row => {
+            const chk = row.querySelector<HTMLInputElement>('input[type="checkbox"]');
+            if (chk?.checked) checkedCount++;
+        });
+        selectAllChk.checked = (checkedCount === rows.length);
+    }
+    if (visibleLbl) {
+        const all = list.querySelectorAll<HTMLLabelElement>('label').length;
+        let visible = 0;
+        list.querySelectorAll<HTMLLabelElement>('label').forEach(row => {
+            const id = row.dataset.modelId || '';
+            if (!kw || id.toLowerCase().includes(kw)) visible++;
+        });
+        visibleLbl.textContent = `${visible} / ${all}`;
+    }
+}
+
+// 左列全选/取消:仅作用于当前可见行
+function toggleNvidiaPreferredSelectAllLeft(): void {
+    if (!nvidiaPreferredModelsListLeft || !chkNvidiaPreferredSelectAllLeft) return;
+    const target = chkNvidiaPreferredSelectAllLeft.checked;
+    toggleVisibleRowsNvidiaPreferred(nvidiaPreferredModelsListLeft, target);
+    if (inputNvidiaPreferredSearchLeft) applyNvidiaPreferredSearchLeft();
+}
+
+function toggleNvidiaPreferredSelectAllRight(): void {
+    if (!nvidiaPreferredModelsListRight || !chkNvidiaPreferredSelectAllRight) return;
+    const target = chkNvidiaPreferredSelectAllRight.checked;
+    toggleVisibleRowsNvidiaPreferred(nvidiaPreferredModelsListRight, target);
+    if (inputNvidiaPreferredSearchRight) applyNvidiaPreferredSearchRight();
+}
+
+function toggleVisibleRowsNvidiaPreferred(list: HTMLDivElement, targetChecked: boolean): void {
+    list.querySelectorAll<HTMLLabelElement>('label:not(.hidden)').forEach(row => {
+        const chk = row.querySelector<HTMLInputElement>('input[type="checkbox"]');
+        if (chk) chk.checked = targetChecked;
+    });
+}
+
+// 保存清单:收集左列全部行 → settings:set-nvidia-preferred-models → 关闭
+function submitNvidiaPreferredModels(): void {
+    if (!btnNvidiaPreferredSave) return;
+    const selected = collectNvidiaPreferredLeftIDs();
+    showNvidiaPreferredError(null);
+    btnNvidiaPreferredSave.disabled = true;
+    try {
+        ipcRenderer.send('settings:set-nvidia-preferred-models', selected);
+        updateNvidiaPreferredBadge(selected.length);
+        // 后端会 emit settings:nvidia-preferred-models-res 事件刷新徽标;乐观关闭 Modal
+        closeNvidiaPreferredModelsModal();
+    } finally {
+        btnNvidiaPreferredSave.disabled = false;
+    }
 }
 
 function openAutoTriggerModal() {

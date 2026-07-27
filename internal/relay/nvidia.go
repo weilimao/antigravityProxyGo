@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/netutil"
 	"antigravity-proxy/internal/stats"
 )
 
@@ -24,8 +25,16 @@ import (
 // nvidiaChannel 是 NVIDIA 号池的通道标识。
 const nvidiaChannel = "nvidia"
 
-func getFallbackNvidiaModels(isAnthropic bool) map[string]interface{} {
-	defaultModelIDs := []string{
+// nvidiaReplayMaxBytes 是 NVIDIA Anthropic 流式蓄流回放的单流最大蓄流字节数。
+// 超过即判定为"超大输出":直连重试轮退回边读边写旧路径(放弃重试能力)兜底失败;
+// 兜底轮把它转为 lastErr 落 overloaded_error(兜底无可退的边读边写路径)。
+// 抽为包级常量是因为直连循环与兜底 helper 必须共用同一阈值,避免两处硬编码值飘移导致
+// "直连认为可蓄、兜底认为超大"这类判定不一致。16 MiB 是经验值,覆盖绝大多数对话回复。
+const nvidiaReplayMaxBytes = 16 * 1024 * 1024 // 16 MiB
+
+// defaultNvidiaFallbackModelIDs 返回号池空/上游失败时的兜底模型 id 清单(上游 id 命名空间)。
+func defaultNvidiaFallbackModelIDs() []string {
+	return []string{
 		"claude-sonnet-4-5",
 		"claude-opus-4-6",
 		"claude-haiku-4-5",
@@ -36,14 +45,23 @@ func getFallbackNvidiaModels(isAnthropic bool) map[string]interface{} {
 		"moonshotai/kimi-k2.5",
 		"z-ai/glm-5.2",
 	}
+}
 
+// formatNvidiaModelList 把一批上游 id 组装成客户端期望的模型列表响应。
+// isAnthropic=true → Anthropic /v1/models 形态 {"data":[{"type":"model","id":...}],"has_more":false}；
+// isAnthropic=false → 标准 OpenAI list 形态 {"object":"list","data":[{"id":...,"object":"model"}]}。
+// 作为路径 (a)/(b)/(c) 回写过滤后统一出口，避免形态组装逻辑散落多处。
+func formatNvidiaModelList(ids []string, isAnthropic bool) map[string]interface{} {
+	if ids == nil {
+		ids = []string{}
+	}
 	if isAnthropic {
 		type anthropicModel struct {
 			Type string `json:"type"`
 			ID   string `json:"id"`
 		}
-		var anthModels []anthropicModel
-		for _, id := range defaultModelIDs {
+		anthModels := make([]anthropicModel, 0, len(ids))
+		for _, id := range ids {
 			anthModels = append(anthModels, anthropicModel{Type: "model", ID: id})
 		}
 		return map[string]interface{}{
@@ -56,8 +74,8 @@ func getFallbackNvidiaModels(isAnthropic bool) map[string]interface{} {
 		ID     string `json:"id"`
 		Object string `json:"object"`
 	}
-	var oaiModels []openAIModel
-	for _, id := range defaultModelIDs {
+	oaiModels := make([]openAIModel, 0, len(ids))
+	for _, id := range ids {
 		oaiModels = append(oaiModels, openAIModel{ID: id, Object: "model"})
 	}
 	return map[string]interface{}{
@@ -66,13 +84,75 @@ func getFallbackNvidiaModels(isAnthropic bool) map[string]interface{} {
 	}
 }
 
+// filterNvidiaModelIDs 把上游 id 列表按全局"NVIDIA 专属模型清单"过滤。
+// preferred 为空 → 原样返回全部(不过滤，语义=放行全量)；
+// preferred 非空 → 仅保留命中清单的 id，保持原顺序(命中顺序，非清单顺序)。
+func filterNvidiaModelIDs(ids []string, preferred []string) []string {
+	if len(preferred) == 0 {
+		return ids
+	}
+	allow := make(map[string]struct{}, len(preferred))
+	for _, p := range preferred {
+		if p = strings.TrimSpace(p); p != "" {
+			allow[p] = struct{}{}
+		}
+	}
+	if len(allow) == 0 {
+		return ids
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := allow[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// extractNvidiaModelIDs 从上游 /v1/models 原始 body 中抽取所有非空 data[].id，过滤掉空 id。
+func extractNvidiaModelIDs(body []byte) ([]string, bool) {
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, false
+	}
+	ids := make([]string, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids, true
+}
+
+// buildFallbackNvidiaModels 兜底列表按全局专属清单过滤后再组装。
+// 号池空且清单非空时 = 兜底 ∩ 清单(语义=即便降级也只让客户端看见清单内模型)。
+func buildFallbackNvidiaModels(isAnthropic bool, preferred []string) map[string]interface{} {
+	ids := filterNvidiaModelIDs(defaultNvidiaFallbackModelIDs(), preferred)
+	return formatNvidiaModelList(ids, isAnthropic)
+}
+
 // handleNvidiaModels 处理 /nvidia/v1/models 或 /nvidia/models 请求：
 // 从 NVIDIA 号池选取可用账号，剥离 /nvidia 前缀后向远端 <BaseURL>/v1/models 发起 GET 请求并透传响应。
+// 回给客户端的模型列表会按全局"NVIDIA 专属模型清单"过滤：清单空=全量；清单非空=仅清单内。
 func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Request, userSession *RelaySession) {
 	// 检测客户端是否为 Anthropic 协议 (如 Cherry Studio Messages 模式或 Claude Code)
 	isAnthropic := r.Header.Get("anthropic-version") != "" ||
 		strings.HasPrefix(r.Header.Get("x-api-key"), "sk-ant-") ||
 		strings.Contains(strings.ToLower(r.Header.Get("User-Agent")), "anthropic")
+
+	// 全局专属清单：清单非空时客户端可见模型被白名单收窄(空=不过滤=全量)。
+	// 必须守护 settingsMgr == nil:测试构造 handler 时传 nil([nvidia_test.go] L34)，否则 panic。
+	var preferred []string
+	if h.settingsMgr != nil {
+		preferred = h.settingsMgr.GetNvidiaPreferredModels()
+	}
 
 	var available []*account.Account
 	if h.accountMgr != nil {
@@ -80,8 +160,8 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 	}
 
 	if len(available) == 0 {
-		h.log("⚠️ [NVIDIA 模型列表透传] 号池中无可用 NVIDIA 账号，返回默认模型列表")
-		writeJSON(w, http.StatusOK, getFallbackNvidiaModels(isAnthropic))
+		h.log("⚠️ [NVIDIA 模型列表透传] 号池中无可用 NVIDIA 账号，返回默认模型列表(按专属清单过滤)")
+		writeJSON(w, http.StatusOK, buildFallbackNvidiaModels(isAnthropic, preferred))
 		return
 	}
 
@@ -109,7 +189,7 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
 	if err != nil {
 		h.log("❌ [NVIDIA 模型列表透传] 构造请求失败: %v", err)
-		writeJSON(w, http.StatusOK, getFallbackNvidiaModels(isAnthropic))
+		writeJSON(w, http.StatusOK, buildFallbackNvidiaModels(isAnthropic, preferred))
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
@@ -128,7 +208,7 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 	resp, errDo := h.client.Do(req)
 	if errDo != nil {
 		h.log("❌ [NVIDIA 模型列表透传] 上游网络请求失败: %v | 目标: %s", errDo, targetURL)
-		writeJSON(w, http.StatusOK, getFallbackNvidiaModels(isAnthropic))
+		writeJSON(w, http.StatusOK, buildFallbackNvidiaModels(isAnthropic, preferred))
 		return
 	}
 	defer resp.Body.Close()
@@ -136,55 +216,41 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 	bodyBytes, errRead := io.ReadAll(resp.Body)
 	if errRead != nil {
 		h.log("❌ [NVIDIA 模型列表透传] 读取上游响应体失败: %v", errRead)
-		writeJSON(w, http.StatusOK, getFallbackNvidiaModels(isAnthropic))
+		writeJSON(w, http.StatusOK, buildFallbackNvidiaModels(isAnthropic, preferred))
 		return
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		h.log("⚠️ [NVIDIA 模型列表透传] 上游响应状态码 %d 非 200 | 响应体: %s", resp.StatusCode, truncateBody(bodyBytes, 500))
-		writeJSON(w, http.StatusOK, getFallbackNvidiaModels(isAnthropic))
+		writeJSON(w, http.StatusOK, buildFallbackNvidiaModels(isAnthropic, preferred))
 		return
 	}
 
 	// 解析上游返回的模型数量用于日志
-	var rawResp struct {
-		Data []json.RawMessage `json:"data"`
+	ids, ok := extractNvidiaModelIDs(bodyBytes)
+	h.log("✅ [NVIDIA 模型列表透传] 上游返回 %d 个模型 | 状态码: %d", len(ids), resp.StatusCode)
+	if !ok || len(ids) == 0 {
+		// 解析失败或上游空列表 → 退回兜底(同样按清单过滤)
+		h.log("⚠️ [NVIDIA 模型列表透传] 上游响应为空或 JSON 解析失败，返回默认模型列表")
+		writeJSON(w, http.StatusOK, buildFallbackNvidiaModels(isAnthropic, preferred))
+		return
 	}
-	modelCount := 0
-	if json.Unmarshal(bodyBytes, &rawResp) == nil {
-		modelCount = len(rawResp.Data)
-	}
-	h.log("✅ [NVIDIA 模型列表透传] 上游返回 %d 个模型 | 状态码: %d", modelCount, resp.StatusCode)
+
+	// 按全局专属清单过滤(空清单=不过滤)
+	filtered := filterNvidiaModelIDs(ids, preferred)
 
 	if isAnthropic {
-		var openAIModels struct {
-			Data []struct {
-				ID string `json:"id"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(bodyBytes, &openAIModels); err == nil && len(openAIModels.Data) > 0 {
-			type anthropicModel struct {
-				Type string `json:"type"`
-				ID   string `json:"id"`
-			}
-			var anthModels []anthropicModel
-			for _, m := range openAIModels.Data {
-				if m.ID != "" {
-					anthModels = append(anthModels, anthropicModel{Type: "model", ID: m.ID})
-				}
-			}
-			resMap := map[string]interface{}{
-				"data":     anthModels,
-				"has_more": false,
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(resMap)
-			return
-		}
-		// 如果解析失败，返回 Anthropic 协议默认模型列表
-		h.log("⚠️ [NVIDIA 模型列表透传] 上游响应 JSON 解析失败，返回默认模型列表")
-		writeJSON(w, http.StatusOK, getFallbackNvidiaModels(true))
+		// 路径 (b):Anthropic 入站 → 组 Anthropic 形态回写
+		writeJSON(w, http.StatusOK, formatNvidiaModelList(filtered, true))
+		return
+	}
+
+	// 路径 (c):OpenAI 入站
+	// 清单非空 → 解析重写为过滤后的标准 OpenAI list(不再逐字节透传，丢失上游附加 header/字段，
+	// NVIDIA /v1/models 实测仅 id/object，信息无实质损失)。
+	// 清单空 → 沿用原始严格透传(逐字节 body + 全 header)，零回归。
+	if len(preferred) > 0 {
+		writeJSON(w, http.StatusOK, formatNvidiaModelList(filtered, false))
 		return
 	}
 
@@ -571,7 +637,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			} else if inboundResponses {
 				inboundKind = "responses"
 			}
-			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount)
+			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, targetURL, upstreamBody)
 			return
 		}
 	}
@@ -603,14 +669,16 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 // writeNvidiaResponse 把上游 OpenAI Chat 响应回译成入站协议并写回客户端。
 // inboundKind: "openai_chat"（透传）| "anthropic"（回译为 Messages）| "responses"（回译为 Responses API）。
 // r 为入站请求,供流式分支透传 r.Context() 到 watchCancel,实现客户端取消即断 + 尾帧补发。
-func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account) {
+// writeNvidiaResponse 把上游响应按入站协议类型回写客户端。targetURL/upstreamBody 仅对 Anthropic 流式
+// 入站有意义(供蓄流回放链路原账号重建上游请求实现断流重试);其余链路忽略这两个参数,不参与重试。
+func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte) {
 	defer resp.Body.Close()
 
 	switch inboundKind {
 	case "anthropic":
 		// 入站是 Anthropic：需要把上游 OpenAI Chat 响应回译成 Anthropic Messages
 		if isStreaming {
-			h.writeNvidiaAnthropicStream(w, r, resp, model, userSession, poolAccount)
+			h.writeNvidiaAnthropicStream(w, r, resp, model, userSession, poolAccount, targetURL, upstreamBody)
 			return
 		}
 		h.writeNvidiaAnthropicNormal(w, resp, model, userSession, poolAccount)
@@ -743,6 +811,56 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 }
 
 // writeNvidiaAnthropicNormal 处理非流式 Anthropic 入站：读全量 OpenAI Chat 响应 → 回译 → 写出。
+// writeAnthropicErrorFromUpstream 把 NVIDIA(OpenAI 兼容)上游的非 200 错误体翻译成
+// Anthropic 标准错误结构回写给客户端,而非裸透 OpenAI JSON。
+//
+// 背景:Claude Code / VSCode 插件等 Anthropic 客户端按 {"type":"error","error":{...}}
+// 识别错误;若直接回写 OpenAI 的 {"error":{"message":...,"code":...}},客户端无法识别
+// 错误协议,表现为卡住或奇怪报错("断了不干活"的诱因之一)。
+//
+// 状态码沿用上游原值(400→400,5xx→5xx);错误文案透传上游 message 原文,便于从 CLI 报错
+// 直接定位 NVIDIA 真实原因(如 missing field content / model not found 等)。
+// 解析失败的兜底:仍透传上游原文 message,保证客户端能看到可读错误而非空结构。
+func (h *APICompatHandler) writeAnthropicErrorFromUpstream(w http.ResponseWriter, statusCode int, upstreamBody []byte) {
+	// 解析上游 OpenAI 错误体 {"error":{"message":...,"type":...,"code":...}}
+	type openAIErrBody struct {
+		Error *struct {
+			Message string      `json:"message"`
+			Type    string      `json:"type"`
+			Code    interface{} `json:"code"`
+		} `json:"error"`
+	}
+	errType := "invalid_request_error"
+	errMsg := string(upstreamBody) // 兜底:解析失败时把上游原文塞进 message,保证客户端能看到可读内容
+	if len(upstreamBody) > 0 {
+		var parsed openAIErrBody
+		if json.Unmarshal(upstreamBody, &parsed) == nil && parsed.Error != nil {
+			if parsed.Error.Message != "" {
+				errMsg = parsed.Error.Message
+			}
+			// NVIDIA 常见 type:"internal_server_error"(对应 500);5xx 映射 API error,
+			// 4xx 映射 invalid_request_error,与 Anthropic 官方错误语义对齐。
+			if parsed.Error.Type != "" {
+				if statusCode >= 500 {
+					errType = "api_error"
+				} else {
+					errType = "invalid_request_error"
+				}
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type": "error",
+		"error": map[string]interface{}{
+			"type":    errType,
+			"message": errMsg,
+		},
+	})
+	_, _ = w.Write(payload)
+}
+
 func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account) {
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -750,10 +868,8 @@ func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, res
 		return
 	}
 	if resp.StatusCode != http.StatusOK {
-		// 上游非 200：把错误包成 Anthropic 错误结构
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(bodyBytes)
+		// 上游非 200:翻译成 Anthropic 标准错误结构回写(原裸透 OpenAI JSON 会让 CLI 无法识别)
+		h.writeAnthropicErrorFromUpstream(w, resp.StatusCode, bodyBytes)
 		return
 	}
 	var chatResp OpenAIChatResponse
@@ -776,20 +892,41 @@ func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, res
 // 响应头对齐 compat.go:826-837(Gemini 链路)保证 SSE 不被反代/框架缓冲:
 //   - X-Accel-Buffering: no 禁止 Nginx 聚合 SSE;
 //   - http.Flusher 逐帧 push 到 TCP socket,避免仅写到 http.ResponseWriter 内部缓冲。
-// r 为入站请求:透传 r.Context() 到 OpenAIChatSSEToAnthropicSSE,客户端取消时 watchCancel
-// 立即 Close 上游,scanner 退出后循环外既有 message_delta + message_stop 尾帧自动补发(end_turn 语义)。
-func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *http.Request, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account) {
+//
+// 蓄流回放架构(上游断流服务端无缝重试):
+// 不再"边读上游边写客户端"。而是先用 replayWriter 在内存把整条上游 SSE 翻译攒成完整 Anthropic SSE
+// (期间若上游中途断流 unexpected EOF,本方法丢弃本次 buffer、睡眠 5s 后原账号重建上游请求重拉,
+// 最多重试 5 次,不换号);只有当整条 ready(收到 finish_reason 且无上游错误)后,才 WriteHeader(200)
+// + SSE 头并把 buffer 逐帧 flush 回放给客户端。重试期间客户端未收到任何字节,不会出现"半截内容冲突";
+// 重试耗尽则回写 Anthropic overloaded_error 让 CLI 看到真实失败(不再静默补 end_turn 假闭合)。
+//
+// r 透传 r.Context():客户端取消时立即终止重试与重拉;poolAccount 重试全程保持同一账号(按要求不换号)。
+// targetURL/upstreamBody 由主循环透传,供重试时原样重建上游 POST 请求体与目标 URL(不重新选号、不改动请求)。
+func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *http.Request, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte) {
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(bodyBytes)
+		// 上游非 200:翻译成 Anthropic 标准错误结构回写(原裸透 OpenAI JSON 会让 CLI 卡住/报奇怪错误)
+		h.writeAnthropicErrorFromUpstream(w, resp.StatusCode, bodyBytes)
 		return
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		h.log("⚠️ [NVIDIA Anthropic 流式] http.ResponseWriter 不支持 Flusher, 降级为仅 bufio flush (SSE 实时性可能打折)")
 	}
+
+	// 蓄流回放:先在内存把整条上游 SSE 攒成完整 Anthropic SSE,断流可原账号重拉(≤5×5s),不换号;
+	// 攒齐后再写响应头并逐帧回放给客户端;重试期间不写任何字节,不会半截冲突。
+	replay, in, out, finalErr := h.pullAnthropicStreamWithRetry(r, resp, poolAccount, targetURL, upstreamBody, model)
+	if finalErr != nil {
+		// 重试耗尽:回写 Anthropic overloaded_error(529 语义),让 CLI 识别为真实失败而非"本轮正常结束"。
+		// 取代旧的"补 end_turn 假闭合"——后者会让 CLI 拿到内容残缺但语义正常的流,既不重试也不报错,任务就卡死。
+		resp.Body.Close()
+		h.log("🛑 [NVIDIA Anthropic 流式] 上游断流, 服务端重试 5 次仍失败, 回写 overloaded_error: %v", finalErr)
+		h.replyAnthropicOverloaded(w)
+		return
+	}
+
+	// 整条 ready:写 SSE 响应头并逐帧回放 buffer 给客户端。
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -799,12 +936,220 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 		flusher.Flush() // 立即把响应头推给客户端, 让其尽早进入 SSE 等待状态
 	}
 	bw := bufio.NewWriter(w)
-	in, out, _ := OpenAIChatSSEToAnthropicSSE(r.Context(), resp.Body, resp.Body, bw, model, flusher)
+	bw.Write(replay.bytes())
 	bw.Flush()
 	if ok {
 		flusher.Flush() // 收尾刷净, 确保 message_stop 落盘
 	}
 	h.recordNvidiaUsage(userSession, model, in, out, poolAccount)
+}
+
+// pullAnthropicStreamWithRetry 把上游 OpenAI Chat SSE 翻译成完整 Anthropic SSE 并蓄流进 replayWriter,
+// 上游中途断流(unexpected EOF / 未给出 finish_reason)时丢弃本次 buffer、睡眠 5s 后原账号重建上游请求重拉,
+// 最多重试 5 次,全程不换号。客户端 r.Context() 取消时立即终止重试与重拉。
+//
+// 返回 (replay, in, out, err):
+//   - replay:整条 ready 的 Anthropic SSE 字节缓冲,供调用方逐帧 flush 回放;
+//   - in/out:成功这次的累计 input/output tokens,用于号池账号维度统计;失败时为 0;
+//   - err:重试耗尽仍失败时非 nil(含最后一次上游错误),调用方据此回写 overloaded_error 给 CLI。
+//
+// 完整性判定:openAIChatSSEToAnthropicSSEInto 返回 finishEmitted==true && err==nil 视为完整。
+// finishEmitted==true 表示收到上游 finish_reason 帧;err==nil 排除 ctx 取消与上游 SSE error chunk
+// 及 scanner.Err()(UnexpectedEOF 等)。两者同时满足才认定本轮蓄流可回放给客户端。
+//
+// 重试约束(对齐用户需求):不重新选号、不冷冻账号、不改请求体;仅以同一 poolAccount 复用 targetURL +
+// upstreamBody 重建 POST 上游。与现有"429 退避换号"链路独立,不触发 skippedAccounts/cooldown 联动。
+//
+// 超大流保护:蓄流字节数超过 replayMaxBytes(16 MiB)判定为超大输出,直接退回"边读边写旧路径"(不重试),
+// 避免无界内存占用。这是蓄流架构的固有约束:超大输出回退实时透传,放弃断流重试能力。
+func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstResp *http.Response, poolAccount *account.Account, targetURL string, upstreamBody []byte, model string) (replay *replayWriter, in, out int, finalErr error) {
+	const (
+		maxRetries = 5
+		// replayMaxBytes 复用包级 nvidiaReplayMaxBytes,保证直连与兜底 helper 同一阈值。
+		replayMaxBytes = nvidiaReplayMaxBytes
+	)
+	// 单次重试退避:生产默认 5s(nvidiaStreamRetryWait,构造初始化);测试可覆盖为小值快跑。
+	// 零值兜底为 5s,避免误装配导致无退避狂打上游。
+	retryWait := h.nvidiaStreamRetryWait
+	if retryWait <= 0 {
+		retryWait = 5 * time.Second
+	}
+	streamID := fmt.Sprintf("msg_nvidia_%d", time.Now().UnixNano())
+	httpClient := h.streamClient
+	ctx := r.Context()
+
+	// 本次循环的活跃响应体(逐次重拉新建,每次结束后 Close)
+	var activeResp *http.Response = firstResp
+	var activeBody io.ReadCloser = firstResp.Body
+	// 第一轮复用主循环已 Do 出来的 firstResp;从第二轮起重建上游请求。
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// 重拉准备:第 0 轮用现成 firstResp,其后各轮新建上游请求(原账号、原请求体)。
+		if attempt > 0 {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
+			if err != nil {
+				finalErr = fmt.Errorf("rebuild nvidia upstream request: %w", err)
+				if activeBody != nil {
+					activeBody.Close()
+				}
+				return nil, 0, 0, finalErr
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
+			req.Header.Set("Accept", "application/json")
+			resp, errDo := httpClient.Do(req)
+			if errDo != nil {
+				finalErr = fmt.Errorf("nvidia upstream retry do failed: %w", errDo)
+				h.log("⚠️ [NVIDIA Anthropic 流式] 断流重试 %d/%d 账号 %s 重拉失败: %v", attempt+1, maxRetries, poolAccount.Email, errDo)
+				continue
+			}
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				finalErr = fmt.Errorf("nvidia upstream retry status %d", resp.StatusCode)
+				h.log("⚠️ [NVIDIA Anthropic 流式] 断流重试 %d/%d 账号 %s 上游返回 %d", attempt+1, maxRetries, poolAccount.Email, resp.StatusCode)
+				continue
+			}
+			activeResp = resp
+			activeBody = resp.Body
+		} else if attempt == 0 && activeResp.StatusCode != http.StatusOK {
+			// 主循环已保证流式入站进入本函数时 resp.StatusCode==200,此处仅防御性兼容。
+			finalErr = fmt.Errorf("nvidia upstream status %d", activeResp.StatusCode)
+			activeBody.Close()
+			return nil, 0, 0, finalErr
+		}
+
+		rw := newReplayWriter()
+		attemptIn, attemptOut, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, activeBody, activeBody, rw, streamID, model)
+		activeBody.Close() // 本轮上游响应体读完即关,下一轮(若有)重拉会拿到全新 body
+
+		// 完整性判定:收到 finish_reason 帧或上游流以 [DONE]/正常 EOF 正常终止,且无上游错误/未 ctx 取消 → 可回放。
+		// streamTerminated 兜底 NIM 等上游"不发 finish_reason、仅 usage+[DONE]"的合法收尾形态,
+		// 避免把它误判为断流而触发无意义重试。真·断流(unexpected EOF 在 [DONE] 前)使 streamTerminated=false
+		// 且 sseErr!=nil,本判定不满足,落入重试路径。
+		if sseErr == nil && (finishEmitted || streamTerminated) {
+			return rw, attemptIn, attemptOut, nil
+		}
+		// ctx 取消:客户端已断,不再重试,带上 ctx 错误返回。
+		if ctx != nil && ctx.Err() != nil {
+			finalErr = fmt.Errorf("client context cancelled during nvidia stream retry: %w", ctx.Err())
+			if sseErr != nil {
+				finalErr = fmt.Errorf("%v (last sse err: %v)", finalErr, sseErr)
+			}
+			return nil, 0, 0, finalErr
+		}
+		// 超大流保护:蓄流超过阈值,判定为超大输出,退回边读边写(不再重试)。
+		if rw.len() > replayMaxBytes {
+			h.log("⚠️ [NVIDIA Anthropic 流式] 蓄流 %d 字节超阈值 %d, 退回边读边写路径放弃重试", rw.len(), replayMaxBytes)
+			finalErr = fmt.Errorf("nvidia replay stream oversized %d bytes (exceeds %d), fall back to passthrough", rw.len(), replayMaxBytes)
+			return nil, 0, 0, finalErr
+		}
+		// 不完整(断流/未收尾/上游内嵌 error chunk):记录原因,睡眠 5s 后重拉(最后一轮不再睡)。
+		lastErr := sseErr
+		if lastErr == nil {
+			lastErr = fmt.Errorf("nvidia upstream stream incomplete (finishEmitted=%v streamTerminated=%v)", finishEmitted, streamTerminated)
+		}
+		finalErr = lastErr
+		h.log("⚠️ [NVIDIA Anthropic 流式] 上游断流判定不完整(已攒 %d 字节), 将重试 %d/%d 账号 %s: %v", rw.len(), attempt+1, maxRetries, poolAccount.Email, lastErr)
+		if attempt < maxRetries-1 {
+			// 睡眠 5s 但受 ctx 取消打断,客户端断开立即放弃重试不空跑。
+			select {
+			case <-ctx.Done():
+				finalErr = fmt.Errorf("client context cancelled during retry backoff: %w", ctx.Err())
+				return nil, 0, 0, finalErr
+			case <-time.After(retryWait):
+			}
+		}
+	}
+	// ===== 直连 5s×5 同账号重试耗尽后,切兜底出站代理再 1 轮(单次请求级,不记忆状态) =====
+	// 兜底代理只对本机到上游的网络路径类断流有效;对上游 worker 过载/上游节点抖动这类上游侧故障,
+	// 换出口到达同一上游集群多半仍失败——这是物理事实,兜底尽力而为,1 轮不成即回 overloaded_error。
+	// 仅 NVIDIA 链路生效(本函数即 NVIDIA Anthropic 流式);不换号、不改请求体,仅换 transport 出口。
+	// 配置为空 / 解析失败时跳过兜底,直接回 overloaded_error。
+	if h.settingsMgr != nil && h.settingsMgr.GetFallbackProxyEnabled() {
+		fbAddr := h.settingsMgr.GetFallbackProxyAddress()
+		fbUser := h.settingsMgr.GetFallbackProxyUsername()
+		fbPass := h.settingsMgr.GetFallbackProxyPassword()
+		fbClient, fbErr := netutil.GetFallbackClient(fbAddr, fbUser, fbPass)
+		if fbErr != nil {
+			h.log("⚠️ [NVIDIA Anthropic 流式] 兜底代理配置无效,跳过兜底: %v (addr=%s)", fbErr, fbAddr)
+		} else if fbClient != nil {
+			h.log("🛟 [NVIDIA Anthropic 流式] 直连重试耗尽,切兜底代理 %s 再试 1 轮 账号 %s", fbAddr, poolAccount.Email)
+			fbReplay, fbIn, fbOut, fbFinalErr := h.pullAnthropicStreamOneRound(ctx, fbClient, poolAccount, targetURL, upstreamBody, streamID, model, "兜底")
+			if fbFinalErr == nil && fbReplay != nil {
+				return fbReplay, fbIn, fbOut, nil
+			}
+			if fbFinalErr != nil {
+				finalErr = fmt.Errorf("fallback proxy round also failed: %w", fbFinalErr)
+			}
+		}
+	}
+	// 重试耗尽(含兜底也失败):返回最后一次错误原因,由调用方回写 overloaded_error。
+	return nil, 0, 0, finalErr
+}
+
+// pullAnthropicStreamOneRound 用指定的 httpClient(potentially 兜底代理 client)向 NVIDIA 上游发一次请求,
+// 蓄流翻译成 Anthropic SSE 并做完整性判定,返回 (replay, in, out, err)。
+// ok=err==nil&&replay!=nil 表示本流完整可回放;否则 err 含原因供调用方记录。
+// 抽出供直连重试循环与兜底 1 轮复用,避免拉轮逻辑复制粘贴漂移。roundLabel 仅用于日志区分("兜底"/"直连")。
+func (h *APICompatHandler) pullAnthropicStreamOneRound(ctx context.Context, httpClient *http.Client, poolAccount *account.Account, targetURL string, upstreamBody []byte, streamID, model, roundLabel string) (*replayWriter, int, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("rebuild nvidia upstream request (%s): %w", roundLabel, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
+	req.Header.Set("Accept", "application/json")
+	resp, errDo := httpClient.Do(req)
+	if errDo != nil {
+		return nil, 0, 0, fmt.Errorf("nvidia upstream (%s) do failed: %w", roundLabel, errDo)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, 0, 0, fmt.Errorf("nvidia upstream (%s) status %d", roundLabel, resp.StatusCode)
+	}
+	rw := newReplayWriter()
+	attemptIn, attemptOut, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, resp.Body, resp.Body, rw, streamID, model)
+	resp.Body.Close()
+	// 完整性判定:收到 finish_reason 或 [DONE]/正常 EOF 正常终止,且无上游错误/未 ctx 取消 → 可回放。
+	if sseErr == nil && (finishEmitted || streamTerminated) {
+		return rw, attemptIn, attemptOut, nil
+	}
+	// ctx 取消:带上 ctx 错误返回,调用方据此放弃后续重试。
+	if ctx != nil && ctx.Err() != nil {
+		err := fmt.Errorf("client context cancelled during (%s) round: %w", roundLabel, ctx.Err())
+		if sseErr != nil {
+			err = fmt.Errorf("%v (last sse err: %v)", err, sseErr)
+		}
+		return nil, 0, 0, err
+	}
+	// 超大流保护:蓄流超过 nvidiaReplayMaxBytes 判定为超大输出。
+	// 与直连循环不同,helper 当前只服务兜底 1 轮,兜底无可退的边读边写路径,故直接转为 lastErr,
+	// 让上层 pullAnthropicStreamWithRetry 把 finalErr 设为兜底失败、落 overloaded_error。
+	// 该判定也保护兜底轮不被超大流撑爆内存(与直连循环保护阈值一致,见 nvidiaReplayMaxBytes)。
+	if rw.len() > nvidiaReplayMaxBytes {
+		return nil, 0, 0, fmt.Errorf("nvidia upstream (%s) replay oversized %d bytes (exceeds %d), abort fallback round", roundLabel, rw.len(), nvidiaReplayMaxBytes)
+	}
+	// 不完整:返回原因(断流/未收尾/上游内嵌 error chunk)。
+	lastErr := sseErr
+	if lastErr == nil {
+		lastErr = fmt.Errorf("nvidia upstream (%s) stream incomplete (finishEmitted=%v streamTerminated=%v)", roundLabel, finishEmitted, streamTerminated)
+	}
+	return nil, 0, 0, lastErr
+}
+
+// replyAnthropicOverloaded 回写 Anthropic 标准 overloaded_error 给客户端(Claude Code CLI 据此识别为
+// 上游过载/断流失败,可走自身处理逻辑而非把残缺流当正常结束)。取代旧的"补 end_turn 假闭合静默"路径。
+// 用 529 状态码对齐 Anthropic 官方 overloaded 语义;响应体为 Anthropic error 结构。
+func (h *APICompatHandler) replyAnthropicOverloaded(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable) // 503
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type": "error",
+		"error": map[string]interface{}{
+			"type":    "overloaded_error",
+			"message": "NVIDIA upstream stream interrupted and server-side retry exhausted (5x5s, same account).",
+		},
+	})
+	_, _ = w.Write(payload)
 }
 
 // recordNvidiaUsage 记录 NVIDIA 用量。

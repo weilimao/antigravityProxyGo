@@ -45,6 +45,10 @@ type APICompatHandler struct {
 	// 计数最少的账号, 把突发高并发洪流摊到负载最轻的账号上, 降低单账号 1 分钟内
 	// >40 次必然 429 的概率。纯内存易失, 不持久化, 重启清零。详见 nvidia_counter.go。
 	nvidiaStats *nvidiaReqStats
+	// nvidiaStreamRetryWait 是 Anthropic 流式入站"上游断流服务端蓄流重试"的单次退避间隔,
+	// 生产默认 5 秒(见 nvidia.go pullAnthropicStreamWithRetry);测试可覆盖为小值以快跑重试用例,
+	// 避免 fix 的 5s×N 退避把单测拖到分钟级。零值时构造兜底为 5s。
+	nvidiaStreamRetryWait time.Duration
 }
 
 func NewAPICompatHandler(
@@ -68,6 +72,7 @@ func NewAPICompatHandler(
 		streamClient:  &http.Client{Transport: netutil.NewTransport(), Timeout: 0},
 		rateLimiter:   NewRateLimiter(),
 		nvidiaStats:   newNvidiaReqStats(),
+		nvidiaStreamRetryWait: 5 * time.Second,
 	}
 }
 

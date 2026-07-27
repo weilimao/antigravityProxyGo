@@ -361,6 +361,60 @@ export function initSettings() {
             });
         }
 
+        // ===== NVIDIA 断流兜底出站代理:与上方专属 SOCKS5 配置独立,镜像其 wiring =====
+        const chkFallbackProxyEnabled = document.getElementById('chkFallbackProxyEnabled') as HTMLInputElement | null;
+        const txtFallbackProxyAddress = document.getElementById('txtFallbackProxyAddress') as HTMLInputElement | null;
+        const txtFallbackProxyUsername = document.getElementById('txtFallbackProxyUsername') as HTMLInputElement | null;
+        const txtFallbackProxyPassword = document.getElementById('txtFallbackProxyPassword') as HTMLInputElement | null;
+        const divFallbackProxyAddress = document.getElementById('divFallbackProxyAddress');
+
+        if (chkFallbackProxyEnabled) {
+            chkFallbackProxyEnabled.addEventListener('change', (e: any) => {
+                const enabled = e.target.checked;
+                try {
+                    ipcRenderer.send('settings:set-fallback-proxy-enabled', enabled);
+                    if (divFallbackProxyAddress) {
+                        divFallbackProxyAddress.style.display = enabled ? 'flex' : 'none';
+                    }
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save fallback proxy enabled:', err);
+                }
+            });
+        }
+
+        if (txtFallbackProxyAddress) {
+            txtFallbackProxyAddress.addEventListener('change', (e: any) => {
+                const val = e.target.value.trim();
+                try {
+                    ipcRenderer.send('settings:set-fallback-proxy-address', val);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save fallback proxy address:', err);
+                }
+            });
+        }
+
+        if (txtFallbackProxyUsername) {
+            txtFallbackProxyUsername.addEventListener('change', (e: any) => {
+                const val = e.target.value.trim();
+                try {
+                    ipcRenderer.send('settings:set-fallback-proxy-username', val);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save fallback proxy username:', err);
+                }
+            });
+        }
+
+        if (txtFallbackProxyPassword) {
+            txtFallbackProxyPassword.addEventListener('change', (e: any) => {
+                const val = e.target.value.trim();
+                try {
+                    ipcRenderer.send('settings:set-fallback-proxy-password', val);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save fallback proxy password:', err);
+                }
+            });
+        }
+
         if (txtFallbackProxyPorts) {
             txtFallbackProxyPorts.addEventListener('change', (e: any) => {
                 const val = e.target.value.trim();
@@ -634,6 +688,44 @@ export function refreshSettingsUI() {
             }
         }
 
+        // ===== NVIDIA 断流兜底出站代理:加载已保存配置,镜像上方专属 SOCKS5 取值范式 =====
+        const chkFallbackProxyEnabled = document.getElementById('chkFallbackProxyEnabled') as HTMLInputElement | null;
+        const txtFallbackProxyAddress = document.getElementById('txtFallbackProxyAddress') as HTMLInputElement | null;
+        const txtFallbackProxyUsername = document.getElementById('txtFallbackProxyUsername') as HTMLInputElement | null;
+        const txtFallbackProxyPassword = document.getElementById('txtFallbackProxyPassword') as HTMLInputElement | null;
+        const divFallbackProxyAddress = document.getElementById('divFallbackProxyAddress');
+
+        if (chkFallbackProxyEnabled) {
+            const enabled = ipcRenderer.sendSync('settings:get-fallback-proxy-enabled');
+            if (enabled !== null && enabled !== undefined) {
+                chkFallbackProxyEnabled.checked = !!enabled;
+                if (divFallbackProxyAddress) {
+                    divFallbackProxyAddress.style.display = enabled ? 'flex' : 'none';
+                }
+            }
+        }
+
+        if (txtFallbackProxyAddress) {
+            const addr = ipcRenderer.sendSync('settings:get-fallback-proxy-address');
+            if (addr !== null && addr !== undefined) {
+                txtFallbackProxyAddress.value = String(addr);
+            }
+        }
+
+        if (txtFallbackProxyUsername) {
+            const username = ipcRenderer.sendSync('settings:get-fallback-proxy-username');
+            if (username !== null && username !== undefined) {
+                txtFallbackProxyUsername.value = String(username);
+            }
+        }
+
+        if (txtFallbackProxyPassword) {
+            const password = ipcRenderer.sendSync('settings:get-fallback-proxy-password');
+            if (password !== null && password !== undefined) {
+                txtFallbackProxyPassword.value = String(password);
+            }
+        }
+
         if (txtFallbackProxyPorts) {
             const ports = ipcRenderer.sendSync('settings:get-fallback-proxy-ports');
             if (ports !== null && ports !== undefined) {
@@ -779,6 +871,17 @@ ipcRenderer.on('settings:network-status-res', (event, data: any) => {
         } else {
             lblNetStatusCustomSocks.textContent = state.currentLanguage === 'zh' ? '未启用' : 'Disabled';
             lblNetStatusCustomSocks.className = "text-[13px] font-mono font-bold text-outline";
+        }
+    }
+
+    const lblNetStatusFallbackProxy = document.getElementById('lblNetStatusFallbackProxy');
+    if (lblNetStatusFallbackProxy) {
+        if (data.fallbackProxyEnabled) {
+            lblNetStatusFallbackProxy.textContent = (state.currentLanguage === 'zh' ? '启用' : 'Enabled') + ` (${data.fallbackProxyAddress})`;
+            lblNetStatusFallbackProxy.className = "text-[13px] font-mono font-bold text-green-600 dark:text-green-400";
+        } else {
+            lblNetStatusFallbackProxy.textContent = state.currentLanguage === 'zh' ? '未启用' : 'Disabled';
+            lblNetStatusFallbackProxy.className = "text-[13px] font-mono font-bold text-outline";
         }
     }
 });

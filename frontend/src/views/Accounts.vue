@@ -46,6 +46,11 @@
                     <option value="sticky" class="dark:bg-[#1a1f30] text-slate-800 dark:text-white">粘性会话</option>
                 </select>
             </div>
+            <button type="button" id="btnNvidiaPreferredModels" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg text-[13px] font-medium text-amber-600 dark:text-amber-400 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer" data-i18n-title="nvidiaPreferredModelsBtn">
+                <span class="material-symbols-outlined text-[16px]">inventory</span>
+                <span data-i18n="nvidiaPreferredModelsBtn">专属模型</span>
+                <span class="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-600 dark:text-amber-400" id="badgeNvidiaPreferredCount">0</span>
+            </button>
             <button class="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/50 rounded-md text-[13px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors shadow-sm cursor-pointer whitespace-nowrap flex-shrink-0" id="btnExportAccounts">
                 <span class="material-symbols-outlined text-[16px]">download</span>
                 <span data-i18n="btnExport">导出</span>

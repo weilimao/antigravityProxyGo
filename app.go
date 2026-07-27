@@ -667,6 +667,10 @@ func (a *App) domReady(ctx context.Context) {
 		"settings:get-custom-socks5-enabled":  a.settingsMgr.GetCustomSocks5Enabled(),
 		"settings:get-custom-socks5-username": a.settingsMgr.GetCustomSocks5Username(),
 		"settings:get-custom-socks5-password": a.settingsMgr.GetCustomSocks5Password(),
+		"settings:get-fallback-proxy-address":  a.settingsMgr.GetFallbackProxyAddress(),
+		"settings:get-fallback-proxy-enabled":  a.settingsMgr.GetFallbackProxyEnabled(),
+		"settings:get-fallback-proxy-username": a.settingsMgr.GetFallbackProxyUsername(),
+		"settings:get-fallback-proxy-password": a.settingsMgr.GetFallbackProxyPassword(),
 		"settings:get-prompt-prefix":          a.settingsMgr.GetPromptPrefix(),
 		"settings:get-custom-model-override-enabled": a.settingsMgr.GetCustomModelOverrideEnabled(),
 		"settings:get-custom-model-override-id":      a.settingsMgr.GetCustomModelOverrideID(),
@@ -1273,6 +1277,97 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		a.accountMgr.UpdateAccountQuota(accId, res)
 		a.AddLog(fmt.Sprintf("✅ [配额刷新] 账号 %s 配额及积分刷新成功！(Tier: %s)", acc.Email, res.Tier))
 		return marshalResponse(res)
+
+	case "settings:get-nvidia-preferred-models":
+		// 全局级"NVIDIA 专属模型清单"获取:
+		// 清单已配置 → 直接返回清单(不请求远端);清单为空 → 复用号池第一个启用 NVIDIA 账号请求远端 /v1/models。
+		a.AddLog("🔍 [NVIDIA 专属模型] 收到获取请求,开始执行")
+		// force 来源参数(可选):"remote"=强制跳过 cache 直接打上游;不传/"local"=沿用"cache 优先,空则回退远端"。
+		// 前端来源切换条用此区分:本地清单(fore=undefined) vs NVIDIA远端(force="remote")。
+		forceRemote := false
+		if len(args) > 0 {
+			if m, ok := args[0].(map[string]interface{}); ok {
+				if v, ok := m["force"].(string); ok && v == "remote" {
+					forceRemote = true
+				}
+			}
+		}
+		cached := a.settingsMgr.GetNvidiaPreferredModels()
+		if len(cached) > 0 && !forceRemote {
+			a.AddLog(fmt.Sprintf("🔍 [NVIDIA 专属模型] 命中缓存清单,%d 个模型,直接返回", len(cached)))
+			return marshalResponse(map[string]interface{}{
+				"success": true,
+				"source":  "cache",
+				"models":  cached,
+			})
+		}
+		if forceRemote {
+			a.AddLog("🔍 [NVIDIA 专属模型] 强制远端模式,跳过缓存清单直接请求上游")
+		}
+		// 清单为空 → 取号池第一个启用 NVIDIA 账号
+		// 重要:必须用 GetRawAccounts() —— 前端展示用的 GetAccounts() 刻意不拷贝 BaseURL/AccessToken
+		// (避免向前端泄露 token),用它会拿到全空 BaseURL/AccessToken,误判所有账号不可用。
+		// GetRawAccounts 返回内部指针,这里只读不写,线程安全(RLock 保护)。
+		rawAccounts := a.accountMgr.GetRawAccounts()
+		var firstAcc *account.Account
+		nvidiaCount := 0
+		enabledCount := 0
+		baseURLOkCount := 0
+		for _, acc := range rawAccounts {
+			if acc == nil || acc.Provider != "nvidia" {
+				continue
+			}
+			nvidiaCount++
+			if !acc.Enabled {
+				continue
+			}
+			enabledCount++
+			if strings.TrimSpace(acc.BaseURL) == "" {
+				continue
+			}
+			baseURLOkCount++
+			if firstAcc == nil {
+				firstAcc = acc
+			}
+		}
+		if firstAcc == nil {
+			// 诊断:列出前若干个 nvidia 账号的关键字段,一次性看清为何全部不可用
+			detail := ""
+			shown := 0
+			for _, acc := range rawAccounts {
+				if acc == nil || acc.Provider != "nvidia" || shown >= 5 {
+					continue
+				}
+				keyMasked := ""
+				if acc.AccessToken != "" {
+					keyMasked = account.MaskAPIKey(acc.AccessToken)
+				}
+				detail += fmt.Sprintf("\n  - [email=%s] enabled=%v baseURL=%q accessTokenLen=%d keyMask=%s", acc.Email, acc.Enabled, acc.BaseURL, len(acc.AccessToken), keyMasked)
+				shown++
+			}
+			a.AddLog(fmt.Sprintf("❌ [NVIDIA 专属模型] 号池无可用 NVIDIA 账号(nvidia=%d,enabled=%d,baseURL就绪=%d)%s", nvidiaCount, enabledCount, baseURLOkCount, detail))
+			return marshalResponse(map[string]interface{}{
+				"success": false,
+				"source":  "remote",
+				"error":   "号池中暂无可用 NVIDIA 账号(需 Provider=nvidia 且启用 且已配置 Base URL)。请在 NVIDIA 号池添加账号时填写 Base URL(如 https://integrate.api.nvidia.com/v1)与 API Key。",
+			})
+		}
+		a.AddLog(fmt.Sprintf("🔍 [NVIDIA 专属模型] 清单为空,用账号 %s 请求远端 %s", firstAcc.Email, firstAcc.BaseURL))
+		remoteModels, ferr := fetchRemoteNvidiaModels(firstAcc.BaseURL, firstAcc.AccessToken)
+		if ferr != nil {
+			a.AddLog(fmt.Sprintf("❌ [NVIDIA 专属模型] 拉取远端模型失败: %v", ferr))
+			return marshalResponse(map[string]interface{}{
+				"success": false,
+				"source":  "remote",
+				"error":   ferr.Error(),
+			})
+		}
+		a.AddLog(fmt.Sprintf("✅ [NVIDIA 专属模型] 复用账号 %s 拉取到远端 %d 个候选模型", firstAcc.Email, len(remoteModels)))
+		return marshalResponse(map[string]interface{}{
+			"success": true,
+			"source":  "remote",
+			"models":  remoteModels,
+		})
 
 	case "settings:change-dir":
 		targetDir, ok, _ := a.dialogSvc.OpenDir(a.ctx, dialogs.DirRequest{Title: "选择数据存储目录"})

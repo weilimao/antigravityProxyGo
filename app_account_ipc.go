@@ -275,84 +275,17 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 				apiKey = strings.TrimSpace(s)
 			}
 		}
-
 		if baseURL == "" {
 			baseURL = account.DefaultNvidiaBaseURL
 		}
-		baseURL = strings.TrimRight(baseURL, "/")
 
-		endpoint := baseURL + "/v1/models"
-		if strings.HasSuffix(baseURL, "/v1") {
-			endpoint = baseURL + "/models"
-		}
-
-		req, err := http.NewRequestWithContext(context.Background(), "GET", endpoint, nil)
-		if err != nil {
-			a.AddLog(fmt.Sprintf("❌ [NVIDIA] 创建模型获取请求失败: %v", err))
-			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		models, ferr := fetchRemoteNvidiaModels(baseURL, apiKey)
+		if ferr != nil {
+			a.AddLog(fmt.Sprintf("❌ [NVIDIA] 拉取模型列表失败: %v", ferr))
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": ferr.Error()})
 			return data, true, nil
 		}
-
-		if apiKey != "" {
-			req.Header.Set("Authorization", "Bearer "+apiKey)
-		}
-		req.Header.Set("Accept", "application/json")
-
-		client := &http.Client{
-			Timeout: 15 * time.Second,
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			a.AddLog(fmt.Sprintf("❌ [NVIDIA] 拉取模型列表失败: %v", err))
-			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": fmt.Sprintf("网络请求失败: %v", err)})
-			return data, true, nil
-		}
-		defer resp.Body.Close()
-
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "读取响应失败"})
-			return data, true, nil
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			a.AddLog(fmt.Sprintf("❌ [NVIDIA] 拉取模型列表返回 HTTP %d: %s", resp.StatusCode, string(bodyBytes)))
-			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))})
-			return data, true, nil
-		}
-
-		var parseRes struct {
-			Data []struct {
-				ID string `json:"id"`
-			} `json:"data"`
-			Models []struct {
-				ID string `json:"id"`
-			} `json:"models"`
-		}
-		if err := json.Unmarshal(bodyBytes, &parseRes); err != nil {
-			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "解析模型数据失败: " + err.Error()})
-			return data, true, nil
-		}
-
-		modelSet := make(map[string]bool)
-		for _, item := range parseRes.Data {
-			if item.ID != "" {
-				modelSet[item.ID] = true
-			}
-		}
-		for _, item := range parseRes.Models {
-			if item.ID != "" {
-				modelSet[item.ID] = true
-			}
-		}
-
-		models := make([]string, 0, len(modelSet))
-		for m := range modelSet {
-			models = append(models, m)
-		}
-		sort.Strings(models)
-
-		a.AddLog(fmt.Sprintf("✅ [NVIDIA] 成功从 %s 获取到 %d 个模型", endpoint, len(models)))
+		a.AddLog(fmt.Sprintf("✅ [NVIDIA] 成功获取到 %d 个模型 (baseURL=%s)", len(models), baseURL))
 		data, _ := marshalResponse(map[string]interface{}{
 			"success": true,
 			"models":  models,
@@ -361,4 +294,74 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 	}
 
 	return "", false, nil
+}
+
+// fetchRemoteNvidiaModels 请求上游 NVIDIA (OpenAI 兼容) 模型列表端点 /v1/models,
+// 兼容 {data:[{id}]} 与 {models:[{id}]} 两种响应形态,去重排序后返回。
+// baseURL 留空时使用 account.DefaultNvidiaBaseURL;apiKey 可为空(部分上游匿名可列模型)。
+// 抽自原 nvidia:fetch-models case,供账号级与全局专属模型清单两路复用。
+func fetchRemoteNvidiaModels(baseURL, apiKey string) ([]string, error) {
+	if baseURL == "" {
+		baseURL = account.DefaultNvidiaBaseURL
+	}
+	baseURL = strings.TrimSpace(strings.TrimRight(baseURL, "/"))
+
+	endpoint := baseURL + "/v1/models"
+	if strings.HasSuffix(baseURL, "/v1") {
+		endpoint = baseURL + "/models"
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), "GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建模型获取请求失败: %v", err)
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("网络请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var parseRes struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Models []struct {
+			ID string `json:"id"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(bodyBytes, &parseRes); err != nil {
+		return nil, fmt.Errorf("解析模型数据失败: %v", err)
+	}
+
+	modelSet := make(map[string]bool)
+	for _, item := range parseRes.Data {
+		if item.ID != "" {
+			modelSet[item.ID] = true
+		}
+	}
+	for _, item := range parseRes.Models {
+		if item.ID != "" {
+			modelSet[item.ID] = true
+		}
+	}
+	models := make([]string, 0, len(modelSet))
+	for m := range modelSet {
+		models = append(models, m)
+	}
+	sort.Strings(models)
+	return models, nil
 }

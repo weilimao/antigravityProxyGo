@@ -1,12 +1,7 @@
-### v1.2.1 更新日志
+### v1.2.2 更新日志
 
-- **NVIDIA 上游流内 SSE Error 嗅探与无感换号重试**：增加对物理 HTTP 200 流中包含的 `{"error": ...}`（如 `ResourceExhausted` 或 `500 Internal server error`）首帧 Error 嗅探。遇到首帧 Error 时自动冷冻该报错账号，并自动从号池挑选下一个可用 NVIDIA 账号进行物理重试，彻底解决超长上下文或节点繁忙时 Agent 静默画横线终止与 `/compact` 报错 `summarization produced empty response` 的问题。
-- **Debugger 调试模式与全量日志落盘**：支持在前端设置中一键开启全量请求 Headers、Body 及 SSE 帧的毫秒级落盘日志，方便精准排查断流与异常；支持自定义日志保存路径，默认状态调整为关闭（false）。
-
-### v1.2.0 更新日志
-
-- **新增 NVIDIA NIM / API 原生中继与账号管理**：全量支持 NVIDIA API 请求结构翻译、响应流式转换、配额探针（quota probe）与调用计数统计；前端新增 NVIDIA 账号添加与集中管理弹窗 (`NvidiaAccountModal.vue`)。
-- **前端模态框基础组件化重构 (BaseModal)**：新建 `BaseModal.vue` 组件，统一全站 13+ 个 Modal 弹窗逻辑与样式架构，大幅提升界面一致性与交互流畅度。
-- **账号管理与配额面板深度优化**：重构 `accountsController`、`accountsRenderer` 及 `usageDetails`，增强配额视图拆分、双因素认证 (OTP) 流程处理及用量验证脚本。
-- **扩展 IPC 与诊断日志服务**：优化 Wails IPC 控制层，集成 `internal/corelog` 日志系统与 `internal/diagserver` 诊断服务端点，提升系统可观测性。
-- **单元测试与构建全量通过**：补充 NVIDIA 翻译器、响应转换及计数器单元测试，所有 Go 单元测试与 Vue TypeScript 生产打包均全绿通过。
+- **NVIDIA 上游断流的服务端蓄流重试**：上游 `unexpected EOF` 等断流不再静默补 `end_turn` 假闭合导致 Claude Code 任务冻死。改用**蓄流回放**架构：整条上游 OpenAI Chat SSE 先缓存到内存 `replayWriter`，完整（收到 `finish_reason` 或 `[DONE]`/正常 EOF 且无上游错误）才回放给客户端；否则判定断流，**同账号、5s 退避、最多重试 5 次**（不换号、不冷冻账号、不改请求体）。退避可被客户端 ctx 取消立即打断，不空跑。客户端 ctx 取消则立即终止重试。
+- **NVIDIA 断流重试耗尽后的兜底出站代理**：直连 5s×5 蓄流重试全部耗尽后，若在设置中启用了兜底代理，则切换独立于全局系统代理 / 专属 SOCKS5 的兜底出站代理（http:// 或 socks5://）再试 1 轮（**单次请求级、不记忆状态、不换号，仅 NVIDIA 链路**）。系统代理与虚拟网卡优先，仅当它们都不通才走此兜底；兜底 1 轮不成即回写 Anthropic `overloaded_error`（503）。兜底代理地址为空 / 协议不支持 / 未启用时跳过兜底直接回 `overloaded_error`，不崩溃。高并发下兜底 transport 按配置级单例复用（同配置指纹共享同一连接池，无每请求重建）。
+- **NVIDIA 专属模型清单过滤与管理**：新增 NVIDIA 专属模型清单配置弹窗（`NvidiaPreferredModelsModal.vue`）。配置后 `GET /nvidia/v1/models` 将按白名单过滤，仅返回命中清单的上游模型（号池空时与默认 9 个兜底模型取交集、号池返回上游模型列表时重写为命中项）；清单为空则不过滤、返回上游全量。前端账号页新增「专属模型」入口。
+- **设置页网络状态卡扩展**：网络状态卡在「Fallback 探测代理」「专属 SOCKS5 代理」之外新增「NVIDIA 兜底代理」一格，实时显示兜底代理启用状态与地址。
+- **测试与构建**：新增兜底 transport 单例构造/复用/并发（50 goroutine 共享同 transport）、relay 蓄流重试命中/耗尽→overloaded/兜底成功/兜底失败/无效地址跳过/未启用跳过/客户端取消共 7 个端到端用例，全部 Go 单元测试与前端 vue-tsc 类型检查均全绿通过。

@@ -175,3 +175,70 @@ func TestSettings_DefaultAllOff(t *testing.T) {
 	}
 }
 
+// TestNvidiaPreferredModels 覆盖全局级 NVIDIA 专属模型清单的默认值、Set/Get 往返、
+// 去空去重、落盘与重载一致性、返回切片的内部隔离性。
+func TestNvidiaPreferredModels(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "antigravity-nvidia-preferred-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	mgr := NewManager()
+	mgr.Init(tempDir)
+
+	// 1. 默认应为空切片(非 nil),避免调用方判空歧义
+	got := mgr.GetNvidiaPreferredModels()
+	if len(got) != 0 {
+		t.Errorf("Expected empty preferred models by default, got %v", got)
+	}
+
+	// 2. Set 后 Get 返回一致;去空去重
+	want := []string{"moonshotai/kimi-k2.5", "  ", "nvidia/llama-3.1-nemotron-70b-instruct", "", "meta/llama-3.3-70b-instruct", "moonshotai/kimi-k2.5"}
+	if err := mgr.SetNvidiaPreferredModels(want); err != nil {
+		t.Fatalf("SetNvidiaPreferredModels failed: %v", err)
+	}
+	got = mgr.GetNvidiaPreferredModels()
+	expected := []string{"moonshotai/kimi-k2.5", "nvidia/llama-3.1-nemotron-70b-instruct", "meta/llama-3.3-70b-instruct"}
+	if len(got) != len(expected) {
+		t.Fatalf("Expected %d deduped models, got %d: %v", len(expected), len(got), got)
+	}
+	for i, m := range expected {
+		if got[i] != m {
+			t.Errorf("Expected models[%d]=%q, got %q", i, m, got[i])
+		}
+	}
+
+	// 3. 返回的是副本,外部修改不影响内存态
+	got[0] = "tampered"
+	again := mgr.GetNvidiaPreferredModels()
+	if again[0] == "tampered" {
+		t.Errorf("GetNvidiaPreferredModels should return a defensive copy, but mutation leaked")
+	}
+
+	// 4. 配置落盘,新 Manager 加载该清单
+	configPath := filepath.Join(tempDir, "config.json")
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("Expected config.json persisted, stat err: %v", err)
+	}
+	mgr2 := NewManager()
+	mgr2.Init(tempDir)
+	reloaded := mgr2.GetNvidiaPreferredModels()
+	if len(reloaded) != len(expected) {
+		t.Fatalf("Reloaded preferred models mismatch, got %v", reloaded)
+	}
+	for i, m := range expected {
+		if reloaded[i] != m {
+			t.Errorf("Reloaded models[%d]=%q, expected %q", i, reloaded[i], m)
+		}
+	}
+
+	// 5. 清空清单
+	if err := mgr2.SetNvidiaPreferredModels([]string{}); err != nil {
+		t.Fatalf("Clear preferred models failed: %v", err)
+	}
+	if len(mgr2.GetNvidiaPreferredModels()) != 0 {
+		t.Errorf("Expected empty after clear, got %v", mgr2.GetNvidiaPreferredModels())
+	}
+}
+

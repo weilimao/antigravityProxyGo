@@ -346,3 +346,90 @@ func equalIntSlice(a, b []int) bool {
 	}
 	return true
 }
+
+// upstreamErrorFirstFrame 构造"上游第一帧即抛 error、尚未吐任何 content block"的 SSE 流。
+// 这是 NVIDIA 偶发限流/5xx/error 帧打头的真实形态,历史上会让 OpenAIChatSSEToAnthropicSSE
+// 在未吐 block 分支直接 return,漏发 message_delta + message_stop → CLI 卡等尾帧("断了不干活")。
+const upstreamErrorFirstFrame = `data: {"error":{"message":"ResourceExhausted: Worker local total request limit reached (48/48)","type":"internal_server_error","code":500}}` + "\n\n" + `data: [DONE]` + "\n\n"
+
+// TestOpenAIChatSSEToAnthropicSSE_FirstFrameError_EmitsFullTail:
+// 回归保护 —— 上游首帧即 error(未吐任何 content block)时,回译必须产出完整闭合的
+// Anthropic SSE 流:message_start → content_block_start/delta/stop(保底空文本块)
+// → message_delta → message_stop。不得出现"只有 message_start 无 message_stop"的残流。
+// 且函数返回 err 非空(供上层代理日志留痕,排查上游 error 原文)。
+func TestOpenAIChatSSEToAnthropicSSE_FirstFrameError_EmitsFullTail(t *testing.T) {
+	var out bytes.Buffer
+	bw := bufio.NewWriter(&out)
+	in, out2, sseErr := OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstreamErrorFirstFrame), nil, bw, "z-ai/glm-5.2")
+	bw.Flush()
+
+	events := parseSSEEvents(out.String())
+	names := eventNames(events)
+	_ = names
+
+	// 必须含完整三件套尾帧 —— 这是修复前会漏掉、导致 CLI 卡等的核心断言。
+	requireEvent(t, events, "message_start")
+	requireEvent(t, events, "message_stop")
+	// message_delta 必发(含 usage + stop_reason),CLI 据此判断本轮正常结束。
+	requireEvent(t, events, "message_delta")
+	// 至少有一个 content_block_start/stop 闭合(ensureAtLeastOneBlock 保底空文本块)。
+	requireEvent(t, events, "content_block_start")
+	requireEvent(t, events, "content_block_stop")
+
+	// err 非空 —— 留痕上游 error 原文(供代理日志),但不应影响已写回客户端的闭合流。
+	if sseErr == nil {
+		t.Errorf("expected non-nil err for upstream first-frame error (for proxy log), got nil")
+	}
+	if !strings.Contains(sseErr.Error(), "ResourceExhausted") {
+		t.Errorf("expected err to carry upstream error text, got: %v", sseErr)
+	}
+	// usage 为 0(上游未吐任何正常 chunk),不影响 CLI 渲染。
+	if in != 0 || out2 != 0 {
+		t.Errorf("expected zero usage on first-frame-error, got in=%d out=%d", in, out2)
+	}
+
+	// stop_reason 应为 end_turn(未吐 finish_reason 时 determineStopReason("") 的 default),
+	// 让 CLI MessageAccumulator 视为本轮正常结束,不触发失败重试/不卡等。
+	var deltaEv *sseEvent
+	for i := range events {
+		if events[i].event == "message_delta" {
+			deltaEv = &events[i]
+			break
+		}
+	}
+	if deltaEv == nil {
+		t.Fatalf("message_delta event not found")
+	}
+	m := dataMap(t, *deltaEv)
+	reason, _ := m["delta"].(map[string]interface{})["stop_reason"].(string)
+	if reason != "end_turn" {
+		t.Errorf("expected stop_reason=end_turn for first-frame-error, got %v", reason)
+	}
+}
+
+// upstreamErrorAfterContent 构造"上游吐过内容后中途抛 error"的 SSE 流(已吐 block 分支)。
+// 命中 OpenAIChatSSEToAnthropicSSE 中 hasEmittedAnyBlock()=true 的 break 路径,验证该分支同样闭合。
+// 用 var 而非 const:构造含函数调用(mustJSONString)拼接,Go 常量不允许函数调用。
+var upstreamErrorAfterContent = "data: " + mustJSONString(map[string]interface{}{
+	"id": "chatcmpl-x", "object": "chat.completion.chunk", "model": "z-ai/glm-5.2",
+	"choices": []interface{}{map[string]interface{}{
+		"index": 0, "delta": map[string]interface{}{"content": "hello"},
+	}},
+}) + "\n\n" + `data: {"error":{"message":"upstream mid-stream boom","type":"internal_server_error","code":500}}` + "\n\n" + `data: [DONE]` + "\n\n"
+
+// TestOpenAIChatSSEToAnthropicSSE_MidStreamError_AfterContent_EmitsFullTail:
+// 已吐 content 后再遇 error → break 落到循环外补尾帧,产出完整闭合流,stop_reason=end_turn。
+func TestOpenAIChatSSEToAnthropicSSE_MidStreamError_AfterContent_EmitsFullTail(t *testing.T) {
+	var out bytes.Buffer
+	bw := bufio.NewWriter(&out)
+	_, _, sseErr := OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstreamErrorAfterContent), nil, bw, "z-ai/glm-5.2")
+	bw.Flush()
+
+	events := parseSSEEvents(out.String())
+	requireEvent(t, events, "message_start")
+	requireEvent(t, events, "message_delta")
+	requireEvent(t, events, "message_stop")
+	if sseErr == nil || !strings.Contains(sseErr.Error(), "mid-stream boom") {
+		t.Errorf("expected err carrying mid-stream error text, got: %v", sseErr)
+	}
+}

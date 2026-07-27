@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"antigravity-proxy/internal/netutil"
 	"antigravity-proxy/internal/settings"
@@ -105,15 +106,67 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		wailsRuntime.EventsEmit(a.ctx, "settings:custom-socks5-password-res", a.settingsMgr.GetCustomSocks5Password())
 		return true
 
+	// ===== NVIDIA 上游蓄流重试耗尽后的兜底出站代理(独立于专属 SOCKS5) =====
+	case "settings:set-fallback-proxy-address":
+		_ = a.settingsMgr.SetFallbackProxyAddress(getStringArg(0))
+		a.AddLog(fmt.Sprintf("⚙️ 兜底代理地址已更新: %s", getStringArg(0)))
+		return true
+
+	case "settings:set-fallback-proxy-enabled":
+		_ = a.settingsMgr.SetFallbackProxyEnabled(getBoolArg(0))
+		status := "禁用"
+		if getBoolArg(0) {
+			status = "启用"
+		}
+		a.AddLog(fmt.Sprintf("⚙️ 兜底代理状态已更新: %s", status))
+		return true
+
+	case "settings:set-fallback-proxy-username":
+		_ = a.settingsMgr.SetFallbackProxyUsername(getStringArg(0))
+		a.AddLog("⚙️ 兜底代理用户名已更新")
+		return true
+
+	case "settings:set-fallback-proxy-password":
+		_ = a.settingsMgr.SetFallbackProxyPassword(getStringArg(0))
+		a.AddLog("⚙️ 兜底代理密码已更新")
+		return true
+
+	case "settings:set-nvidia-preferred-models":
+		// args: [models: []interface{<string>}]
+		var models []string
+		if len(args) > 0 {
+			if arr, ok := args[0].([]interface{}); ok {
+				for _, v := range arr {
+					if s, ok := v.(string); ok {
+						s = strings.TrimSpace(s)
+						if s != "" {
+							models = append(models, s)
+						}
+					}
+				}
+			}
+		}
+		_ = a.settingsMgr.SetNvidiaPreferredModels(models)
+		savedCount := len(models)
+		a.AddLog(fmt.Sprintf("⚙️ NVIDIA 专属模型清单已更新: %d 个", savedCount))
+		wailsRuntime.EventsEmit(a.ctx, "settings:nvidia-preferred-models-res", map[string]interface{}{
+			"success": true,
+			"count":   savedCount,
+			"models":  models,
+		})
+		return true
+
 	case "settings:get-network-status":
 		fallbackURL := ""
 		if u := netutil.GetCachedLocalProxy(); u != nil {
 			fallbackURL = u.String()
 		}
 		wailsRuntime.EventsEmit(a.ctx, "settings:network-status-res", map[string]interface{}{
-			"customSocks5Address": a.settingsMgr.GetCustomSocks5Address(),
-			"customSocks5Enabled": a.settingsMgr.GetCustomSocks5Enabled(),
-			"cachedLocalProxy":    fallbackURL,
+			"customSocks5Address":  a.settingsMgr.GetCustomSocks5Address(),
+			"customSocks5Enabled":  a.settingsMgr.GetCustomSocks5Enabled(),
+			"fallbackProxyAddress": a.settingsMgr.GetFallbackProxyAddress(),
+			"fallbackProxyEnabled": a.settingsMgr.GetFallbackProxyEnabled(),
+			"cachedLocalProxy":      fallbackURL,
 		})
 		return true
 

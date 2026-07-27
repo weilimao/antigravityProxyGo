@@ -164,6 +164,7 @@
     <TriggerTestModal />
     <AutoTriggerModal />
     <NvidiaAccountModal />
+    <NvidiaPreferredModelsModal />
   </div>
 </template>
 
@@ -190,6 +191,7 @@ import RelayUserQuotaModal from './components/modals/RelayUserQuotaModal.vue';
 import TriggerTestModal from './components/modals/TriggerTestModal.vue';
 import AutoTriggerModal from './components/modals/AutoTriggerModal.vue';
 import NvidiaAccountModal from './components/modals/NvidiaAccountModal.vue';
+import NvidiaPreferredModelsModal from './components/modals/NvidiaPreferredModelsModal.vue';
 import { initRemoteEvents } from './ui/remoteController';
 import { setLanguage, switchView, initDashboardEvents } from './ui/dashboard';
 import { ipcRenderer } from './shared/ipc';

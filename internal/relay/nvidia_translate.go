@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -300,10 +301,31 @@ func MapNvidiaModel(inModel string, acc *account.Account) string {
 // 使阻塞的 scanner.Scan() 退出读循环，随后在循环外统一补发 message_delta + message_stop 尾帧。
 // body 为上游响应体(用于 ctx 取消时主动 Close 触发 scanner 退出);body 为 nil 时仅退化兼容旧行为,
 // 不接入"取消即断"(留给调用方保证非空)。
+//
+// 本函数为薄委托:将 sink 具体化为 flushWriter(写往 *bufio.Writer + 可选 http.Flusher),
+// 真正的转译逻辑在 openAIChatSSEToAnthropicSSEInto(接收 sseEventSink)。蓄流回放重试链路
+// 直接调 openAIChatSSEToAnthropicSSEInto 传 replayWriter,本函数签名保持不变,所有旧调用零改动。
 func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.ReadCloser, writer *bufio.Writer, model string, flusher ...http.Flusher) (input, output int, err error) {
-	// 为本次流式会话生成唯一消息 ID，用于 message_start 的 id 字段
 	streamID := fmt.Sprintf("msg_nvidia_%d", time.Now().UnixNano())
 	fw := newFlushWriter(streamID, writer, flusher...)
+	input, output, _, _, err = openAIChatSSEToAnthropicSSEInto(ctx, reader, body, fw, streamID, model)
+	return input, output, err
+}
+
+// openAIChatSSEToAnthropicSSEInto 把上游 OpenAI Chat SSE 翻译成 Anthropic SSE,写到 sink(flushWriter 或 replayWriter)。
+// 返回 (input, output, finishEmitted, streamTerminated, err):
+//   - finishEmitted:是否收到上游合法 finish_reason 帧并已 close 所有 block(确定性"本轮正文收尾"信号);
+//   - streamTerminated:上游流是否以正常协议终止符结束 —— 收到 [DONE] 或读到正常 EOF(无扫描错误)。
+//     这一路径的完整性兜底:NIM 等上游存在"不发 finish_reason 帧,仅发 usage 帧后跟 [DONE]"的合法收尾形态,
+//     仅靠 finishEmitted 会把它误判为不完整断流。streamTerminated==true 表示上游流是"协议级结束"而非断流,
+//     重试主体据此判定可回放。
+//   - err:上游 SSE 内嵌 error chunk 或 scanner.Err()(非 ctx 取消)的错误,供上层日志/重试判定。
+//
+// 完整性判定(重试主体使用):finishEmitted || (streamTerminated && err==nil) 视为完整可回放。
+// 真·断流(unexpected EOF 在 [DONE] 之前打断)会使 streamTerminated=false 且 err!=nil,两条件均不满足 → 重试。
+//
+// 转译逻辑与原 OpenAIChatSSEToAnthropicSSE 逐行等价,仅参数化 sink 与 streamID,并新增 streamTerminated 信号。
+func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body io.ReadCloser, sink sseEventSink, streamID, model string) (input, output int, finishEmitted, streamTerminated bool, err error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
@@ -314,10 +336,9 @@ func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.
 	}
 
 	// message_start
-	fw.writeEvent("message_start", messageStartPayload(streamID, model))
+	sink.writeEvent("message_start", messageStartPayload(streamID, model))
 
 	blockStates := &sseBlockStates{blocks: map[int]*sseBlock{}}
-	finishEmitted := false
 	stopReason := ""
 
 	for scanner.Scan() {
@@ -330,6 +351,7 @@ func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
+			streamTerminated = true // OpenAI 协议权威终止符:流正常结束,非断流。
 			break
 		}
 
@@ -343,8 +365,19 @@ func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.
 		var errChunk sseErrorChunk
 		if json.Unmarshal([]byte(data), &errChunk) == nil && errChunk.Error != nil && errChunk.Error.Message != "" {
 			errMsg := fmt.Sprintf("upstream sse error: %s (code: %v)", errChunk.Error.Message, errChunk.Error.Code)
+			// 保住 err 供上层(writeNvidiaAnthropicStream 忽略返回值,但 watchCancel/日志可取)
+			// 仅在尚未被 ctx 取消语义占据时记录上游 error,避免覆盖既有 ctx 取消路径的语义。
+			if err == nil {
+				err = fmt.Errorf("%s", errMsg)
+			}
 			if !blockStates.hasEmittedAnyBlock() {
-				return input, output, fmt.Errorf("%s", errMsg)
+				// 历史缺口:此处曾直接 return,跳过循环外统一尾帧补发,
+				// 导致 CLI 仅收到 message_start 而无 message_stop → 卡等尾帧、
+				// 表现为"断了不干活"。现改为保底发一个文本块并 break,让控制流落到循环外
+				// 统一补 message_delta + message_stop,产出完整闭合的 SSE 流(空本轮)。
+				// 取舍:CLI 视为本轮正常结束(end_turn),不卡等、不触发重试风暴;
+				// 上游 error 原文已保存在 err 并由代理日志记录,便于事后排查。
+				blockStates.ensureAtLeastOneBlock(sink)
 			}
 			break
 		}
@@ -363,16 +396,16 @@ func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.
 		}
 		ch := chunk.Choices[0]
 		if ch.Delta.Content != "" {
-			blockStates.emitTextDelta(ch.Delta.Content, fw)
+			blockStates.emitTextDelta(ch.Delta.Content, sink)
 		} else if ch.Delta.ReasoningContent != "" {
-			blockStates.emitTextDelta(ch.Delta.ReasoningContent, fw)
+			blockStates.emitTextDelta(ch.Delta.ReasoningContent, sink)
 		}
 		for _, tc := range ch.Delta.ToolCalls {
-			blockStates.emitToolCallDelta(tc, fw)
+			blockStates.emitToolCallDelta(tc, sink)
 		}
 		if ch.FinishReason != nil && ch.FinishReason != "" {
-			blockStates.ensureAtLeastOneBlock(fw)
-			blockStates.closeAll(fw)
+			blockStates.ensureAtLeastOneBlock(sink)
+			blockStates.closeAll(sink)
 			stopReason = blockStates.determineStopReason(fmt.Sprintf("%v", ch.FinishReason))
 			finishEmitted = true
 		}
@@ -384,6 +417,12 @@ func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.
 		if ctx == nil || ctx.Err() == nil {
 			err = scanErr
 		}
+	} else if err == nil {
+		// 循环无扫描错误且 err 仍 nil(未被上游 SSE error chunk 等主动 break 路径污染):
+		// 上游流以正常 EOF 关闭,协议级结束,非断流。[DONE] 分支已提前置位;此处覆盖"上游未发 [DONE]
+		// 即 EOF 关闭"的合法收尾形态。err!=nil(如 error chunk break)则保持 streamTerminated=false,
+		// 让重试主体据此判定为不完整 → 重试,符合上游报错应重试的语义。
+		streamTerminated = true
 	}
 	// message_delta 必须在循环结束后发出：Anthropic 官方要求 message_delta.usage 的 token
 	// 计数为累计值 (cumulative)，而上游 NIM 的 usage 帧 ({"choices":[],"usage":{...}}) 在
@@ -391,8 +430,8 @@ func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.
 	// input/output 仍为 0，会导致 Claude Code SDK 的 MessageAccumulator 误判流未正常结束，
 	// 触发"等连接关闭/下次请求才整条渲染"的退化路径。此处统一在循环外、usage 帧已落地后发出。
 	if !finishEmitted {
-		blockStates.ensureAtLeastOneBlock(fw)
-		blockStates.closeAll(fw)
+		blockStates.ensureAtLeastOneBlock(sink)
+		blockStates.closeAll(sink)
 		stopReason = blockStates.determineStopReason("")
 	}
 	// 客户端主动取消(ctx 被撤销)且上游未给出 finish_reason:补 end_turn 语义尾帧,
@@ -400,13 +439,10 @@ func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.
 	if ctx != nil && ctx.Err() != nil && stopReason == "" {
 		stopReason = "end_turn"
 	}
-	fw.writeEvent("message_delta", messageDeltaPayload(stopReason, input, output))
-
-	// message_stop
-	// 对齐官方：data 必须为 {"type":"message_stop"}，而非 "{}"。
-	fw.writeEvent("message_stop", `{"type":"message_stop"}`)
-	fw.flush()
-	return input, output, err
+	sink.writeEvent("message_delta", messageDeltaPayload(stopReason, input, output))
+	sink.writeEvent("message_stop", `{"type":"message_stop"}`)
+	sink.flush()
+	return input, output, finishEmitted, streamTerminated, err
 }
 
 // messageStartPayload 生成 message_start 事件的 data 负载。
@@ -480,7 +516,7 @@ type sseBlockStates struct {
 }
 
 // emitTextDelta 把一条 OpenAI 文本增量转成 Anthropic content_block_delta(text_delta)。
-func (s *sseBlockStates) emitTextDelta(text string, fw *flushWriter) {
+func (s *sseBlockStates) emitTextDelta(text string, fw sseEventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// 文本块在 Anthropic 里通常用 index 0；此处维护单一文本块
@@ -499,7 +535,7 @@ func (s *sseBlockStates) emitTextDelta(text string, fw *flushWriter) {
 
 // emitToolCallDelta 处理 OpenAI tool_calls 增量(index 指向上游分块的工具调用编号)，
 // 映射成 Anthropic 的 content_block_start(tool_use) + content_block_delta(input_json_delta)。
-func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw *flushWriter) {
+func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.hasToolCall = true
@@ -528,7 +564,7 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw *flushWriter) {
 }
 
 // closeAll 关闭所有已打开的文本/工具块，发出 content_block_stop。
-func (s *sseBlockStates) closeAll(fw *flushWriter) {
+func (s *sseBlockStates) closeAll(fw sseEventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	keys := make([]int, 0, len(s.blocks))
@@ -554,7 +590,7 @@ func (s *sseBlockStates) hasEmittedAnyBlock() bool {
 }
 
 // ensureAtLeastOneBlock 确保流结束前至少发出一个 content_block(若零 Block 则保底发空文本块)
-func (s *sseBlockStates) ensureAtLeastOneBlock(fw *flushWriter) {
+func (s *sseBlockStates) ensureAtLeastOneBlock(fw sseEventSink) {
 	if !s.hasEmittedAnyBlock() {
 		s.emitTextDelta("", fw)
 	}
@@ -616,7 +652,21 @@ func watchCancel(ctx context.Context, body io.ReadCloser) (stop func()) {
 	}
 }
 
-// ===== flushwriter =====
+// ===== sseEventSink / flushwriter / replaywriter =====
+
+// sseEventSink 抽象 SSE 事件写入目标。两类实现:
+//   - flushWriter:边读上游边把 Anthropic SSE 事件逐帧 flush 到客户端 TCP socket(实时流式);
+//   - replayWriter:把整条转译结果蓄流进内存 bytes.Buffer,供上游断流重试场景攒全量再回放。
+//
+// 抽象该接口使 OpenAIChatSSEToAnthropicSSE 的转译逻辑与"写往哪里"解耦:
+// 蓄流回放链路(writeNvidiaAnthropicStream)先用 replayWriter 在内存攒出完整 Anthropic SSE,
+// 断流可丢弃本次 buffer 原账号重拉上游(≤5×5s),整条 ready 后再把 buffer 逐帧 flush 给客户端,
+// 客户端在重试期间未收到任何字节,不会出现"半截内容冲突"。
+type sseEventSink interface {
+	writeEvent(event, data string)
+	writeRaw(s string)
+	flush()
+}
 
 type flushWriter struct {
 	w       *bufio.Writer
@@ -663,6 +713,57 @@ func (f *flushWriter) flush() {
 	if f.flusher != nil {
 		f.flusher.Flush()
 	}
+}
+
+// replayWriter 是 sseEventSink 的蓄流实现:把 Anthropic SSE 事件按帧原样写进内存 bytes.Buffer,
+// 不接触任何 socket。供上游断流重试链路(writeNvidiaAnthropicStream)在整条上游 SSE
+// 攒齐之前先把转译结果持留在 buffer,断流可丢弃本次 buffer 重拉上游,ready 后再回放给客户端。
+//
+// 写入格式与 flushWriter.writeEvent 完全一致(event:/data:/空行),保证回放时客户端拿到的
+// SSE 字节流与"边读边写"链路逐字节等价,行为零差异。
+//
+// 帧与帧之间不复用 bufio,直接写 bytes.Buffer;所有写操作加锁,防止并发乱序
+// (虽然当前转译链路单协程顺序写,加锁为防御性,与 flushWriter 对齐)。
+type replayWriter struct {
+	mu sync.Mutex
+	buf bytes.Buffer
+}
+
+func newReplayWriter() *replayWriter {
+	return &replayWriter{}
+}
+
+// writeEvent 写一帧 Anthropic SSE: event: <name>\n data: <data>\n\n。
+func (r *replayWriter) writeEvent(event, data string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.buf.WriteString("event: " + event + "\n")
+	r.buf.WriteString("data: " + data + "\n\n")
+}
+
+// writeRaw 写原始 SSE 字节(如末尾 data: [DONE]\n\n 兼容 OpenAI 透传语义),原样直灌 buffer。
+func (r *replayWriter) writeRaw(s string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.buf.WriteString(s)
+}
+
+// flush 在蓄流语义下为空操作:真正的 flush 发生在回放给 flushWriter 那一刻,
+// 这里保留方法以满足 sseEventSink 接口契约。
+func (r *replayWriter) flush() {}
+
+// bytes 返回已蓄流的完整 SSE 字节切片(只读视图),供回放层逐帧 flush 给客户端。
+func (r *replayWriter) bytes() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.Bytes()
+}
+
+// len 返回已蓄流字节数,供上层做超大流保护判定(超过阈值则退回边读边写,避免无界内存)。
+func (r *replayWriter) len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.Len()
 }
 
 // ===== Anthropic SSE payload 构造 =====
@@ -721,12 +822,18 @@ func contentBlockStopPayload(index int) string {
 // 保证 NVIDIA 上游收到的 OpenAI Chat JSON 严格符合规范，单独定义一套 chat 类型。
 
 // ChatMessage 是发给 NVIDIA 上游的 OpenAI Chat messages 元素。
+//
+// 注意:Content 字段刻意不使用 omitempty。
+// 原因:NVIDIA(及多数 OpenAI 兼容)上游用 serde 反序列化,要求每条 message 显式带 content 字段;
+// 若空串 "" 被 omitempty 省略,上游会回 400 "Failed to deserialize the JSON body into
+// the target type: missing field `content`"。因此空内容必须序列化为 "content":"" 落盘,
+// 这对 assistant(纯 tool_use 无文本)与 tool(空 tool_result)角色尤其关键。
 type ChatMessage struct {
-	Role       string           `json:"role"`
-	Content    string           `json:"content,omitempty"`
-	ToolCalls  []ChatToolCall   `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	ToolName   string           `json:"tool_name,omitempty"`
+	Role       string         `json:"role"`
+	Content    string         `json:"content"`
+	ToolCalls  []ChatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	ToolName   string         `json:"tool_name,omitempty"`
 }
 
 type ChatToolCallFunction struct {

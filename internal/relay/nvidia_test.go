@@ -10,11 +10,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/session"
+	"antigravity-proxy/internal/settings"
 	"antigravity-proxy/internal/stats"
 )
 
@@ -209,7 +212,9 @@ func TestWriteNvidiaAnthropicStream_FlusherInvoked(t *testing.T) {
 
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", strings.NewReader(""))
-	handler.writeNvidiaAnthropicStream(fc, req, mockResp, "z-ai/glm-5.2", &RelaySession{UserID: "u-flush"}, nil)
+	// 蓄流回放架构下 writeNvidiaAnthropicStream 需 targetURL/upstreamBody 供断流重拉;
+	// 本用例上游流完整(含 finish_reason+usage+[DONE]),首轮即 ready,不会真的重试,故传占位值即可。
+	handler.writeNvidiaAnthropicStream(fc, req, mockResp, "z-ai/glm-5.2", &RelaySession{UserID: "u-flush"}, nil, "https://integrate.api.nvidia.com/v1/chat/completions", []byte("{}"))
 
 	// 1) X-Accel-Buffering: no
 	if fc.Header().Get("X-Accel-Buffering") != "no" {
@@ -221,9 +226,10 @@ func TestWriteNvidiaAnthropicStream_FlusherInvoked(t *testing.T) {
 		t.Errorf("Content-Type 期望 text/event-stream, 实际=%q", fc.Header().Get("Content-Type"))
 	}
 
-	// 3) Flush() 至少被调过(>=1 帧 + 收尾 = 至少 8 次: message_start + 2 content_block_start + 2 delta + 2 stop + message_delta + message_stop + 收尾一次)
-	if fc.FlushCount() < 3 {
-		t.Errorf("Flush() 调用次数 = %d, 期望至少 3 次", fc.FlushCount())
+	// 3) 蓄流回放架构下 flusher.Flush() 仅在整条 ready 后回放收尾时被调一次(首帧 + 收尾)。
+	// 不再像旧"边读边写"那样逐帧 flush,故期望至少 1 次(响应头推送 + 尾帧落盘)。
+	if fc.FlushCount() < 1 {
+		t.Errorf("Flush() 调用次数 = %d, 期望至少 1 次(蓄流回放收尾)", fc.FlushCount())
 	}
 
 	// 4) SSE 事件序列认证: 检查输出含必须事件
@@ -1044,6 +1050,572 @@ func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
 			t.Errorf("expected error message to contain ResourceExhausted, got: %v", err)
 		}
 	})
+}
+
+// ===== NVIDIA 专属模型清单过滤(handleNvidiaModels 接入全局白名单) =====
+
+// preferredSettings 是 handleNvidiaModels 清单过滤测试专用的最小 settings mock。
+// 沿用 chatcompressE2ESettings 范式:嵌入 settings.ManagerInterface 实现接口,
+// 仅重写被该方法链调用的 GetNvidiaPreferredModels;其余不被调用的方法走嵌入字段(无 nil deref 风险)。
+type preferredSettings struct {
+	settings.ManagerInterface
+	preferred []string
+}
+
+func (m *preferredSettings) GetNvidiaPreferredModels() []string {
+	if m.preferred == nil {
+		return []string{}
+	}
+	out := make([]string, len(m.preferred))
+	copy(out, m.preferred)
+	return out
+}
+
+// newNvidiaTestHandlerWithSettings 在 newNvidiaTestHandler 基础上注入 settingsMgr,供清单过滤测试。
+func newNvidiaTestHandlerWithSettings(t *testing.T, accounts []*account.Account, pref []string) *APICompatHandler {
+	t.Helper()
+	accMgr := account.NewManager()
+	for _, a := range accounts {
+		accMgr.AddAccount(a)
+	}
+	accMgr.SetNvidiaPoolMode(true)
+	accMgr.SetActiveChannel("nvidia")
+	router := session.NewRouter()
+	ut := stats.NewUsageTracker(pricing.NewManager())
+	return NewAPICompatHandler(nil, accMgr, router, nil, ut, &preferredSettings{preferred: pref}, nil)
+}
+
+// nvidiaModelsUpstream 构造一个 mock NVIDIA /v1/models 上游,返回指定 id 列表(OpenAI list 形态)。
+func nvidiaModelsUpstream(t *testing.T, ids []string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("upstream path = %q, want /v1/models", r.URL.Path)
+		}
+		var entries []string
+		for _, id := range ids {
+			entries = append(entries, `{"id":"`+id+`","object":"model"}`)
+		}
+		body := `{"object":"list","data":[` + strings.Join(entries, ",") + `]}`
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+}
+
+// dataIDs 从 handleNvidiaModels 响应体中提取 data[].id 列表(兼容 Anthropic 与 OpenAI 两种形态)。
+func dataIDs(body []byte) []string {
+	var res struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(res.Data))
+	for _, d := range res.Data {
+		out = append(out, d.ID)
+	}
+	return out
+}
+
+// 用例1:清单为空 → 不过滤,返回上游全量(现状回归)。
+func TestHandleNvidiaModels_EmptyPreferred_NoFilter(t *testing.T) {
+	upstream := nvidiaModelsUpstream(t, []string{"meta/llama-3.3-70b-instruct", "deepseek-ai/deepseek-r1"})
+	defer upstream.Close()
+	acc := mkNvidiaAccount("nv-empty", "nv-empty", "k", upstream.URL, "moonshotai/kimi-k2.5")
+	handler := newNvidiaTestHandlerWithSettings(t, []*account.Account{acc}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/nvidia/v1/models", nil)
+	rr := httptest.NewRecorder()
+	handler.handleNvidiaModels(rr, req, &RelaySession{UserID: "u", UserKey: "k"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	got := dataIDs(rr.Body.Bytes())
+	if len(got) != 2 {
+		t.Fatalf("expected 2 models unfiltered, got %v", got)
+	}
+}
+
+// 用例2:清单非空 → 仅返回命中清单的模型(路径 c OpenAI 重写)。
+func TestHandleNvidiaModels_NonEmptyPreferred_Filtered(t *testing.T) {
+	upstream := nvidiaModelsUpstream(t, []string{"meta/llama-3.3-70b-instruct", "deepseek-ai/deepseek-r1"})
+	defer upstream.Close()
+	acc := mkNvidiaAccount("nv-filter", "nv-filter", "k", upstream.URL, "moonshotai/kimi-k2.5")
+	handler := newNvidiaTestHandlerWithSettings(t, []*account.Account{acc}, []string{"meta/llama-3.3-70b-instruct"})
+
+	req := httptest.NewRequest(http.MethodGet, "/nvidia/v1/models", nil)
+	rr := httptest.NewRecorder()
+	handler.handleNvidiaModels(rr, req, &RelaySession{UserID: "u", UserKey: "k"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	got := dataIDs(rr.Body.Bytes())
+	if len(got) != 1 || got[0] != "meta/llama-3.3-70b-instruct" {
+		t.Fatalf("expected only meta/llama-3.3-70b-instruct, got %v", got)
+	}
+}
+
+// 用例3:清单非空但全部不命中上游 → 路径 c 重写为空 data 但结构合法(仍是 OpenAI list)。
+func TestHandleNvidiaModels_PreferredMisses_OpenAIPassthrough(t *testing.T) {
+	upstream := nvidiaModelsUpstream(t, []string{"meta/llama-3.3-70b-instruct", "deepseek-ai/deepseek-r1"})
+	defer upstream.Close()
+	acc := mkNvidiaAccount("nv-miss", "nv-miss", "k", upstream.URL, "moonshotai/kimi-k2.5")
+	handler := newNvidiaTestHandlerWithSettings(t, []*account.Account{acc}, []string{"nonexistent/model-x"})
+
+	req := httptest.NewRequest(http.MethodGet, "/nvidia/v1/models", nil)
+	rr := httptest.NewRecorder()
+	handler.handleNvidiaModels(rr, req, &RelaySession{UserID: "u", UserKey: "k"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	// 重写后的结构仍为合法 OpenAI list
+	var res map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+		t.Fatalf("invalid json: %v body=%s", err, rr.Body.String())
+	}
+	if res["object"] != "list" {
+		t.Errorf("expected object=list, got %v", res["object"])
+	}
+	got := dataIDs(rr.Body.Bytes())
+	if len(got) != 0 {
+		t.Fatalf("expected empty data after filter, got %v", got)
+	}
+}
+
+// 用例4:Anthropic 入站(带 anthropic-version 头)+ 清单非空 → 路径 b 输出 Anthropic 形态且只含命中项。
+func TestHandleNvidiaModels_Anthropic_PreferredFiltered(t *testing.T) {
+	upstream := nvidiaModelsUpstream(t, []string{"meta/llama-3.3-70b-instruct", "deepseek-ai/deepseek-r1"})
+	defer upstream.Close()
+	acc := mkNvidiaAccount("nv-anth", "nv-anth", "k", upstream.URL, "moonshotai/kimi-k2.5")
+	handler := newNvidiaTestHandlerWithSettings(t, []*account.Account{acc}, []string{"deepseek-ai/deepseek-r1"})
+
+	req := httptest.NewRequest(http.MethodGet, "/nvidia/v1/models", nil)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	rr := httptest.NewRecorder()
+	handler.handleNvidiaModels(rr, req, &RelaySession{UserID: "u", UserKey: "k"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	// Anthropic 形态:{"data":[{"type":"model","id":...}],"has_more":false}
+	var res struct {
+		Data []struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+		} `json:"data"`
+		HasMore bool `json:"has_more"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+		t.Fatalf("invalid json: %v body=%s", err, rr.Body.String())
+	}
+	if res.HasMore {
+		t.Errorf("expected has_more=false, got true")
+	}
+	if len(res.Data) != 1 || res.Data[0].Type != "model" || res.Data[0].ID != "deepseek-ai/deepseek-r1" {
+		t.Fatalf("expected 1 anthropic model deepseek-ai/deepseek-r1, got %+v", res.Data)
+	}
+}
+
+// 用例5:号池空(无可用账号)→ fallback 9 个兜底 ∩ 清单,只返回命中兜底项。
+func TestHandleNvidiaModels_FallbackPreferredFiltered(t *testing.T) {
+	// 无账号 → 走 buildFallbackNvidiaModels
+	handler := newNvidiaTestHandlerWithSettings(t, nil, []string{"meta/llama-3.3-70b-instruct", "moonshotai/kimi-k2.5"})
+
+	req := httptest.NewRequest(http.MethodGet, "/nvidia/v1/models", nil)
+	rr := httptest.NewRecorder()
+	handler.handleNvidiaModels(rr, req, &RelaySession{UserID: "u", UserKey: "k"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	got := dataIDs(rr.Body.Bytes())
+	// fallback 9 个里命中这两个的恰好 2 个
+	if len(got) != 2 {
+		t.Fatalf("expected 2 fallback models matching preferred, got %v", got)
+	}
+	want := map[string]bool{"meta/llama-3.3-70b-instruct": true, "moonshotai/kimi-k2.5": true}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("unexpected fallback id after filter: %s", id)
+		}
+	}
+}
+
+// 用例6:settingsMgr 为 nil(现有 newNvidiaTestHandler 范式)→ 不过滤、不 panic(回写全量)。
+func TestHandleNvidiaModels_NilSettingsMgr_NoPanic(t *testing.T) {
+	upstream := nvidiaModelsUpstream(t, []string{"meta/llama-3.3-70b-instruct", "deepseek-ai/deepseek-r1"})
+	defer upstream.Close()
+	acc := mkNvidiaAccount("nv-nil", "nv-nil", "k", upstream.URL, "moonshotai/kimi-k2.5")
+	// 原始 helper 传 settingsMgr=nil,验证守护逻辑不 panic 且不过滤
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+
+	req := httptest.NewRequest(http.MethodGet, "/nvidia/v1/models", nil)
+	rr := httptest.NewRecorder()
+	handler.handleNvidiaModels(rr, req, &RelaySession{UserID: "u", UserKey: "k"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	got := dataIDs(rr.Body.Bytes())
+	if len(got) != 2 {
+		t.Fatalf("expected 2 models unfiltered (nil settingsmgr), got %v", got)
+	}
+}
+
+// ===== 上游断流(unexpected EOF)服务端蓄流重试用例 =====
+//
+// 以下用例覆盖 writeNvidiaAnthropicStream 的蓄流回放重试链路(pullAnthropicStreamWithRetry):
+//   - 前 N 次返回中途断流(unexpected EOF)、第 N+1 次完整 → 重试命中并回放完整 Anthropic SSE;
+//   - 全程不换号(同一 poolAccount 全程复用);
+//   - 单次退避用 h.nvidiaStreamRetryWait,测试覆盖为 5ms,避免 5s×N 拖垮单测;
+//   - 重试用尽 → 回写 Anthropic overloaded_error(503),而非旧的 end_turn 假闭合;
+//   - 客户端 ctx 取消 → 立即终止重试,不空跑退避。
+
+// flakyNvidiaUpstream 构造一个可控的 mock NVIDIA 上游:用 failN 控制前若干次请求返回
+// "上游内嵌 SSE error chunk"({"error":{"message":...}}),自第 failN+1 次起返回完整合法 SSE。
+//
+// 为何用 SSE error chunk 而非真 TCP unexpected EOF 重现断流:openAIChatSSEToAnthropicSSEInto 对
+// 上游 SSE error chunk 会置 err 并 break、不置 streamTerminated,重试主体据此判定"本流不完整需重试"。
+// 生产环境的 unexpected EOF 同样使 scanner.Err() 非 nil 走同一条"不完整→重试"判定——两条路径在
+// 重试判定处等价,故用稳定可控的 SSE error chunk 复现"上游故障应重试"语义,不依赖 HTTP 层断流细节
+// (真 TCP 半截 chunked 关闭复现脆弱、跨平台不稳)。
+// 返回 server 与已发生请求次数指针,供断言"重试了几次"。
+func flakyNvidiaUpstream(t *testing.T, failN int) (*httptest.Server, *int32) {
+	t.Helper()
+	var calls int32
+	errorChunk := strings.Join([]string{
+		`data: {"error":{"message":"upstream interrupted","type":"internal","code":"stream_broken"}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n")
+	completeSSE := strings.Join([]string{
+		`data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"}}]}`,
+		`data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`data: {"id":"1","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cur := atomic.AddInt32(&calls, 1)
+		if int(cur) <= failN {
+			// 故障:上游内嵌 SSE error chunk(非完整正常流),触发重试主体的"不完整→重试"判定。
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(errorChunk))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(completeSSE))
+	}))
+	return srv, &calls
+}
+
+// TestPullAnthropicStream_RetryOnEOFThenSuccess 断流重试命中:前 2 次中途断流,第 3 次完整。
+// 断言:客户端收 200 + 完整 Anthropic SSE 事件序列 + 文本 delta, 且全程未换号(同一账号)。
+func TestPullAnthropicStream_RetryOnEOFThenSuccess(t *testing.T) {
+	upstream, calls := flakyNvidiaUpstream(t, 2)
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-retry", "retrybot@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond // 加速退避,避免 5s×N 拖垮单测
+
+	anthReq := &AnthropicRequest{
+		Model:   "claude-sonnet-4-5",
+		Stream:  true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+	rr := httptest.NewRecorder()
+	start := time.Now()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-retry", UserKey: "k-retry"})
+	elapsed := time.Since(start)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 after retry success, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	out := rr.Body.String()
+	for _, ev := range []string{"message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"} {
+		if !strings.Contains(out, "event: "+ev) {
+			t.Errorf("missing event %q after retry:\n%s", ev, out)
+		}
+	}
+	if !strings.Contains(out, `"text":"Hi"`) {
+		t.Errorf("expected text delta Hi from completed attempt, got:\n%s", out)
+	}
+	// 重试命中:必须发生过 3 次上游请求(2 次断流 + 1 次成功)。
+	if got := atomic.LoadInt32(calls); got != 3 {
+		t.Errorf("expected 3 upstream calls (2 EOF + 1 success), got %d", got)
+	}
+	// 全程不换号 + 退避被加逽数据双校验:总耗时应远小于生产 2×5s=10s(此处用 5ms×2 退避的毫秒级)。
+	if elapsed > 2*time.Second {
+		t.Errorf("retry backoff not accelerated, elapsed=%v (nvidiaStreamRetryWait workaround failed)", elapsed)
+	}
+}
+
+// TestPullAnthropicStream_RetryExhausted_RepliesOverloaded 5 次均中途断流,重试用尽。
+// 断言:回写 503 + Anthropic overloaded_error(取代旧的 end_turn 假闭合),调用记录为 5 次。
+func TestPullAnthropicStream_RetryExhausted_RepliesOverloaded(t *testing.T) {
+	upstream, calls := flakyNvidiaUpstream(t, 10) // failN 远超 5 次,确保次次断流
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-exh", "exhbot@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+
+	anthReq := &AnthropicRequest{
+		Model:   "claude-sonnet-4-5",
+		Stream:  true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-exh", UserKey: "k-exh"})
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 overloaded_error after retry exhausted, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	out := rr.Body.String()
+	if !strings.Contains(out, `"type":"overloaded_error"`) {
+		t.Errorf("expected overloaded_error payload, got:\n%s", out)
+	}
+	// 重试用尽:恰好 5 次上游请求(不换号,同一账号重拉满 5 次)。
+	if got := atomic.LoadInt32(calls); got != 5 {
+		t.Errorf("expected exactly 5 upstream calls (retry max) without switch, got %d", got)
+	}
+}
+
+// ===== 直连蓄流重试耗尽后接兜底出站代理(pullAnthropicStreamWithRetry 兜底分支) =====
+//
+// 以下用例覆盖 NVIDIA Anthropic 流式链路在直连 5s×5 重试全部耗尽后,切换兜底出站代理再 1 轮的集成行为:
+//   - 兜底成功:直连 5 轮断流,兜底轮完整 → 200 + 完整 Anthropic SSE,calls==6(5 直连 + 1 兜底);
+//   - 兜底也失败:连同兜底轮共 6 次全断流 → 503 overloaded_error,calls==6;
+//   - 启用但地址协议不支持(ftp://):GetFallbackClient 返回 err 跳过兜底 → 503,calls==5(只走直连);
+//   - 未启用:enabled=false 直接跳过兜底 → 503,calls==5;
+//   - 无 settingsMgr:守护 nil 不 panic,走直连耗尽 → 链路与未启用等价(已在现有用例覆盖,不重复)。
+//
+// 验证物理事实依据:Go http client 设置 Proxy=上游 server 自身 URL 时,Do 请求会以绝对 URI 形式发出,
+// httptest server 能正确解析 r.URL.Path 到 handler(已通过独立探测 TestProxySelfProbe 确认)。
+// 故 FallbackProxyAddress = upstream.URL 即可用作零额外 server 的"兜底成功转发"e2e 探针:
+// 兜底轮 fbClient.Do 经 proxy 协议把请求再发一次给同一上游 server,handler 无感知区分。
+
+// fallbackSettings 是兜底代理测试专用的最小 settings mock。
+// 与 preferredSettings 不同:本测试走 handleNvidia 完整路径,链调 debugger getter 等多个方法,
+// 若嵌入 nil 接口会让未重写方法落到 nil 上 panic(autogenerated)。故嵌入一个真实
+// settings.NewManager()(零值 Config,所有 getter 返零值/不崩),仅重写 4 个兜底 getter
+// 指向测试字段、GetNvidiaPreferredModels 返回空切片(保持与 preferredSettings 同款行为)。
+// handleNvidia 全路径对 settings 的链调均为只读 getter,不触发 Manager 的 SaveConfig/写文件。
+type fallbackSettings struct {
+	*settings.Manager
+	fbAddr    string
+	fbEnabled bool
+	fbUser    string
+	fbPass    string
+}
+
+func (m *fallbackSettings) GetFallbackProxyAddress() string { return m.fbAddr }
+func (m *fallbackSettings) GetFallbackProxyEnabled() bool   { return m.fbEnabled }
+func (m *fallbackSettings) GetFallbackProxyUsername() string { return m.fbUser }
+func (m *fallbackSettings) GetFallbackProxyPassword() string { return m.fbPass }
+func (m *fallbackSettings) GetNvidiaPreferredModels() []string { return []string{} }
+
+// newNvidiaTestHandlerWithFallback 在 newNvidiaTestHandler 基础上注入兜底 settings mock。
+func newNvidiaTestHandlerWithFallback(t *testing.T, accounts []*account.Account, fbAddr string, fbEnabled bool) *APICompatHandler {
+	t.Helper()
+	accMgr := account.NewManager()
+	for _, a := range accounts {
+		accMgr.AddAccount(a)
+	}
+	accMgr.SetNvidiaPoolMode(true)
+	accMgr.SetActiveChannel("nvidia")
+	router := session.NewRouter()
+	ut := stats.NewUsageTracker(pricing.NewManager())
+	sm := &fallbackSettings{Manager: settings.NewManager(), fbAddr: fbAddr, fbEnabled: fbEnabled}
+	return NewAPICompatHandler(nil, accMgr, router, nil, ut, sm, nil)
+}
+
+// TestPullAnthropicStream_FallbackRoundSucceeds 直连 5 轮全断流,兜底轮完整成功。
+// 断言:200 + 完整 Anthropic SSE 事件序列 + 文本 delta + calls==6(5 直连 + 1 兜底)。
+func TestPullAnthropicStream_FallbackRoundSucceeds(t *testing.T) {
+	upstream, calls := flakyNvidiaUpstream(t, 5) // call 1-5 断流、call 6(兜底)完整
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-fb-ok", "fbbot@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	// 兜底地址指向上游自身:fbClient.Do 经 proxy 协议把请求再发回同一 server(探测已验证可行),兜底轮拿到完整流。
+	handler := newNvidiaTestHandlerWithFallback(t, []*account.Account{acc}, upstream.URL, true)
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+
+	anthReq := &AnthropicRequest{
+		Model:   "claude-sonnet-4-5",
+		Stream:  true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-fb-ok", UserKey: "k-fb-ok"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 after fallback round success, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	out := rr.Body.String()
+	for _, ev := range []string{"message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"} {
+		if !strings.Contains(out, "event: "+ev) {
+			t.Errorf("missing event %q after fallback success:\n%s", ev, out)
+		}
+	}
+	if !strings.Contains(out, `"text":"Hi"`) {
+		t.Errorf("expected text delta Hi from fallback completed round, got:\n%s", out)
+	}
+	// 5 轮直连断流 + 1 轮兜底成功 = 恰好 6 次上游请求。
+	if got := atomic.LoadInt32(calls); got != 6 {
+		t.Errorf("expected 6 upstream calls (5 direct EOF + 1 fallback success), got %d", got)
+	}
+}
+
+// TestPullAnthropicStream_FallbackAlsoFails_RepliesOverloaded 直连 5 轮 + 兜底 1 轮全断流。
+// 断言:503 overloaded_error + calls==6(兜底被触达但同样失败),不换号。
+func TestPullAnthropicStream_FallbackAlsoFails_RepliesOverloaded(t *testing.T) {
+	upstream, calls := flakyNvidiaUpstream(t, 10) // 持续断流,兜底轮也击中 error chunk
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-fb-fail", "fbfail@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler := newNvidiaTestHandlerWithFallback(t, []*account.Account{acc}, upstream.URL, true)
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+
+	anthReq := &AnthropicRequest{
+		Model:   "claude-sonnet-4-5",
+		Stream:  true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-fb-fail", UserKey: "k-fb-fail"})
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 overloaded after fallback failed, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"type":"overloaded_error"`) {
+		t.Errorf("expected overloaded_error payload after fallback also failed, got:\n%s", rr.Body.String())
+	}
+	// 5 轮直连 + 1 轮兜底(同样失败)= 6 次,calls 必须 == 6 证明兜底分支确实被触达而非跳过。
+	if got := atomic.LoadInt32(calls); got != 6 {
+		t.Errorf("expected 6 upstream calls (5 direct + 1 fallback failed), got %d (fallback branch may be skipped)", got)
+	}
+}
+
+// TestPullAnthropicStream_FallbackInvalidAddressSkipped 启用兜底但地址协议不支持(ftp://)。
+// GetFallbackClient 返回 err → 跳过兜底 → 503 overloaded。断言 calls==5(只走直连,兜底未触达)且不崩。
+func TestPullAnthropicStream_FallbackInvalidAddressSkipped(t *testing.T) {
+	upstream, calls := flakyNvidiaUpstream(t, 10)
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-fb-bad", "fbbad@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler := newNvidiaTestHandlerWithFallback(t, []*account.Account{acc}, "ftp://1.2.3.4:21", true)
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+
+	anthReq := &AnthropicRequest{
+		Model:   "claude-sonnet-4-5",
+		Stream:  true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-fb-bad", UserKey: "k-fb-bad"})
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when fallback addr invalid (skipped), got %d body=%s", rr.Code, rr.Body.String())
+	}
+	// 兜底被跳过(地址无效):只走 5 轮直连,calls==5。
+	if got := atomic.LoadInt32(calls); got != 5 {
+		t.Errorf("expected 5 upstream calls (fallback skipped due to invalid addr), got %d", got)
+	}
+}
+
+// TestPullAnthropicStream_FallbackDisabledSkipped 配置了地址但 enabled=false。
+// 守护"未启用即不触达兜底"语义:calls==5(只走直连)+ 503 overloaded。
+func TestPullAnthropicStream_FallbackDisabledSkipped(t *testing.T) {
+	upstream, calls := flakyNvidiaUpstream(t, 10)
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-fb-off", "fboff@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler := newNvidiaTestHandlerWithFallback(t, []*account.Account{acc}, upstream.URL, false)
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+
+	anthReq := &AnthropicRequest{
+		Model:   "claude-sonnet-4-5",
+		Stream:  true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-fb-off", UserKey: "k-fb-off"})
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when fallback disabled, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"type":"overloaded_error"`) {
+		t.Errorf("expected overloaded_error payload, got:\n%s", rr.Body.String())
+	}
+	if got := atomic.LoadInt32(calls); got != 5 {
+		t.Errorf("expected 5 upstream calls (fallback disabled), got %d", got)
+	}
+}
+
+// TestPullAnthropicStream_FirstFlakyThenSuccess_NoAccountSwitch 隐式校验"不换号":
+// 用唯一可用账号(池中仅 1 个),断流重试全程只能复用它。若重试换号,换号循环会因无其它账号而提前 502。
+// 这里与 RetryOnEOFThenSuccess 组合,确证不换号语义(同账号重试满 5 次/calls)。已在 exhaust 用例体现。
+func TestPullAnthropicStream_ClientCancelAbortsRetry(t *testing.T) {
+	upstream, calls := flakyNvidiaUpstream(t, 10) // 一直断流
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-cancel", "cancelbot@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+	handler.nvidiaStreamRetryWait = 300 * time.Millisecond // 中等退避便于观察取消时机
+
+	anthReq := &AnthropicRequest{
+		Model:   "claude-sonnet-4-5",
+		Stream:  true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body)).WithContext(ctx)
+
+	// 另起协程跑请求(蓄流重试会阻塞退避),协程外稍后取消 ctx,验证重试立即终止而非空跑满 5×300ms。
+	done := make(chan struct{})
+	var rr *httptest.ResponseRecorder
+	go func() {
+		rec := httptest.NewRecorder()
+		rr = rec
+		handler.handleNvidia(rec, req, &RelaySession{UserID: "u-cancel", UserKey: "k-cancel"})
+		close(done)
+	}()
+	// 等首轮断流 + 进入第一次退避后取消(首轮很快,50ms 足够覆盖首轮 EOF + 落到退避 select)。
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client cancel did not abort retry within 3s (backoff loop did not honor ctx)")
+	}
+	// 取消后上游请求次数应远小于 5 次(理想为 1~2 次),证明重试在 ctx 取消时立即停止。
+	if got := atomic.LoadInt32(calls); got >= 5 {
+		t.Errorf("client cancel should stop further retries, but %d upstream calls occurred", got)
+	}
+	// 客户端取消后不应返回 200 成功流(本轮未完整),状态码非 200 即视为重试被正确终止。
+	if rr != nil && rr.Code == http.StatusOK {
+		t.Errorf("client-cancelled stream should not surface as 200 success, got %d", rr.Code)
+	}
 }
 
 
