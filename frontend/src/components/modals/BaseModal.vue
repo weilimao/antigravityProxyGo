@@ -44,6 +44,7 @@
           <button
             v-if="showClose"
             :id="closeBtnId"
+            @click="handleClose"
             class="text-outline hover:text-primary transition-colors flex items-center justify-center p-1 rounded-full hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
           >
             <span class="material-symbols-outlined text-[18px]">close</span>
@@ -72,7 +73,7 @@
 </template>
 
 <script setup lang="ts">
-withDefaults(
+const props = withDefaults(
   defineProps<{
     id?: string;
     containerId?: string;
@@ -100,4 +101,13 @@ withDefaults(
     showClose: true,
   }
 );
+
+const emit = defineEmits(['close']);
+
+function handleClose() {
+  emit('close');
+  if (props.id && (window as any)._relayCloseModal) {
+    (window as any)._relayCloseModal(props.id);
+  }
+}
 </script>

@@ -36,9 +36,23 @@ app.use(router);
     const modal = document.getElementById(id);
     if (!modal) return;
     modal.classList.remove('show');
+    
+    let isHidden = false;
+    const hideModal = () => {
+        if (!isHidden) {
+            isHidden = true;
+            if (!modal.classList.contains('show')) {
+                modal.classList.add('hidden');
+            }
+        }
+    };
+
+    // 200ms 强制隐藏兜底，防止 CSS transitionend 事件未触发导致弹窗关不掉
+    setTimeout(hideModal, 200);
+
     const onTransitionEnd = (e: TransitionEvent) => {
         if (e.propertyName === 'opacity' && !modal.classList.contains('show')) {
-            modal.classList.add('hidden');
+            hideModal();
             modal.removeEventListener('transitionend', onTransitionEnd);
         }
     };
