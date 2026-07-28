@@ -165,8 +165,15 @@
 </div>
 <!-- 使用趋势折线图 (SVG 矢量绘图) -->
 <div class="glass-card rounded-xl p-5 flex flex-col relative">
-<div class="flex justify-between items-center mb-3">
+<div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+<div class="flex items-center gap-2">
 <div class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="usageTrend">使用趋势</div>
+<!-- 数据维度切换: 综合趋势(全局桶) / NVIDIA(英伟达号池专用桶), 两桶后端物理隔离 -->
+<div class="flex gap-1 bg-slate-100 dark:bg-white/5 p-0.5 rounded-lg text-[10px]" id="trendScopeSelector">
+<button class="px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold" data-trend-scope="all" data-i18n="trendScopeAll">综合趋势</button>
+<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-trend-scope="nvidia" data-i18n="trendScopeNvidia">NVIDIA</button>
+</div>
+</div>
 <!-- 快捷选项与筛选 -->
 <div class="flex gap-1 bg-slate-100 dark:bg-white/5 p-0.5 rounded-lg text-[10px]" id="chartRangeSelector">
 <button class="px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold" data-range="24h" data-i18n="range24h">近24小时</button>

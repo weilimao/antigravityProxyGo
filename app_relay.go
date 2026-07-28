@@ -661,6 +661,9 @@ func (a *App) ensureRelayInitialized() {
 		a.settingsMgr,
 		a.AddLog,
 	)
+	// 注入全局 stats.Tracker, 使 NVIDIA 中继链路能将号池用量计入
+	// 「使用趋势-NVIDIA」专用桶 (TrackNvidiaRequest), 与综合趋势桶隔离。
+	a.relayCompatAPIMgr.SetGlobalStatsTracker(a.statsTracker)
 
 	// Start session cleanup timer
 	go func() {

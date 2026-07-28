@@ -1866,10 +1866,11 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 			}
 
 			return map[string]interface{}{
-				"stats":    statsObj,
-				"trends":   trends,
-				"requests": requests,
-				"usage":    usagePayload,
+				"stats":        statsObj,
+				"trends":       trends,
+				"nvidiaTrends": a.statsTracker.GetNvidiaTrends(),
+				"requests":     requests,
+				"usage":        usagePayload,
 			}
 		}
 	}

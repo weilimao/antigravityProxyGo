@@ -99,6 +99,8 @@ let consolePoolIdx = 0;
 // rebuilds and onmousemove-closure reassignment.
 let lastTrendsSig = '';
 let lastChartRange = '';
+// lastChartScope: 上次重画时的趋势 scope (all/nvidia), 用于检测 scope 切换并触发动画重画。
+let lastChartScope = 'all';
 let lastChartDrawTs = 0;
 let chartRedrawTimer: any = null;
 const CHART_DRAW_MIN_INTERVAL = 3000;
@@ -141,6 +143,13 @@ function applyConsoleClasses(entry: HTMLElement, log: string) {
     if (log.includes('✅') || log.includes('🚀')) entry.classList.add('info');
 }
 
+// currentTrendsSource: 按 currentTrendScope 返回当前应喂给趋势图的数据序列。
+// 'all' = 综合全局桶 (state.trendsData, 口径零回归);
+// 'nvidia' = NVIDIA 号池专用桶 (state.nvidiaTrendsData)。两桶由后端物理隔离下发。
+function currentTrendsSource(): any[] {
+    return state.currentTrendScope === 'nvidia' ? state.nvidiaTrendsData : state.trendsData;
+}
+
 // Throttled trend-chart redraw: re-draw at most once per CHART_DRAW_MIN_INTERVAL,
 // with a trailing draw so the final state is always reflected. Range changes
 // draw immediately (with left-to-right animation); within-range polling updates
@@ -148,20 +157,31 @@ function applyConsoleClasses(entry: HTMLElement, log: string) {
 // not cause the chart to animate every few seconds. Skips entirely when the
 // filtered trends signature has not changed.
 function maybeDrawTrendChart() {
-    if (!state.trendsData || state.trendsData.length === 0) return;
-    const filteredTrends = chartRenderer.getFilteredTrends(state.trendsData, state.currentRange);
+    const src = currentTrendsSource();
+    if (!src || src.length === 0) {
+        // 切到 scope 后该桶暂无数据 (如 NVIDIA 号池尚无请求): 清空残留曲线避免误读,
+        // 并清空 sig 使后续真实数据到来时必定重画。
+        chartRenderer.clearTrendChart();
+        lastTrendsSig = `scope=${state.currentTrendScope}:empty`;
+        return;
+    }
+    const filteredTrends = chartRenderer.getFilteredTrends(src, state.currentRange);
     const last = filteredTrends[filteredTrends.length - 1];
-    const sig = `${state.currentRange}:${filteredTrends.length}:${last ? `${last.time}_${last.requests}_${last.input}` : ''}`;
+    // sig 含 scope: 切换 tab 即使数据签名碰巧相同也强制重画, 保证画面与 scope 一致。
+    const sig = `scope=${state.currentTrendScope}:${state.currentRange}:${filteredTrends.length}:${last ? `${last.time}_${last.requests}_${last.input}` : ''}`;
     if (sig === lastTrendsSig) return;
 
     const rangeChanged = state.currentRange !== lastChartRange;
+    // scope 切换视为"范围级"变化, 触发左到右动画重画, 给用户明确视觉反馈。
+    const scopeChanged = state.currentTrendScope !== lastChartScope;
     const now = Date.now();
-    if (rangeChanged || now - lastChartDrawTs >= CHART_DRAW_MIN_INTERVAL) {
-        // rangeChanged=true：切范围/首进 app → 播左到右动画；
-        // 仅 tick 到期但范围未变 → 轮询静默重画，不动画。
-        chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange, rangeChanged);
+    if (rangeChanged || scopeChanged || now - lastChartDrawTs >= CHART_DRAW_MIN_INTERVAL) {
+        // rangeChanged=true 或 scopeChanged=true：切范围/切 scope/首进 app → 播左到右动画；
+        // 仅 tick 到期但范围与 scope 均未变 → 轮询静默重画，不动画。
+        chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange, rangeChanged || scopeChanged);
         lastTrendsSig = sig;
         lastChartRange = state.currentRange;
+        lastChartScope = state.currentTrendScope;
         lastChartDrawTs = now;
         if (chartRedrawTimer) {
             clearTimeout(chartRedrawTimer);
@@ -178,13 +198,20 @@ function maybeDrawTrendChart() {
 // 强制带动画重画趋势图：跳过 sig 短路与节流，供 switchView 切回 dashboard 时调用，
 // 保证每次切回仪表盘都看到一次左到右画线动画（即使 trends 签名未变也不会被短路）。
 export function redrawTrendChartAnimated() {
-    if (!state.trendsData || state.trendsData.length === 0) return;
-    const filteredTrends = chartRenderer.getFilteredTrends(state.trendsData, state.currentRange);
+    const src = currentTrendsSource();
+    if (!src || src.length === 0) {
+        chartRenderer.clearTrendChart();
+        lastTrendsSig = `scope=${state.currentTrendScope}:empty`;
+        lastChartScope = state.currentTrendScope;
+        return;
+    }
+    const filteredTrends = chartRenderer.getFilteredTrends(src, state.currentRange);
     chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange, true);
     const last = filteredTrends[filteredTrends.length - 1];
-    const sig = `${state.currentRange}:${filteredTrends.length}:${last ? `${last.time}_${last.requests}_${last.input}` : ''}`;
+    const sig = `scope=${state.currentTrendScope}:${state.currentRange}:${filteredTrends.length}:${last ? `${last.time}_${last.requests}_${last.input}` : ''}`;
     lastTrendsSig = sig;
     lastChartRange = state.currentRange;
+    lastChartScope = state.currentTrendScope;
     lastChartDrawTs = Date.now();
     if (chartRedrawTimer) {
         clearTimeout(chartRedrawTimer);
@@ -1192,16 +1219,20 @@ export function initDashboardEvents() {
     ipcRenderer.on('stats-updated', (event: any, payload: any) => {
         if (!payload) return;
 
-        const { stats, trends, requests, usage } = payload;
+        const { stats, trends, nvidiaTrends, requests, usage } = payload;
 
         // Construct current payload signature for dirty-checking
         const statsSig = stats ? `${stats.totalRequests}_${stats.totalErrors}_${stats.totalRetries}_${stats.totalInputTokens}_${stats.totalOutputTokens}_${stats.totalCachedTokens}_${stats.totalCost}` : '';
         const trendsLen = trends ? trends.length : 0;
+        // nvidiaTrendsLen 纳入 sig: NVIDIA 号池桶有新数据时强制通过 renderActiveView 重画,
+        // 否则 sig 不变会被短路, 导致「NVIDIA」Tab 曲线不更新。
+        const nvidiaTrendsLen = nvidiaTrends ? nvidiaTrends.length : 0;
+        const nvLast = (nvidiaTrends && nvidiaTrends.length > 0) ? `${nvidiaTrends[nvidiaTrends.length - 1].time}_${nvidiaTrends[nvidiaTrends.length - 1].requests}_${nvidiaTrends[nvidiaTrends.length - 1].input}` : '';
         const lastReqSig = (requests && requests.length > 0) ? `${requests[0].timestamp}_${requests[0].statusCode}_${requests[0].cost}` : '';
         const reqsLen = requests ? requests.length : 0;
         const usageSig = usage ? JSON.stringify(usage) : '';
 
-        const currentSig = `${statsSig}|${trendsLen}|${reqsLen}_${lastReqSig}|${usageSig}`;
+        const currentSig = `${statsSig}|${trendsLen}|nv=${nvidiaTrendsLen}_${nvLast}|${reqsLen}_${lastReqSig}|${usageSig}`;
         if (currentSig === lastStatsUpdatedSig) {
             return; // Skip rendering if no relevant metrics have changed
         }
@@ -1210,6 +1241,11 @@ export function initDashboardEvents() {
         if (stats) state.statsData = stats;
         if (trends !== undefined && trends !== null) {
             state.trendsData = trends;
+        }
+        // nvidiaTrends: NVIDIA 号池专用趋势桶。后端恒定下发 (空时为 []),
+        // 因此 != null 兜底即写入, 保证「NVIDIA」Tab 在轮询中持续拿到最新序列。
+        if (nvidiaTrends !== undefined && nvidiaTrends !== null) {
+            state.nvidiaTrendsData = nvidiaTrends;
         }
         if (requests) state.allRequests = requests;
         if (usage) state.usageData = usage;

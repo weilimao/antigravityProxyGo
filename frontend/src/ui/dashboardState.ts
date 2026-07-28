@@ -7,6 +7,12 @@ export interface DashboardState {
     currentTheme: string;
     activeTab: string;
     trendsData: any[];
+    // nvidiaTrendsData: 全局 stats.Tracker 的 nvidiaTrends 桶(英伟达号池专用), 与 trendsData
+    // (综合全局桶)物理隔离。前端「使用趋势」卡片由 currentTrendScope 决定取哪个序列喂给图表渲染。
+    nvidiaTrendsData: any[];
+    // currentTrendScope: 使用趋势的数据维度切换。'all' = 综合趋势(原全局桶, 口径零回归);
+    // 'nvidia' = NVIDIA 号池专用桶(由后端 TrackNvidiaRequest 累加, 仅含号池用量)。
+    currentTrendScope: 'all' | 'nvidia';
     allRequests: any[];
     searchQuery: string;
     currentRange: string;
@@ -76,6 +82,8 @@ const state: DashboardState = {
     currentTheme: 'light',
     activeTab: 'logs',
     trendsData: [],
+    nvidiaTrendsData: [],
+    currentTrendScope: 'all',
     allRequests: [],
     searchQuery: '',
     currentRange: '24h',

@@ -69,21 +69,25 @@ export function initSettings() {
             const settingsPanelAbout = document.getElementById('settings-panel-about');
             const settingsPanelRelay = document.getElementById('settings-panel-relay');
             const settingsPanelNetwork = document.getElementById('settings-panel-network');
+            const settingsPanelHelp = document.getElementById('settings-panel-help');
 
             const btnSettingsTabGeneral = document.getElementById('btnSettingsTabGeneral');
             const btnSettingsTabAbout = document.getElementById('btnSettingsTabAbout');
             const btnSettingsTabRelay = document.getElementById('btnSettingsTabRelay');
             const btnSettingsTabNetwork = document.getElementById('btnSettingsTabNetwork');
+            const btnSettingsTabHelp = document.getElementById('btnSettingsTabHelp');
 
             if (settingsPanelGeneral) settingsPanelGeneral.style.setProperty('display', activePanel === 'general' ? 'flex' : 'none', 'important');
             if (settingsPanelAbout) settingsPanelAbout.style.setProperty('display', activePanel === 'about' ? 'flex' : 'none', 'important');
             if (settingsPanelRelay) settingsPanelRelay.style.setProperty('display', activePanel === 'relay' ? 'flex' : 'none', 'important');
             if (settingsPanelNetwork) settingsPanelNetwork.style.setProperty('display', activePanel === 'network' ? 'flex' : 'none', 'important');
+            if (settingsPanelHelp) settingsPanelHelp.style.setProperty('display', activePanel === 'help' ? 'flex' : 'none', 'important');
 
             if (btnSettingsTabGeneral) btnSettingsTabGeneral.className = activePanel === 'general' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabAbout) btnSettingsTabAbout.className = activePanel === 'about' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabRelay) btnSettingsTabRelay.className = activePanel === 'relay' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabNetwork) btnSettingsTabNetwork.className = activePanel === 'network' ? activeTabClass : inactiveTabClass;
+            if (btnSettingsTabHelp) btnSettingsTabHelp.className = activePanel === 'help' ? activeTabClass : inactiveTabClass;
 
             if (activePanel === 'network') {
                 try {
@@ -104,11 +108,13 @@ export function initSettings() {
         const btnSettingsTabAbout = document.getElementById('btnSettingsTabAbout');
         const btnSettingsTabRelay = document.getElementById('btnSettingsTabRelay');
         const btnSettingsTabNetwork = document.getElementById('btnSettingsTabNetwork');
+        const btnSettingsTabHelp = document.getElementById('btnSettingsTabHelp');
 
         if (btnSettingsTabGeneral) btnSettingsTabGeneral.addEventListener('click', () => switchSettingsTab('general'));
         if (btnSettingsTabAbout) btnSettingsTabAbout.addEventListener('click', () => switchSettingsTab('about'));
         if (btnSettingsTabRelay) btnSettingsTabRelay.addEventListener('click', () => switchSettingsTab('relay'));
         if (btnSettingsTabNetwork) btnSettingsTabNetwork.addEventListener('click', () => switchSettingsTab('network'));
+        if (btnSettingsTabHelp) btnSettingsTabHelp.addEventListener('click', () => switchSettingsTab('help'));
 
         const btnRefreshNetLogs = document.getElementById('btnRefreshNetLogs');
         if (btnRefreshNetLogs) {

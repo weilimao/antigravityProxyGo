@@ -1216,6 +1216,17 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 		CachedTokens: 0,
 		Account:      accMeta,
 	})
+
+	// 3) 全局「使用趋势-NVIDIA」专用桶 (stats.Tracker.TrackNvidiaRequest)。
+	// 这是让英伟达号池用量首次进入仪表盘使用趋势图的关键落点: 仅累加全局 stats.Tracker 的
+	// nvidiaTrends 桶, 不进 trends 综合桶, 也不动全局 stats/Models, 因此「综合趋势」Tab
+	// 与顶部指标卡口径完全不变(零回归), 「NVIDIA」Tab 单独反映号池时间曲线。
+	// globalStatsTracker 未注入(relay 单测场景)时为 nil, 安全跳过, 不影响既有两路统计。
+	// displayModel 已去 "nvidia/" 前缀, 满足 TrackNvidiaRequest 对上游展示名的约定;
+	// NVIDIA 上游(OpenAI Chat 协议)无 cache, cachedTokens 固定 0。
+	if h.globalStatsTracker != nil {
+		h.globalStatsTracker.TrackNvidiaRequest(displayModel, input, output)
+	}
 }
 
 // isAnthropicPassthroughHeader 判断是否为 anthropic 专属头(不透传给客户端)。

@@ -111,9 +111,10 @@ func toRequestLogLite(r *RequestLog) RequestLogLite {
 }
 
 type StatsData struct {
-	Stats    GlobalStats    `json:"stats"`
-	Trends   []*HourlyTrend `json:"trends"`
-	Requests []*RequestLog  `json:"requests"`
+	Stats         GlobalStats    `json:"stats"`
+	Trends        []*HourlyTrend `json:"trends"`
+	NvidiaTrends  []*HourlyTrend `json:"nvidiaTrends,omitempty"`
+	Requests      []*RequestLog  `json:"requests"`
 }
 
 type Tracker struct {
@@ -121,6 +122,10 @@ type Tracker struct {
 	persistPath    string
 	stats          GlobalStats
 	trends         []*HourlyTrend
+	// nvidiaTrends 是英伟达号池专用趋势桶, 与 trends (综合/全局桶) 完全隔离:
+	// 由 TrackNvidiaRequest 累加, 不进 trends, 反之亦然。前端「使用趋势」的
+	// 「NVIDIA」Tab 消费此序列, 「综合趋势」Tab 仍消费 trends, 两者互不污染。
+	nvidiaTrends   []*HourlyTrend
 	requests       []*RequestLog
 	saveTimeout    *time.Timer
 	saveTimeoutLock sync.Mutex
@@ -133,9 +138,10 @@ func NewTracker(pricingMgr *pricing.Manager) *Tracker {
 		stats: GlobalStats{
 			Models: make(map[string]*ModelStats),
 		},
-		trends:     make([]*HourlyTrend, 0),
-		requests:   make([]*RequestLog, 0),
-		pricingMgr: pricingMgr,
+		trends:       make([]*HourlyTrend, 0),
+		nvidiaTrends: make([]*HourlyTrend, 0),
+		requests:     make([]*RequestLog, 0),
+		pricingMgr:   pricingMgr,
 	}
 }
 
@@ -225,6 +231,28 @@ func (t *Tracker) TrackRequest(modelName string, inTokens, outTokens, cachedToke
 	t.scheduleSave()
 }
 
+// TrackNvidiaRequest 记录一次 NVIDIA 号池请求到 nvidiaTrends 专用桶。
+// 与 TrackRequest 的关键区别: 不动 stats(全局统计) / 也不动 trends(综合趋势桶),
+// 仅累加 nvidiaTrends, 供前端「使用趋势-NVIDIA」Tab 单独消费。
+// modelName 应为去前缀后的上游展示名(如 "z-ai/glm-5.2"); 成本按 NVIDIA 价计算,
+// cache 概念在 NVIDIA 上游(OpenAI Chat 协议)不存在, cachedTokens 固定为 0。
+// 调用方应先判 (input==0 && output==0) 跳过, 避免制造空桶。
+func (t *Tracker) TrackNvidiaRequest(modelName string, inTokens, outTokens int) {
+	t.Lock()
+	defer t.Unlock()
+
+	cost := t.pricingMgr.CalculateCost(modelName, inTokens, outTokens, 0)
+	rate := t.pricingMgr.GetPricingForModel(modelName)
+
+	inputCost := math.Round((float64(inTokens)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+	outputCost := math.Round((float64(outTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
+
+	t.updateNvidiaTrends(inTokens, outTokens, cost, inputCost, outputCost)
+
+	// Trigger async save — nvidiaTrends 同样落盘 stats.json, 重启可恢复。
+	t.scheduleSave()
+}
+
 func (t *Tracker) TrackRetry(count int) {
 	t.Lock()
 	t.stats.TotalRetries += count
@@ -248,14 +276,53 @@ func (t *Tracker) GetTotalRetries() int {
 	return t.stats.TotalRetries
 }
 
+// GetNvidiaTrends 轻量级读取 NVIDIA 号池专用趋势桶的深拷贝, 供 app.go 远程中继分支
+// 在手工组装 stats-updated payload 时携带本地 nvidiaTrends (该分支走 remote query 不
+// 调 GetPayload, 故需单独取)。线程安全: 读锁内值拷贝每个 HourlyTrend, 与 GetPayload 的
+// trendsCopy 同口径, 避免返回内部切片别名导致的并发写竞争。
+func (t *Tracker) GetNvidiaTrends() []*HourlyTrend {
+	t.RLock()
+	defer t.RUnlock()
+	copyOut := make([]*HourlyTrend, len(t.nvidiaTrends))
+	for i, tr := range t.nvidiaTrends {
+		copyOut[i] = &HourlyTrend{
+			Time:       tr.Time,
+			Input:      tr.Input,
+			Output:     tr.Output,
+			Cached:     tr.Cached,
+			Requests:   tr.Requests,
+			Cost:       tr.Cost,
+			InputCost:  tr.InputCost,
+			OutputCost: tr.OutputCost,
+			CachedCost: tr.CachedCost,
+		}
+	}
+	return copyOut
+}
+
 func (t *Tracker) updateTrends(inTokens, outTokens, cachedTokens int, cost, inputCost, outputCost, cachedCost float64) {
+	t.appendTrendBucket(&t.trends, inTokens, outTokens, cachedTokens, cost, inputCost, outputCost, cachedCost)
+}
+
+// updateNvidiaTrends 把一次 NVIDIA 号池请求的 Token/成本累加到 nvidiaTrends 桶。
+// 与 updateTrends 逻辑同构, 但目标桶是 nvidiaTrends, 与综合全局桶 trends 物理隔离,
+// 保证「NVIDIA」Tab 的曲线只反映英伟达号池用量, 不会混入 Gemini/claude 直连请求,
+// 反之「综合趋势」Tab 也不会被 NVIDIA 用量污染。
+func (t *Tracker) updateNvidiaTrends(inTokens, outTokens int, cost, inputCost, outputCost float64) {
+	t.appendTrendBucket(&t.nvidiaTrends, inTokens, outTokens, 0, cost, inputCost, outputCost, 0)
+}
+
+// appendTrendBucket 是按小时桶累加趋势的通用内核, 由 updateTrends(综合桶) 与
+// updateNvidiaTrends(NVIDIA 桶) 共用。target 为桶切片指针, 调用方负责并发安全
+// (二者均在 Tracker.Lock 持有区内调用)。每桶最多保留 720 点(30 天小时级)。
+func (t *Tracker) appendTrendBucket(target *[]*HourlyTrend, inTokens, outTokens, cachedTokens int, cost, inputCost, outputCost, cachedCost float64) {
 	now := time.Now()
 	hourLabel := fmt.Sprintf("%02d:00", now.Hour())
 	dateLabel := fmt.Sprintf("%02d/%02d", now.Month(), now.Day())
 	timeKey := dateLabel + " " + hourLabel
 
 	var currentBin *HourlyTrend
-	for _, bin := range t.trends {
+	for _, bin := range *target {
 		if bin.Time == timeKey {
 			currentBin = bin
 			break
@@ -266,10 +333,10 @@ func (t *Tracker) updateTrends(inTokens, outTokens, cachedTokens int, cost, inpu
 		currentBin = &HourlyTrend{
 			Time: timeKey,
 		}
-		t.trends = append(t.trends, currentBin)
+		*target = append(*target, currentBin)
 		// Limit to last 720 data points (30 days of hourly bins)
-		if len(t.trends) > 720 {
-			t.trends = t.trends[1:]
+		if len(*target) > 720 {
+			*target = (*target)[1:]
 		}
 	}
 
@@ -422,6 +489,23 @@ func (t *Tracker) GetPayload(usagePayload interface{}) map[string]interface{} {
 		}
 	}
 
+	// nvidiaTrendsCopy: 英伟达号池专用趋势桶深拷贝, 供前端「NVIDIA」Tab 消费;
+	// 与综合趋势 trendsCopy 物理隔离, 二者在前端按 scope 切换, 互不污染。
+	nvidiaTrendsCopy := make([]*HourlyTrend, len(t.nvidiaTrends))
+	for i, trend := range t.nvidiaTrends {
+		nvidiaTrendsCopy[i] = &HourlyTrend{
+			Time:       trend.Time,
+			Input:      trend.Input,
+			Output:     trend.Output,
+			Cached:     trend.Cached,
+			Requests:   trend.Requests,
+			Cost:       trend.Cost,
+			InputCost:  trend.InputCost,
+			OutputCost: trend.OutputCost,
+			CachedCost: trend.CachedCost,
+		}
+	}
+
 	// Lite projection: only scalar fields. requestBody / requestHeaders stay
 	// in t.requests and are fetched on demand via GetRequestDetails.
 	requestsCopy := make([]RequestLogLite, len(t.requests))
@@ -430,10 +514,11 @@ func (t *Tracker) GetPayload(usagePayload interface{}) map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"stats":    statsCopy,
-		"trends":   trendsCopy,
-		"requests": requestsCopy,
-		"usage":    usagePayload,
+		"stats":        statsCopy,
+		"trends":       trendsCopy,
+		"nvidiaTrends": nvidiaTrendsCopy,
+		"requests":     requestsCopy,
+		"usage":        usagePayload,
 	}
 }
 
@@ -547,6 +632,14 @@ func (t *Tracker) SaveToDisk() {
 		trendsCopy[i] = &cp
 	}
 
+	// nvidiaTrendsCopy: 英伟达号池专用趋势桶序列化拷贝, 与 trends 同样做值拷贝避免
+	// json.Marshal 反射与并发写竞争; 落盘进 stats.json 的 nvidiaTrends 字段, 重启回填。
+	nvidiaTrendsCopy := make([]*HourlyTrend, len(t.nvidiaTrends))
+	for i, tr := range t.nvidiaTrends {
+		cp := *tr
+		nvidiaTrendsCopy[i] = &cp
+	}
+
 	reqsCopy := make([]*RequestLog, len(t.requests))
 	for i, req := range t.requests {
 		cp := *req // value copy
@@ -556,9 +649,10 @@ func (t *Tracker) SaveToDisk() {
 
 	// Marshal from fully-owned copies – no shared pointers, no data race.
 	data := StatsData{
-		Stats:    statsCopy,
-		Trends:   trendsCopy,
-		Requests: reqsCopy,
+		Stats:        statsCopy,
+		Trends:       trendsCopy,
+		NvidiaTrends: nvidiaTrendsCopy,
+		Requests:     reqsCopy,
 	}
 
 	bytesData, err := json.Marshal(data)
@@ -604,6 +698,12 @@ func (t *Tracker) LoadFromDisk() {
 		t.stats.Models = make(map[string]*ModelStats)
 	}
 	t.trends = parsed.Trends
+	// nvidiaTrends 回填: 老 stats.json 无此字段时为 nil, 兜底为空切片保持 NewTracker 口径一致,
+	// 避免 appendTrendBucket 对 nil 切片 append 时虽合法但与「始终非 nil」的约定不符。
+	t.nvidiaTrends = parsed.NvidiaTrends
+	if t.nvidiaTrends == nil {
+		t.nvidiaTrends = make([]*HourlyTrend, 0)
+	}
 	t.requests = parsed.Requests
 
 	for _, req := range t.requests {

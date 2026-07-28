@@ -10,6 +10,7 @@
 <button class="px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200" id="btnSettingsTabGeneral" data-i18n="settingsTabGeneral">参数配置</button>
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" data-i18n="settingsTabRelay" id="btnSettingsTabRelay">中继服务器</button>
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabNetwork" data-i18n="settingsTabNetwork">网络监控</button>
+<button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabHelp" data-i18n="settingsTabHelp">使用说明</button>
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabAbout" data-i18n="settingsTabAbout">关于</button>
 </div>
 </div>
@@ -27,12 +28,12 @@
 <div class="flex flex-col gap-2 mt-2">
 <label class="text-[12px] font-bold text-outline" data-i18n="currentDirLabel">当前存储路径</label>
 <div class="flex gap-2">
-<input class="flex-grow px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtDataDir" readonly type="text">
+<input class="flex-grow px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtDataDir" readonly type="text" />
 <button class="px-4 py-2 bg-primary text-white hover:bg-primary/90 rounded-md text-[13px] font-bold transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer" id="btnBrowseDir">
 <span class="material-symbols-outlined text-[16px]">folder</span>
 <span data-i18n="btnChangeDir">更改位置</span>
 </button>
-</input></div>
+</div>
 </div>
 <!-- 状态提示 -->
 <div class="hidden text-[12px] p-3 rounded-lg border flex flex-col gap-1" id="migrationStatus">
@@ -871,11 +872,14 @@ Authorization: Bearer sk-ant-...</pre>
 </div>
 </div>
 </div>
+<!-- 使用说明面板（模块化组件） -->
+<UsageHelpPanel />
 </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted } from 'vue';
+import UsageHelpPanel from '../components/settings/UsageHelpPanel.vue';
 import { initSettings } from '../ui/settingsController';
 import { initRelayEvents } from '../ui/relayController';
 import { initAboutPanelEvents } from '../ui/updaterController';

@@ -33,6 +33,13 @@ type APICompatHandler struct {
 	// NVIDIA 中继链路在 recordNvidiaUsage 内调用它，使每个号池账号
 	// (AccountMeta.ID/Email/Provider/ProjectID/ScopeType) 在前端账号使用统计页可见。
 	usageTracker  *stats.UsageTracker
+	// globalStatsTracker 是全局 *stats.Tracker(主进程 handler 用的那个, 非 relay 的 StatsTracker)。
+	// NVIDIA 中继链路在 recordNvidiaUsage 末尾用它把号池用量计入「使用趋势-NVIDIA」专用桶
+	// (TrackNvidiaRequest), 与综合全局桶 trends 物理隔离。装配点在 app_relay.go 经
+	// SetGlobalStatsTracker 注入; 未注入(如 relay 单测)时为 nil, recordNvidiaUsage 降级跳过,
+	// 不影响既有 relay 维度统计。保持非构造参数 + setter 形式, 避免改动 NewAPICompatHandler
+	// 签名牵连 7 处现有调用点与单测。
+	globalStatsTracker *stats.Tracker
 	logFn         func(string)
 	client        *http.Client
 	streamClient  *http.Client // 流式请求专用，不设全局超时，避免长生成被截断
@@ -74,6 +81,16 @@ func NewAPICompatHandler(
 		nvidiaStats:   newNvidiaReqStats(),
 		nvidiaStreamRetryWait: 5 * time.Second,
 	}
+}
+
+// SetGlobalStatsTracker 注入全局 *stats.Tracker, 使 NVIDIA 中继链路能把号池用量计入
+// 「使用趋势-NVIDIA」专用桶 (TrackNvidiaRequest)。仅 app_relay.go 装配处调用一次;
+// relay 单测不调, 字段保持 nil, recordNvidiaUsage 自动降级跳过该落点, 不崩溃不误计。
+func (h *APICompatHandler) SetGlobalStatsTracker(t *stats.Tracker) {
+	if h == nil {
+		return
+	}
+	h.globalStatsTracker = t
 }
 
 func (h *APICompatHandler) getModelMapping() []settings.ModelMappingEntry {

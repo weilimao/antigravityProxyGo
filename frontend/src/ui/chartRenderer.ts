@@ -84,6 +84,30 @@ export function updateMemoryChart() {
 }
 
 // Draw SVG Line Chart
+// clearTrendChart: 将趋势折线图清空为空态 (5 条 path 置空 d, 两个 area 置空, 左/右/底
+// 轴 label 清空, 成本与 Token 汇总值归零)。用于「使用趋势」在 currentTrendScope 切到
+// NVIDIA 但 nvidiaTrendsData 仍为空时, 避免画面残留上一个 scope 的曲线造成误读。
+// 元素缺失时静默跳过, 与 drawTrendChartSVG 的容错口径一致。
+export function clearTrendChart() {
+    const ids = ['chartPathCost', 'chartPathInput', 'chartPathOutput', 'chartPathCached', 'chartPathRequests', 'chartAreaInput', 'chartAreaCached'];
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el) el.setAttribute('d', '');
+    }
+    const axisIds = ['chartLeftAxis', 'chartRightAxis', 'chartXAxis'];
+    for (const id of axisIds) {
+        const g = document.getElementById(id);
+        if (g) g.textContent = '';
+    }
+    const valIds = ['valSummaryTotal', 'valSummaryInput', 'valSummaryOutput', 'valSummaryCached', 'valSummaryTotalRequests', 'valSummaryTotalTokens', 'valSummaryInputTokens', 'valSummaryOutputTokens', 'valSummaryCachedTokens'];
+    // 成本类汇总(以 $ 前缀显示)归零为 '$0.0000'; 计数类(请求数/Token)归零为 '0'。
+    const costValIds = new Set(['valSummaryTotal', 'valSummaryInput', 'valSummaryOutput', 'valSummaryCached']);
+    for (const id of valIds) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = costValIds.has(id) ? '$0.0000' : '0';
+    }
+}
+
 export function drawTrendChartSVG(trends: any[], range = '7d', animate = true) {
     const trendSvg = document.getElementById('trendSvg');
     const costPath = document.getElementById('chartPathCost');
@@ -668,7 +692,10 @@ export function initChartFilters() {
                 }
             });
             
-            const filtered = getFilteredTrends(state.trendsData, state.currentRange);
+            // 按 currentTrendScope 取数据源: 切换时间范围时也要尊重当前 scope,
+            // 否则 NVIDIA Tab 下换 7d/30d 会错误地画回综合全局桶数据。
+            const src = state.currentTrendScope === 'nvidia' ? state.nvidiaTrendsData : state.trendsData;
+            const filtered = getFilteredTrends(src, state.currentRange);
             drawTrendChartSVG(filtered, state.currentRange);
         });
     });
@@ -708,10 +735,52 @@ export function initChartFilters() {
         });
         
         chartFilterPanel.classList.add('hidden');
-        
-        const filtered = getFilteredTrends(state.trendsData, state.currentRange);
+
+        // 自定义时间区间同样需尊重当前 scope (与范围按钮同一回归点)。
+        const srcForFilter = state.currentTrendScope === 'nvidia' ? state.nvidiaTrendsData : state.trendsData;
+        const filtered = getFilteredTrends(srcForFilter, state.currentRange);
         drawTrendChartSVG(filtered, state.currentRange);
     });
+
+    // ---- 趋势数据维度切换 (综合趋势 / NVIDIA) ----
+    // trendScopeSelector 与时间范围选择器平级, 切换 currentTrendScope 后立即强制动画重画,
+    // 既走 maybeDrawTrendChart 的 sig 感知路径外的"首切强制动画"兜底, 保证用户每次切换都看到动画。
+    const trendScopeSelector = document.getElementById('trendScopeSelector');
+    if (trendScopeSelector) {
+        const scopeButtons = trendScopeSelector.querySelectorAll('button[data-trend-scope]');
+        // 初始高亮与 state.currentTrendScope 对齐 (防止 DOM 初始 class 与 state 不同步)。
+        scopeButtons.forEach((b: any) => {
+            const s = b.getAttribute('data-trend-scope');
+            if (s === state.currentTrendScope) {
+                b.className = 'px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold';
+            } else {
+                b.className = 'px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium';
+            }
+        });
+        scopeButtons.forEach((b: any) => {
+            b.addEventListener('click', () => {
+                const s = b.getAttribute('data-trend-scope');
+                if (!s) return;
+                state.currentTrendScope = s as 'all' | 'nvidia';
+                scopeButtons.forEach((o: any) => {
+                    if (o === b) {
+                        o.className = 'px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold';
+                    } else {
+                        o.className = 'px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium';
+                    }
+                });
+                // scope 切换时强制带动画重画该 scope 的当前序列。
+                // 此处内联重画而非回调 dashboard.ts 的函数, 避免 chartRenderer→dashboard 反向依赖形成循环。
+                const scopeSrc = state.currentTrendScope === 'nvidia' ? state.nvidiaTrendsData : state.trendsData;
+                if (!scopeSrc || scopeSrc.length === 0) {
+                    clearTrendChart();
+                } else {
+                    const scopeFiltered = getFilteredTrends(scopeSrc, state.currentRange);
+                    drawTrendChartSVG(scopeFiltered, state.currentRange, true);
+                }
+            });
+        });
+    }
 }
 
 // ============================================================================
