@@ -658,7 +658,7 @@ const translations: Translations = {
         relayStatsInputTokens: "输入 Token",
         relayStatsOutputTokens: "输出 Tokens",
         relayRemain: "剩余:",
-        relayExpectedRefresh: "预计刷新时间",
+        relayExpectedRefresh: "预计 {time} 刷新",
         relayExpectedRefreshDate: "预计 {month}-{day} {time} 刷新",
         relayUserUsageTracking: "用户剩余用量实时追踪",
         relayStatsModelTitle: "模型统计",
