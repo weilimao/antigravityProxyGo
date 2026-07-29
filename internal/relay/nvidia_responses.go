@@ -226,7 +226,7 @@ func openAIChoiceToResponsesItems(m ChatMessage, respID string) []ResponsesOutpu
 }
 
 // writeNvidiaResponsesNormal 处理非流式 Responses 入站：读全量上游 OpenAI Chat 响应 → 回译 → 写出。
-func (h *APICompatHandler) writeNvidiaResponsesNormal(w http.ResponseWriter, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account) {
+func (h *APICompatHandler) writeNvidiaResponsesNormal(w http.ResponseWriter, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account, logCtx nvidiaLogCtx) {
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "read upstream body failed: " + err.Error()})
@@ -250,11 +250,11 @@ func (h *APICompatHandler) writeNvidiaResponsesNormal(w http.ResponseWriter, res
 	_, _ = w.Write(payload)
 
 	// 配额/统计回调，与 Chat 透传链路口径一致
-	h.recordNvidiaUsage(userSession, model, rr.Usage.InputTokens, rr.Usage.OutputTokens, poolAccount)
+	h.recordNvidiaUsage(userSession, model, rr.Usage.InputTokens, rr.Usage.OutputTokens, poolAccount, logCtx)
 }
 
 // writeNvidiaResponsesStream 处理流式 Responses 入站：上游 OpenAI Chat SSE → Responses SSE 事件序列。
-func (h *APICompatHandler) writeNvidiaResponsesStream(w http.ResponseWriter, r *http.Request, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account) {
+func (h *APICompatHandler) writeNvidiaResponsesStream(w http.ResponseWriter, r *http.Request, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account, logCtx nvidiaLogCtx) {
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		h.log("⚠️ [NVIDIA Responses 流式] 上游状态码 %d 非透传 | body: %s", resp.StatusCode, truncateBody(bodyBytes, 500))
@@ -281,7 +281,7 @@ func (h *APICompatHandler) writeNvidiaResponsesStream(w http.ResponseWriter, r *
 	in, out := OpenAIChatSSEToResponsesSSE(r.Context(), resp.Body, resp.Body, fw, model)
 	fw.flush()
 
-	h.recordNvidiaUsage(userSession, model, in, out, poolAccount)
+	h.recordNvidiaUsage(userSession, model, in, out, poolAccount, logCtx)
 }
 
 // OpenAIChatSSEToResponsesSSE 实时把 NVIDIA(OpenAI Chat 兼容)的 SSE 流重写成 Responses API 事件流。

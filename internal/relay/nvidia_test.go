@@ -214,7 +214,7 @@ func TestWriteNvidiaAnthropicStream_FlusherInvoked(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", strings.NewReader(""))
 	// 蓄流回放架构下 writeNvidiaAnthropicStream 需 targetURL/upstreamBody 供断流重拉;
 	// 本用例上游流完整(含 finish_reason+usage+[DONE]),首轮即 ready,不会真的重试,故传占位值即可。
-	handler.writeNvidiaAnthropicStream(fc, req, mockResp, "z-ai/glm-5.2", &RelaySession{UserID: "u-flush"}, nil, "https://integrate.api.nvidia.com/v1/chat/completions", []byte("{}"))
+	handler.writeNvidiaAnthropicStream(fc, req, mockResp, "z-ai/glm-5.2", &RelaySession{UserID: "u-flush"}, nil, "https://integrate.api.nvidia.com/v1/chat/completions", []byte("{}"), nvidiaLogCtx{})
 
 	// 1) X-Accel-Buffering: no
 	if fc.Header().Get("X-Accel-Buffering") != "no" {

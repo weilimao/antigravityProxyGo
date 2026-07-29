@@ -90,6 +90,7 @@ func runMigrations(db *sql.DB, dataDir string) error {
 			host TEXT NOT NULL DEFAULT '',
 			path TEXT NOT NULL DEFAULT '',
 			session_id TEXT NOT NULL DEFAULT '',
+			family TEXT NOT NULL DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_req_logs_user_mode ON request_logs(user_id, mode);`,
@@ -159,6 +160,8 @@ func runMigrations(db *sql.DB, dataDir string) error {
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN host TEXT NOT NULL DEFAULT '';`)
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN path TEXT NOT NULL DEFAULT '';`)
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN session_id TEXT NOT NULL DEFAULT '';`)
+	// family: 协议族标记(""=gemini/claude 直连, "nvidia"=NVIDIA 号池链路), 供按族聚合/过滤。
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN family TEXT NOT NULL DEFAULT '';`)
 
 	// --- Versioned Migrations ---
 	migrationVersion := getMigrationVersion(db)

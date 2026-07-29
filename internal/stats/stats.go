@@ -63,6 +63,11 @@ type RequestLog struct {
 	RequestHeaders interface{} `json:"requestHeaders"`
 	SessionID      string      `json:"sessionId"`
 	DurationMs     int64       `json:"durationMs"`
+	// Family 标记本次请求所属的协议族,用于与「NVIDIA 号池」等专属链路做逻辑隔离。
+	// gemini/claude 直连链路默认 ""(空),NVIDIA 号池链路记 "nvidia"。
+	// 前端可据此为 NVIDIA 行渲染专属 badge/筛选,既可合并入主列表又便于按族区分,
+	// 不污染 NVIDIA 专用趋势桶(nvidiaTrends)与综合趋势桶(trends)的物理隔离语义。
+	Family         string      `json:"family"`
 }
 
 // RequestLogLite is the scalar-only projection of RequestLog sent on the
@@ -88,6 +93,9 @@ type RequestLogLite struct {
 	Account      string  `json:"account"`
 	SessionID    string  `json:"sessionId"`
 	DurationMs   int64   `json:"durationMs"`
+	// Family 与 RequestLog.Family 同义, 轻量投影随之下行到 IPC 热路径,
+	// 供前端按族渲染 badge/筛选, 不携带 requestBody/requestHeaders(按需经 GetRequestDetails 拉取)。
+	Family       string  `json:"family"`
 }
 
 func toRequestLogLite(r *RequestLog) RequestLogLite {
@@ -107,6 +115,7 @@ func toRequestLogLite(r *RequestLog) RequestLogLite {
 		Account:      r.Account,
 		SessionID:    r.SessionID,
 		DurationMs:   r.DurationMs,
+		Family:       r.Family,
 	}
 }
 
@@ -231,6 +240,66 @@ func (t *Tracker) TrackRequest(modelName string, inTokens, outTokens, cachedToke
 	t.scheduleSave()
 }
 
+// TrackRequestForModel 将一次请求计入全局综合统计(顶部指标卡 + stats.Models 模型表 + trends
+// 综合趋势桶), 与 TrackRequest 口径完全一致——复用 CalculateCost/GetPricingForModel, 累加全部是
+// 全局桶, 与 nvidiaTrends(NVIDIA 专用桶)物理隔离, 不会与 TrackNvidiaRequest 产生重复累加。
+//
+// 设计目的: 纳入 NVIDIA 号池链路的用量到「模型统计」Tab / 顶部指标卡 / 「综合趋势」曲线, 使其与
+// gemini/claude 直连链路口径一致。本方法刻意不含 family 参数——family 仅是 RequestLog 的展示标记
+// (落点5 用 AddRequestLogForFamily 写库), 不应进入统计累加签名, 避免误以为按族分流(最小惊讶原则)。
+// 若未来确需按 family 分桶, 应在该处新增独立方法, 而非给本方法加被忽略的参数。
+// cachedTokens 对 NVIDIA 上游(OpenAI Chat 协议)固定为 0。
+func (t *Tracker) TrackRequestForModel(modelName string, inTokens, outTokens, cachedTokens int) {
+	t.Lock()
+	defer t.Unlock()
+
+	cost := t.pricingMgr.CalculateCost(modelName, inTokens, outTokens, cachedTokens)
+	rate := t.pricingMgr.GetPricingForModel(modelName)
+
+	nonCachedIn := inTokens - cachedTokens
+	if nonCachedIn < 0 {
+		nonCachedIn = 0
+	}
+
+	inputCost := math.Round((float64(nonCachedIn)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+	outputCost := math.Round((float64(outTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
+	cachedCost := math.Round((float64(cachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
+
+	// 1. Update overall stats
+	t.stats.TotalRequests++
+	t.stats.TotalInputTokens += inTokens
+	t.stats.TotalOutputTokens += outTokens
+	t.stats.TotalCachedTokens += cachedTokens
+	t.stats.TotalCost = math.Round((t.stats.TotalCost+cost)*1000000.0) / 1000000.0
+
+	// 2. Update model specific stats
+	modelKey := "unknown"
+	if modelName != "" {
+		modelKey = modelName
+	}
+
+	if t.stats.Models == nil {
+		t.stats.Models = make(map[string]*ModelStats)
+	}
+
+	m, exists := t.stats.Models[modelKey]
+	if !exists {
+		m = &ModelStats{}
+		t.stats.Models[modelKey] = m
+	}
+	m.Reqs++
+	m.InTokens += inTokens
+	m.OutTokens += outTokens
+	m.CachedTokens += cachedTokens
+	m.Cost = math.Round((m.Cost+cost)*1000000.0) / 1000000.0
+
+	// 3. Update hourly trends(综合趋势桶)
+	t.updateTrends(inTokens, outTokens, cachedTokens, cost, inputCost, outputCost, cachedCost)
+
+	// 4. Trigger async save
+	t.scheduleSave()
+}
+
 // TrackNvidiaRequest 记录一次 NVIDIA 号池请求到 nvidiaTrends 专用桶。
 // 与 TrackRequest 的关键区别: 不动 stats(全局统计) / 也不动 trends(综合趋势桶),
 // 仅累加 nvidiaTrends, 供前端「使用趋势-NVIDIA」Tab 单独消费。
@@ -274,6 +343,22 @@ func (t *Tracker) GetTotalRetries() int {
 	t.RLock()
 	defer t.RUnlock()
 	return t.stats.TotalRetries
+}
+
+// GetTotalRequests 轻量级读取全局总请求数, 供外部(含单测)不做全量 payload 深拷贝即能校验
+// 落点4(TrackRequestForFamily)是否被触发。与 GetTotalRetries 同口径, 读锁内返回标量。
+func (t *Tracker) GetTotalRequests() int {
+	t.RLock()
+	defer t.RUnlock()
+	return t.stats.TotalRequests
+}
+
+// GetRequestLogCount 轻量级读取内存请求日志条数, 供外部(含单测)校验落点5
+// (AddRequestLogForFamily)是否把日志写入了内存 requests 快照。读锁内返回长度, 不回切片别名。
+func (t *Tracker) GetRequestLogCount() int {
+	t.RLock()
+	defer t.RUnlock()
+	return len(t.requests)
 }
 
 // GetNvidiaTrends 轻量级读取 NVIDIA 号池专用趋势桶的深拷贝, 供 app.go 远程中继分支
@@ -402,6 +487,67 @@ func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 			Host:         rl.Host,
 			Path:         rl.Path,
 			SessionID:    rl.SessionID,
+		}
+		_ = db.InsertRequestLog(dbItem)
+	}(reqLog, t.pricingMgr)
+
+	t.scheduleSave()
+}
+
+// AddRequestLogForFamily 与 AddRequestLog 同构, 但跳过 isRealModel 过滤: NVIDIA 上游走 OpenAI Chat
+// 协议, 入站 Path 形如 /nvidia/v1/chat/completions, 不含 gemini 链路的 generatecontent/predict 关键词,
+// 既有 AddRequestLog 的过滤会把 NVIDIA 请求全丢弃(漏计根因之一)。本方法以显式 family 入库,
+// 供 NVIDIA 链路把成功请求写入「请求日志」列表, 与 gemini/claude 口径一致。
+//
+// 与 AddRequestLog 的其余差异: 仅保留 Model==""||"unknown" 跳过与 TruncateRequestBody 截断;
+// Cost 仍复用 pricingMgr.CalculateCost 重算; cachedTokens 由调用方填(NVIDIA 固定 0, CacheStatus="NONE")。
+// 落库 db.RequestLog 时写入 family 列, 使远程聚合查询可按族过滤。
+func (t *Tracker) AddRequestLogForFamily(reqLog *RequestLog) {
+	if reqLog.Model == "" || reqLog.Model == "unknown" {
+		return
+	}
+
+	t.Lock()
+	reqLog.Cost = t.pricingMgr.CalculateCost(reqLog.Model, reqLog.InTokens, reqLog.OutTokens, reqLog.CachedTokens)
+	reqLog.RequestBody = TruncateRequestBody(reqLog.RequestBody)
+
+	t.requests = append([]*RequestLog{reqLog}, t.requests...)
+	if len(t.requests) > 50 {
+		t.requests = t.requests[:50]
+	}
+	t.Unlock()
+
+	go func(rl *RequestLog, prMgr *pricing.Manager) {
+		timestamp := time.Now().Format(time.RFC3339)
+		rate := prMgr.GetPricingForModel(rl.Model)
+		nonCachedIn := rl.InTokens - rl.CachedTokens
+		if nonCachedIn < 0 {
+			nonCachedIn = 0
+		}
+		inputCost := math.Round((float64(nonCachedIn)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+		outputCost := math.Round((float64(rl.OutTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
+		cachedCost := math.Round((float64(rl.CachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
+
+		dbItem := &db.RequestLog{
+			ReqID:        rl.ID,
+			Timestamp:    timestamp,
+			Mode:         "local",
+			UserID:       rl.Account,
+			ModelName:    rl.Model,
+			InTokens:     rl.InTokens,
+			OutTokens:    rl.OutTokens,
+			CachedTokens: rl.CachedTokens,
+			Cost:         rl.Cost,
+			InputCost:    inputCost,
+			OutputCost:   outputCost,
+			CachedCost:   cachedCost,
+			DurationMs:   rl.DurationMs,
+			StatusCode:   rl.StatusCode,
+			Method:       rl.Method,
+			Host:         rl.Host,
+			Path:         rl.Path,
+			SessionID:    rl.SessionID,
+			Family:       rl.Family,
 		}
 		_ = db.InsertRequestLog(dbItem)
 	}(reqLog, t.pricingMgr)

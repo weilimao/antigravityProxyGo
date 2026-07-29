@@ -1859,6 +1859,7 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 					Host:         dr.Host,
 					Path:         dr.Path,
 					SessionID:    dr.SessionID,
+					Family:       dr.Family,
 				})
 			}
 			if requests == nil {

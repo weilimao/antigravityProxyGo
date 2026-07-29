@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,45 @@ import (
 	"antigravity-proxy/internal/stats"
 )
 
+// nvidiaLogCtx 携带一次 NVIDIA 请求落地为「请求日志」+「全局综合统计」所需的最小上下文。
+// recordNvidiaUsage 现在除了既有的 relay/usage/nvidiaTrends 三处落点, 还会把同一笔请求写入
+// stats.Tracker 的全局 stats.Models + trends(落点4, 经 TrackRequestForFamily) 与请求日志
+// (落点5, 经 AddRequestLogForFamily), 使 NVIDIA 用量初次进入仪表盘「模型统计」/「综合趋势」/
+// 「请求日志」与顶部指标卡; family="nvidia" 做逻辑隔离, nvidiaTrends 物理隔离桶仍由
+// TrackNvidiaRequest 单独累加, 互不污染。Host 为上游账号 BaseURL 的裸 host; Method/Path 取自
+// 入站 r; StatusCode 取自上游响应(recordNvidiaUsage 仅在成功路径调用, 恒 200); SessionID
+// 取自 userSession.Token; DurationMs 由 handleNvidia 入口起算的 startTs 算得端到端耗时。
+type nvidiaLogCtx struct {
+	Method     string
+	Host       string
+	Path       string
+	SessionID  string
+	Account    string
+	StatusCode int
+	StartTs    time.Time
+}
+
+// nvidiaHostFromBaseURL 从上游账号 BaseURL(如 https://integrate.api.nvidia.com/v1)
+// 提取裸 host(如 integrate.api.nvidia.com), 与 gemini/claude 直连链路 RequestLog.Host 只存
+// 裸 host 的口径一致。解析失败时回退为去掉协议前缀的 BaseURL, 仍保可读性。
+func nvidiaHostFromBaseURL(baseURL string) string {
+	b := strings.TrimSpace(baseURL)
+	if b == "" {
+		return "nvidia"
+	}
+	if u, err := url.Parse(b); err == nil && u.Host != "" {
+		return u.Host
+	}
+	// 兜底: 去掉常见协议前缀
+	for _, scheme := range []string{"https://", "http://"} {
+		b = strings.TrimPrefix(b, scheme)
+	}
+	if idx := strings.IndexAny(b, "/"); idx > 0 {
+		b = b[:idx]
+	}
+	return b
+}
+
 // nvidia.go 实现 /nvidia/* 路由的主链路：
 // 入站 Anthropic(/nvidia/v1/messages) 或 OpenAI Chat(/nvidia/v1/chat/completions) →
 // 选号(支持游标轮询默认与粘性会话) → 协议转换 → 直连 NVIDIA 上游 → 响应回译 → 换号重试。
@@ -24,6 +64,12 @@ import (
 
 // nvidiaChannel 是 NVIDIA 号池的通道标识。
 const nvidiaChannel = "nvidia"
+
+// nvidiaReqLogSeq 是 NVIDIA 请求日志(落点5)的全局原子递增序列, 用于生成稳定且无碰撞的 RequestLog.ID。
+// 单独纳秒时间戳在高并发下易碰撞, 叠加单调递增序列后即使同纳秒也唯一; ID 与落点1 RelaySample.ReqID
+// (nv-<nanos>) 同前缀但语义不同(落点5 是仪表盘「请求日志」行 ID, 落点1 是 relay 维度统计样本 ID),
+// 用 "nvlog-" 前缀区分两套日志系统的命名空间, 便于把同一笔请求在两处日志里对照排查。
+var nvidiaReqLogSeq uint64
 
 // nvidiaReplayMaxBytes 是 NVIDIA Anthropic 流式蓄流回放的单流最大蓄流字节数。
 // 超过即判定为"超大输出":直连重试轮退回边读边写旧路径(放弃重试能力)兜底失败;
@@ -288,6 +334,9 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 	r.Body.Close()
 
 	reqID := fmt.Sprintf("nv_%d", time.Now().UnixNano())
+	// start: 入站请求接入时刻, 作为「请求日志」DurationMs 的端到端耗时基准(与 gemini/claude
+	// 直连链路口径一致), 经 writeNvidiaResponse → recordNvidiaUsage 透传到落点5。
+	start := time.Now()
 	if h.settingsMgr != nil {
 		enabled := h.settingsMgr.GetEnableDebuggerMode()
 		logPath := h.settingsMgr.GetResolvedDebuggerLogPath()
@@ -637,7 +686,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			} else if inboundResponses {
 				inboundKind = "responses"
 			}
-			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, targetURL, upstreamBody)
+			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, targetURL, upstreamBody, start)
 			return
 		}
 	}
@@ -671,27 +720,52 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 // r 为入站请求,供流式分支透传 r.Context() 到 watchCancel,实现客户端取消即断 + 尾帧补发。
 // writeNvidiaResponse 把上游响应按入站协议类型回写客户端。targetURL/upstreamBody 仅对 Anthropic 流式
 // 入站有意义(供蓄流回放链路原账号重建上游请求实现断流重试);其余链路忽略这两个参数,不参与重试。
-func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte) {
+func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte, startTs time.Time) {
 	defer resp.Body.Close()
+
+	// logCtx: 在分发出站协议前统一组装请求日志上下文, 共享给四个下行函数的 recordNvidiaUsage 调用点。
+	// Host 优先取上游账号 BaseURL 的裸 host; poolAccount 为空时优先用入站 r.Host, 再回退占位 "nvidia"
+	// (r.Host 为入站 Host 头, 比 "nvidia" 更可读; 整段不直接解引用 poolAccount, 故无 nil panic)。
+	// Path/Method 取入站 r; Account 优先号池 Email, 缺则 userSession.UserID; SessionID 用 userSession.Token。
+	var logCtx nvidiaLogCtx
+	logCtx.Method = r.Method
+	logCtx.Path = r.URL.Path
+	logCtx.StartTs = startTs
+	logCtx.StatusCode = resp.StatusCode
+	logCtx.Host = "nvidia"
+	if r.Host != "" {
+		logCtx.Host = r.Host
+	}
+	logCtx.SessionID = ""
+	if poolAccount != nil {
+		logCtx.Host = nvidiaHostFromBaseURL(poolAccount.BaseURL)
+		logCtx.Account = poolAccount.Email
+	}
+	if userSession != nil {
+		logCtx.SessionID = userSession.Token
+		if logCtx.Account == "" {
+			logCtx.Account = userSession.UserID
+		}
+	}
 
 	switch inboundKind {
 	case "anthropic":
 		// 入站是 Anthropic：需要把上游 OpenAI Chat 响应回译成 Anthropic Messages
 		if isStreaming {
-			h.writeNvidiaAnthropicStream(w, r, resp, model, userSession, poolAccount, targetURL, upstreamBody)
+			h.writeNvidiaAnthropicStream(w, r, resp, model, userSession, poolAccount, targetURL, upstreamBody, logCtx)
 			return
 		}
-		h.writeNvidiaAnthropicNormal(w, resp, model, userSession, poolAccount)
+		h.writeNvidiaAnthropicNormal(w, resp, model, userSession, poolAccount, logCtx)
 		return
 
 	case "responses":
 		// 入站是 Responses API(codex /v1/responses)：把上游 OpenAI Chat 响应回译成 Responses 格式。
 		// 非流式聚合后回译；流式逐 SSE chunk 重写成 Responses 事件序列。
 		if isStreaming {
-			h.writeNvidiaResponsesStream(w, r, resp, model, userSession, poolAccount)
+			h.writeNvidiaResponsesStream(w, r, resp, model, userSession, poolAccount, logCtx)
 			return
 		}
-		h.writeNvidiaResponsesNormal(w, resp, model, userSession, poolAccount)
+		h.writeNvidiaResponsesNormal(w, resp, model, userSession, poolAccount, logCtx)
 		return
 
 	default:
@@ -699,7 +773,7 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Re
 		// 方案 A：边透传边嗅探 usage，非流式从全量 JSON 提 usage，
 		// 流式从 SSE 末帧 data:{...usage...} 提 usage，统计口径与 Anthropic 入站一致。
 		inUsage, outUsage := h.proxyNvidiaOpenAIPassthrough(r.Context(), w, resp, isStreaming)
-		h.recordNvidiaUsage(userSession, model, inUsage, outUsage, poolAccount)
+		h.recordNvidiaUsage(userSession, model, inUsage, outUsage, poolAccount, logCtx)
 	}
 }
 
@@ -861,7 +935,7 @@ func (h *APICompatHandler) writeAnthropicErrorFromUpstream(w http.ResponseWriter
 	_, _ = w.Write(payload)
 }
 
-func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account) {
+func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account, logCtx nvidiaLogCtx) {
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "read upstream body failed: " + err.Error()})
@@ -885,7 +959,7 @@ func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, res
 	_, _ = w.Write(payload)
 
 	// 配额/统计回调(复用 statsTracker)
-	h.recordNvidiaUsage(userSession, model, anthResp.Usage.InputTokens, anthResp.Usage.OutputTokens, poolAccount)
+	h.recordNvidiaUsage(userSession, model, anthResp.Usage.InputTokens, anthResp.Usage.OutputTokens, poolAccount, logCtx)
 }
 
 // writeNvidiaAnthropicStream 处理流式 Anthropic 入站：上游 OpenAI Chat SSE → Anthropic SSE。
@@ -902,7 +976,7 @@ func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, res
 //
 // r 透传 r.Context():客户端取消时立即终止重试与重拉;poolAccount 重试全程保持同一账号(按要求不换号)。
 // targetURL/upstreamBody 由主循环透传,供重试时原样重建上游 POST 请求体与目标 URL(不重新选号、不改动请求)。
-func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *http.Request, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte) {
+func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *http.Request, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte, logCtx nvidiaLogCtx) {
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		// 上游非 200:翻译成 Anthropic 标准错误结构回写(原裸透 OpenAI JSON 会让 CLI 卡住/报奇怪错误)
@@ -941,7 +1015,7 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 	if ok {
 		flusher.Flush() // 收尾刷净, 确保 message_stop 落盘
 	}
-	h.recordNvidiaUsage(userSession, model, in, out, poolAccount)
+	h.recordNvidiaUsage(userSession, model, in, out, poolAccount, logCtx)
 }
 
 // pullAnthropicStreamWithRetry 把上游 OpenAI Chat SSE 翻译成完整 Anthropic SSE 并蓄流进 replayWriter,
@@ -1159,7 +1233,7 @@ func (h *APICompatHandler) replyAnthropicOverloaded(w http.ResponseWriter) {
 // ModelName 在 relayStatsMgr 侧带 "nvidia/" 前缀，使 DB 的 family LIKE 查询("nvidia/") 能命中 NVIDIA 族，
 // 不污染 gemini/claude 统计；usageTracker 侧去前缀喂入，前端模型列显示为 upstreamModel(如 z-ai/glm-5.2)，
 // pricing 的 fuzzy 匹配仍能按子串(kimi/llama/nemotron)命价。
-func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model string, input, output int, poolAccount *account.Account) {
+func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model string, input, output int, poolAccount *account.Account, logCtx nvidiaLogCtx) {
 	if input == 0 && output == 0 {
 		return
 	}
@@ -1226,6 +1300,47 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 	// NVIDIA 上游(OpenAI Chat 协议)无 cache, cachedTokens 固定 0。
 	if h.globalStatsTracker != nil {
 		h.globalStatsTracker.TrackNvidiaRequest(displayModel, input, output)
+
+		// 4) 全局综合统计 (stats.Tracker.TrackRequestForModel): 把同一笔 NVIDIA 请求首次计入
+		// 顶部指标卡 + stats.Models 模型表 + trends 综合趋势桶, 使其与 gemini/claude 直连链路
+		// 口径一致。TrackRequestForModel 累加口径与 TrackRequest 同构, 仅写全局桶, 与 nvidiaTrends
+		// 物理隔离桶互不污染——故「综合趋势」(全局含NVIDIA)与「使用趋势-NVIDIA」(纯NVIDIA)是
+		// 两个不同口径视图, 不构成错误的双重计数。
+		// 与落点1(relay 维度 RecordUsage, 模型名带 nvidia/ 前缀, 供 relay:get-user-stats 族查询)
+		// 数据源隔离: 落点4 写 stats.json(主仪表盘), 落点1 写 relay_stats.json(中继用户维度页),
+		// 二者走不同 IPC/不同 Tab, 无前端汇总相加逻辑, 故去前缀 vs 带前缀不产生叠加误导。
+		// NVIDIA 上游无 cache, cachedTokens 固定 0。
+		h.globalStatsTracker.TrackRequestForModel(displayModel, input, output, 0)
+
+		// 5) 请求日志 (stats.Tracker.AddRequestLogForFamily): 把 NVIDIA 成功请求写入仪表盘
+		// 「请求日志」列表。绕过既有 AddRequestLog 的 isRealModel 过滤(要求 Path 含
+		// generatecontent/predict, NVIDIA 走 /v1/chat/completions 不满足), 由 family 显式入库。
+		// Model 用去前缀上游展示名, 与「模型统计」展示口径一致; CacheStatus="NONE"
+		// (NVIDIA 上游 OpenAI Chat 协议无 cache, 前端紫色 NONE badge 自动渲染); DurationMs 由
+		// handleNvidia 入口 startTs 算得端到端耗时, 极快返回时下限保底 1ms 避免 0ms 误读。
+		// ID 经原子序列 nvidiaReqLogSeq 去碰撞, 与 relay 维度落点1 的 ReqID 命名空间分离(便于对照排查)。
+		durationMs := time.Since(logCtx.StartTs).Milliseconds()
+		if durationMs <= 0 {
+			durationMs = 1
+		}
+		reqLog := &stats.RequestLog{
+			ID:           fmt.Sprintf("nvlog-%d-%d", atomic.AddUint64(&nvidiaReqLogSeq, 1), time.Now().UnixNano()),
+			Timestamp:    time.Now().Format("01/02 15:04:05"),
+			Method:       logCtx.Method,
+			Host:         logCtx.Host,
+			Path:         logCtx.Path,
+			Model:        displayModel,
+			InTokens:     input,
+			OutTokens:    output,
+			CachedTokens: 0,
+			CacheStatus: "NONE",
+			StatusCode:  logCtx.StatusCode,
+			Account:     logCtx.Account,
+			SessionID:   logCtx.SessionID,
+			DurationMs:   durationMs,
+			Family:       "nvidia",
+		}
+		h.globalStatsTracker.AddRequestLogForFamily(reqLog)
 	}
 }
 

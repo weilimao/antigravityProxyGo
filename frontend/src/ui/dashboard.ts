@@ -235,6 +235,10 @@ interface LogsRowSlot {
     modelName: HTMLSpanElement;
     account: HTMLSpanElement;
     modelCell: HTMLTableCellElement;
+    // nvidiaBadge: NVIDIA 号池链路请求(family==="nvidia")的专属绿色标识, 在模型名行右侧显示。
+    // 预创建(初始 hidden)并在 updateLogsRowSlot 切换显隐, 避免在重流量下动态增删 DOM 节点
+    // 触发 Blink DOM 节点池膨胀(与项目 row-pool 内存优化口径一致)。
+    nvidiaBadge: HTMLSpanElement;
     inTokens: HTMLSpanElement;
     outTokens: HTMLSpanElement;
     cost: HTMLTableCellElement;
@@ -276,9 +280,17 @@ function buildLogsRowSlot(): LogsRowSlot {
     const modelCell = makeTd('p-3 font-sans font-medium text-on-surface dark:text-white truncate');
     const modelDiv = document.createElement('div');
     modelDiv.className = 'flex flex-col min-w-0';
+    // 模型名行(横向): 模型名 + 可选 NVIDIA badge, badge 默认 hidden, 由 updateLogsRowSlot 切换。
+    const modelNameRow = document.createElement('div');
+    modelNameRow.className = 'flex items-center gap-1 min-w-0';
     const modelName = makeSpan('font-semibold text-on-surface dark:text-white truncate');
+    const nvidiaBadge = makeSpan('inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/40 flex-none');
+    nvidiaBadge.style.display = 'none';
+    nvidiaBadge.textContent = 'NVIDIA';
+    modelNameRow.appendChild(modelName);
+    modelNameRow.appendChild(nvidiaBadge);
     const account = makeSpan('text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5');
-    modelDiv.appendChild(modelName);
+    modelDiv.appendChild(modelNameRow);
     modelDiv.appendChild(account);
     modelCell.appendChild(modelDiv);
 
@@ -318,7 +330,7 @@ function buildLogsRowSlot(): LogsRowSlot {
     tr.appendChild(statusCell);
     tr.appendChild(btnCell);
 
-    return { tr, timestamp, method, host, methodHostCell, path, sessionId, modelName, account, modelCell, inTokens, outTokens, cost, duration, hitRate, cacheBadge, httpCode, viewBtn };
+    return { tr, timestamp, method, host, methodHostCell, path, sessionId, modelName, account, modelCell, nvidiaBadge, inTokens, outTokens, cost, duration, hitRate, cacheBadge, httpCode, viewBtn };
 }
 
 function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
@@ -336,6 +348,15 @@ function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
 
     slot.modelName.textContent = log.model;
     slot.modelCell.setAttribute('title', log.model);
+
+    // NVIDIA 号池链路请求(family==="nvidia")在模型名行右侧显示绿色 NVIDIA badge, 便于在
+    // 合并的请求日志列表里一眼区分英伟达号池来源(gemini/claude 直连日志无此 badge)。
+    // 仅切换显隐, 不增删 DOM 节点, 与 row-pool 内存优化口径一致。
+    if (log.family === 'nvidia') {
+        slot.nvidiaBadge.style.display = '';
+    } else {
+        slot.nvidiaBadge.style.display = 'none';
+    }
 
     if (log.account) {
         slot.account.textContent = log.account;
