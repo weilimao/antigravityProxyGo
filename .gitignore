@@ -10,3 +10,6 @@ docs/
 tests/
 scratch/
 logs/
+.env.local
+scripts/.secret_token
+*.secret
