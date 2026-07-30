@@ -884,6 +884,7 @@ func (h *APICompatHandler) handleStreamResponse(
 	blockIndex := 0
 	textBlockOpen := false
 	thinkingBlockOpen := false
+	thinkingEmittedAny := false // thinking 块是否已实际下发过 thinking_delta;关块前据此判断是否补 signature_delta
 	hasFunctionCall := false
 	openAIRoleSent := false
 
@@ -899,7 +900,10 @@ func (h *APICompatHandler) handleStreamResponse(
 				"model":         displayModel,
 				"stop_reason":   nil,
 				"stop_sequence": nil,
-				"usage":         map[string]interface{}{"input_tokens": 0, "output_tokens": 0},
+				// usage:对齐 Anthropic 官方流式 message_start 实例 {"input_tokens":N,"output_tokens":1},
+				// output_tokens 起始占位为 1(官方惯例预扣占位,与 NVIDIA 路径 messageStartPayload 一致)。
+				// input_tokens 此阶段尚无累计值,置 0,由末帧 message_delta 补累计真实值。
+				"usage":         map[string]interface{}{"input_tokens": 0, "output_tokens": 1},
 			},
 		}
 		msgStartBytes, _ := json.Marshal(msgStart)
@@ -1022,11 +1026,12 @@ func (h *APICompatHandler) handleStreamResponse(
 							startEvt := map[string]interface{}{
 								"type":          "content_block_start",
 								"index":         blockIndex,
-								"content_block": map[string]interface{}{"type": "thinking", "thinking": ""},
+								"content_block": map[string]interface{}{"type": "thinking", "thinking": "", "signature": ""},
 							}
 							startBytes, _ := json.Marshal(startEvt)
 							fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", string(startBytes))
 							thinkingBlockOpen = true
+							thinkingEmittedAny = false
 						}
 						deltaEvt := map[string]interface{}{
 							"type":  "content_block_delta",
@@ -1035,6 +1040,7 @@ func (h *APICompatHandler) handleStreamResponse(
 						}
 						deltaBytes, _ := json.Marshal(deltaEvt)
 						fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(deltaBytes))
+						thinkingEmittedAny = true
 					} else if apiFormat == "openai" {
 						chunk := OpenAIStreamChunk{
 							ID:      streamID,
@@ -1167,11 +1173,26 @@ func (h *APICompatHandler) handleStreamResponse(
 						fmt.Fprintf(w, "event: response.output_text.delta\ndata: %s\n\n", string(deltaBytes))
 					} else { // anthropic
 						if thinkingBlockOpen {
-							stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
-							stopBytes, _ := json.Marshal(stopEvt)
-							fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
-							blockIndex++
+							// 关 thinking 块前补一条空串 signature_delta(Gemini 已剥真签名,发空串占位),
+							// 严格对齐官方 thinking_delta → signature_delta → content_block_stop 序列。
+							// 若 thinking 块从未下发过 thinking_delta(thinkingEmittedAny==false,异常只开块),
+							// 则不发 signature_delta 也不发 stop —— 但此处 thinkingBlockOpen 必伴随首 delta,
+							// 故仅作防御保留对称逻辑,正常路径总会执行 signature_delta。
+							if thinkingEmittedAny {
+								sigEvt := map[string]interface{}{
+									"type":  "content_block_delta",
+									"index": blockIndex,
+									"delta": map[string]interface{}{"type": "signature_delta", "signature": ""},
+								}
+								sigBytes, _ := json.Marshal(sigEvt)
+								fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(sigBytes))
+								stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
+								stopBytes, _ := json.Marshal(stopEvt)
+								fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
+								blockIndex++
+							}
 							thinkingBlockOpen = false
+							thinkingEmittedAny = false
 						}
 						// 延迟开启 text block：仅在有实际文本时才发送 content_block_start
 						if !textBlockOpen {
@@ -1495,11 +1516,23 @@ func (h *APICompatHandler) handleStreamResponse(
 	} else { // anthropic
 		// 关闭未完成的 thinking block / text block
 		if thinkingBlockOpen {
-			blockStop := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
-			blockStopBytes, _ := json.Marshal(blockStop)
-			fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(blockStopBytes))
-			blockIndex++
+			// 关 thinking 块前补一条空串 signature_delta(仅当确实下发过 thinking_delta):
+			// 严格对齐官方序列 thinking_delta → signature_delta → content_block_stop。
+			if thinkingEmittedAny {
+				sigEvt := map[string]interface{}{
+					"type":  "content_block_delta",
+					"index": blockIndex,
+					"delta": map[string]interface{}{"type": "signature_delta", "signature": ""},
+				}
+				sigBytes, _ := json.Marshal(sigEvt)
+				fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(sigBytes))
+				blockStop := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
+				blockStopBytes, _ := json.Marshal(blockStop)
+				fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(blockStopBytes))
+				blockIndex++
+			}
 			thinkingBlockOpen = false
+			thinkingEmittedAny = false
 		}
 		if textBlockOpen {
 			blockStop := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
@@ -1542,7 +1575,11 @@ func (h *APICompatHandler) handleStreamResponse(
 				"stop_reason":   stopReason,
 				"stop_sequence": nil,
 			},
-			"usage": map[string]interface{}{"output_tokens": outTokens},
+			// usage:官方明确 message_delta 的 token 计数为累计值(cumulative),
+			// 故 input_tokens 填本轮累计输入(PromptTokenCount)、output_tokens 填累计输出
+			// (CandidatesTokenCount)。与 NVIDIA 路径 messageDeltaPayload 双填对齐,
+			// 让严格客户端(Claude Code SDK)的用度归集完整,松散客户端忽略多余字段不受影响。
+			"usage": map[string]interface{}{"input_tokens": inTokens, "output_tokens": outTokens},
 		}
 		msgDeltaBytes, _ := json.Marshal(msgDelta)
 		fmt.Fprintf(w, "event: message_delta\ndata: %s\n\n", string(msgDeltaBytes))

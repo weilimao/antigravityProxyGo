@@ -108,7 +108,229 @@ func AnthropicToOpenAIChat(req *AnthropicRequest) (*OpenAIChatRequest, error) {
 		out.StreamOptions = &ChatStreamOptions{IncludeUsage: true}
 	}
 
+	// 思考等级透传:把客户端(Claude Code Anthropic 协议)的思考配置 resolve 为等级,
+	// 再按 NIM 上游取值模式映射,注入 chat_template_kwargs:{thinking:true, reasoning_effort:<mapped>}。
+	// 客户端不发思考配置时 effort 为空 → 不注入 → 上游行为与改动前一致(回归安全)。
+	// 仅对支持思考的 NIM 推理模型注入,避免往不支持 chat_template_kwargs 的上游误塞引发 400。
+	if effort := resolveReasoningEffort(req); effort != "" {
+		mode := nvidiaThinkingEffortMode(req.Model)
+		if mapped := mapReasoningEffort(effort, mode); mapped != "" {
+			out.ChatTemplateKwargs = map[string]interface{}{
+				"thinking":         true,
+				"reasoning_effort": mapped,
+			}
+		}
+	} else if !isThinkingExplicitlyDisabled(req) && nvidiaModelSupportsThinking(req.Model) {
+		// 客户端未表达思考强度(且未显式关闭),但模型本身是推理型:仅开 thinking 不设等级,
+		// 让上游按默认档出思考(NIM 推理模型默认行为),避免思考被误关。
+		// 注意:客户端显式 disabled 时绝不 fallback,尊重关闭意图。
+		out.ChatTemplateKwargs = map[string]interface{}{"thinking": true}
+	}
+
 	return out, nil
+}
+
+// resolveReasoningEffort 从 Anthropic 请求体识别客户端想要的思考等级,
+// 返回规范化内部值 "low"/"medium"/"high"/"max"(max 即 cc-switch 的 xhigh,NIM 直用 max)。
+// 空串表示客户端未表达思考或显式关闭 → 不注入。
+// 移植自 cc-switch transform.rs:94-124,优先级:output_config.effort > thinking.type+budget_tokens。
+//
+// 解析入口:output_config.effort(low/medium/high/max 1:1,未知丢)优先;
+// 兜底 thinking.type:adaptive→max,enabled 按 budget_tokens 分档(<4000→low,4000-15999→medium,
+// ≥16000→high,无 budget→high),disabled/缺省→""。
+func resolveReasoningEffort(req *AnthropicRequest) string {
+	if req == nil {
+		return ""
+	}
+	// Priority 1: output_config.effort
+	if len(req.OutputConfig) > 0 {
+		var oc struct {
+			Effort string `json:"effort"`
+		}
+		if json.Unmarshal(req.OutputConfig, &oc) == nil {
+			switch strings.ToLower(strings.TrimSpace(oc.Effort)) {
+			case "low":
+				return "low"
+			case "medium":
+				return "medium"
+			case "high":
+				return "high"
+			case "max":
+				return "max"
+			}
+		}
+	}
+	// Priority 2: thinking.type + budget_tokens
+	if req.Thinking == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(req.Thinking.Type)) {
+	case "adaptive":
+		return "max" // adaptive = 最强推理,对应 NIM max 档
+	case "enabled":
+		b := req.Thinking.BudgetTokens
+		switch {
+		case b <= 0:
+			return "high" // enabled 但无 budget → 假定强推理
+		case b < 4000:
+			return "low"
+		case b < 16000:
+			return "medium"
+		default:
+			return "high"
+		}
+	default:
+		return "" // disabled / 缺省
+	}
+}
+
+// mapReasoningEffort 将内部规范化等级按上游取值模式映射成目标上游认的字符串。
+// 移植自 cc-switch transform_codex_chat.rs:458-491,NIM 链用 "deepseek" mode:
+// max/xhigh→max,其余(low/medium/high/adaptive)→high —— 只产 NIM v4-flash 认的 high/max,
+// 不产 low/medium,避免触发上游 400 "Invalid reasoning_effort"。
+// 返回空串表示不注入(上游不认的值)。
+func mapReasoningEffort(effort, mode string) string {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	switch effort {
+	case "none", "off", "disabled":
+		return "" // 显式关闭:不注入 effort,由 thinking:false 路径处理(此处不处理关闭)
+	}
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "deepseek":
+		// NIM DeepSeek v4-flash 等取值仅 high/max:max/xhigh→max,其余→high。
+		switch effort {
+		case "max", "xhigh":
+			return "max"
+		default:
+			return "high"
+		}
+	case "passthrough":
+		switch effort {
+		case "minimal", "low", "medium", "high", "max":
+			return effort
+		default:
+			return ""
+		}
+	default:
+		// 未显式配置模式:降级为 deepseek(NIM 默认上游取值最稳)
+		switch effort {
+		case "max", "xhigh":
+			return "max"
+		default:
+			return "high"
+		}
+	}
+}
+
+// nvidiaThinkingEffortMode 按上游模型名判定不同上游取值模式。
+// 当前 NIM 池上游统一为 deepseek 取值(只有 high/max 两档最稳);新增上游若取值不同再按模型分支扩展。
+func nvidiaThinkingEffortMode(model string) string {
+	return "deepseek"
+}
+
+// nvidiaModelSupportsThinking 判别上游模型是否为推理型(默认开思考)。
+// 推理型模型即使客户端未显式请求思考,也应发 thinking:true 让上游按默认档出思考,
+// 避免被默认关掉。判别基于模型名关键字:deepseek-v4/glm-4.6/glm-5/qwen3/r1 等推理模型。
+func nvidiaModelSupportsThinking(model string) bool {
+	low := strings.ToLower(model)
+	keywords := []string{"deepseek-v4", "deepseek-r", "glm-4.5", "glm-4.6", "glm-5", "qwen3", "/r1", "reasoning"}
+	for _, k := range keywords {
+		if strings.Contains(low, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// injectNvidiaChatTemplateKwargs 给 OpenAI Chat 入站(直连或 Codex chat-completions)的请求,
+// 把客户端发的思考等级透传成 NIM 认的 chat_template_kwargs。
+// 从原始入站 bodyBytes 提取 reasoning_effort(顶层,Codex 形态)或 reasoning.effort(OpenRouter 形态),
+// 按 NIM 上游取值模式映射后注入 chat_template_kwargs:{thinking:true, reasoning_effort:<mapped>}。
+// 客户端未发思考强度时:若模型本身推理型 → 仅 thinking:true 默认档;否则不注入(回归安全)。
+//
+// 设计要点:reasoning_effort 不是 OpenAIChatRequest 字段(顶层该字段 NIM 不认,会 400),
+// 既不在结构体里接、也不往上游顶层发,只在原始 body 里提后转进 chat_template_kwargs。
+func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte, upstreamModel string) {
+	if chatReq == nil {
+		return
+	}
+	mode := nvidiaThinkingEffortMode(upstreamModel)
+	if effort := extractOpenAIReasoningEffort(bodyBytes); effort != "" {
+		if mapped := mapReasoningEffort(effort, mode); mapped != "" {
+			chatReq.ChatTemplateKwargs = map[string]interface{}{
+				"thinking":         true,
+				"reasoning_effort": mapped,
+			}
+			return
+		}
+		return
+	}
+	if nvidiaModelSupportsThinking(upstreamModel) && !openAIBodyExplicitlyDisabled(bodyBytes) {
+		chatReq.ChatTemplateKwargs = map[string]interface{}{"thinking": true}
+	}
+}
+
+// isThinkingExplicitlyDisabled 判定 Anthropic 客户端是否显式关闭思考。
+// 仅当 thinking.type=="disabled" 时为真(output_config 协议无关闭概念,其 effort 字段均为开档)。
+// 用于在"模型默认开思考"的 fallback 路径中排除客户端显式关闭,尊重关闭意图。
+func isThinkingExplicitlyDisabled(req *AnthropicRequest) bool {
+	if req == nil || req.Thinking == nil {
+		return false
+	}
+	return strings.ToLower(strings.TrimSpace(req.Thinking.Type)) == "disabled"
+}
+
+// openAIBodyExplicitlyDisabled 判定 OpenAI 入站 body 是否显式关闭思考。
+// OpenAI 协议无显式 disabled 字段;若 reasoning_effort 为 "none"/"off"/"disabled" 视为显式关闭。
+func openAIBodyExplicitlyDisabled(bodyBytes []byte) bool {
+	effort := extractOpenAIReasoningEffort(bodyBytes)
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none", "off", "disabled":
+		return true
+	}
+	return false
+}
+
+// extractOpenAIReasoningEffort 从原始入站 body 提取思考等级字符串。
+// 支持两种形态:Codex 顶层 "reasoning_effort":"high" 与 OpenRouter "reasoning":{"effort":"max"}。
+// 返回 lowercase 规范化值或空串。
+func extractOpenAIReasoningEffort(bodyBytes []byte) string {
+	if len(bodyBytes) == 0 {
+		return ""
+	}
+	var raw struct {
+		ReasoningEffort string `json:"reasoning_effort"`
+		Reasoning       struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+	}
+	if json.Unmarshal(bodyBytes, &raw) == nil {
+		if e := strings.ToLower(strings.TrimSpace(raw.ReasoningEffort)); e != "" {
+			return normalizeEffort(e)
+		}
+		if e := strings.ToLower(strings.TrimSpace(raw.Reasoning.Effort)); e != "" {
+			return normalizeEffort(e)
+		}
+	}
+	return ""
+}
+
+// normalizeEffort 把 OpenAI 各档措辞归一为内部值 low/medium/high/max。
+// xhigh(OpenAI 最强档)→ max(对应 NIM max);其余常见项直接映射;未知返回空串。
+func normalizeEffort(e string) string {
+	switch e {
+	case "minimal":
+		return "low" // NIM 无 minimal,后续 mapReasoningEffort 会再落到 high
+	case "low", "medium", "high", "max", "xhigh":
+		if e == "xhigh" {
+			return "max"
+		}
+		return e
+	case "none", "off", "disabled":
+		return ""
+	default:
+		return ""
+	}
 }
 
 // anthropicAssistantToChat 把 Anthropic assistant 消息转成 OpenAI assistant 消息。
@@ -398,7 +620,13 @@ func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body
 		if ch.Delta.Content != "" {
 			blockStates.emitTextDelta(ch.Delta.Content, sink)
 		} else if ch.Delta.ReasoningContent != "" {
-			blockStates.emitTextDelta(ch.Delta.ReasoningContent, sink)
+			// 仅在非空时进 thinking 分支:无推理模型(reasoning_content 恒空)永不开 thinking 块,
+			// 行为与改动前一致。有推理模型走原生 thinking 块 + thinking_delta + 关块前空串 signature_delta。
+			blockStates.emitThinkingDelta(ch.Delta.ReasoningContent, sink)
+		} else if ch.Delta.Reasoning != "" {
+			// 兜底:部分 NIM 上游模型思考文本走 reasoning 字段(而非 reasoning_content),
+			// 同样翻译为 thinking_delta,与 reasoning_content 语义等价。
+			blockStates.emitThinkingDelta(ch.Delta.Reasoning, sink)
 		}
 		for _, tc := range ch.Delta.ToolCalls {
 			blockStates.emitToolCallDelta(tc, sink)
@@ -498,13 +726,17 @@ func messageDeltaPayload(stopReason string, inputTokens, outputTokens int) strin
 // ===== SSE 流式辅助状态机 =====
 
 // sseBlock 记录当前打开的内容块(文本或工具调用)在 Anthropic 流中的索引与身份。
+// kind 取值:"text" | "tool_use" | "thinking"。thinking 块固定占 index 0,先于 text/tool 块,
+// 一旦开过即永久占位(不从 map 删除),保证后续 text/tool 块按官方"index 单调递增不复用"分配。
 type sseBlock struct {
-	index       int
-	kind        string // "text" | "tool_use"
-	toolID      string
-	toolName    string
-	textStarted bool
-	toolStarted bool
+	index           int
+	kind            string // "text" | "tool_use" | "thinking"
+	toolID          string
+	toolName        string
+	textStarted     bool
+	toolStarted     bool
+	thinkingStarted bool // thinking 块已开块且至少发过一条 thinking_delta 的标志
+	closed          bool // 该块是否已发过 content_block_stop,避免 closeAll 重复关块
 }
 
 type sseBlockStates struct {
@@ -515,15 +747,47 @@ type sseBlockStates struct {
 	hasToolCall bool
 }
 
+// nextFreeIndex 返回当前 blocks 中未占用的最小 index,供 text/tool 块分配使用。
+// 引入 thinking 块(固定占 index 0)后,text 与 tool 块需据此整体后移一位,避免与 thinking 块抢同 index。
+func (s *sseBlockStates) nextFreeIndex() int {
+	used := map[int]bool{}
+	for k := range s.blocks {
+		used[k] = true
+	}
+	for i := 0; ; i++ {
+		if !used[i] {
+			return i
+		}
+	}
+}
+
 // emitTextDelta 把一条 OpenAI 文本增量转成 Anthropic content_block_delta(text_delta)。
+// 若 thinking 块当前已开(thinkingStarted),先按官方序列完整闭合它
+// (signature_delta → content_block_stop) 再开 text 块,保证"思考先于正文、思考块完全闭合后才开 text"。
+// text 块 index 分配:若 index 0 尚未被任何块占用(无 thinking/无 tool)→ 0;
+// 否则用 nextFreeIndex()(thinking 开过永久占 0 → text 落在 1)。
+// 已开过的同 index text 块(连续 text_delta)直接复用、不重复开块。
 func (s *sseBlockStates) emitTextDelta(text string, fw sseEventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// 文本块在 Anthropic 里通常用 index 0；此处维护单一文本块
-	b, ok := s.blocks[0]
-	if !ok {
-		b = &sseBlock{index: 0, kind: "text"}
-		s.blocks[0] = b
+	// 若 thinking 块当前已开:先发空串 signature_delta + content_block_stop 闭合它
+	s.closeThinkingIfOpen(fw)
+	// 优先检索是否有已创建且未关闭的 text 块，有则复用（避免多帧 text_delta 误触发 nextFreeIndex 开新块）
+	var b *sseBlock
+	for _, blk := range s.blocks {
+		if blk != nil && blk.kind == "text" && !blk.closed {
+			b = blk
+			break
+		}
+	}
+	if b == nil {
+		// 未找到已有 text 块：分配 index（若 0 位被 thinking 或 tool 占领则用 nextFreeIndex）
+		idx := 0
+		if b0, ok := s.blocks[0]; ok && b0 != nil && (b0.kind == "thinking" || b0.kind == "tool_use") {
+			idx = s.nextFreeIndex()
+		}
+		b = &sseBlock{index: idx, kind: "text"}
+		s.blocks[idx] = b
 	}
 	if !b.textStarted {
 		b.textStarted = true
@@ -533,18 +797,78 @@ func (s *sseBlockStates) emitTextDelta(text string, fw sseEventSink) {
 	fw.writeEvent("content_block_delta", contentBlockTextDeltaPayload(b.index, text))
 }
 
+// closeThinkingIfOpen 在锁内调用:若 blocks[0] 是已开块(thinkingStarted)且尚未关闭的 thinking 块,
+// 按 official 序列发 signature_delta(空)+content_block_stop 闭合它,并标记 closed,
+// 但不从 map 删除——以保证后续 text/tool 块按官方"index 单调递增不复用 thinking 的 0 位"分配。
+// 仅可开块却从未下发 thinking_delta 的异常 thinking 块(thinkingStarted==false)静默丢弃且不占位。
+func (s *sseBlockStates) closeThinkingIfOpen(fw sseEventSink) {
+	b, ok := s.blocks[0]
+	if !ok || b == nil || b.kind != "thinking" || b.closed {
+		return
+	}
+	if b.thinkingStarted {
+		fw.writeEvent("content_block_delta", contentBlockSignatureDeltaPayload(b.index, ""))
+		fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
+		b.closed = true
+	}
+	// 未发过 thinking_delta 的空块:丢弃,不占位(无推理模型守卫),从 map 删除
+	if !b.thinkingStarted {
+		delete(s.blocks, 0)
+	}
+}
+
+// emitThinkingDelta 把上游 reasoning_content 增量转成 Anthropic thinking 块事件序列:
+// 首次开 content_block_start(thinking),后续 content_block_delta(thinking_delta)。
+// thinking 块固定占 index 0,严格对齐官方"思考先于正文"顺序。
+// 仅在 reasoning_content != "" 时由主循环调用,无推理模型路径永不开 thinking 块。
+func (s *sseBlockStates) emitThinkingDelta(text string, fw sseEventSink) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 若 text 块已开却回收到 reasoning(异常顺序),先关 text 块再开 thinking(防御,理论上不触发)
+	if b, ok := s.blocks[0]; ok && b != nil && b.kind == "text" && b.textStarted {
+		fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
+		delete(s.blocks, 0)
+	}
+	b, ok := s.blocks[0]
+	if !ok || b == nil {
+		b = &sseBlock{index: 0, kind: "thinking"}
+		s.blocks[0] = b
+	} else if b.kind != "thinking" {
+		// 防御:index 0 被非 thinking 占据时,用下一可用 index 开 thinking
+		idx := s.nextFreeIndex()
+		b = &sseBlock{index: idx, kind: "thinking"}
+		s.blocks[idx] = b
+	}
+	if !b.thinkingStarted {
+		b.thinkingStarted = true
+		fw.writeEvent("content_block_start", contentBlockThinkingStartPayload(b.index))
+	}
+	fw.writeEvent("content_block_delta", contentBlockThinkingDeltaPayload(b.index, text))
+}
+
 // emitToolCallDelta 处理 OpenAI tool_calls 增量(index 指向上游分块的工具调用编号)，
 // 映射成 Anthropic 的 content_block_start(tool_use) + content_block_delta(input_json_delta)。
 func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.hasToolCall = true
-	idx := tc.Index
+	// 若 thinking 块当前已开:先按官方序列完整闭合它(signature_delta → stop)再开 tool_use,
+	// 保证"思考先于正文/工具"且 thinking 块在 tool_use 块之前完全闭合。
+	s.closeThinkingIfOpen(fw)
+	// tool_use 块 index 分配:base = 已开(含已关)块数量 —— thinking 开过占 1 位 + text 开过占 1 位。
+	// 上游 tc.Index 是该工具调用在上游工具列表里的位次,key = base + tc.Index 保证多工具不抢 index,
+	// 且工具块严格排在 thinking/text 之后,符合官方"思考→正文→工具"或"思考→工具"顺序。
 	base := 0
-	if s.textEmitted {
+	if b0, ok := s.blocks[0]; ok && b0 != nil && b0.kind == "thinking" {
 		base = 1
 	}
-	key := base + idx
+	if s.textEmitted {
+		base = 1
+		if b0, ok := s.blocks[0]; ok && b0 != nil && b0.kind == "thinking" {
+			base = 2
+		}
+	}
+	key := base + tc.Index
 	b, ok := s.blocks[key]
 	if !ok {
 		b = &sseBlock{index: key, kind: "tool_use", toolID: tc.ID, toolName: tc.Function.Name}
@@ -553,7 +877,7 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 	if !b.toolStarted {
 		b.toolStarted = true
 		if b.toolID == "" {
-			b.toolID = fmt.Sprintf("toolu_nvidia_%d", idx)
+			b.toolID = fmt.Sprintf("toolu_nvidia_%d", tc.Index)
 		}
 		fw.writeEvent("content_block_start", contentBlockStartPayload(b.index, "tool_use", b.toolID, b.toolName))
 	}
@@ -563,7 +887,11 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 	}
 }
 
-// closeAll 关闭所有已打开的文本/工具块，发出 content_block_stop。
+// closeAll 关闭所有已打开但尚未 closed 的文本/工具/思考块,发出 content_block_stop。
+// 对 thinking 块:关块前先发一条空串 signature_delta(无签名上游占位),严格对齐官方序列。
+// 已经被 closeThinkingIfOpen/emitThinkingDelta 切换逻辑提前闭合(closed==true)的块跳过,避免重复关门。
+// 对只开块却从未下发 thinking_delta 的异常 thinking 块(无推理模型误触发 / 上游异常握手帧):
+// 直接丢弃,不发 signature_delta、不发 stop,避免客户端 SDK 收到空 thinking 块报错或卡等。
 func (s *sseBlockStates) closeAll(fw sseEventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -574,19 +902,37 @@ func (s *sseBlockStates) closeAll(fw sseEventSink) {
 	sort.Ints(keys)
 	for _, k := range keys {
 		b := s.blocks[k]
-		if b.textStarted || b.toolStarted {
-			fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
+		if b.closed {
+			continue // 已被切换逻辑提前闭合,不重复关块
 		}
-		b.textStarted = false
-		b.toolStarted = false
+		if b.kind == "thinking" && !b.thinkingStarted {
+			// 空块丢弃:从未实际下发 thinking_delta 的 thinking 块,当作没开过。
+			delete(s.blocks, k)
+			continue
+		}
+		if b.thinkingStarted {
+			fw.writeEvent("content_block_delta", contentBlockSignatureDeltaPayload(b.index, ""))
+			fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
+			b.closed = true
+		} else if b.textStarted || b.toolStarted {
+			fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
+			b.closed = true
+		}
 	}
 }
 
-// hasEmittedAnyBlock 检查本轮会话是否已发出过至少一个 content_block
+// hasEmittedAnyBlock 检查本轮会话是否已发出过至少一个 content_block。
+// 注意:从未下发 thinking_delta 的异常 thinking 块(只开块无内容)不计入,避免它错误地
+// 抑制空块兜底逻辑,保证无推理模型路径与改动前行为一致。
 func (s *sseBlockStates) hasEmittedAnyBlock() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.blocks) > 0
+	for _, b := range s.blocks {
+		if b.thinkingStarted || b.textStarted || b.toolStarted {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureAtLeastOneBlock 确保流结束前至少发出一个 content_block(若零 Block 则保底发空文本块)
@@ -817,6 +1163,49 @@ func contentBlockStopPayload(index int) string {
 	return string(b)
 }
 
+// contentBlockThinkingStartPayload 构造 thinking 块的 content_block_start 负载。
+// 严格对齐 Anthropic 官方流式协议:thinking 块开块时 thinking 与 signature 均为空串,
+// 后续由 thinking_delta 累积思考文本、由 signature_delta 在关块前补签名。
+// 对无签名上游(NIM/GLM reasoning_content、Gemini 已剥签名的 thought)关块前发空串占位,
+// 等同官方 display:"omitted" 形态 —— 满足事件序列形状,让 Claude Code SDK 的
+// MessageAccumulator 能正常识别并渲染思考块。
+func contentBlockThinkingStartPayload(index int) string {
+	m := map[string]interface{}{
+		"type":  "content_block_start",
+		"index": index,
+		"content_block": map[string]interface{}{
+			"type":      "thinking",
+			"thinking":  "",
+			"signature": "",
+		},
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// contentBlockThinkingDeltaPayload 构造 thinking_delta 增量负载,承载上游推理过程的分片文本。
+func contentBlockThinkingDeltaPayload(index int, thinking string) string {
+	m := map[string]interface{}{
+		"type":  "content_block_delta",
+		"index": index,
+		"delta": map[string]interface{}{"type": "thinking_delta", "thinking": thinking},
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// contentBlockSignatureDeltaPayload 构造 signature_delta 负载:关 thinking 块前发一次。
+// 对无签名上游传空串占位,保证协议形态完整,避免客户端把缺 signature_delta 的 thinking 块判为不完整而丢弃。
+func contentBlockSignatureDeltaPayload(index int, signature string) string {
+	m := map[string]interface{}{
+		"type":  "content_block_delta",
+		"index": index,
+		"delta": map[string]interface{}{"type": "signature_delta", "signature": signature},
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
 // ===== OpenAI Chat 兼容请求/响应类型(独立于 compat_translate.go 的 OpenAIRequest)=====
 // 现有 OpenAIRequest 是给 Gemini 链路用的(无 messages 内 tool_calls 序列化细节)，这里为了
 // 保证 NVIDIA 上游收到的 OpenAI Chat JSON 严格符合规范，单独定义一套 chat 类型。
@@ -882,6 +1271,10 @@ type OpenAIChatRequest struct {
 	Tools         []ChatTool         `json:"tools,omitempty"`
 	ToolChoice    interface{}        `json:"tool_choice,omitempty"`
 	StreamOptions *ChatStreamOptions `json:"stream_options,omitempty"`
+	// ChatTemplateKwargs 透传 NIM 推理模型的思考开关与等级。NIM 官方 DeepSeek v4-flash 示例
+	// 证实上游认 {"thinking":true,"reasoning_effort":"high"|"max"},经 OpenAI SDK 走 extra_body,
+	// 原生 HTTP 请求体里即顶层 chat_template_kwargs 对象,由 vLLM 模板注入。
+	ChatTemplateKwargs map[string]interface{} `json:"chat_template_kwargs,omitempty"`
 }
 
 // OpenAIChatResponse 是 NVIDIA 上游返回的 OpenAI Chat Completions 非流式响应。
@@ -933,7 +1326,10 @@ type OpenAIChatDelta struct {
 	Role             string         `json:"role,omitempty"`
 	Content          string         `json:"content,omitempty"`
 	ReasoningContent string         `json:"reasoning_content,omitempty"`
-	ToolCalls        []ChatToolCall `json:"tool_calls,omitempty"`
+	// Reasoning 是部分 NIM 上游模型(D/S 派系官方示例用 getattr 兜底)返回思考文本的字段名兜底。
+	// 当 reasoning_content 缺失、reasoning 有值时也走 thinking_delta 回译。
+	Reasoning string         `json:"reasoning,omitempty"`
+	ToolCalls []ChatToolCall `json:"tool_calls,omitempty"`
 }
 
 // mapNvidiaModel 按账号配置把入站模型名映射成上游模型 id。

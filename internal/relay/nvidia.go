@@ -498,6 +498,12 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			if chatReq.Stream && (chatReq.StreamOptions == nil || !chatReq.StreamOptions.IncludeUsage) {
 				chatReq.StreamOptions = &ChatStreamOptions{IncludeUsage: true}
 			}
+			// Codex/OpenAI 入站的思考等级透传:从原始 body 提 reasoning_effort(顶层)
+			// 或 reasoning.effort(OpenRouter 形态),按 NIM 取值模式映射后注入 chat_template_kwargs,
+			// 让 NIM 推理模型按等级思考。客户端未传思考 → 不注入 → 上游行为不变(回归安全)。
+			// 注意:顶层 reasoning_effort 不是 NIM 认的字段(NIM 认 chat_template_kwargs),
+			// 故 OpenAIChatRequest 无该字段,从原始 bodyBytes 单独取,避免污染上游请求结构。
+			injectNvidiaChatTemplateKwargs(&chatReq, bodyBytes, upstreamModel)
 			upstreamReq = &chatReq
 		}
 

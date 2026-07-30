@@ -247,6 +247,9 @@ type AnthropicRequest struct {
 	Tools       []AnthropicTool    `json:"tools,omitempty"`
 	ToolChoice  json.RawMessage    `json:"tool_choice,omitempty"`
 	Thinking    *AnthropicThinking `json:"thinking,omitempty"`
+	// OutputConfig 承载 Anthropic 新协议的 output_config.effort 字段,用 RawMessage 原样保留,
+	// 由 nvidia 链路 resolveReasoningEffort 优先解析 effort,高于 thinking.budget_tokens。
+	OutputConfig json.RawMessage `json:"output_config,omitempty"`
 }
 
 // UnmarshalJSON 允许 AnthropicRequest.System 兼容字符串及数组两种格式 of JSON 解析
@@ -261,6 +264,7 @@ func (r *AnthropicRequest) UnmarshalJSON(data []byte) error {
 		Tools       []AnthropicTool    `json:"tools,omitempty"`
 		ToolChoice  json.RawMessage    `json:"tool_choice,omitempty"`
 		Thinking    *AnthropicThinking `json:"thinking,omitempty"`
+		OutputConfig json.RawMessage    `json:"output_config,omitempty"`
 	}
 
 	if err := json.Unmarshal(data, &temp); err != nil {
@@ -275,6 +279,7 @@ func (r *AnthropicRequest) UnmarshalJSON(data []byte) error {
 	r.Tools = temp.Tools
 	r.ToolChoice = temp.ToolChoice
 	r.Thinking = temp.Thinking
+	r.OutputConfig = temp.OutputConfig
 
 	if len(temp.System) == 0 {
 		return nil
