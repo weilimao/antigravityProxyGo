@@ -71,8 +71,8 @@ func (s *Store) Update(key string, fn func(int) int) {
     s.m.Unlock()
 }
 `
-	// 硬编码 Token(用户指定)。仅本地手测用,勿提交到公开仓库。
-	hardcodedToken = "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"
+	// 默认 Token。可由 -token 标志或环境变量传入，请勿硬编码真实 Key 提交仓库。
+	hardcodedToken = ""
 )
 
 func main() {
@@ -87,6 +87,8 @@ func main() {
 	// 日志文件路径:默认写当前工作目录 logs/ 子目录,带时间戳与 mode;可用 -log-file 覆盖。
 	logFile := flag.String("log-file", "", "日志文件输出路径(不填则自动写到 ./logs/nvidia_probe_<时间>_<mode>.log)")
 	flag.Parse()
+
+	activeToken := resolveToken(*token)
 
 	// ===== tee 所有 stdout 到日志文件,便于事后分析 =====
 	// 实现:先备份真实屏幕 fd(dup),再建 pipe 把 os.Stdout 指向 pipe 写端,
@@ -108,20 +110,19 @@ func main() {
 	fmt.Printf("Target   : %s\n", targetURL)
 	fmt.Printf("Model    : %s\n", *model)
 	fmt.Printf("Prompt   : %q\n", *prompt)
-	fmt.Printf("Token    : %s...\n", safePrefix(*token, 14))
+	fmt.Printf("Token    : %s...\n", safePrefix(activeToken, 14))
 	fmt.Printf("Mode     : %s\n\n", *mode)
 
 	switch *mode {
 	case "stream":
-		runOnce(targetURL, *token, *model, *prompt, true)
+		runOnce(targetURL, activeToken, *model, *prompt, true)
 	case "nostream":
-		runOnce(targetURL, *token, *model, *prompt, false)
+		runOnce(targetURL, activeToken, *model, *prompt, false)
 	case "both":
-		fmt.Println("######## 分支 A: stream=false ########")
-		runOnce(targetURL, *token, *model, *prompt, false)
-		fmt.Println()
-		fmt.Println("######## 分支 B: stream=true  ########")
-		runOnce(targetURL, *token, *model, *prompt, true)
+		fmt.Println("======== 轮次 1/2: 非流式 (stream=false) ========")
+		runOnce(targetURL, activeToken, *model, *prompt, false)
+		fmt.Println("\n======== 轮次 2/2: 流式 (stream=true) ========")
+		runOnce(targetURL, activeToken, *model, *prompt, true)
 	case "compare":
 		// 压缩对照实验:验证上游是不是真的对 text/event-stream 返回 gzip,
 		// 以及不同 Accept-Encoding 下流式逐帧到达的差异(用于坐实/排除 gzip 缓冲根因)。
@@ -692,6 +693,23 @@ func flushTee() {
 		os.Stdout = teeScreen
 	}
 	fmt.Fprintf(os.Stderr, "[log] 完整日志已写入: %s\n", teeLogPath)
+}
+
+// resolveToken 按优先级读取 Token：命令行参数 > scripts/.secret_token 文件 > 环境变量 NVIDIA_TOKEN。
+func resolveToken(flagToken string) string {
+	if flagToken != "" {
+		return flagToken
+	}
+	if env := os.Getenv("NVIDIA_TOKEN"); env != "" {
+		return env
+	}
+	secretFile := filepath.Join(".", "scripts", ".secret_token")
+	if data, err := os.ReadFile(secretFile); err == nil {
+		if t := strings.TrimSpace(string(data)); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // 保留 io 引用以防某些工具链把 io 标记为未使用(io.Copy 已用到, 实际不会触发)。

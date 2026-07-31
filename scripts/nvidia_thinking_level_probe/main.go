@@ -76,9 +76,8 @@ func (s *Store) Update(key string, fn func(int) int) {
     s.m.Unlock()
 }
 `
-	// 硬编码 Token(用户指定)。仅本地手测用,勿提交到公开仓库。
-	// 与 scripts/nvidia_upstream_stream_probe/main.go:75 同一 token,复用不新增。
-	hardcodedToken = "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"
+	// 默认 Token。可由 -token 标志或环境变量传入，请勿硬编码真实 Key 提交仓库。
+	hardcodedToken = ""
 )
 
 // efforts 两档轮询的默认取值。deepseek-v4-flash 官方仅认 high / max 两档。
@@ -108,6 +107,8 @@ func main() {
 	logDir := flag.String("log-dir", "", "日志文件输出目录(不填则写到 ./logs/)")
 	flag.Parse()
 
+	activeToken := resolveToken(*token)
+
 	efforts := parseEfforts(*effortsStr)
 	if len(efforts) == 0 {
 		fmt.Fprintf(os.Stderr, "[错误] -efforts 解析为空,请填如 high 或 high,max\n")
@@ -134,7 +135,7 @@ func main() {
 	fmt.Printf("Model    : %s\n", *model)
 	fmt.Printf("Efforts  : %v\n", efforts)
 	fmt.Printf("Prompt   : %q\n", *prompt)
-	fmt.Printf("Token    : %s...\n", safePrefix(*token, 14))
+	fmt.Printf("Token    : %s...\n", safePrefix(activeToken, 14))
 	fmt.Printf("总览日志 : %s (跨档汇总写这里)\n", summaryPath)
 	fmt.Printf("分档日志 : 每档单独一个文件,见下方各档输出\n\n")
 
@@ -149,7 +150,7 @@ func main() {
 		st := &effortStat{effort: effort, status: -1, logPath: effortLog}
 		stats = append(stats, st)
 
-		runOnceEffort(targetURL, *token, *model, *prompt, effort, effortLog, st)
+		runOnceEffort(targetURL, activeToken, *model, *prompt, effort, effortLog, st)
 		fmt.Println()
 	}
 
@@ -589,6 +590,23 @@ func flushTee() {
 		os.Stdout = summaryScreen
 	}
 	fmt.Fprintf(os.Stderr, "[log] 总览日志已写入: %s\n", summaryLogPath)
+}
+
+// resolveToken 按优先级读取 Token：命令行参数 > scripts/.secret_token 文件 > 环境变量 NVIDIA_TOKEN。
+func resolveToken(flagToken string) string {
+	if flagToken != "" {
+		return flagToken
+	}
+	if env := os.Getenv("NVIDIA_TOKEN"); env != "" {
+		return env
+	}
+	secretFile := filepath.Join(".", "scripts", ".secret_token")
+	if data, err := os.ReadFile(secretFile); err == nil {
+		if t := strings.TrimSpace(string(data)); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // 保留 io 引用以防某些工具链把 io 标记为未使用。
