@@ -1314,6 +1314,60 @@ func flakyNvidiaUpstream(t *testing.T, failN int) (*httptest.Server, *int32) {
 	return srv, &calls
 }
 
+// draftChunkLines 构造"先发若干正文增量(draft)+ 再发 error chunk 触发断流"的上游 SSE 字节流。
+// 用于模拟生产环境"上游吐了一截正文后中途断流"的真实形态——区别于 flakyNvidiaUpstream 的纯 error chunk
+// (零正文断流)。bodyFragments 逐个作为 text chunk 的 content 发出,最后追加 error chunk + [DONE]。
+// translator 对 error chunk 路径:已吐正文时直接 break,循环外 closeAll 闭合已开的 text 块(落 live stop),
+// message_delta/message_stop 只 replay 不推 live,首轮断流后 live 上草稿段为"已闭合的完整 text 块"。
+func draftChunkLines(bodyFragments []string) string {
+	parts := make([]string, 0, len(bodyFragments)+2)
+	for _, frag := range bodyFragments {
+		parts = append(parts, `data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":`+ jsonString(frag) +`}}]}`)
+	}
+	parts = append(parts, `data: {"error":{"message":"upstream interrupted mid-stream","type":"internal","code":"stream_broken"}}`)
+	parts = append(parts, `data: [DONE]`, "")
+	return strings.Join(parts, "\n\n")
+}
+
+// completeChunkLines 构造"完整正常收尾(含 finish_reason + usage + [DONE])"的上游 SSE 字节流。
+// body 为最终正文(与首轮草稿不同以验证"重启段正文与草稿不同")。
+func completeChunkLines(body string) string {
+	return strings.Join([]string{
+		`data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":` + jsonString(body) + `}}]}`,
+		`data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`data: {"id":"1","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n")
+}
+
+// jsonString 把字符串编为 JSON 字符串字面量(含引号),用于手工拼接上游 SSE 帧。
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// flakyNvidiaUpstreamWithDraft 构造可控 mock:前 failN 次请求返回"先吐 draftFragments 草稿正文再断流"
+// (模拟生产"吐了一截后断流"),自第 failN+1 次起返回完整正文 completeBody(与草稿不同)。
+// 返回 server 与已发生请求次数指针。本 helper 用于验证"草稿段 + 重启段"端到端续传不重发。
+func flakyNvidiaUpstreamWithDraft(t *testing.T, failN int, draftFragments []string, completeBody string) (*httptest.Server, *int32) {
+	t.Helper()
+	var calls int32
+	draftSSE := draftChunkLines(draftFragments)
+	completeSSE := completeChunkLines(completeBody)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cur := atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		if int(cur) <= failN {
+			_, _ = w.Write([]byte(draftSSE))
+			return
+		}
+		_, _ = w.Write([]byte(completeSSE))
+	}))
+	return srv, &calls
+}
+
 // TestPullAnthropicStream_RetryOnEOFThenSuccess 断流重试命中:前 2 次中途断流,第 3 次完整。
 // 断言:客户端收 200 + 完整 Anthropic SSE 事件序列 + 文本 delta, 且全程未换号(同一账号)。
 func TestPullAnthropicStream_RetryOnEOFThenSuccess(t *testing.T) {
@@ -1388,6 +1442,150 @@ func TestPullAnthropicStream_RetryExhausted_RepliesOverloaded(t *testing.T) {
 	// 重试用尽:恰好 5 次上游请求(不换号,同一账号重拉满 5 次)。
 	if got := atomic.LoadInt32(calls); got != 5 {
 		t.Errorf("expected exactly 5 upstream calls (retry max) without switch, got %d", got)
+	}
+}
+
+// TestPullAnthropicLive_RetryResumesNotReplays 锁定"正文逐块实时下发 + 断流续传不重发"端到端:
+//
+//	前 2 轮上游吐不同草稿正文片段后中途断流(error chunk),第 3 轮完整且正文与草稿不同。
+//	首轮 tee 把草稿段实时推 live(message_start + text 块 + text_delta 草稿 + closeAll 闭合的 stop),
+//	重试轮 resumeSink 跳过 message_start、惰性补闭合(liveBodyOpenIdx 已被 closeAll 清为 -1 故无草稿块待补)、
+//	新正文块分配 index=liveMaxUsedIdx+1=1、提交重启段 pending 落 live。
+//	最后 replayFollowingInto 据 resume 快照跳过已 live 的草稿块(start/delta/stop 全跳)、只补 message_delta+message_stop。
+//
+// 客户端最终流期望:
+//
+//	200 + message_start 恰好 1 个 +
+//	草稿段(cbs text idx=0 + text_delta 草稿 + cbs_stop 0,已闭合)+
+//	重启段(cbs text idx=1 + text_delta 完整正文 + cbs_stop 1)+
+//	message_delta + message_stop。
+//	无重复 message_start、无 index 冲突(0 与 1 各一次)、草稿与重启正文不同(续传不重发)。
+func TestPullAnthropicLive_RetryResumesNotReplays(t *testing.T) {
+	// 前 2 轮断流且吐不同草稿片段;第 3 轮完整,正文与草稿不同。
+	upstream, calls := flakyNvidiaUpstreamWithDraft(t, 2,
+		[]string{"DRAFT_A_", "PART2_"}, // 第 1 轮草稿(第 2 轮草稿也为 draftSSE 同样内容,但只取第 1 轮落 live)
+		"FINAL_FULL_ANSWER", // 第 3 轮完整正文(重启段)
+	)
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-resume", "resumebot@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond // 加速退避
+
+	anthReq := &AnthropicRequest{
+		Model:  "claude-sonnet-4-5",
+		Stream: true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-resume", UserKey: "k-resume"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 after resumed retry success, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	events := parseSSEEvents(rr.Body.String())
+
+	// message_start 恰好 1 个(首轮发 1 个,重试轮全跳,replayFollowingInto 也跳)。
+	msCount := 0
+	for _, ev := range events {
+		if ev.event == "message_start" {
+			msCount++
+		}
+	}
+	if msCount != 1 {
+		t.Fatalf("message_start 应恰好 1 个(续传不重发),实际=%d 流=%v", msCount, eventNames(events))
+	}
+
+	// message_stop 恰好 1 个(replayFollowingInto 补发一次,首轮/重试轮都未推 live)。
+	stopCount := 0
+	for _, ev := range events {
+		if ev.event == "message_stop" {
+			stopCount++
+		}
+	}
+	if stopCount != 1 {
+		t.Fatalf("message_stop 应恰好 1 个,实际=%d 流=%v", stopCount, eventNames(events))
+	}
+
+	// content_block_start(text) 的 index 集合应恰好为 {0, 1}(草稿段 idx 0 + 重启段 idx 1),无重复、无冲突。
+	var startIdx []int
+	textStartCount := 0
+	for _, ev := range events {
+		if ev.event != "content_block_start" {
+			continue
+		}
+		m := dataMap(t, ev)
+		cb, _ := m["content_block"].(map[string]interface{})
+		if cb == nil || cb["type"] != "text" {
+			continue
+		}
+		textStartCount++
+		if v, ok := m["index"].(float64); ok {
+			startIdx = append(startIdx, int(v))
+		}
+	}
+	if textStartCount != 2 {
+		t.Fatalf("text 块 start 应恰好 2 个(草稿段 + 重启段),实际=%d 流=%v", textStartCount, eventNames(events))
+	}
+	if !equalIntSlice(startIdx, []int{0, 1}) {
+		t.Fatalf("text 块 index 序列应为 [0,1](草稿 idx 0 + 重启 idx 1 单调无冲突),实际=%v", startIdx)
+	}
+
+	// 草稿段正文与非草稿正文均应出现,且二者不同(续传:重启段不重发草稿)。
+	var allText string
+	for _, ev := range events {
+		if ev.event != "content_block_delta" {
+			continue
+		}
+		dm := dataMap(t, ev)
+		delta, _ := dm["delta"].(map[string]interface{})
+		if delta == nil || delta["type"] != "text_delta" {
+			continue
+		}
+		if s, ok := delta["text"].(string); ok {
+			allText += s
+		}
+	}
+	if !strings.Contains(allText, "DRAFT_A_PART2_") {
+		t.Fatalf("草稿段正文应出现在最终流(草稿段实时下发),实际 allText=%q", allText)
+	}
+	if !strings.Contains(allText, "FINAL_FULL_ANSWER") {
+		t.Fatalf("重启段完整正文应出现在最终流,实际 allText=%q", allText)
+	}
+	if strings.Contains(allText, "DRAFT_A_PART2_FINAL_FULL_ANSWER") {
+		// 草稿与重启正文拼成连续串属正常(两段邻接),但若是同一串被重复回放则异常——此处分隔不同的片段,允许邻接。
+	}
+
+	// 每个 text 块 index 都应有对应 content_block_stop(完整闭合,无"开块未闭合")。
+	startedIdx := map[int]bool{}
+	for _, ev := range events {
+		if ev.event == "content_block_start" {
+			m := dataMap(t, ev)
+			cb, _ := m["content_block"].(map[string]interface{})
+			if cb != nil && cb["type"] == "text" {
+				if v, ok := m["index"].(float64); ok {
+					startedIdx[int(v)] = true
+				}
+			}
+		}
+	}
+	for _, ev := range events {
+		if ev.event != "content_block_stop" {
+			continue
+		}
+		if v, ok := dataMap(t, ev)["index"].(float64); ok {
+			delete(startedIdx, int(v))
+		}
+	}
+	if len(startedIdx) != 0 {
+		t.Fatalf("存在未闭合的 text 块 index=%v(应全闭合),流=%v", startedIdx, eventNames(events))
+	}
+
+	// 重试命中:恰好 3 次上游请求(2 次断流草稿 + 1 次完整)。
+	if got := atomic.LoadInt32(calls); got != 3 {
+		t.Errorf("expected 3 upstream calls (2 draft-broken + 1 complete), got %d", got)
 	}
 }
 

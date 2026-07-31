@@ -392,10 +392,11 @@ func TestTeeSink_LiveThinkingOpenOnUpstreamErrorMidThinking(t *testing.T) {
 	}
 }
 
-// TestThinkingRealtimeThenBodyReplay_E2E 锁定端到端客户端最终流:
-// 首轮 tee 把 message_start+思考实时推 live,正文蓄流;整条 ready 后 replayBodyInto 回放正文+尾帧。
+// TestThinkingRealtimeThenBodyReplay_E2E 锁定端到端客户端最终流(正文实时下发新架构):
+// 首轮 tee 把 message_start+思考+正文 text 全部逐块实时推 live(思考与正文 real-time);
+// 整条 ready 后 replayFollowingInto 仅补尾帧(text 块已在 liveIdxMap 中被跳过,不重复回放)。
 // 客户端最终 live 流 == message_start + 思考块整段 + 正文块整段 + message_delta + message_stop,
-// 且 message_start 只一个、思考块只一个、无重复。
+// 且 message_start 只一个、思考块只一个、正文 text_delta 只一个(无重复)。
 func TestThinkingRealtimeThenBodyReplay_E2E(t *testing.T) {
 	h := newTeeTestHarness()
 	upstream := writeUpstream(
@@ -411,8 +412,14 @@ func TestThinkingRealtimeThenBodyReplay_E2E(t *testing.T) {
 	if h.tee.liveThinkingOpen {
 		t.Fatalf("正常结束 liveThinkingOpen 应为 false")
 	}
-	// 回放正文
-	h.replay.replayBodyInto(h.liveFW)
+	// 整条 ready:replayFollowingInto 据 tee 的 live 协议态快照跳过已 live 的 text/thinking,只补尾帧。
+	// 首轮无重试,快照 thinkingLive=true(首轮思考已 live)、liveIdxMap=text 块 identity 映射、liveMaxIdx 为最大已用 index。
+	state := &liveStreamState{
+		liveIdxMap:   h.tee.liveIdxMap,
+		liveMaxIdx:   h.tee.liveMaxUsedIdx,
+		thinkingLive: h.tee.liveThinkingPushed,
+	}
+	h.replay.replayFollowingInto(h.liveFW, state)
 	h.liveFW.flush()
 	out := parseSSEEvents(h.live.String())
 
@@ -458,7 +465,7 @@ func TestThinkingRealtimeThenBodyReplay_E2E(t *testing.T) {
 		t.Fatalf("应至少 2 条 thinking_delta,实际=%d", thinkDelta)
 	}
 	if textDelta != 1 {
-		t.Fatalf("正文 text_delta 应 1 个,实际=%d", textDelta)
+		t.Fatalf("正文 text_delta 应 1 个(实时下发,不重复回放),实际=%d", textDelta)
 	}
 	// 顺序:message_start → thinking 块整段(start/delta*/signature_delta/stop) → 正文块整段(start/delta/stop) → message_delta/stop
 	want := []string{
