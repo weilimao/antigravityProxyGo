@@ -3,6 +3,7 @@ package settings
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -239,6 +240,42 @@ func TestNvidiaPreferredModels(t *testing.T) {
 	}
 	if len(mgr2.GetNvidiaPreferredModels()) != 0 {
 		t.Errorf("Expected empty after clear, got %v", mgr2.GetNvidiaPreferredModels())
+	}
+}
+
+func TestEnableThinkingMode_AutoPersistToDisk(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "settings_test_persist_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	configPath := filepath.Join(tempDir, "config.json")
+	// 模拟旧版的 config.json(缺少 enableThinkingMode 属性)
+	oldConfigJSON := []byte(`{
+		"relayPort": "18444",
+		"requestTimeout": 300
+	}`)
+	if err := os.WriteFile(configPath, oldConfigJSON, 0644); err != nil {
+		t.Fatalf("Failed to write mock old config: %v", err)
+	}
+
+	// 实例化 Manager 并初始化(触发 loadConfig 自动补全与 SaveConfig 落盘)
+	mgr := NewManager()
+	mgr.Init(tempDir)
+
+	if !mgr.GetEnableThinkingMode() {
+		t.Errorf("Expected EnableThinkingMode == true in memory after loadConfig")
+	}
+
+	// 读取落盘后的 config.json 验证磁盘文件中已经真实持久化写入了 "enableThinkingMode": true
+	diskData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("Failed to read back config.json from disk: %v", err)
+	}
+	diskStr := string(diskData)
+	if !strings.Contains(diskStr, `"enableThinkingMode": true`) {
+		t.Errorf("Expected disk config.json to contain \"enableThinkingMode\": true, got:\n%s", diskStr)
 	}
 }
 

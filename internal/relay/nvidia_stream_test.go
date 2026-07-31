@@ -433,3 +433,25 @@ func TestOpenAIChatSSEToAnthropicSSE_MidStreamError_AfterContent_EmitsFullTail(t
 		t.Errorf("expected err carrying mid-stream error text, got: %v", sseErr)
 	}
 }
+
+func TestOpenAIChatSSEToAnthropicSSE_ReasoningAsText(t *testing.T) {
+	SetGlobalReasoningAsText(true)
+	defer SetGlobalReasoningAsText(false)
+
+	upstreamReasoning := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking step 1\"}}]}\n\ndata: [DONE]\n\n"
+	var out bytes.Buffer
+	bw := bufio.NewWriter(&out)
+	_, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstreamReasoning), nil, bw, "z-ai/glm-5.2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bw.Flush()
+
+	got := out.String()
+	if !strings.Contains(got, `"type":"text_delta"`) || !strings.Contains(got, `thinking step 1`) {
+		t.Errorf("expected reasoning_content to be streamed as text_delta when ReasoningAsText is enabled, got:\n%s", got)
+	}
+	if strings.Contains(got, `"type":"thinking_delta"`) {
+		t.Errorf("did not expect thinking_delta when ReasoningAsText is enabled, got:\n%s", got)
+	}
+}

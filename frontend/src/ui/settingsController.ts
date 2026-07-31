@@ -524,6 +524,28 @@ export function initSettings() {
             });
         }
 
+        const chkReasoningAsText = document.getElementById('chkReasoningAsText') as HTMLInputElement | null;
+        if (chkReasoningAsText) {
+            chkReasoningAsText.addEventListener('change', (e: any) => {
+                try {
+                    ipcRenderer.send('settings:set-reasoning-as-text', e.target.checked);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save reasoning as text setting:', err);
+                }
+            });
+        }
+
+        const chkEnableThinkingMode = document.getElementById('chkEnableThinkingMode') as HTMLInputElement | null;
+        if (chkEnableThinkingMode) {
+            chkEnableThinkingMode.addEventListener('change', (e: any) => {
+                try {
+                    ipcRenderer.send('settings:set-enable-thinking-mode', e.target.checked);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save enable thinking mode setting:', err);
+                }
+            });
+        }
+
         function updateConsoleVisibility(enabled: boolean) {
             if (systemConsole) {
                 if (enabled) {
@@ -577,6 +599,7 @@ export function initSettings() {
 
         // Initial load
         refreshSettingsUI();
+        switchSettingsTab('general');
 
     } catch (globalErr) {
         console.error('[SettingsController] Global init error:', globalErr);
@@ -800,6 +823,24 @@ export function refreshSettingsUI() {
             const maxTokens = ipcRenderer.sendSync('settings:get-custom-max-output-tokens');
             if (maxTokens !== null && maxTokens !== undefined) {
                 txtCustomMaxOutputTokens.value = String(maxTokens);
+            }
+        }
+
+        const chkReasoningAsText = document.getElementById('chkReasoningAsText') as HTMLInputElement | null;
+        if (chkReasoningAsText) {
+            const enabled = ipcRenderer.sendSync('settings:get-reasoning-as-text');
+            if (enabled !== null && enabled !== undefined) {
+                chkReasoningAsText.checked = !!enabled;
+            }
+        }
+
+        const chkEnableThinkingMode = document.getElementById('chkEnableThinkingMode') as HTMLInputElement | null;
+        if (chkEnableThinkingMode) {
+            const enabled = ipcRenderer.sendSync('settings:get-enable-thinking-mode');
+            if (enabled === false || enabled === 'false' || enabled === 0) {
+                chkEnableThinkingMode.checked = false;
+            } else {
+                chkEnableThinkingMode.checked = true; // 除非明确显式返回 false，一律默认开启
             }
         }
 

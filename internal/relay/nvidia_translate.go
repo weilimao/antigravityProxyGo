@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"antigravity-proxy/internal/account"
@@ -112,7 +114,9 @@ func AnthropicToOpenAIChat(req *AnthropicRequest) (*OpenAIChatRequest, error) {
 	// 再按 NIM 上游取值模式映射,注入 chat_template_kwargs:{thinking:true, reasoning_effort:<mapped>}。
 	// 客户端不发思考配置时 effort 为空 → 不注入 → 上游行为与改动前一致(回归安全)。
 	// 仅对支持思考的 NIM 推理模型注入,避免往不支持 chat_template_kwargs 的上游误塞引发 400。
-	if effort := resolveReasoningEffort(req); effort != "" {
+	if !IsEnableThinkingMode() {
+		out.ChatTemplateKwargs = nil
+	} else if effort := resolveReasoningEffort(req); effort != "" {
 		mode := nvidiaThinkingEffortMode(req.Model)
 		if mapped := mapReasoningEffort(effort, mode); mapped != "" {
 			out.ChatTemplateKwargs = map[string]interface{}{
@@ -252,6 +256,10 @@ func nvidiaModelSupportsThinking(model string) bool {
 // 既不在结构体里接、也不往上游顶层发,只在原始 body 里提后转进 chat_template_kwargs。
 func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte, upstreamModel string) {
 	if chatReq == nil {
+		return
+	}
+	if !IsEnableThinkingMode() {
+		chatReq.ChatTemplateKwargs = nil
 		return
 	}
 	mode := nvidiaThinkingEffortMode(upstreamModel)
@@ -621,12 +629,20 @@ func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body
 			blockStates.emitTextDelta(ch.Delta.Content, sink)
 		} else if ch.Delta.ReasoningContent != "" {
 			// 仅在非空时进 thinking 分支:无推理模型(reasoning_content 恒空)永不开 thinking 块,
-			// 行为与改动前一致。有推理模型走原生 thinking 块 + thinking_delta + 关块前空串 signature_delta。
-			blockStates.emitThinkingDelta(ch.Delta.ReasoningContent, sink)
+			// 若开启 IsReasoningAsText() 伪装模式,则作为普通 text_delta 直接逐字推打屏幕,避免 CLI 界面自动折叠。
+			if IsReasoningAsText() {
+				blockStates.emitTextDelta(ch.Delta.ReasoningContent, sink)
+			} else {
+				blockStates.emitThinkingDelta(ch.Delta.ReasoningContent, sink)
+			}
 		} else if ch.Delta.Reasoning != "" {
 			// 兜底:部分 NIM 上游模型思考文本走 reasoning 字段(而非 reasoning_content),
-			// 同样翻译为 thinking_delta,与 reasoning_content 语义等价。
-			blockStates.emitThinkingDelta(ch.Delta.Reasoning, sink)
+			// 同样在伪装模式下转为普通 text_delta。
+			if IsReasoningAsText() {
+				blockStates.emitTextDelta(ch.Delta.Reasoning, sink)
+			} else {
+				blockStates.emitThinkingDelta(ch.Delta.Reasoning, sink)
+			}
 		}
 		for _, tc := range ch.Delta.ToolCalls {
 			blockStates.emitToolCallDelta(tc, sink)
@@ -1335,4 +1351,34 @@ type OpenAIChatDelta struct {
 // mapNvidiaModel 按账号配置把入站模型名映射成上游模型 id。
 func mapNvidiaModel(inModel string, acc *account.Account) string {
 	return account.ResolveNvidiaModel(inModel, acc)
+}
+
+var globalReasoningAsText atomic.Bool
+var globalEnableThinkingMode atomic.Bool
+
+func init() {
+	globalEnableThinkingMode.Store(true) // 思考模式默认开启
+}
+
+func SetGlobalReasoningAsText(v bool) {
+	globalReasoningAsText.Store(v)
+}
+
+func IsReasoningAsText() bool {
+	if globalReasoningAsText.Load() {
+		return true
+	}
+	env := strings.ToLower(os.Getenv("REASONING_AS_TEXT"))
+	return env == "true" || env == "1" || env == "yes"
+}
+
+func SetGlobalEnableThinkingMode(v bool) {
+	globalEnableThinkingMode.Store(v)
+}
+
+func IsEnableThinkingMode() bool {
+	if env := strings.ToLower(os.Getenv("ENABLE_THINKING_MODE")); env != "" {
+		return env == "true" || env == "1" || env == "yes"
+	}
+	return globalEnableThinkingMode.Load()
 }

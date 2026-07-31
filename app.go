@@ -639,6 +639,10 @@ func (a *App) ShowItemInFolder(p string) {
 }
 
 func (a *App) domReady(ctx context.Context) {
+	// 同步全局 ReasoningAsText 与 EnableThinkingMode 状态
+	relay.SetGlobalReasoningAsText(a.settingsMgr.GetReasoningAsText())
+	relay.SetGlobalEnableThinkingMode(a.settingsMgr.GetEnableThinkingMode())
+
 	// Pre-populate window.wailsConfigCache before DOM loads
 	activeDir := a.settingsMgr.GetActiveDataDirectory()
 	defaultDir := a.settingsMgr.GetDefaultUserDataPath()
@@ -679,6 +683,8 @@ func (a *App) domReady(ctx context.Context) {
 		"settings:get-custom-thinking-budget":          a.settingsMgr.GetCustomThinkingBudget(),
 		"settings:get-custom-thinking-min-budget":      a.settingsMgr.GetCustomThinkingMinBudget(),
 		"settings:get-custom-max-output-tokens":        a.settingsMgr.GetCustomMaxOutputTokens(),
+		"settings:get-reasoning-as-text":               a.settingsMgr.GetReasoningAsText(),
+		"settings:get-enable-thinking-mode":            a.settingsMgr.GetEnableThinkingMode(),
 		"settings:get-language":               a.settingsMgr.GetLanguage(),
 		"settings:get-session-optimization":   a.settingsMgr.GetSessionOptimization(),
 	}

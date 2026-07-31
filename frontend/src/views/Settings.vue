@@ -66,6 +66,43 @@
 </div>
 </div>
 
+<!-- 思维链与思考模式设置卡片 (与全站标准卡片一致) -->
+<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">psychology</span>
+<span>思维链与思考模式设置</span>
+</h2>
+<p class="text-xs text-outline leading-relaxed">
+控制上游思维链（Reasoning Content）在客户端上的开启与实时展现形式。关闭后代理将屏蔽所有思考参数，让模型快速输出正文。
+</p>
+
+<!-- 开关 1：启用思考模式 -->
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex flex-col gap-0.5">
+<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="enableThinkingModeLabel">开启思考模式 (Enable Thinking Mode)</span>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="enableThinkingModeDesc">默认开启。关闭后代理将透明拦截并自动剥离请求 Payload 中的思考参数，让上游模型直出正文回答，降低响应开销。</span>
+</div>
+<!-- Toggle Switch -->
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="chkEnableThinkingMode" type="checkbox" checked />
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
+
+<!-- 开关 2：思考过程直吐正文 (打字机模式) -->
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex flex-col gap-0.5">
+<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="reasoningAsTextLabel">思考过程直吐正文 (打字机模式)</span>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="reasoningAsTextDesc">开启后，将上游思维链 (Reasoning Content) 直接作为文本流逐字打屏输出，避免 CLI 客户端界面默认收起折叠。</span>
+</div>
+<!-- Toggle Switch -->
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="chkReasoningAsText" type="checkbox"/>
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
+</div>
+
 <!-- Debugger 调试模式与日志落盘卡片 -->
 <div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
@@ -888,5 +925,9 @@ onMounted(() => {
   initSettings();
   initRelayEvents();
   initAboutPanelEvents();
+  // 强制初始化子页签显隐状态，切到常规参数配置 Tab
+  if (typeof (window as any).switchSettingsTab === 'function') {
+    (window as any).switchSettingsTab('general');
+  }
 });
 </script>

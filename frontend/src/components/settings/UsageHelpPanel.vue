@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col gap-6 w-full" id="settings-panel-help">
+  <div class="flex flex-col gap-6 w-full" id="settings-panel-help" style="display: none !important;">
     <!-- 卡片 1：IDE 更新后拦截失效解决指南（高亮突显） -->
     <div class="glass-card rounded-xl p-6 flex flex-col gap-4 border-l-4 border-l-primary">
       <div class="flex items-center justify-between">

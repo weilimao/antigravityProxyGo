@@ -201,37 +201,48 @@ func parseEfforts(s string) []string {
 // 逐帧打印 SSE 并统计思考字段命中。effortLog 为该档独立日志文件路径。
 // stat 用于回填该档统计(供跨档汇总)。
 func runOnceEffort(targetURL, token, model, prompt, effort, effortLog string, stat *effortStat) {
-	// 该档用独立内存 buf 收集全部输出(避免跨档共享 pipe 切换导致的屏幕串档竞态):
-	// 本档所有 fmt.Print* 先写进 buf,该档结束后再一次性冲刷到「真实屏幕 + 该档日志文件」。
-	startEffortBuf()
+	// 该档启动实时 Tee 拦截: 将输出同时实时多路复用到「当前终端/总览」和「分档日志文件」。
+	stopTee := startEffortTee(effortLog)
+	defer stopTee()
 
 	// 构造请求体: stream=true 强制注入 include_usage(与 nvidia.go:373-376 一致)。
-	chatReq := &OpenAIChatRequest{
-		Model:    model,
-		Messages: []ChatMessage{{Role: "user", Content: prompt}},
-		Stream:   true,
-		StreamOptions: &ChatStreamOptions{IncludeUsage: true},
-		// 关键: 注入思考开关与等级(NIM 官方 deepseek-v4-flash 形态)。
-		ChatTemplateKwargs: map[string]interface{}{
+	var kwargs map[string]interface{}
+	switch strings.ToLower(effort) {
+	case "off", "none", "false":
+		// 不开启思考模式: 不携带 chat_template_kwargs
+		kwargs = nil
+	default:
+		// 开启思考模式: 注入思考开关与等级
+		kwargs = map[string]interface{}{
 			"thinking":         true,
 			"reasoning_effort": effort,
-		},
+		}
+	}
+
+	chatReq := &OpenAIChatRequest{
+		Model:              model,
+		Messages:           []ChatMessage{{Role: "user", Content: prompt}},
+		Stream:             true,
+		StreamOptions:      &ChatStreamOptions{IncludeUsage: true},
+		ChatTemplateKwargs: kwargs,
 	}
 	body, err := json.Marshal(chatReq)
 	if err != nil {
 		stat.err = "构造请求体失败: " + err.Error()
 		fmt.Printf("[构造请求体失败] %v\n", err)
-		flushEffortBuf(effortLog)
 		return
 	}
-	fmt.Printf("[请求体] chat_template_kwargs={thinking:true, reasoning_effort:%q}\n", effort)
+	if kwargs == nil {
+		fmt.Printf("[请求体] 思考模式: 已关闭 (未携带 chat_template_kwargs)\n")
+	} else {
+		fmt.Printf("[请求体] chat_template_kwargs={thinking:true, reasoning_effort:%q}\n", effort)
+	}
 	fmt.Printf("[请求体] 完整 JSON: %s\n\n", string(body))
 
 	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		stat.err = "构造请求失败: " + err.Error()
 		fmt.Printf("[构造请求失败] %v\n", err)
-		flushEffortBuf(effortLog)
 		return
 	}
 	// 请求头与 nvidia.go:397-399 一致: 不注入 anthropic 头。
@@ -247,7 +258,6 @@ func runOnceEffort(targetURL, token, model, prompt, effort, effortLog string, st
 	if err != nil {
 		stat.err = "上游请求失败: " + err.Error()
 		fmt.Printf("[上游请求失败] 已耗时 %v | %v\n", time.Since(start), err)
-		flushEffortBuf(effortLog)
 		return
 	}
 	defer resp.Body.Close()
@@ -263,7 +273,6 @@ func runOnceEffort(targetURL, token, model, prompt, effort, effortLog string, st
 		errStr := truncate(string(errBytes), 2000)
 		stat.err = fmt.Sprintf("上游 %d: %s", resp.StatusCode, truncate(string(errBytes), 80))
 		fmt.Printf("[上游非 200 错误体,effort=%s]\n%s\n", effort, errStr)
-		flushEffortBuf(effortLog)
 		return
 	}
 
@@ -441,8 +450,6 @@ func runOnceEffort(targetURL, token, model, prompt, effort, effortLog string, st
 			fmt.Printf("结论: effort=%s → delta 无独立思考字段,思考内容可能混在正文或不开启 ✗\n", effort)
 		}
 	}
-
-	flushEffortBuf(effortLog)
 }
 
 // truncate 截断长字符串用于打印, 复刻 nvidia.go:200-206 的 truncateBody 行为。
@@ -530,69 +537,45 @@ func startTee(realStdout *os.File, logFile string) {
 	summaryScreen = realStdout
 }
 
-// startEffortBuf 拦截本档输出:把 os.Stdout 指向一个新 pipe 写端,goroutine 把读端字节
-// 写进本档 buf(只收容,不直接写屏幕/文件)。本档结束 flushEffortBuf 时关闭写端 → goroutine 收到 EOF、buf 收齐,
-// 主协程再串行把 buf 一次冲到「屏幕(总览 pipe)+ 该档文件」。无跨档 pipe 切换竞态。
-func startEffortBuf() {
-	buf := new(bytes.Buffer)
-	r, w, err := os.Pipe()
-	if err != nil {
-		// pipe 失败:退化为不拦截(本档直接写总览 pipe),牺牲分档文件隔离但不出错。
-		fmt.Fprintf(os.Stdout, "[warn] effort pipe 失败,本档输出混入总览: %v\n", err)
-		effortBuf = nil
-		effortSavedOut = nil
-		return
-	}
-	effortBuf = buf
-	effortSavedOut = os.Stdout // 保存总览 pipe 写端,flush 后恢复
-	effortPipeWriter = w       // 保存本档 pipe 写端,flush 时关闭触发 goroutine 收齐
-	os.Stdout = w              // 本档 fmt.Print* 进 pipe
-	go func() {
-		_, _ = io.Copy(buf, r)
-		_ = r.Close()
-	}()
-}
-
-// flushEffortBuf 关闭本档 pipe 写端,等收容 goroutine 读到 EOF 把 buf 收齐,
-// 再把 buf 一次性冲到「该档日志文件 + 屏幕(经总览 pipe)」,最后恢复 os.Stdout。
-// goroutine-less 串行最后一冲,无跨档串档。
-func flushEffortBuf(logPath string) {
-	if effortBuf == nil {
-		// 退化为不拦截的档:无需冲刷,os.Stdout 始终是总览写端。
-		return
-	}
-	// 先恢复 os.Stdout 到总览 pipe 写端,使后续 fmt 走总览。
-	if effortSavedOut != nil {
-		os.Stdout = effortSavedOut
-	}
-	effortSavedOut = nil
-
-	// 关闭当前 pipe 写端,触发收容 goroutine 读到 EOF,完成 buf 收齐。
-	// 注意 effortSavedOut 是总览写端,os.Stdout 已切回它;这里关闭的是本档 pipe 写端。
-	// 本档 pipe 写端 = 切换前的 os.Stdout,需单独持有句柄。
-	if effortPipeWriter != nil {
-		_ = effortPipeWriter.Close()
-		effortPipeWriter = nil
-	}
-
-	// 此时 buf 已收齐。bytes.Buffer.WriteTo 会推进读指针,连续两次 WriteTo 第二次为空,
-	// 故先取字符串再分别写文件与屏幕。
-	content := effortBuf.String()
-
-	// 写该档日志文件。
+// startEffortTee 启动本档实时 Tee: 拦截 os.Stdout, 实时 MultiWriter 写入「分档日志文件」以及「切换前的总览 Pipe 写端」。
+// 这样本档接收到的每一帧 SSE 在控制台和分档日志文件中都是实时逐行打屏与落盘的。
+func startEffortTee(logPath string) func() {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		fmt.Fprintf(os.Stdout, "[warn] 建分档日志父目录失败(%s): %v\n", logPath, err)
+		return func() {}
 	}
-	if f, err := os.Create(logPath); err == nil {
-		_, _ = f.WriteString(content)
-		_ = f.Close()
-	} else {
+	f, err := os.Create(logPath)
+	if err != nil {
 		fmt.Fprintf(os.Stdout, "[warn] 创建分档日志失败(%s): %v\n", logPath, err)
+		return func() {}
 	}
-	// buf 内容也写到屏幕(经总览 pipe → 屏幕+总览文件,跨档串行无交叠)。
-	_, _ = os.Stdout.WriteString(content)
-	fmt.Fprintf(os.Stdout, "[log] 分档日志已写入: %s\n", logPath)
-	effortBuf = nil
+
+	savedOut := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "[warn] os.Pipe 失败,本档日志可能无法分流: %v\n", err)
+		_ = f.Close()
+		return func() {}
+	}
+
+	os.Stdout = w
+	mw := io.MultiWriter(savedOut, f)
+	done := make(chan struct{})
+
+	go func() {
+		_, _ = io.Copy(mw, r)
+		_ = f.Close()
+		_ = r.Close()
+		close(done)
+	}()
+
+	return func() {
+		// 恢复 os.Stdout
+		os.Stdout = savedOut
+		_ = w.Close()
+		<-done
+		fmt.Fprintf(os.Stdout, "[log] 分档日志已写入: %s\n", logPath)
+	}
 }
 
 // flushTee 关闭总览 pipe 写端(在 main 退出前调用)。

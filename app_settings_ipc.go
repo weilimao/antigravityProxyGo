@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"antigravity-proxy/internal/netutil"
+	"antigravity-proxy/internal/relay"
 	"antigravity-proxy/internal/settings"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -230,6 +231,28 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		maxTokens := getIntArg(0)
 		_ = a.settingsMgr.SetCustomMaxOutputTokens(maxTokens)
 		a.AddLog(fmt.Sprintf("⚙️ 自定义最大输出 Token 已更新: %d", maxTokens))
+		return true
+
+	case "settings:set-reasoning-as-text":
+		enabled := getBoolArg(0)
+		_ = a.settingsMgr.SetReasoningAsText(enabled)
+		relay.SetGlobalReasoningAsText(enabled)
+		status := "关闭"
+		if enabled {
+			status = "开启"
+		}
+		a.AddLog(fmt.Sprintf("⚙️ 思考过程直吐正文模式: %s", status))
+		return true
+
+	case "settings:set-enable-thinking-mode":
+		enabled := getBoolArg(0)
+		_ = a.settingsMgr.SetEnableThinkingMode(enabled)
+		relay.SetGlobalEnableThinkingMode(enabled)
+		status := "关闭"
+		if enabled {
+			status = "开启"
+		}
+		a.AddLog(fmt.Sprintf("⚙️ 思考模式已: %s", status))
 		return true
 
 	case "settings:language-changed":

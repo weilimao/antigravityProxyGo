@@ -89,6 +89,8 @@ type Config struct {
 	CustomThinkingBudget          int    `json:"customThinkingBudget"`
 	CustomThinkingMinBudget       int    `json:"customThinkingMinBudget"`
 	CustomMaxOutputTokens         int    `json:"customMaxOutputTokens"`
+	ReasoningAsText               bool   `json:"reasoningAsText"`
+	EnableThinkingMode            bool   `json:"enableThinkingMode"`
 	EnableDebuggerMode            bool   `json:"enableDebuggerMode"`
 	DebuggerLogPath               string `json:"debuggerLogPath"`
 	// NvidiaPreferredModels 是全局级"NVIDIA 专属模型清单",所有 NVIDIA 账号共用。
@@ -220,6 +222,8 @@ func (m *Manager) Init(defaultPath string) {
 		CustomThinkingBudget:          0,
 		CustomThinkingMinBudget:       32,
 		CustomMaxOutputTokens:         65536,
+		ReasoningAsText:               false,
+		EnableThinkingMode:            true,
 		EnableDebuggerMode:            false,
 		DebuggerLogPath:               "logs/debugger",
 	}
@@ -264,6 +268,7 @@ func (m *Manager) loadConfig() {
 		NvidiaCompressEnabled:         true,
 		NvidiaCompressThresholdTokens: 80000,
 		NvidiaCompressKeepToolResults: 4,
+		EnableThinkingMode:      true,
 		EnableDebuggerMode:      false,
 		DebuggerLogPath:         "logs/debugger",
 	}
@@ -274,6 +279,7 @@ func (m *Manager) loadConfig() {
 	// Detect which security fields are explicitly set in the config file.
 	// If a security field is missing from an older config, apply secure defaults
 	// rather than the Go zero value (false).
+	needSave := false
 	var rawMap map[string]json.RawMessage
 	if err := json.Unmarshal(data, &rawMap); err == nil {
 		if _, exists := rawMap["relaySSRFBlock"]; !exists {
@@ -287,6 +293,10 @@ func (m *Manager) loadConfig() {
 		}
 		if _, exists := rawMap["customThinkingSupports"]; !exists {
 			parsed.CustomThinkingSupports = false
+		}
+		if !parsed.EnableThinkingMode {
+			parsed.EnableThinkingMode = true
+			needSave = true
 		}
 		if _, exists := rawMap["enableDebuggerMode"]; !exists {
 			parsed.EnableDebuggerMode = false
@@ -340,7 +350,7 @@ func (m *Manager) loadConfig() {
 		}
 	}
 
-	if modified {
+	if modified || needSave {
 		_ = m.SaveConfig()
 	}
 
@@ -883,6 +893,7 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			FallbackProxyUsername: "",
 			FallbackProxyPassword: "",
 			RequestTimeout:       300,
+			EnableThinkingMode:   true,
 		}
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")
 		if err != nil {
@@ -1287,6 +1298,32 @@ func (m *Manager) SetCustomMaxOutputTokens(val int) error {
 	return m.SaveConfig()
 }
 
+func (m *Manager) GetReasoningAsText() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.ReasoningAsText
+}
+
+func (m *Manager) SetReasoningAsText(val bool) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.ReasoningAsText = val
+	return m.SaveConfig()
+}
+
+func (m *Manager) GetEnableThinkingMode() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.config.EnableThinkingMode
+}
+
+func (m *Manager) SetEnableThinkingMode(val bool) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.EnableThinkingMode = val
+	return m.SaveConfig()
+}
+
 type SessionOptimizationConfig struct {
 	EnableCustomCompression bool   `json:"enableCustomCompression"`
 	MaxTokensThreshold      int    `json:"maxTokensThreshold"`
@@ -1420,6 +1457,10 @@ type ManagerInterface interface {
 	SetCustomThinkingMinBudget(val int) error
 	GetCustomMaxOutputTokens() int
 	SetCustomMaxOutputTokens(val int) error
+	GetReasoningAsText() bool
+	SetReasoningAsText(val bool) error
+	GetEnableThinkingMode() bool
+	SetEnableThinkingMode(val bool) error
 	GetEnableDebuggerMode() bool
 	SetEnableDebuggerMode(enable bool) error
 	GetDebuggerLogPath() string

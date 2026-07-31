@@ -1820,6 +1820,18 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 					// 替换哨兵值为真实签名，保证 v1internal API 思考链连续性
 					if innerReq, ok := v1internalReq["request"].(map[string]interface{}); ok {
 						sigcache.InjectCachedSignatures(innerReq, sigcache.GetGlobal(), userSession.UserID, currentModel)
+
+						// 强效注入思考配置，强制 Gemini 上游输出带 thought:true 标记的明文思考内容
+						if IsEnableThinkingMode() {
+							genConfig, _ := innerReq["generationConfig"].(map[string]interface{})
+							if genConfig == nil {
+								genConfig = make(map[string]interface{})
+								innerReq["generationConfig"] = genConfig
+							}
+							genConfig["thinkingConfig"] = map[string]interface{}{
+								"includeThoughts": true,
+							}
+						}
 					}
 
 					if innerBytes, errMar := json.Marshal(v1internalReq); errMar == nil {
