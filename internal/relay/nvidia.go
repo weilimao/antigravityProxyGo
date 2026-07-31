@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -991,32 +992,93 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		h.log("⚠️ [NVIDIA Anthropic 流式] http.ResponseWriter 不支持 Flusher, 降级为仅 bufio flush (SSE 实时性可能打折)")
+		h.log("⚠️ [NVIDIA Anthropic 流式] http.ResponseWriter 不支持 Flusher, 降级为仅 bufio flush (SSE �时性可能打折)")
 	}
 
-	// 蓄流回放:先在内存把整条上游 SSE 攒成完整 Anthropic SSE,断流可原账号重拉(≤5×5s),不换号;
-	// 攒齐后再写响应头并逐帧回放给客户端;重试期间不写任何字节,不会半截冲突。
-	replay, in, out, finalErr := h.pullAnthropicStreamWithRetry(r, resp, poolAccount, targetURL, upstreamBody, model)
-	if finalErr != nil {
-		// 重试耗尽:回写 Anthropic overloaded_error(529 语义),让 CLI 识别为真实失败而非"本轮正常结束"。
-		// 取代旧的"补 end_turn 假闭合"——后者会让 CLI 拿到内容残缺但语义正常的流,既不重试也不报错,任务就卡死。
-		resp.Body.Close()
-		h.log("🛑 [NVIDIA Anthropic 流式] 上游断流, 服务端重试 5 次仍失败, 回写 overloaded_error: %v", finalErr)
-		h.replyAnthropicOverloaded(w)
-		return
-	}
-
-	// 整条 ready:写 SSE 响应头并逐帧回放 buffer 给客户端。
+	// 混合模式 + 延迟缓冲保 503:
+	//   - pull 前 liveFW 置 deferredActive=true + firstByteHook(WriteHeader 200 + 刷头)。
+	//   - 推理模型:首轮 tee 把 message_start + thinking 块 start 暂存 liveFW.deferred,首个 thinking_delta
+	//     到达时 tee 调 liveFW.flushDeferred() 触发 WriteHeader + 把框架帧一齐送出 + 逐字实时推思考。
+	//     首字节延迟 ≈ TTFT。
+	//   - 无推理模型:首轮无 live 字节,pull 返回成功后 replayBodyInto 前手动调 flushDeferred 触发 WriteHeader,
+	//     再回放正文。首字节延迟与改动前一致(无长沉默期,不回归)。
+	//   - 上游在首条思考实质内容前就断流重试耗尽:deferred 未 flush,dropDeferred 丢弃框架帧,回写 503
+	//     overloaded_error,客户端干净失败(从未收到任何字节)。一旦思考实质内容已 flush(200 头已发),
+	//     失败只能流内补 event:error 表达(SSE 流式失败的规范语义)。
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	if ok {
-		flusher.Flush() // 立即把响应头推给客户端, 让其尽早进入 SSE 等待状态
-	}
 	bw := bufio.NewWriter(w)
-	bw.Write(replay.bytes())
+	liveFW := newFlushWriter(fmt.Sprintf("nv_%d", time.Now().UnixNano()), bw, flusher)
+
+	headerWritten := false
+	headerMu := &sync.Mutex{}
+	firstLiveByteHook := func() {
+		headerMu.Lock()
+		defer headerMu.Unlock()
+		if headerWritten {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		if ok {
+			flusher.Flush() // 立即把响应头推给客户端,让其尽早进入 SSE 等待状态
+		}
+		headerWritten = true
+	}
+	liveFW.firstByteHook = firstLiveByteHook
+	liveFW.deferredActive = true // pull 阶段框架帧先进 deferred,等首条实质内容 flush
+
+	replay, liveThinkingOpen, in, out, finalErr := h.pullAnthropicStreamWithRetry(r, resp, poolAccount, targetURL, upstreamBody, model, liveFW)
+	if finalErr != nil {
+		// 重试耗尽。两种情况:
+		// 1) 200 头未发(deferred 未 flush,上游在首条思考实质内容前就次次断流):drop 丢弃框架帧,
+		//    回写 503 overloaded_error,客户端干净失败;
+		// 2) 200 头已发(首条思考实质内容已 flush):无法回退状态码,补闭合未闭合思考块后流内追加
+		//    event:error,让客户端 SDK 据此识别失败(SSE 流式失败规范语义)。
+		headerMu.Lock()
+		written := headerWritten
+		headerMu.Unlock()
+		resp.Body.Close()
+		h.log("🛑 [NVIDIA Anthropic 流式] 上游断流, 服务端重试 5 次仍失败, 回写 overloaded_error: %v", finalErr)
+		if !written {
+			liveFW.dropDeferred() // 丢弃暂存的 message_start 等框架帧,确保 503 回写前无字节落盘
+			h.replyAnthropicOverloaded(w)
+			return
+		}
+		// 200 头已发:deferred 已 flush,liveFW 转直写模式。流内补闭合 + error 事件收尾。
+		if liveThinkingOpen {
+			liveFW.writeEvent("content_block_delta", contentBlockSignatureDeltaPayload(0, ""))
+			liveFW.writeEvent("content_block_stop", contentBlockStopPayload(0))
+		}
+		errPayload, _ := json.Marshal(map[string]interface{}{
+			"type": "error",
+			"error": map[string]interface{}{
+				"type":    "overloaded_error",
+				"message": "NVIDIA upstream stream interrupted and server-side retry exhausted (5x5s, same account).",
+			},
+		})
+		liveFW.writeEvent("error", string(errPayload))
+		bw.Flush()
+		if ok {
+			flusher.Flush()
+		}
+		return
+	}
+
+	// 整条 ready:replay 中正文/工具段 + 尾帧待回放。若首轮思考推到一半断流未闭合(liveThinkingOpen),
+	// 先在 live 上补 signature_delta(空)+content_block_stop 闭合 index 0 思考块,再回放正文(正文从 index 1 起)。
+	// replayBodyInto 回放正文前必须确保 200 头已发:
+	//   - 推理模型首轮 thinking 实质内容已 flush,deferred 已 flush 过,flushDeferred 幂等无副作用;
+	//   - 无推理模型首轮无 live 字节,deferred 仍 active 且为空,此处 flushDeferred 触发 WriteHeader 200
+	//     (firstByteHook)+ 刷净空 deferred,随后 replayBodyInto 的正文首帧直写客户端,不回归首字节延迟。
+	// 补闭合帧同样需在 200 头发出后直写:故 flushDeferred 必须在补闭合/replayBodyInto 之前调用。
+	liveFW.flushDeferred()
+	if liveThinkingOpen {
+		liveFW.writeEvent("content_block_delta", contentBlockSignatureDeltaPayload(0, ""))
+		liveFW.writeEvent("content_block_stop", contentBlockStopPayload(0))
+	}
+	replay.replayBodyInto(liveFW) // 只回放正文/工具段+尾帧,跳过 message_start 与思考头
 	bw.Flush()
 	if ok {
 		flusher.Flush() // 收尾刷净, 确保 message_stop 落盘
@@ -1042,7 +1104,26 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 //
 // 超大流保护:蓄流字节数超过 replayMaxBytes(16 MiB)判定为超大输出,直接退回"边读边写旧路径"(不重试),
 // 避免无界内存占用。这是蓄流架构的固有约束:超大输出回退实时透传,放弃断流重试能力。
-func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstResp *http.Response, poolAccount *account.Account, targetURL string, upstreamBody []byte, model string) (replay *replayWriter, in, out int, finalErr error) {
+//
+// 混合模式(思考实时透传 + 正文蓄流回放):liveFW 非 nil 时,首轮(attempt==0)用 teeSink 把思考块
+// 逐字实时透传到 liveFW(客户端实时看到思考),正文/工具块只蓄流进 replay;上游断流后从第 1 轮起
+// 切纯 replayWriter 重新蓄整条(teereplayOnly),整条 ready 后只回放正文(replayBodyInto 跳过思考头)。
+// 重试轮的思考不再外发(首轮已实时显示的思考是草稿,断流不回滚),避免二次推送导致 index 冲突/重复 message_start。
+// 返回 liveThinkingOpen:首轮 live 上思考块是否仍处开块未闭合状态,供调用方回放正文前判断是否补闭合。
+//
+// 返回 (replay, liveThinkingOpen, in, out, err):
+//   - replay:整条 ready 的 Anthropic SSE 字节缓冲,供调用方 replayBodyInto 回放正文;
+//   - liveThinkingOpen:首轮实时推到一半的思考块若未闭合则为 true,调用方据此补 signature_delta+content_block_stop;
+//   - in/out:成功这次的累计 input/output tokens,用于号池账号维度统计;失败时为 0;
+//   - err:重试耗尽仍失败时非 nil(含最后一次上游错误),调用方据此回写 overloaded_error 给 CLI。
+//
+// 完整性判定:openAIChatSSEToAnthropicSSEInto 返回 finishEmitted==true && err==nil 视为完整。
+// finishEmitted==true 表示收到上游 finish_reason 帧;err==nil 排除 ctx 取消与上游 SSE error chunk
+// 及 scanner.Err()(UnexpectedEOF 等)。两者同时满足才认定本轮蓄流可回放给客户端。
+//
+// 重试约束(对齐用户需求):不重新选号、不冷冻账号、不改请求体;仅以同一 poolAccount 复用 targetURL +
+// upstreamBody 重建 POST 上游。与现有"429 退避换号"链路独立,不触发 skippedAccounts/cooldown 联动。
+func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstResp *http.Response, poolAccount *account.Account, targetURL string, upstreamBody []byte, model string, liveFW *flushWriter) (replay *replayWriter, liveThinkingOpen bool, in, out int, finalErr error) {
 	const (
 		maxRetries = 5
 		// replayMaxBytes 复用包级 nvidiaReplayMaxBytes,保证直连与兜底 helper 同一阈值。
@@ -1058,6 +1139,11 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 	httpClient := h.streamClient
 	ctx := r.Context()
 
+	// 混合模式 tee:首轮(attempt==0)双写——思考实时透传 liveFW,正文蓄流 replay;
+	// 断流后从第 1 轮起切 tee.replayOnly,整条 ready 后回放正文(replayBodyInto 跳过思考头)。
+	// liveFW==nil(上游不支持 Flusher 的降级路径)时退化为纯蓄流,等同旧行为。
+	tee := newTeeSink(newReplayWriter(), liveFW)
+
 	// 本次循环的活跃响应体(逐次重拉新建,每次结束后 Close)
 	var activeResp *http.Response = firstResp
 	var activeBody io.ReadCloser = firstResp.Body
@@ -1071,7 +1157,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				if activeBody != nil {
 					activeBody.Close()
 				}
-				return nil, 0, 0, finalErr
+				return nil, false, 0, 0, finalErr
 			}
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
@@ -1094,11 +1180,18 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 			// 主循环已保证流式入站进入本函数时 resp.StatusCode==200,此处仅防御性兼容。
 			finalErr = fmt.Errorf("nvidia upstream status %d", activeResp.StatusCode)
 			activeBody.Close()
-			return nil, 0, 0, finalErr
+			return nil, false, 0, 0, finalErr
 		}
 
-		rw := newReplayWriter()
-		attemptIn, attemptOut, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, activeBody, activeBody, rw, streamID, model)
+		// sink 选择:首轮用 tee(双写,思考实时透传);断流后重试轮切纯 replay(tee.replayOnly)
+		// 并 reset 丢弃首轮未完整蓄流,换 tee.replay 作 sink 重新蓄整条上游内容,不再实时外发。
+		var sink sseEventSink = tee
+		if attempt > 0 {
+			tee.replayOnly = true
+			tee.replay.reset()
+			sink = tee.replay
+		}
+		attemptIn, attemptOut, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, activeBody, activeBody, sink, streamID, model)
 		activeBody.Close() // 本轮上游响应体读完即关,下一轮(若有)重拉会拿到全新 body
 
 		// 完整性判定:收到 finish_reason 帧或上游流以 [DONE]/正常 EOF 正常终止,且无上游错误/未 ctx 取消 → 可回放。
@@ -1106,7 +1199,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 		// 避免把它误判为断流而触发无意义重试。真·断流(unexpected EOF 在 [DONE] 前)使 streamTerminated=false
 		// 且 sseErr!=nil,本判定不满足,落入重试路径。
 		if sseErr == nil && (finishEmitted || streamTerminated) {
-			return rw, attemptIn, attemptOut, nil
+			return tee.replay, tee.liveThinkingOpen, attemptIn, attemptOut, nil
 		}
 		// ctx 取消:客户端已断,不再重试,带上 ctx 错误返回。
 		if ctx != nil && ctx.Err() != nil {
@@ -1114,13 +1207,13 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 			if sseErr != nil {
 				finalErr = fmt.Errorf("%v (last sse err: %v)", finalErr, sseErr)
 			}
-			return nil, 0, 0, finalErr
+			return nil, false, 0, 0, finalErr
 		}
 		// 超大流保护:蓄流超过阈值,判定为超大输出,退回边读边写(不再重试)。
-		if rw.len() > replayMaxBytes {
-			h.log("⚠️ [NVIDIA Anthropic 流式] 蓄流 %d 字节超阈值 %d, 退回边读边写路径放弃重试", rw.len(), replayMaxBytes)
-			finalErr = fmt.Errorf("nvidia replay stream oversized %d bytes (exceeds %d), fall back to passthrough", rw.len(), replayMaxBytes)
-			return nil, 0, 0, finalErr
+		if tee.replay.len() > replayMaxBytes {
+			h.log("⚠️ [NVIDIA Anthropic 流式] 蓄流 %d 字节超阈值 %d, 退回边读边写路径放弃重试", tee.replay.len(), replayMaxBytes)
+			finalErr = fmt.Errorf("nvidia replay stream oversized %d bytes (exceeds %d), fall back to passthrough", tee.replay.len(), replayMaxBytes)
+			return nil, false, 0, 0, finalErr
 		}
 		// 不完整(断流/未收尾/上游内嵌 error chunk):记录原因,睡眠 5s 后重拉(最后一轮不再睡)。
 		lastErr := sseErr
@@ -1128,13 +1221,13 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 			lastErr = fmt.Errorf("nvidia upstream stream incomplete (finishEmitted=%v streamTerminated=%v)", finishEmitted, streamTerminated)
 		}
 		finalErr = lastErr
-		h.log("⚠️ [NVIDIA Anthropic 流式] 上游断流判定不完整(已攒 %d 字节), 将重试 %d/%d 账号 %s: %v", rw.len(), attempt+1, maxRetries, poolAccount.Email, lastErr)
+		h.log("⚠️ [NVIDIA Anthropic 流式] 上游断流判定不完整(已攒 %d 字节), 将重试 %d/%d 账号 %s: %v", tee.replay.len(), attempt+1, maxRetries, poolAccount.Email, lastErr)
 		if attempt < maxRetries-1 {
 			// 睡眠 5s 但受 ctx 取消打断,客户端断开立即放弃重试不空跑。
 			select {
 			case <-ctx.Done():
 				finalErr = fmt.Errorf("client context cancelled during retry backoff: %w", ctx.Err())
-				return nil, 0, 0, finalErr
+				return nil, false, 0, 0, finalErr
 			case <-time.After(retryWait):
 			}
 		}
@@ -1155,7 +1248,9 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 			h.log("🛟 [NVIDIA Anthropic 流式] 直连重试耗尽,切兜底代理 %s 再试 1 轮 账号 %s", fbAddr, poolAccount.Email)
 			fbReplay, fbIn, fbOut, fbFinalErr := h.pullAnthropicStreamOneRound(ctx, fbClient, poolAccount, targetURL, upstreamBody, streamID, model, "兜底")
 			if fbFinalErr == nil && fbReplay != nil {
-				return fbReplay, fbIn, fbOut, nil
+				// 兜底成功:回放兜底 replay 正文(replayBodyInto 跳过其思考头);首轮 live 思考块
+				// 若仍开未闭合,由 tee.liveThinkingOpen 透传给调用方在回放前补闭合。
+				return fbReplay, tee.liveThinkingOpen, fbIn, fbOut, nil
 			}
 			if fbFinalErr != nil {
 				finalErr = fmt.Errorf("fallback proxy round also failed: %w", fbFinalErr)
@@ -1163,7 +1258,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 		}
 	}
 	// 重试耗尽(含兜底也失败):返回最后一次错误原因,由调用方回写 overloaded_error。
-	return nil, 0, 0, finalErr
+	return nil, false, 0, 0, finalErr
 }
 
 // pullAnthropicStreamOneRound 用指定的 httpClient(potentially 兜底代理 client)向 NVIDIA 上游发一次请求,

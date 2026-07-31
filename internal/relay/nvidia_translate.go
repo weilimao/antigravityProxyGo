@@ -1035,6 +1035,18 @@ type flushWriter struct {
 	flusher http.Flusher
 	reqID   string
 	mu      sync.Mutex
+	// firstByteHook 在首次向 w 写入前一次性调用(混合模式延迟 WriteHeader 场景)。
+	// 用途:past-WriteHeader 的首字节到达时由 flushWriter 触发回调,保证 WriteHeader(200)
+	// 先于任何响应体字节落盘。nil 时跳过。触发后置空避免重复调用。
+	firstByteHook func()
+	// deferred 延迟缓冲:混合模式延迟 WriteHeader 场景下,在"实质内容首字"到达前,
+	// 框架帧(message_start + thinking 块 content_block_start)先进 deferred 暂存,不落盘不 flusher、
+	// 也不触发 WriteHeader。首个实质内容(thinking_delta 或回放正文首帧)到达时调 flushDeferred 触发
+	// firstByteHook(WriteHeader 200 + 刷头)+ 把 deferred 字节顺序写 w + flusher,转入直写模式。
+	// 若上游在实质内容前就断流重试耗尽,dropDeferred 丢弃暂存帧,回写 503,不污染客户端流。
+	// deferredActive=false(默认)时 writeEvent/writeRaw 直接走直写路径,行为与改动前一致(零回归)。
+	deferred       bytes.Buffer
+	deferredActive bool
 }
 
 // newFlushWriter 创建 flushWriter。若 flusher 非 nil, writeEvent/writeRaw/flush 会在 bufio.Flush
@@ -1047,9 +1059,21 @@ func newFlushWriter(reqID string, w *bufio.Writer, flusher ...http.Flusher) *flu
 	return fw
 }
 
+// writeEvent 写一帧 Anthropic SSE。deferredActive 期间该帧进 deferred 暂存,不落盘;
+// 否则触发 firstByteHook(首次)后直写 w + flusher。
 func (f *flushWriter) writeEvent(event, data string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deferredActive {
+		f.deferred.WriteString("event: " + event + "\n")
+		f.deferred.WriteString("data: " + data + "\n\n")
+		return
+	}
+	if f.firstByteHook != nil {
+		hook := f.firstByteHook
+		f.firstByteHook = nil // 一次性触发,避免重复 WriteHeader
+		hook()
+	}
 	f.w.WriteString("event: " + event + "\n")
 	f.w.WriteString("data: " + data + "\n\n")
 	f.w.Flush() // 出 bufio 内部缓冲 → http.ResponseWriter
@@ -1061,6 +1085,15 @@ func (f *flushWriter) writeEvent(event, data string) {
 func (f *flushWriter) writeRaw(s string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deferredActive {
+		f.deferred.WriteString(s)
+		return
+	}
+	if f.firstByteHook != nil {
+		hook := f.firstByteHook
+		f.firstByteHook = nil
+		hook()
+	}
 	f.w.WriteString(s)
 	f.w.Flush()
 	if f.flusher != nil {
@@ -1068,9 +1101,47 @@ func (f *flushWriter) writeRaw(s string) {
 	}
 }
 
+// flushDeferred 把暂存的 deferred 字节一次性落盘:先触发 firstByteHook(WriteHeader 200 + 刷头),
+// 再把 deferred 写 w + flusher,然后关闭延迟模式转入直写。幂等:多次调用只首次落盘 deferred。
+// 用于混合模式首个实质内容(thinking_delta 或回放正文首帧)到达时确认 200 流,把其前的框架帧一并送出。
+func (f *flushWriter) flushDeferred() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.deferredActive {
+		return // 未进入延迟模式,无需处理
+	}
+	f.deferredActive = false
+	if f.firstByteHook != nil {
+		hook := f.firstByteHook
+		f.firstByteHook = nil
+		hook() // WriteHeader(200) + flusher.Flush 刷头
+	}
+	if f.deferred.Len() > 0 {
+		f.w.Write(f.deferred.Bytes())
+		f.w.Flush()
+		if f.flusher != nil {
+			f.flusher.Flush()
+		}
+		f.deferred.Reset()
+	}
+}
+
+// dropDeferred 丢弃暂存的框架帧并关闭延迟模式,供上游在实质内容前断流重试耗尽时回 503 使用:
+// 客户端从未收到任何字节(message_start 等框架帧未落盘),故可干净回写 503 overloaded_error。
+func (f *flushWriter) dropDeferred() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deferredActive = false
+	f.deferred.Reset()
+	f.firstByteHook = nil
+}
+
 func (f *flushWriter) flush() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deferredActive {
+		return // 延迟模式:不刷盘,等 flushDeferred 转实写
+	}
 	f.w.Flush()
 	if f.flusher != nil {
 		f.flusher.Flush()
@@ -1126,6 +1197,236 @@ func (r *replayWriter) len() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.buf.Len()
+}
+
+// reset 清空已蓄流内容(保留 buffer 容量)。混合模式下重试轮开始前丢弃首轮未完整蓄流,
+// 换用纯 replay 重新蓄整条上游内容时调用。
+func (r *replayWriter) reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.buf.Reset()
+}
+
+// replayBodyInto 把本 replay buffer 中的"正文/工具段 + 尾帧"回放到 live 客户端 sink,
+// 跳过开头的 message_start 与整个思考段(它们在首轮已通过 teeSink 实时推给 live)。
+// 供混合模式(writeNvidiaAnthropicStream)在整条 ready 后把正文回放给客户端使用。
+//
+// 帧序约定(由 openAIChatSSEToAnthropicSSEInto 产出):
+//
+//	message_start
+//	[content_block_start(thinking) → thinking_delta* → signature_delta → content_block_stop]  // 思考段,可缺省
+//	content_block_start(text|tool_use) → ... → content_block_stop                              // 正文/工具段
+//	message_delta
+//	message_stop
+//
+// 回放策略:逐帧扫描,message_start 永不回放(首轮已发);遇思考段从其 content_block_start(thinking)
+// 起整段跳到配对 content_block_stop 之后;首个正文/工具 content_block_start 起的所有帧(含 text/tool
+// delta、停块、message_delta、message_stop)原样回放给 live。
+//
+// liveSink 期望为 flushWriter;replayBodyInto 不锁 liveSink,调用方需保证此时无其它写者并发。
+func (r *replayWriter) replayBodyInto(liveSink sseEventSink) {
+	r.mu.Lock()
+	raw := append([]byte(nil), r.buf.Bytes()...)
+	r.mu.Unlock()
+	frames := scanAnthropicSSEFrames(raw)
+	skippingThinking := false
+	bodyStarted := false
+	for _, f := range frames {
+		switch f.event {
+		case "message_start":
+			// 首帧已在首轮实时发过,不重发
+			continue
+		case "content_block_start":
+			if !bodyStarted {
+				kind := contentBlockKind(f.data)
+				if kind == "thinking" {
+					// 思考段开头:跳过直到它的 content_block_stop
+					skippingThinking = true
+					continue
+				}
+				if kind == "text" || kind == "tool_use" {
+					bodyStarted = true
+				}
+			}
+		case "content_block_stop":
+			if skippingThinking {
+				// 配对到思考块的 stop,跳过本帧后结束跳过状态
+				skippingThinking = false
+				continue
+			}
+		}
+		if skippingThinking {
+			continue
+		}
+		liveSink.writeRaw(f.raw)
+	}
+	liveSink.flush()
+}
+
+// anthropicSSEFrame 表示 replay buffer 内的一帧原始 SSE 字节片段,附解析出的事件名与 data。
+type anthropicSSEFrame struct {
+	event string
+	data  string
+	raw   string // 原始 SSE 文本(event: X\ndata: Y\n\n),回放时原样写出
+}
+
+// scanAnthropicSSEFrames 把 Anthropic SSE 字节流按帧切成 []anthropicSSEFrame。
+// 仅用于 replayBodyInto 回放内部 buffer(格式由 replayWriter.writeEvent 固定为
+// "event: <name>\ndata: <data>\n\n"),改造极轻,不依赖外部 SSE 包。
+func scanAnthropicSSEFrames(raw []byte) []anthropicSSEFrame {
+	frames := make([]anthropicSSEFrame, 0, 16)
+	var event, data string
+	rawStart := 0
+	n := len(raw)
+	i := 0
+	for i < n {
+		// 找一行结尾(\n)
+		nl := n
+		for j := i; j < n; j++ {
+			if raw[j] == '\n' {
+				nl = j
+				break
+			}
+		}
+		line := bytes.TrimRight(raw[i:nl], "\r")
+		switch {
+		case bytes.HasPrefix(line, []byte("event: ")):
+			event = string(bytes.TrimPrefix(line, []byte("event: ")))
+		case bytes.HasPrefix(line, []byte("data: ")):
+			data = string(bytes.TrimPrefix(line, []byte("data: ")))
+		case len(line) == 0:
+			// 空行 = 帧分隔,只有同时具备 event+data 才成帧
+			if event != "" && data != "" {
+				frames = append(frames, anthropicSSEFrame{
+					event: event,
+					data:  data,
+					raw:   string(raw[rawStart:nl+1]) + "\n",
+				})
+			}
+			event, data = "", ""
+			rawStart = nl + 1
+		}
+		i = nl + 1
+	}
+	return frames
+}
+
+// contentBlockKind 从 content_block_start 事件的 data 中提取 content_block.type(thinking|text|tool_use)。
+// 解析失败返回空串,调用方按"非思考即正文"处理。
+func contentBlockKind(data string) string {
+	var m map[string]interface{}
+	if json.Unmarshal([]byte(data), &m) != nil {
+		return ""
+	}
+	cb, _ := m["content_block"].(map[string]interface{})
+	if cb == nil {
+		return ""
+	}
+	kind, _ := cb["type"].(string)
+	return kind
+}
+
+// ===== teeSink: 混合模式双写 sink(思考实时透传 + 正文/工具蓄流) =====
+
+// teeSink 是 sseEventSink 的混合模式实现:把同一份 Anthropic SSE 事件同时写给
+// replay(蓄流,供断流重试与正文回放)与 live(实时推客户端 TCP socket)。
+//
+// 分流目标——精准解决"思考块等整条 ready 才出"的首字节延迟痛点:
+//
+//	message_start          → 双写(让客户端立即进入 SSE 等待态)
+//	思考段(thinking 块
+//	content_block_start →
+//	thinking_delta* →
+//	signature_delta →
+//	content_block_stop)    → 双写(思考逐字实时显示在客户端)
+//	正文/工具段起          → 只写 replay(整条 ready 后由 replayBodyInto 回放,
+//	                         保留断流重试能力——正文不丢半截)
+//	message_delta/stop     → 只写 replay(尾帧随正文回放补发)
+//
+// 切换时机:转译主循环保证"思考块在正文块之前完全闭合"(closeThinkingIfOpen 在开 text/tool 前必调,
+// 见 nvidia_translate.go:782-784)。故 tee 只需在见到首个正文块的 content_block_start(text/tool_use)
+// 时置 bodyStarted=true,此前所有帧双写 live,此后所有帧只写 replay。message_start 永远双写。
+//
+// replayOnly=true 时一律只写 replay:用于上游断流后的重试轮——首轮思考已实时发到客户端(草稿,
+// 断流不回滚),重试轮重新蓄流整条,整条 ready 后只回放正文(replayBodyInto 跳过思考头),
+// 避免向客户端二次推送 thinking/content_block_start 导致的 index 冲突与重复 message_start。
+type teeSink struct {
+	replay      *replayWriter
+	live        *flushWriter
+	bodyStarted bool // 已见首个正文/工具块 content_block_start,此后只蓄流不实时推
+	replayOnly  bool // 重试轮:全部只写 replay(压住思考重复外发)
+	// liveThinkingOpen 跟踪 live 上思考块是否仍处开块未闭合状态,供回放前判断是否补闭合。
+	liveThinkingOpen bool
+	// liveDeferredFlushed 标记首条实质思考内容是否已 flushDeferred(确认 200 流)。
+	liveDeferredFlushed bool
+}
+
+func newTeeSink(replay *replayWriter, live *flushWriter) *teeSink {
+	return &teeSink{replay: replay, live: live}
+}
+
+// writeEvent 按 bodyStarted/replayOnly 分流写 live+replay。
+func (t *teeSink) writeEvent(event, data string) {
+	// replay 始终写(蓄流供重试判定与正文回放)
+	t.replay.writeEvent(event, data)
+	if t.replayOnly || t.live == nil {
+		// 重试轮:liveThinkingOpen 保持首轮残留值不动,仅蓄流
+		return
+	}
+	// 双写分流:思考段(+message_start)实时推 live,正文段只 replay
+	pushLive := false
+	switch event {
+	case "message_start":
+		pushLive = true
+	case "content_block_start":
+		if !t.bodyStarted {
+			kind := contentBlockKind(data)
+			switch kind {
+			case "thinking":
+				pushLive = true
+				t.liveThinkingOpen = true
+			case "text", "tool_use":
+				// 首个正文块:不推 live(蓄流),标记正文段开始
+				t.bodyStarted = true
+			}
+		}
+	case "content_block_delta":
+		// 仍在思考段(bodyStarted 未置)才推 live;正文 delta 蓄流不推
+		if !t.bodyStarted {
+			pushLive = true
+			// 首条实质内容(thinking_delta):此前 message_start + thinking 块 start 是框架帧,
+			// 已暂存在 live.deferred。此刻 flushDeferred 触发 WriteHeader(200)+把框架帧一并送出,
+			// 确认 200 流。若上游在首条思考内容前就断流,deferred 未 flush,可干净回 503。
+			if !t.liveDeferredFlushed {
+				t.live.flushDeferred()
+				t.liveDeferredFlushed = true
+			}
+		}
+	case "content_block_stop":
+		// 仍在思考段的 stop 推 live 并清 liveThinkingOpen;正文 stop 蓄流不推
+		if !t.bodyStarted {
+			pushLive = true
+			t.liveThinkingOpen = false
+		}
+	}
+	if pushLive {
+		t.live.writeEvent(event, data)
+	}
+}
+
+// writeRaw 原始 SSE 字节同步双写(转译主循环未用到 writeRaw,保留接口对称)。
+func (t *teeSink) writeRaw(s string) {
+	t.replay.writeRaw(s)
+	if !t.replayOnly && t.live != nil && !t.bodyStarted {
+		t.live.writeRaw(s)
+	}
+}
+
+func (t *teeSink) flush() {
+	t.replay.flush()
+	if !t.replayOnly && t.live != nil {
+		t.live.flush()
+	}
 }
 
 // ===== Anthropic SSE payload 构造 =====
