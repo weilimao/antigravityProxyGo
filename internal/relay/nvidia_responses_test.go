@@ -644,3 +644,205 @@ func writeSSEToWriter(w http.ResponseWriter, flusher http.Flusher, jsonData stri
 func fmtFprintf(w http.ResponseWriter, s string) {
 	_, _ = w.Write([]byte(s))
 }
+
+// ===== C: NVIDIA 池流式 reasoning → Responses reasoning_text(问题 C 根因修复) =====
+//
+// 对应改动:nvidia_responses.go OpenAIChatSSEToResponsesSSE 循环内新增 reasoning 增量分支,
+// 把上游 ch.Delta.ReasoningContent 映射成 response.reasoning_text.delta(独立 output_item)。
+// 旧实现此处零 reasoning 处理,reasoning_content 被整段丢弃——Codex 走 NVIDIA 池完全无思考(C)。
+
+// TestOpenAIChatSSEToResponsesSSE_ReasoningStream 锁定:上游流式 reasoning_content + 正文,
+// 下游应出现独立 reasoning item 的 reasoning_text.delta + reasoning_text.done 收尾,
+// 且 reasoning 与正文 output_index 不同(独立 item),正文 done 也齐。
+func TestOpenAIChatSSEToResponsesSSE_ReasoningStream(t *testing.T) {
+	var sse strings.Builder
+	// reasoning 增量(两片)
+	writeSSEData(&sse, mustJSONString(map[string]interface{}{
+		"id": "chatcmpl-rs-reason", "object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{"reasoning_content": "思考"}, "finish_reason": nil}},
+	}))
+	writeSSEData(&sse, mustJSONString(map[string]interface{}{
+		"id": "chatcmpl-rs-reason", "object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{"reasoning_content": "完毕"}, "finish_reason": nil}},
+	}))
+	// 正文增量
+	writeSSEData(&sse, mustJSONString(map[string]interface{}{
+		"id": "chatcmpl-rs-reason", "object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{"content": "答案"}, "finish_reason": nil}},
+	}))
+	// finish + usage
+	writeSSEData(&sse, mustJSONString(map[string]interface{}{
+		"id": "chatcmpl-rs-reason", "object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{}, "finish_reason": "stop"}},
+		"usage":  map[string]int{"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+	}))
+	sse.WriteString("data: [DONE]\n\n")
+
+	buf := &flushBuffer{}
+	fw := newFlushWriter("test_resp_reason", bufio.NewWriter(buf))
+	in, out := OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "moonshotai/kimi-k2.5")
+	fw.flush()
+
+	if in != 5 || out != 3 {
+		t.Errorf("usage wrong: in=%d out=%d", in, out)
+	}
+
+	events := parseSSEEvents(buf.String())
+	requireEvent(t, events, "response.created")
+	requireEvent(t, events, "response.output_item.added")
+	requireEvent(t, events, "response.content_part.added")
+	requireEvent(t, events, "response.reasoning_text.delta")
+	requireEvent(t, events, "response.reasoning_text.done")
+	requireEvent(t, events, "response.output_text.delta")
+	requireEvent(t, events, "response.output_text.done")
+	requireEvent(t, events, "response.completed")
+
+	// reasoning_text.delta 累积文本应含两片思考
+	var reasonDelta strings.Builder
+	for _, ev := range events {
+		if ev.event == "response.reasoning_text.delta" {
+			var m map[string]interface{}
+			if err := json.Unmarshal([]byte(ev.data), &m); err == nil {
+				if s, ok := m["delta"].(string); ok {
+					reasonDelta.WriteString(s)
+				}
+			}
+		}
+	}
+	if reasonDelta.String() != "思考完毕" {
+		t.Errorf("reasoning_text.delta 累积期望 \"思考完毕\",实际 %q", reasonDelta.String())
+	}
+
+	// reasoning_text.done 累积文本应完整
+	var reasonDoneText string
+	for _, ev := range events {
+		if ev.event == "response.reasoning_text.done" {
+			var m map[string]interface{}
+			if err := json.Unmarshal([]byte(ev.data), &m); err == nil {
+				if s, ok := m["text"].(string); ok {
+					reasonDoneText = s
+				}
+			}
+		}
+	}
+	if reasonDoneText != "思考完毕" {
+		t.Errorf("reasoning_text.done 文本期望 \"思考完毕\",实际 %q", reasonDoneText)
+	}
+
+	// reasoning 与正文 output_index 必须不同(独立 item)
+	reasonOutIdx, textOutIdx := -1, -1
+	for _, ev := range events {
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(ev.data), &m); err != nil {
+			continue
+		}
+		switch ev.event {
+		case "response.reasoning_text.delta":
+			if v, ok := m["output_index"].(float64); ok && reasonOutIdx == -1 {
+				reasonOutIdx = int(v)
+			}
+		case "response.output_text.delta":
+			if v, ok := m["output_index"].(float64); ok && textOutIdx == -1 {
+				textOutIdx = int(v)
+			}
+		}
+	}
+	if reasonOutIdx == -1 || textOutIdx == -1 {
+		t.Fatalf("未取到 reasoning/text 的 output_index,reason=%d text=%d", reasonOutIdx, textOutIdx)
+	}
+	if reasonOutIdx == textOutIdx {
+		t.Fatalf("reasoning 与正文 output_index 不得相同(独立 item),reason=%d text=%d", reasonOutIdx, textOutIdx)
+	}
+}
+
+// TestOpenAIChatSSEToResponsesSSE_ReasoningFieldFallback 锁定:reasoning_content 缺失时,
+// reasoning 字段兜底走 reasoning_text 分支(部分 NIM 上游用 reasoning 字段名)。
+func TestOpenAIChatSSEToResponsesSSE_ReasoningFieldFallback(t *testing.T) {
+	var sse strings.Builder
+	writeSSEData(&sse, mustJSONString(map[string]interface{}{
+		"id": "chatcmpl-rf", "object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{"reasoning": "兜底思考"}, "finish_reason": nil}},
+	}))
+	writeSSEData(&sse, mustJSONString(map[string]interface{}{
+		"id": "chatcmpl-rf", "object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{"content": "正文"}, "finish_reason": nil}},
+	}))
+	writeSSEData(&sse, mustJSONString(map[string]interface{}{
+		"id": "chatcmpl-rf", "object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{}, "finish_reason": "stop"}},
+	}))
+	sse.WriteString("data: [DONE]\n\n")
+
+	buf := &flushBuffer{}
+	fw := newFlushWriter("test_resp_rf", bufio.NewWriter(buf))
+	_, _ = OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "z-ai/glm-5.2")
+	fw.flush()
+
+	events := parseSSEEvents(buf.String())
+	requireEvent(t, events, "response.reasoning_text.delta")
+	requireEvent(t, events, "response.reasoning_text.done")
+	respText := textOfDelta(events, "response.reasoning_text.delta")
+	if respText != "兜底思考" {
+		t.Errorf("reasoning 字段兜底应产出 reasoning_text.delta,期望 \"兜底思考\",实际 %q", respText)
+	}
+}
+
+// textOfDelta 拼接指定事件的 delta 字符串字段。
+func textOfDelta(events []sseEvent, eventName string) string {
+	var sb strings.Builder
+	for _, ev := range events {
+		if ev.event != eventName {
+			continue
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(ev.data), &m); err == nil {
+			if s, ok := m["delta"].(string); ok {
+				sb.WriteString(s)
+			}
+		}
+	}
+	return sb.String()
+}
+
+// ===== D-nvidia 非流式: OpenAIChatToResponses 含 reasoning_content =====
+
+// TestOpenAIChatToResponses_ReasoningItem 锁定:非流式 NVIDIA 响应含 reasoning_content 时,
+// 回译出的 Responses output[0] 为 reasoning_text message item,正文 output[1] 为 output_text。
+func TestOpenAIChatToResponses_ReasoningItem(t *testing.T) {
+	resp := &OpenAIChatResponse{
+		ID:   "chatcmpl-rc",
+		Model: "moonshotai/kimi-k2.5",
+		Choices: []OpenAIChatChoice{{
+			Index: 0,
+			Message: ChatMessage{
+				Role:             "assistant",
+				ReasoningContent: "这是推理过程",
+				Content:          "这是正文答案",
+			},
+			FinishReason: "stop",
+		}},
+		Usage: OpenAIChatUsage{PromptTokens: 7, CompletionTokens: 5, TotalTokens: 12},
+	}
+	rr := OpenAIChatToResponses(resp, "moonshotai/kimi-k2.5")
+	if len(rr.Output) < 2 {
+		t.Fatalf("应至少 2 个 output item(reasoning+text),实际 %d: %+v", len(rr.Output), rr.Output)
+	}
+	if rr.Output[0].Type != "message" {
+		t.Errorf("output[0] 应为 message(reasoning),实际 %v", rr.Output[0].Type)
+	}
+	if len(rr.Output[0].Content) == 0 || rr.Output[0].Content[0].Type != "reasoning_text" {
+		t.Errorf("output[0].content[0].type 应为 reasoning_text,实际 %+v", rr.Output[0].Content)
+	}
+	if rr.Output[0].Content[0].Text != "这是推理过程" {
+		t.Errorf("reasoning_text 文本期望 \"这是推理过程\",实际 %q", rr.Output[0].Content[0].Text)
+	}
+	if rr.Output[1].Type != "message" {
+		t.Errorf("output[1] 应为 message(text),实际 %v", rr.Output[1].Type)
+	}
+	if len(rr.Output[1].Content) == 0 || rr.Output[1].Content[0].Type != "output_text" {
+		t.Errorf("output[1].content[0].type 应为 output_text,实际 %+v", rr.Output[1].Content)
+	}
+	if rr.Output[1].Content[0].Text != "这是正文答案" {
+		t.Errorf("正文文本期望 \"这是正文答案\",实际 %q", rr.Output[1].Content[0].Text)
+	}
+}

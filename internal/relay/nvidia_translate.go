@@ -1540,6 +1540,10 @@ type ChatMessage struct {
 	ToolCalls  []ChatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
 	ToolName   string         `json:"tool_name,omitempty"`
+	// ReasoningContent 承载 NVIDIA 上游非流式响应里推理模型的思考文本。
+	// 旧实现非流式回译忽略该字段,思考被丢弃(D-nvidia 侧)。部分模型用 reasoning 字段名兜底。
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	Reasoning        string `json:"reasoning,omitempty"`
 }
 
 type ChatToolCallFunction struct {

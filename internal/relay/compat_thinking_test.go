@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -358,4 +359,367 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ===== A: includeThoughts 注入回归(问题 A 根因修复) =====
+//
+// 对应改动:compat_translate.go GeminiThinkingConfig 加 IncludeThoughts *bool 字段,
+// TranslateAnthropicToGemini/TranslateOpenAIToGemini 在思考模式开启且模型支持时注入 includeThoughts:true。
+// 这是 Claude Code 走 antigravity 号池能看到思考过程的根因字段。
+
+// TestTranslateAnthropicToGemini_InjectsIncludeThoughts 锁定:Claude Code 显式开思考
+// (thinking.type=enabled + budget)时,翻译出的 Gemini 请求带 generationConfig.thinkingConfig.includeThoughts=true。
+func TestTranslateAnthropicToGemini_InjectsIncludeThoughts(t *testing.T) {
+	// 测试环境默认 globalEnableThinkingMode=true,确保不被外部环境干扰
+	SetGlobalEnableThinkingMode(true)
+	defer SetGlobalEnableThinkingMode(true)
+
+	budget := 4096
+	anthReq := &AnthropicRequest{
+		Model:    "claude-sonnet-4-5", // 含 sonnet 不会被 MapClientModelToGemini 当 gemini 保留,但翻译前不走映射
+		MaxTokens: new(int),
+		Thinking: &AnthropicThinking{
+			Type:         "enabled",
+			BudgetTokens: budget,
+		},
+	}
+	*anthReq.MaxTokens = 1024
+
+	gemReq := TranslateAnthropicToGemini(anthReq)
+	if gemReq == nil || gemReq.GenerationConfig == nil || gemReq.GenerationConfig.ThinkingConfig == nil {
+		t.Fatalf("应注入 ThinkingConfig,got %+v", gemReq.GenerationConfig)
+	}
+	tc := gemReq.GenerationConfig.ThinkingConfig
+	if tc.ThinkingBudget != budget {
+		t.Errorf("ThinkingBudget 期望 %d,实际 %d", budget, tc.ThinkingBudget)
+	}
+	if tc.IncludeThoughts == nil || *tc.IncludeThoughts != true {
+		t.Errorf("IncludeThoughts 必须为 *true,实际 %v(根因修复:缺此字段上游不返 thought)", tc.IncludeThoughts)
+	}
+}
+
+// TestTranslateAnthropicToGemini_DisabledNoThoughts 锁定:thinking.type=disabled 时绝不注入 includeThoughts,
+// 即便全局思考模式开启(尊重客户端显式关闭)。
+func TestTranslateAnthropicToGemini_DisabledNoThoughts(t *testing.T) {
+	SetGlobalEnableThinkingMode(true)
+	defer SetGlobalEnableThinkingMode(true)
+
+	budget := 4096
+	maxTok := 1024
+	anthReq := &AnthropicRequest{
+		Model:    "claude-sonnet-4-5",
+		MaxTokens: &maxTok,
+		Thinking: &AnthropicThinking{
+			Type:         "disabled",
+			BudgetTokens: budget,
+		},
+	}
+	gemReq := TranslateAnthropicToGemini(anthReq)
+	if gemReq.GenerationConfig == nil || gemReq.GenerationConfig.ThinkingConfig == nil {
+		t.Fatalf("disabled 带 budget 仍应有 ThinkingConfig(budget 透传)")
+	}
+	if gemReq.GenerationConfig.ThinkingConfig.IncludeThoughts != nil {
+		t.Errorf("disabled 时不得注入 IncludeThoughts,实际 %v", gemReq.GenerationConfig.ThinkingConfig.IncludeThoughts)
+	}
+}
+
+// TestTranslateAnthropicToGemini_NonThinkingModelSkipsIncludeThoughts 锁定:非推理型模型
+// 不注入 includeThoughts(避免上游 400)。geminiModelSupportsThinking 关键字:flash/pro/thinking/reasoning。
+func TestTranslateAnthropicToGemini_NonThinkingModelSkipsIncludeThoughts(t *testing.T) {
+	SetGlobalEnableThinkingMode(true)
+	defer SetGlobalEnableThinkingMode(true)
+
+	maxTok := 1024
+	// "claude-3-haiku" 会被 MapClientModelToGemini 映射为 gemini-1.5-flash,但翻译函数本身用入站 model 名判定。
+	// 此处直接用一个不含 flash/pro/thinking/reasoning 关键字的模型名,验证 geminiModelSupportsThinking 返回 false。
+	anthReq := &AnthropicRequest{
+		Model:    "gpt-3.5-turbo",
+		MaxTokens: &maxTok,
+	}
+	gemReq := TranslateAnthropicToGemini(anthReq)
+	// 非推理模型且无 thinking 字段 → 不应注入 ThinkingConfig(无 budget 无 includeThoughts)。
+	if gemReq.GenerationConfig != nil && gemReq.GenerationConfig.ThinkingConfig != nil {
+		if gemReq.GenerationConfig.ThinkingConfig.IncludeThoughts != nil {
+			t.Errorf("非推理模型不得注入 IncludeThoughts,实际 %v", gemReq.GenerationConfig.ThinkingConfig.IncludeThoughts)
+		}
+	}
+}
+
+// TestTranslateOpenAIToGemini_InjectsIncludeThoughts 锁定:OpenAI Chat 入站对推理模型
+// 注入 thinkingConfig 含 ThinkingBudget 与 includeThoughts:true。
+func TestTranslateOpenAIToGemini_InjectsIncludeThoughts(t *testing.T) {
+	SetGlobalEnableThinkingMode(true)
+	defer SetGlobalEnableThinkingMode(true)
+
+	maxTok := 2048
+	openReq := &OpenAIRequest{
+		Model:    "gemini-2.5-flash",
+		MaxTokens: &maxTok,
+		Messages: []OpenAIMessage{{Role: "user", Content: "hi"}},
+	}
+	gemReq := TranslateOpenAIToGemini(openReq)
+	if gemReq.GenerationConfig == nil || gemReq.GenerationConfig.ThinkingConfig == nil {
+		t.Fatalf("flash 模型应注入 ThinkingConfig")
+	}
+	tc := gemReq.GenerationConfig.ThinkingConfig
+	if tc.ThinkingBudget != 8192 {
+		t.Errorf("flash 默认 ThinkingBudget 期望 8192,实际 %d", tc.ThinkingBudget)
+	}
+	if tc.IncludeThoughts == nil || *tc.IncludeThoughts != true {
+		t.Errorf("OpenAI 入站推理模型应注入 IncludeThoughts=true,实际 %v", tc.IncludeThoughts)
+	}
+}
+
+// ===== B: responses 流式 reasoning 独立 item 收尾(问题 B 根因修复) =====
+//
+// 对应改动:compat.go handleStreamResponse responses 路径 reasoning 拆为独立 output_item,
+// 闭包 closeResponsesReasoning 发 reasoning_text.done + content_part.done + output_item.done。
+// 旧实现 thought 与正文共用 responsesMsgOpened/responsesMsgID 且硬编码 output_index 0,无 reasoning done。
+
+// runGeminiResponsesStream 用给定的 Gemini 上游 SSE 喂入 handleStreamResponse(responses),
+// 返回转译后的 SSE 文本。
+func runGeminiResponsesStream(t *testing.T, upstream string) string {
+	t.Helper()
+	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
+	fc := &flushCounter{ResponseRecorder: httptest.NewRecorder()}
+	h.handleStreamResponse(
+		context.Background(),
+		fc,
+		strings.NewReader(upstream),
+		&RelaySession{},
+		"gemini-2.5-flash",
+		"gemini-2.5-flash",
+		"responses",
+		time.Unix(1700000000, 0),
+		"/v1internal:streamGenerateContent",
+		"req-test-resp",
+	)
+	return fc.Body.String()
+}
+
+// TestResponsesStream_ReasoningThenText_DoneEmitted 锁定:Codex(Antigravity 池)流式思考后跟正文,
+// 下游出现独立 reasoning item 的完整事件序列:reasoning_text.delta → reasoning_text.done →
+// content_part.done → output_item.done,正文 message item 占不同 output_index,且正文 done 也齐。
+func TestResponsesStream_ReasoningThenText_DoneEmitted(t *testing.T) {
+	upstream := geminiThoughtSSE("思考第一步.", true) +
+		geminiThoughtSSE("思考结论.", true) +
+		geminiThoughtSSE("最终答案.", false)
+	got := runGeminiResponsesStream(t, upstream)
+	events := parseSSEEvents(got)
+
+	requireEvent(t, events, "response.created")
+	requireEvent(t, events, "response.in_progress")
+	requireEvent(t, events, "response.output_item.added")
+	requireEvent(t, events, "response.content_part.added")
+	requireEvent(t, events, "response.reasoning_text.delta")
+	requireEvent(t, events, "response.reasoning_text.done")
+	requireEvent(t, events, "response.output_item.done")
+	requireEvent(t, events, "response.output_text.delta")
+	requireEvent(t, events, "response.output_text.done")
+	requireEvent(t, events, "response.completed")
+
+	// reasoning_text.done 累积文本应包含两段思考
+	var reasonDoneText string
+	for _, ev := range events {
+		if ev.event != "response.reasoning_text.done" {
+			continue
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(ev.data), &m); err == nil {
+			if s, ok := m["text"].(string); ok {
+				reasonDoneText = s
+			}
+		}
+	}
+	if !strings.Contains(reasonDoneText, "第一步") || !strings.Contains(reasonDoneText, "结论") {
+		t.Fatalf("reasoning_text.done 文本累积不完整,实际=%q", reasonDoneText)
+	}
+
+	// reasoning item 的 output_index 与正文 message item 的 output_index 必须不同(独立 item)
+	reasonOutIdx, textOutIdx := -1, -1
+	for _, ev := range events {
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(ev.data), &m); err != nil {
+			continue
+		}
+		switch ev.event {
+		case "response.reasoning_text.delta":
+			if v, ok := m["output_index"].(float64); ok && reasonOutIdx == -1 {
+				reasonOutIdx = int(v)
+			}
+		case "response.output_text.delta":
+			if v, ok := m["output_index"].(float64); ok && textOutIdx == -1 {
+				textOutIdx = int(v)
+			}
+		}
+	}
+	if reasonOutIdx == -1 || textOutIdx == -1 {
+		t.Fatalf("未取到 reasoning/text 的 output_index,reason=%d text=%d", reasonOutIdx, textOutIdx)
+	}
+	if reasonOutIdx == textOutIdx {
+		t.Fatalf("reasoning 与正文 output_index 不得相同(独立 item),reason=%d text=%d", reasonOutIdx, textOutIdx)
+	}
+
+	// reasoning item 必须收尾 output_item.done(item.type=message, content[].type=reasoning_text)
+	hasReasonItemDone := false
+	for _, ev := range events {
+		if ev.event != "response.output_item.done" {
+			continue
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(ev.data), &m); err != nil {
+			continue
+		}
+		item, _ := m["item"].(map[string]interface{})
+		if item == nil {
+			continue
+		}
+		content, _ := item["content"].([]interface{})
+		for _, c := range content {
+			cp, _ := c.(map[string]interface{})
+			if cp != nil && cp["type"] == "reasoning_text" {
+				hasReasonItemDone = true
+			}
+		}
+	}
+	if !hasReasonItemDone {
+		t.Fatalf("reasoning item 必须有 output_item.done 收尾(events=%v)", eventNames(events))
+	}
+}
+
+// TestResponsesStream_ReasoningOnly_ClosesAtTail 锁定:上游只发思考无正文(断流或纯思考),
+// 收尾段 closeResponsesReasoning 仍补 reasoning done 三件套,不让 reasoning item 悬空。
+func TestResponsesStream_ReasoningOnly_ClosesAtTail(t *testing.T) {
+	upstream := geminiThoughtSSE("纯思考无正文.", true)
+	got := runGeminiResponsesStream(t, upstream)
+	events := parseSSEEvents(got)
+	requireEvent(t, events, "response.reasoning_text.delta")
+	requireEvent(t, events, "response.reasoning_text.done")
+	requireEvent(t, events, "response.output_item.done")
+	requireEvent(t, events, "response.completed")
+	// 不应出现 output_text.delta(无正文)
+	for _, ev := range events {
+		if ev.event == "response.output_text.delta" {
+			t.Fatalf("纯思考流不应出现 output_text.delta")
+		}
+	}
+}
+
+// ===== D-compat 非流式: thought 独立 thinking/reasoning 条目 =====
+
+// TestGeminiNormalResponse_ThoughtSeparatedAnthropic 锁定:非流式 Anthropic 路径,
+// thought:true 的 part 被翻译为独立 thinking 块,置于正文 text 块之前,不混入正文。
+func TestGeminiNormalResponse_ThoughtSeparatedAnthropic(t *testing.T) {
+	// 构造一帧包含 thought + 正文 的非流式 Gemini 响应
+	part1 := map[string]interface{}{"text": "这是思考.", "thought": true}
+	part2 := map[string]interface{}{"text": "这是正文."}
+	resp := map[string]interface{}{
+		"candidates": []interface{}{
+			map[string]interface{}{
+				"content": map[string]interface{}{
+					"role":  "model",
+					"parts": []interface{}{part1, part2},
+				},
+			},
+		},
+	}
+	b, _ := json.Marshal(resp)
+	upstream := string(b)
+
+	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
+	fc := &flushCounter{ResponseRecorder: httptest.NewRecorder()}
+	h.handleNormalResponse(
+		fc,
+		strings.NewReader(upstream),
+		&RelaySession{},
+		"gemini-2.5-flash",
+		"anthropic",
+		time.Unix(1700000000, 0),
+		"/v1internal:generateContent",
+		"req-norm-anth",
+	)
+	var anthResp AnthropicResponse
+	if err := json.Unmarshal(fc.Body.Bytes(), &anthResp); err != nil {
+		t.Fatalf("解析 Anthropic 响应失败: %v body=%s", err, fc.Body.String())
+	}
+	// content[0] 应为 thinking 块,content[1] 为 text 块
+	if len(anthResp.Content) < 2 {
+		t.Fatalf("应至少 2 个 content block(thinking+text),实际 %d: %+v", len(anthResp.Content), anthResp.Content)
+	}
+	if anthResp.Content[0].Type != "thinking" {
+		t.Errorf("content[0] 应为 thinking,实际 %q", anthResp.Content[0].Type)
+	}
+	if !strings.Contains(anthResp.Content[0].Thinking, "思考") {
+		t.Errorf("thinking 块文本应含\"思考\",实际 %q", anthResp.Content[0].Thinking)
+	}
+	if anthResp.Content[1].Type != "text" {
+		t.Errorf("content[1] 应为 text,实际 %q", anthResp.Content[1].Type)
+	}
+	if !strings.Contains(anthResp.Content[1].Text, "正文") {
+		t.Errorf("正文块文本应含\"正文\",实际 %q", anthResp.Content[1].Text)
+	}
+}
+
+// TestGeminiNormalResponse_ThoughtSeparatedResponses 锁定:非流式 Responses 路径,
+// thought 翻译为独立 reasoning message item(置于正文 message item 之前)。
+func TestGeminiNormalResponse_ThoughtSeparatedResponses(t *testing.T) {
+	part1 := map[string]interface{}{"text": "reasoning here", "thought": true}
+	part2 := map[string]interface{}{"text": "final answer"}
+	resp := map[string]interface{}{
+		"candidates": []interface{}{
+			map[string]interface{}{
+				"content": map[string]interface{}{
+					"role":  "model",
+					"parts": []interface{}{part1, part2},
+				},
+			},
+		},
+	}
+	b, _ := json.Marshal(resp)
+	upstream := string(b)
+
+	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
+	fc := &flushCounter{ResponseRecorder: httptest.NewRecorder()}
+	h.handleNormalResponse(
+		fc,
+		strings.NewReader(upstream),
+		&RelaySession{},
+		"gemini-2.5-flash",
+		"responses",
+		time.Unix(1700000000, 0),
+		"/v1internal:generateContent",
+		"req-norm-resp",
+	)
+
+	var compl map[string]interface{}
+	if err := json.Unmarshal(fc.Body.Bytes(), &compl); err != nil {
+		t.Fatalf("解析 responses 响应失败: %v body=%s", err, fc.Body.String())
+	}
+	respObj, _ := compl["response"].(map[string]interface{})
+	output, _ := respObj["output"].([]interface{})
+	if len(output) < 2 {
+		t.Fatalf("应至少 2 个 output item(reasoning+text),实际 %d", len(output))
+	}
+	reasonItem, _ := output[0].(map[string]interface{})
+	if reasonItem["type"] != "message" {
+		t.Errorf("output[0] 应为 message(reasoning),实际 %v", reasonItem["type"])
+	}
+	reasonContent, _ := reasonItem["content"].([]interface{})
+	if len(reasonContent) == 0 {
+		t.Fatalf("reasoning item content 空")
+	}
+	rc, _ := reasonContent[0].(map[string]interface{})
+	if rc["type"] != "reasoning_text" {
+		t.Errorf("output[0].content[0].type 应为 reasoning_text,实际 %v", rc["type"])
+	}
+	if !strings.Contains(fmt.Sprintf("%v", rc["text"]), "reasoning") {
+		t.Errorf("reasoning_text 文本应含 reasoning,实际 %v", rc["text"])
+	}
+
+	textItem, _ := output[1].(map[string]interface{})
+	textContent, _ := textItem["content"].([]interface{})
+	tc, _ := textContent[0].(map[string]interface{})
+	if tc["type"] != "output_text" {
+		t.Errorf("output[1].content[0].type 应为 output_text,实际 %v", tc["type"])
+	}
 }

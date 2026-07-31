@@ -159,6 +159,10 @@ type OpenAIStreamChunk struct {
 type AnthropicContent struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+	// thinking 块字段(响应构建:Gemini thought:true 回译为 Anthropic thinking 块)
+	// signature 恒为空串占位(Gemini 已剥真签名,对齐流式路径 signature_delta 空串策略)
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
 	// tool_use 字段（响应构建 + 请求历史解析）
 	ID    string                 `json:"id,omitempty"`
 	Name  string                 `json:"name,omitempty"`
@@ -215,6 +219,11 @@ func (m *AnthropicMessage) UnmarshalJSON(data []byte) error {
 
 type GeminiThinkingConfig struct {
 	ThinkingBudget int `json:"thinkingBudget,omitempty"`
+	// IncludeThoughts 为 true 时,要求上游 Gemini 返回带 thought:true 标记的明文思考内容。
+	// 用指针类型区分"未设"(nil,字段省略)与"显式 false"(不输出思考)。
+	// 这是 Claude Code 走 antigravity 号池能看到思考过程的根因字段:
+	// 缺它则上游永远不返 thought:true,回译侧 part.Thought 分支(compat.go)永不命中。
+	IncludeThoughts *bool `json:"includeThoughts,omitempty"`
 }
 
 type GeminiConfig struct {
@@ -594,6 +603,22 @@ func parseOpenAIContentString(contentStr string) []GeminiPart {
 	return []GeminiPart{{Text: SanitizeAllThoughtSignatures(contentStr)}}
 }
 
+// geminiModelSupportsThinking 判定入站模型是否为 Gemini 推理型(会产出 thought:true 思考内容)。
+// 仅对这类模型注入 includeThoughts:true,避免对非推理型模型(如 gemini-1.5-flash 纯文本)
+// 发送上游不认的字段触发 400。判定关键字与 TranslateOpenAIToGemini 的 thinkingConfig 注入条件对齐。
+//
+// 注意:这是 antigravity/generativelanguage 路径专用,NVIDIA 链路另有 nvidiaModelSupportsThinking。
+func geminiModelSupportsThinking(model string) bool {
+	m := strings.ToLower(model)
+	return strings.Contains(m, "flash") ||
+		strings.Contains(m, "pro") ||
+		strings.Contains(m, "thinking") ||
+		strings.Contains(m, "reasoning")
+}
+
+// includeThoughtsTrue 返回指向 true 的 *bool,用于注入 IncludeThoughts 字段。
+func includeThoughtsTrue() *bool { v := true; return &v }
+
 func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 	gemReq := &GeminiRequest{
 		Contents: make([]GeminiContent, 0),
@@ -723,7 +748,9 @@ func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 		}
 	}
 
-	// 自动为 flash / pro / thinking 等思考型推理模型注入 thinkingConfig 预算，防止谷歌上游截断返回 0 OutTokens
+	// 自动为 flash / pro / thinking 等思考型推理模型注入 thinkingConfig 预算,防止谷歌上游截断返回 0 OutTokens;
+	// 同时在思考模式开启时注入 includeThoughts:true,使上游返回 thought:true 明文思考,
+	// 回译侧(compat.go part.Thought 分支)据此产出 Codex/Claude Code 的推理增量显示。
 	lowerModel := strings.ToLower(openReq.Model)
 	if strings.Contains(lowerModel, "flash") || strings.Contains(lowerModel, "pro") || strings.Contains(lowerModel, "thinking") {
 		if gemReq.GenerationConfig == nil {
@@ -733,6 +760,10 @@ func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 			gemReq.GenerationConfig.ThinkingConfig = &GeminiThinkingConfig{
 				ThinkingBudget: 8192,
 			}
+		}
+		// 思考模式开启时要求上游输出明文思考(指针类型,显式 true)
+		if IsEnableThinkingMode() {
+			gemReq.GenerationConfig.ThinkingConfig.IncludeThoughts = includeThoughtsTrue()
 		}
 	}
 
@@ -846,6 +877,29 @@ func TranslateAnthropicToGemini(anthReq *AnthropicRequest) *GeminiRequest {
 				ThinkingBudget: anthReq.Thinking.BudgetTokens,
 			}
 		}
+	}
+
+	// Claude Code 出思考的核心注入:只要客户端显式开启思考(thinking.type=enabled 且有预算),
+	// 且全局思考模式开启,即注入 includeThoughts:true,要求上游返回 thought:true 明文思考。
+	// 这是 Claude Code 走 antigravity 号池能看到思考过程的根因修复:
+	// 缺 includeThoughts 时上游永远不返 thought:true,回译侧 part.Thought 分支永不命中。
+	//
+	// 判定依据:anthReq.Model 是客户端原始模型名(如 claude-sonnet-4-5),经 MapClientModelToGemini
+	// 映射后的 gemini 模型(flash/pro 系)天然支持思考,故此处以"客户端显式开思考"为准注入,
+	// 而非用入站 model 名做关键字判定(否则 claude-* 永不命中)。
+	// 尊重显式 disabled:thinking.type=="disabled" 时绝不注入。
+	thinkEnabled := anthReq.Thinking != nil && strings.EqualFold(anthReq.Thinking.Type, "enabled")
+	thinkDisabled := anthReq.Thinking != nil && strings.EqualFold(anthReq.Thinking.Type, "disabled")
+	if !thinkDisabled && IsEnableThinkingMode() && (thinkEnabled || geminiModelSupportsThinking(anthReq.Model)) {
+		if gemReq.GenerationConfig == nil {
+			gemReq.GenerationConfig = &GeminiConfig{}
+		}
+		if gemReq.GenerationConfig.ThinkingConfig == nil {
+			// 客户端未给预算时,不强制 ThinkingBudget(避免对已含默认预算的模型触发 400),
+			// 仅注入 includeThoughts:true 让上游输出明文思考。
+			gemReq.GenerationConfig.ThinkingConfig = &GeminiThinkingConfig{}
+		}
+		gemReq.GenerationConfig.ThinkingConfig.IncludeThoughts = includeThoughtsTrue()
 	}
 
 	// 强制满足 Gemini 的严格 user/model 角色交替约束

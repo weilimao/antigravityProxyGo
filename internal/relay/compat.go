@@ -707,12 +707,21 @@ func (h *APICompatHandler) handleNormalResponse(
 		}
 	}
 
-	// 提取回复内容（text + functionCall）与用量
+	// 提取回复内容(thought 思考 / text 正文 + functionCall)与用量。
+	// thought:true 的 part 文本是思考内容,必须与正文分离,不能混入 text——
+	// 旧实现非流式路径忽略 part.Thought,把思考文本当正文回译,导致 Claude Code/Codex
+	// 非流式请求把思考当正文显示(D)。此处把 thought 单独累积,后续按 apiFormat 独立输出。
 	var contentBlocks []AnthropicContent
+	var thinkingText strings.Builder
 	hasFunctionCall := false
 	if len(gemResp.Candidates) > 0 {
 		for _, part := range gemResp.Candidates[0].Content.Parts {
 			if part.Text != "" {
+				if part.Thought {
+					// 思考内容单独累积,不进正文 contentBlocks
+					thinkingText.WriteString(part.Text)
+					continue
+				}
 				contentBlocks = append(contentBlocks, AnthropicContent{Type: "text", Text: part.Text})
 			}
 			if part.FunctionCall != nil {
@@ -726,7 +735,7 @@ func (h *APICompatHandler) handleNormalResponse(
 			}
 		}
 	}
-	if len(contentBlocks) == 0 {
+	if len(contentBlocks) == 0 && thinkingText.Len() == 0 {
 		contentBlocks = []AnthropicContent{{Type: "text", Text: ""}}
 	}
 
@@ -787,6 +796,27 @@ func (h *APICompatHandler) handleNormalResponse(
 			}
 		}
 		respID := fmt.Sprintf("resp_%d", rand.Int63())
+		// output 条目:若有思考,先插一个 reasoning message item(独立 output_index),
+		// 再跟正文 message item。与流式路径 reasoning 独立 item 语义一致(B)。
+		var outputItems []interface{}
+		outIdx := 0
+		if thinkingText.Len() > 0 {
+			outputItems = append(outputItems, map[string]interface{}{
+				"id":      fmt.Sprintf("msg_%s_r0", respID),
+				"type":    "message",
+				"status":  "completed",
+				"role":    "assistant",
+				"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": thinkingText.String()}},
+			})
+			outIdx = 1
+		}
+		outputItems = append(outputItems, map[string]interface{}{
+			"id":      fmt.Sprintf("msg_%s_%d", respID, outIdx),
+			"type":    "message",
+			"status":  "completed",
+			"role":    "assistant",
+			"content": []interface{}{map[string]interface{}{"type": "output_text", "text": replyText}},
+		})
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"type": "response.completed",
 			"response": map[string]interface{}{
@@ -799,18 +829,24 @@ func (h *APICompatHandler) handleNormalResponse(
 					"output_tokens": outTokens,
 					"total_tokens":  inTokens + outTokens,
 				},
-				"output": []interface{}{
-					map[string]interface{}{
-						"id":      fmt.Sprintf("msg_%s_0", respID),
-						"type":    "message",
-						"status":  "completed",
-						"role":    "assistant",
-						"content": []interface{}{map[string]interface{}{"type": "output_text", "text": replyText}},
-					},
-				},
+				"output": outputItems,
 			},
 		})
 	} else { // anthropic
+		// 若有思考内容,在正文前插入 thinking 块(对齐流式路径 thinking_delta + 空串 signature)。
+		// thinking 块的 index 在 content 数组顺序中自然处于 text 块之前,符合 Anthropic 规范。
+		var finalBlocks []AnthropicContent
+		if thinkingText.Len() > 0 {
+			finalBlocks = append(finalBlocks, AnthropicContent{
+				Type:      "thinking",
+				Thinking:  thinkingText.String(),
+				Signature: "",
+			})
+		}
+		finalBlocks = append(finalBlocks, contentBlocks...)
+		if len(finalBlocks) == 0 {
+			finalBlocks = []AnthropicContent{{Type: "text", Text: ""}}
+		}
 		stopReason := "end_turn"
 		if hasFunctionCall {
 			stopReason = "tool_use"
@@ -819,7 +855,7 @@ func (h *APICompatHandler) handleNormalResponse(
 			ID:           fmt.Sprintf("msg_%d", rand.Int63()),
 			Type:         "message",
 			Role:         "assistant",
-			Content:      contentBlocks,
+			Content:      finalBlocks,
 			Model:        geminiModel,
 			StopReason:   stopReason,
 			StopSequence: nil,
@@ -919,8 +955,77 @@ func (h *APICompatHandler) handleStreamResponse(
 	}
 	responsesMsgOpened := false
 	responsesMsgID := fmt.Sprintf("msg_%s_0", streamID)
+	responsesMsgOutIdx := 0 // 正文 message item 占用的 output_index,首次开块时由 responsesOutIdx 分配
 	var responsesTextBuf strings.Builder
 	hasOpenAIToolCall := false
+
+	// ===== Responses 协议 reasoning(思考)独立 item 状态机 =====
+	// thought 与正文必须拆成各自独立的 output_item,不能共用一个 message 条目:
+	// 旧实现 thought 与 text 共用 responsesMsgOpened/responsesMsgID/responsesTextBuf 且都硬编码 output_index 0,
+	// 导致 thought 一旦真正流入(A 修复后),part 类型被正文覆盖、index 撞车、无收尾 done——Codex 收到损坏流。
+	// 此处用独立状态把思考拆为单独的 reasoning item(item.type=message, content[].type=reasoning_text),
+	// 与正文 message item、function_call item 各占一个 output_index,互不干扰。
+	//
+	// output_index 分配约定(responsesOutIdx 递增计数器,开块即分配并推进):
+	//   - reasoning item 开块时取 responsesOutIdx 并 ++(reasoning 先到则占 0)
+	//   - 正文 message item 开块时取 responsesOutIdx 并 ++(在其之后)
+	//   - 每个 function_call item 开块时取 responsesOutIdx 并 ++
+	// 每类 item 用各自记录的 index 续发 delta/done,互不撞车。
+	responsesReasoningOpened := false
+	responsesReasoningID := fmt.Sprintf("msg_%s_r0", streamID)
+	responsesReasoningOutIdx := 0 // reasoning item 锁定的 output_index(开块时赋值)
+	var responsesReasoningBuf strings.Builder
+
+	responsesOutIdx := 0
+	// closeResponsesReasoning 闭合已开启的 reasoning item:发 reasoning_text.done +
+	// content_part.done + output_item.done 三件套,清零状态。幂等(未开则不动作)。
+	// 不在此推进 responsesOutIdx(index 在开块时已分配并推进),只发收尾事件。
+	closeResponsesReasoning := func() {
+		if !responsesReasoningOpened {
+			return
+		}
+		reasonsText := responsesReasoningBuf.String()
+		reasonDone := map[string]interface{}{
+			"type":            "response.reasoning_text.done",
+			"sequence_number": nextSeq(),
+			"item_id":         responsesReasoningID,
+			"output_index":    responsesReasoningOutIdx,
+			"content_index":   0,
+			"text":            reasonsText,
+		}
+		rdBytes, _ := json.Marshal(reasonDone)
+		fmt.Fprintf(w, "event: response.reasoning_text.done\ndata: %s\n\n", string(rdBytes))
+
+		reasonPartDone := map[string]interface{}{
+			"type":            "response.content_part.done",
+			"sequence_number": nextSeq(),
+			"item_id":         responsesReasoningID,
+			"output_index":    responsesReasoningOutIdx,
+			"content_index":   0,
+			"part": map[string]interface{}{
+				"type": "reasoning_text",
+				"text": reasonsText,
+			},
+		}
+		rpdBytes, _ := json.Marshal(reasonPartDone)
+		fmt.Fprintf(w, "event: response.content_part.done\ndata: %s\n\n", string(rpdBytes))
+
+		reasonItemDone := map[string]interface{}{
+			"type":            "response.output_item.done",
+			"sequence_number": nextSeq(),
+			"output_index":    responsesReasoningOutIdx,
+			"item": map[string]interface{}{
+				"id":      responsesReasoningID,
+				"type":    "message",
+				"status":  "completed",
+				"role":    "assistant",
+				"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": reasonsText}},
+			},
+		}
+		ridBytes, _ := json.Marshal(reasonItemDone)
+		fmt.Fprintf(w, "event: response.output_item.done\ndata: %s\n\n", string(ridBytes))
+		responsesReasoningOpened = false
+	}
 
 	// Responses 协议下，开始流时首发 response.created 和 response.in_progress
 	if apiFormat == "responses" {
@@ -1054,13 +1159,15 @@ func (h *APICompatHandler) handleStreamResponse(
 						chunkBytes, _ := json.Marshal(chunk)
 						fmt.Fprintf(w, "data: %s\n\n", string(chunkBytes))
 					} else if apiFormat == "responses" {
-						if !responsesMsgOpened {
+						if !responsesReasoningOpened {
+							responsesReasoningOutIdx = responsesOutIdx
+							responsesOutIdx++
 							itemAdded := map[string]interface{}{
 								"type":            "response.output_item.added",
 								"sequence_number": nextSeq(),
-								"output_index":    0,
+								"output_index":    responsesReasoningOutIdx,
 								"item": map[string]interface{}{
-									"id":      responsesMsgID,
+									"id":      responsesReasoningID,
 									"type":    "message",
 									"status":  "in_progress",
 									"role":    "assistant",
@@ -1073,8 +1180,8 @@ func (h *APICompatHandler) handleStreamResponse(
 							partAdded := map[string]interface{}{
 								"type":            "response.content_part.added",
 								"sequence_number": nextSeq(),
-								"item_id":         responsesMsgID,
-								"output_index":    0,
+								"item_id":         responsesReasoningID,
+								"output_index":    responsesReasoningOutIdx,
 								"content_index":   0,
 								"part": map[string]interface{}{
 									"type": "reasoning_text",
@@ -1083,13 +1190,14 @@ func (h *APICompatHandler) handleStreamResponse(
 							}
 							partBytes, _ := json.Marshal(partAdded)
 							fmt.Fprintf(w, "event: response.content_part.added\ndata: %s\n\n", string(partBytes))
-							responsesMsgOpened = true
+							responsesReasoningOpened = true
 						}
+						responsesReasoningBuf.WriteString(cleanText)
 						deltaEvt := map[string]interface{}{
 							"type":            "response.reasoning_text.delta",
 							"sequence_number": nextSeq(),
-							"item_id":         responsesMsgID,
-							"output_index":    0,
+							"item_id":         responsesReasoningID,
+							"output_index":    responsesReasoningOutIdx,
 							"content_index":   0,
 							"delta":           cleanText,
 						}
@@ -1128,11 +1236,16 @@ func (h *APICompatHandler) handleStreamResponse(
 						chunkBytes, _ := json.Marshal(chunk)
 						fmt.Fprintf(w, "data: %s\n\n", string(chunkBytes))
 					} else if apiFormat == "responses" {
+						// 进入正文 item 前,先把可能已开启的 reasoning item 闭合掉:
+						// 思考与正文是两个独立 output_item,各自的 output_index 由 responsesOutIdx 分配。
+						closeResponsesReasoning()
 						if !responsesMsgOpened {
+							responsesMsgOutIdx = responsesOutIdx
+							responsesOutIdx++
 							itemAdded := map[string]interface{}{
 								"type":            "response.output_item.added",
 								"sequence_number": nextSeq(),
-								"output_index":    0,
+								"output_index":    responsesMsgOutIdx,
 								"item": map[string]interface{}{
 									"id":      responsesMsgID,
 									"type":    "message",
@@ -1148,7 +1261,7 @@ func (h *APICompatHandler) handleStreamResponse(
 								"type":            "response.content_part.added",
 								"sequence_number": nextSeq(),
 								"item_id":         responsesMsgID,
-								"output_index":    0,
+								"output_index":    responsesMsgOutIdx,
 								"content_index":   0,
 								"part": map[string]interface{}{
 									"type": "output_text",
@@ -1165,7 +1278,7 @@ func (h *APICompatHandler) handleStreamResponse(
 							"type":            "response.output_text.delta",
 							"sequence_number": nextSeq(),
 							"item_id":         responsesMsgID,
-							"output_index":    0,
+							"output_index":    responsesMsgOutIdx,
 							"content_index":   0,
 							"delta":           cleanText,
 						}
@@ -1279,6 +1392,9 @@ func (h *APICompatHandler) handleStreamResponse(
 					fmt.Fprintf(w, "data: %s\n\n", string(argsBytes))
 					flusher.Flush()
 				} else if apiFormat == "responses" {
+					// 进入工具调用 item 前,先关掉可能还开着的 reasoning item(思考与工具不同 item);
+					// 正文 message item 若已开则保持开启(一个 response 可同时含 message + function_call)。
+					closeResponsesReasoning()
 					callID := fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), rand.Int63n(1000))
 					fcItemID := fmt.Sprintf("fc_%s", callID)
 					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
@@ -1287,10 +1403,14 @@ func (h *APICompatHandler) handleStreamResponse(
 					}
 					argsStr := string(argsJSON)
 
+					// 每个工具调用独占一个 output_index,开块即分配并推进
+					fcOutIdx := responsesOutIdx
+					responsesOutIdx++
+
 					itemAdded := map[string]interface{}{
 						"type":            "response.output_item.added",
 						"sequence_number": nextSeq(),
-						"output_index":    blockIndex,
+						"output_index":    fcOutIdx,
 						"item": map[string]interface{}{
 							"id":        fcItemID,
 							"type":      "function_call",
@@ -1307,7 +1427,7 @@ func (h *APICompatHandler) handleStreamResponse(
 						"type":            "response.function_call_arguments.delta",
 						"sequence_number": nextSeq(),
 						"item_id":         fcItemID,
-						"output_index":    blockIndex,
+						"output_index":    fcOutIdx,
 						"call_id":         callID,
 						"delta":           argsStr,
 					}
@@ -1318,7 +1438,7 @@ func (h *APICompatHandler) handleStreamResponse(
 						"type":            "response.function_call_arguments.done",
 						"sequence_number": nextSeq(),
 						"item_id":         fcItemID,
-						"output_index":    blockIndex,
+						"output_index":    fcOutIdx,
 						"call_id":         callID,
 						"arguments":       argsStr,
 					}
@@ -1328,7 +1448,7 @@ func (h *APICompatHandler) handleStreamResponse(
 					itemDone := map[string]interface{}{
 						"type":            "response.output_item.done",
 						"sequence_number": nextSeq(),
-						"output_index":    blockIndex,
+						"output_index":    fcOutIdx,
 						"item": map[string]interface{}{
 							"id":        fcItemID,
 							"type":      "function_call",
@@ -1340,7 +1460,6 @@ func (h *APICompatHandler) handleStreamResponse(
 					}
 					itemDoneBytes, _ := json.Marshal(itemDone)
 					fmt.Fprintf(w, "event: response.output_item.done\ndata: %s\n\n", string(itemDoneBytes))
-					blockIndex++
 					flusher.Flush()
 				} else if apiFormat == "anthropic" {
 					hasFunctionCall = true
@@ -1447,6 +1566,9 @@ func (h *APICompatHandler) handleStreamResponse(
 		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	} else if apiFormat == "responses" {
+		// 收尾前先闭合可能仍开着的 reasoning item(若思考是最后一个 part 且后续无正文,
+		// 循环内未触发 closeResponsesReasoning,在此补收尾 done 三件套)。
+		closeResponsesReasoning()
 		fullText := responsesTextBuf.String()
 		var outputItems []interface{}
 
@@ -1455,7 +1577,7 @@ func (h *APICompatHandler) handleStreamResponse(
 				"type":            "response.output_text.done",
 				"sequence_number": nextSeq(),
 				"item_id":         responsesMsgID,
-				"output_index":    0,
+				"output_index":    responsesMsgOutIdx,
 				"content_index":   0,
 				"text":            fullText,
 			}
@@ -1466,7 +1588,7 @@ func (h *APICompatHandler) handleStreamResponse(
 				"type":            "response.content_part.done",
 				"sequence_number": nextSeq(),
 				"item_id":         responsesMsgID,
-				"output_index":    0,
+				"output_index":    responsesMsgOutIdx,
 				"content_index":   0,
 				"part": map[string]interface{}{
 					"type": "output_text",
@@ -1486,7 +1608,7 @@ func (h *APICompatHandler) handleStreamResponse(
 			itemDone := map[string]interface{}{
 				"type":            "response.output_item.done",
 				"sequence_number": nextSeq(),
-				"output_index":    0,
+				"output_index":    responsesMsgOutIdx,
 				"item":            itemMsg,
 			}
 			itemBytes, _ := json.Marshal(itemDone)

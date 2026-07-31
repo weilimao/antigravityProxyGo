@@ -183,15 +183,39 @@ func OpenAIChatToResponses(resp *OpenAIChatResponse, displayModel string) *Respo
 }
 
 // openAIChoiceToResponsesItems 把一个 OpenAI Chat choice message 拆成 Responses output[] 条目。
+// 思考(reasoning_content/reasoning)→独立 reasoning message 条目置于正文前(D-nvidia 侧);
 // 文本→message 条目；tool_calls→每个一个 function_call 条目（顺序与上游一致）。
 func openAIChoiceToResponsesItems(m ChatMessage, respID string) []ResponsesOutputItem {
 	var items []ResponsesOutputItem
 
+	// 思考条目(若有):独立 output item,content[].type=reasoning_text,置于正文之前。
+	// 旧实现非流式路径忽略思考,把 reason 文本丢失——Codex 非流式完全无思考(D-nvidia 侧)。
+	rrText := m.ReasoningContent
+	if strings.TrimSpace(rrText) == "" && m.Reasoning != "" {
+		rrText = m.Reasoning
+	}
+	if strings.TrimSpace(rrText) != "" {
+		items = append(items, ResponsesOutputItem{
+			Type:   "message",
+			ID:     "msg_" + respID + "_r0",
+			Role:   "assistant",
+			Status: "completed",
+			Content: []ResponsesContentPart{{
+				Type: "reasoning_text",
+				Text: rrText,
+			}},
+		})
+	}
+
 	// 文本条目（即使为空也保留，保持 message 结构完整）
+	textOutIdx := 0
+	if len(items) > 0 {
+		textOutIdx = 1 // reasoning 已占 index 0
+	}
 	if strings.TrimSpace(m.Content) != "" || len(m.ToolCalls) == 0 {
 		items = append(items, ResponsesOutputItem{
 			Type:   "message",
-			ID:     "msg_" + respID + "_0",
+			ID:     fmt.Sprintf("msg_%s_%d", respID, textOutIdx),
 			Role:   "assistant",
 			Status: "completed",
 			Content: []ResponsesContentPart{{
@@ -225,7 +249,7 @@ func openAIChoiceToResponsesItems(m ChatMessage, respID string) []ResponsesOutpu
 	return items
 }
 
-// writeNvidiaResponsesNormal 处理非流式 Responses 入站：读全量上游 OpenAI Chat 响应 → 回译 → 写出。
+// writeNvidiaResponsesNormal 处理非流式 Responses 入站:读全量上游 OpenAI Chat 响应 → 回译 → 写出。
 func (h *APICompatHandler) writeNvidiaResponsesNormal(w http.ResponseWriter, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account, logCtx nvidiaLogCtx) {
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -317,6 +341,14 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 	toolItems := map[int]*responsesStreamItem{}
 	var fullText strings.Builder
 
+	// reasoning(思考)独立 item:上游 NIM 推理模型先发 reasoning_content 再发正文,
+	// 思考与正文是两个独立 output_item,与 compat.go 流式 reasoning 独立 item 语义一致(B)。
+	// 旧实现此处零 reasoning 处理,reasoning_content 被整段丢弃——Codex 走 NVIDIA 池完全无思考(C)。
+	reasonItem := &responsesStreamItem{kind: "reasoning", id: "msg_" + streamID + "_r0"}
+	var reasoningBuf strings.Builder
+	reasoningOpened := false
+	reasonOutIdx := 0 // reasoning item 锁定的 output_index(开块时赋值,正文来时推进)
+
 	finishReason := ""
 
 	for scanner.Scan() {
@@ -345,11 +377,35 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 		}
 		ch := chunk.Choices[0]
 
+		// 思考增量:reasoning_content(主)/reasoning(兜底)先于正文到达,
+		// 映射成 response.reasoning_text.delta,part.type=reasoning_text,独立 output_item。
+		// 仅在非空时进分支:无推理模型(reasoning_content 恒空)永不开元,对齐 NVIDIA thinking 守卫。
+		rrDelta := ch.Delta.ReasoningContent
+		if strings.TrimSpace(rrDelta) == "" && ch.Delta.Reasoning != "" {
+			rrDelta = ch.Delta.Reasoning
+		}
+		if rrDelta != "" {
+			if !reasoningOpened {
+				reasoningOpened = true
+				fw.writeEvent("response.output_item.added", responsesReasoningItemAddedPayload(reasonItem.id, reasonOutIdx))
+				fw.writeEvent("response.content_part.added", responsesReasoningPartAddedPayload(reasonItem.id, reasonOutIdx))
+				reasonItem.opened = true
+			}
+			reasoningBuf.WriteString(rrDelta)
+			fw.writeEvent("response.reasoning_text.delta", responsesReasoningDeltaPayload(reasonItem.id, reasonOutIdx, rrDelta))
+		}
+
 		// 文本增量
 		if strings.TrimSpace(ch.Delta.Content) != "" || ch.Delta.Content != "" {
-			textItem.ensureOpened(fw, "output_text")
+			// 进入正文 item 前,先把可能已开启的 reasoning item 闭合并推进 output_index
+			if reasoningOpened {
+				responsesCloseReasoning(fw, reasonItem.id, reasonOutIdx, reasoningBuf.String())
+				reasoningOpened = false
+				reasonOutIdx++
+			}
+			textItem.ensureOpened(fw, "output_text", reasonOutIdx)
 			fullText.WriteString(ch.Delta.Content)
-			fw.writeEvent("response.output_text.delta", responsesOutputTextDeltaPayload(textItem.id, ch.Delta.Content))
+			fw.writeEvent("response.output_text.delta", responsesOutputTextDeltaPayload(textItem.id, textItem.outIdx, ch.Delta.Content))
 		}
 
 		// 工具调用增量：按上游 tool_calls[index] 维护独立条目
@@ -391,12 +447,19 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 		}
 	}
 
+	// 收尾:reasoning 块(若思考是最后一个 item 且后续无正文,循环内未触发关闭,在此补收尾)
+	if reasoningOpened {
+		responsesCloseReasoning(fw, reasonItem.id, reasonOutIdx, reasoningBuf.String())
+		reasoningOpened = false
+		reasonOutIdx++
+	}
+
 	// 收尾：文本块
 	if textItem.opened {
 		ft := fullText.String()
-		fw.writeEvent("response.output_text.done", responsesOutputTextDonePayload(textItem.id, ft))
-		fw.writeEvent("response.content_part.done", responsesContentPartDonePayload(textItem.id, ft))
-		fw.writeEvent("response.output_item.done", responsesOutputItemDoneMessagePayload(textItem.id, ft))
+		fw.writeEvent("response.output_text.done", responsesOutputTextDonePayload(textItem.id, textItem.outIdx, ft))
+		fw.writeEvent("response.content_part.done", responsesContentPartDonePayload(textItem.id, textItem.outIdx, ft))
+		fw.writeEvent("response.output_item.done", responsesOutputItemDoneMessagePayload(textItem.id, textItem.outIdx, ft))
 	}
 
 	// 收尾：工具调用块（按 index 升序）
@@ -439,23 +502,26 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 
 // responsesStreamItem 记录流中一个 output 条目的打开状态与累积内容。
 type responsesStreamItem struct {
-	kind     string // "text" | "tool"
-	index    int
-	id       string
-	callID   string
-	name     string
-	opened   bool
-	argsBuf  strings.Builder
+	kind    string // "text" | "tool" | "reasoning"
+	index   int
+	outIdx  int // 该 item 在 Responses output[] 数组中的位置(reasoning 前置时正文 item 需往后挪)
+	id      string
+	callID  string
+	name    string
+	opened  bool
+	argsBuf strings.Builder
 }
 
-// ensureOpened 在首个文本增量前补发 output_item.added + content_part.added（part 类型 output_text）。
-func (it *responsesStreamItem) ensureOpened(fw *flushWriter, partType string) {
+// ensureOpened 在首个文本/思考增量前补发 output_item.added + content_part.added(part 类型由 partType 给定)。
+// output_index 取 it.outIdx,确保 reasoning item 关闭后正文 item 拿到不冲突的 index。
+func (it *responsesStreamItem) ensureOpened(fw *flushWriter, partType string, outIdx int) {
 	if it.opened {
 		return
 	}
 	it.opened = true
-	fw.writeEvent("response.output_item.added", responsesMessageItemAddedPayload(it.id))
-	fw.writeEvent("response.content_part.added", responsesContentPartAddedPayload(it.id, partType))
+	it.outIdx = outIdx
+	fw.writeEvent("response.output_item.added", responsesMessageItemAddedPayload(it.id, outIdx))
+	fw.writeEvent("response.content_part.added", responsesContentPartAddedPayload(it.id, partType, outIdx))
 }
 
 // ===== Responses SSE payload 构造器 =====
@@ -492,7 +558,7 @@ func responsesInProgressPayload(id string, createdAt int64) string {
 }
 
 // responsesMessageItemAddedPayload 发文本 message 条目的 output_item.added。
-func responsesMessageItemAddedPayload(itemID string) string {
+func responsesMessageItemAddedPayload(itemID string, outIdx int) string {
 	item := map[string]interface{}{
 		"id":      itemID,
 		"type":    "message",
@@ -503,64 +569,64 @@ func responsesMessageItemAddedPayload(itemID string) string {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"type":            "response.output_item.added",
 		"sequence_number": 0,
-		"output_index":    0,
+		"output_index":    outIdx,
 		"item":            item,
 	})
 	return string(payload)
 }
 
 // responsesContentPartAddedPayload 发 content_part.added，part.type 通常为 output_text。
-func responsesContentPartAddedPayload(itemID, partType string) string {
+func responsesContentPartAddedPayload(itemID, partType string, outIdx int) string {
 	part := map[string]interface{}{"type": partType, "text": ""}
 	payload, _ := json.Marshal(map[string]interface{}{
 		"type":            "response.content_part.added",
 		"sequence_number": 0,
 		"item_id":         itemID,
-		"output_index":    0,
+		"output_index":    outIdx,
 		"content_index":   0,
 		"part":            part,
 	})
 	return string(payload)
 }
 
-func responsesOutputTextDeltaPayload(itemID, delta string) string {
+func responsesOutputTextDeltaPayload(itemID string, outIdx int, delta string) string {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"type":            "response.output_text.delta",
 		"sequence_number": 0,
 		"item_id":         itemID,
-		"output_index":    0,
+		"output_index":    outIdx,
 		"content_index":   0,
 		"delta":           delta,
 	})
 	return string(payload)
 }
 
-func responsesOutputTextDonePayload(itemID, text string) string {
+func responsesOutputTextDonePayload(itemID string, outIdx int, text string) string {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"type":            "response.output_text.done",
 		"sequence_number": 0,
 		"item_id":         itemID,
-		"output_index":    0,
+		"output_index":    outIdx,
 		"content_index":   0,
 		"text":            text,
 	})
 	return string(payload)
 }
 
-func responsesContentPartDonePayload(itemID, text string) string {
+func responsesContentPartDonePayload(itemID string, outIdx int, text string) string {
 	part := map[string]interface{}{"type": "output_text", "text": text}
 	payload, _ := json.Marshal(map[string]interface{}{
 		"type":            "response.content_part.done",
 		"sequence_number": 0,
 		"item_id":         itemID,
-		"output_index":    0,
+		"output_index":    outIdx,
 		"content_index":   0,
 		"part":            part,
 	})
 	return string(payload)
 }
 
-func responsesOutputItemDoneMessagePayload(itemID, text string) string {
+func responsesOutputItemDoneMessagePayload(itemID string, outIdx int, text string) string {
 	item := map[string]interface{}{
 		"id":      itemID,
 		"type":    "message",
@@ -571,7 +637,7 @@ func responsesOutputItemDoneMessagePayload(itemID, text string) string {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"type":            "response.output_item.done",
 		"sequence_number": 0,
-		"output_index":    0,
+		"output_index":    outIdx,
 		"item":            item,
 	})
 	return string(payload)
@@ -634,6 +700,100 @@ func responsesFunctionCallItemDonePayload(it *responsesStreamItem, args string) 
 		"item":            item,
 	})
 	return string(payload)
+}
+
+// ===== reasoning(思考)item 的 Responses SSE payload 构造器(C) =====
+// reasoning item 用 type=message + content[].type=reasoning_text,与正文 output_text item 分离。
+// output_index 由调用侧 reasonOutIdx 显式传入(不存ResponsesStreamItem.index,避免与 tool index 混用)。
+
+func responsesReasoningItemAddedPayload(itemID string, outIdx int) string {
+	item := map[string]interface{}{
+		"id":      itemID,
+		"type":    "message",
+		"status":  "in_progress",
+		"role":    "assistant",
+		"content": []interface{}{},
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type":            "response.output_item.added",
+		"sequence_number": 0,
+		"output_index":    outIdx,
+		"item":            item,
+	})
+	return string(payload)
+}
+
+func responsesReasoningPartAddedPayload(itemID string, outIdx int) string {
+	part := map[string]interface{}{"type": "reasoning_text", "text": ""}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type":            "response.content_part.added",
+		"sequence_number": 0,
+		"item_id":         itemID,
+		"output_index":    outIdx,
+		"content_index":   0,
+		"part":            part,
+	})
+	return string(payload)
+}
+
+func responsesReasoningDeltaPayload(itemID string, outIdx int, delta string) string {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type":            "response.reasoning_text.delta",
+		"sequence_number": 0,
+		"item_id":         itemID,
+		"output_index":    outIdx,
+		"content_index":   0,
+		"delta":           delta,
+	})
+	return string(payload)
+}
+
+// responsesCloseReasoning 闭合已开启的 reasoning item:发 reasoning_text.done +
+// content_part.done + output_item.done 三件套。调用方保证仅在 reasoningOpened=true 时调用,
+// 调用后推进 output_index。不幂等(调用方负责状态翻转)。
+func responsesCloseReasoning(fw *flushWriter, itemID string, outIdx int, reasonsText string) {
+	reasonDone := map[string]interface{}{
+		"type":            "response.reasoning_text.done",
+		"sequence_number": 0,
+		"item_id":         itemID,
+		"output_index":    outIdx,
+		"content_index":   0,
+		"text":            reasonsText,
+	}
+	fw.writeEvent("response.reasoning_text.done", string(marshalJSON(reasonDone)))
+
+	reasonPartDone := map[string]interface{}{
+		"type":            "response.content_part.done",
+		"sequence_number": 0,
+		"item_id":         itemID,
+		"output_index":    outIdx,
+		"content_index":   0,
+		"part": map[string]interface{}{
+			"type": "reasoning_text",
+			"text": reasonsText,
+		},
+	}
+	fw.writeEvent("response.content_part.done", string(marshalJSON(reasonPartDone)))
+
+	itemDone := map[string]interface{}{
+		"type":            "response.output_item.done",
+		"sequence_number": 0,
+		"output_index":    outIdx,
+		"item": map[string]interface{}{
+			"id":      itemID,
+			"type":    "message",
+			"status":  "completed",
+			"role":    "assistant",
+			"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": reasonsText}},
+		},
+	}
+	fw.writeEvent("response.output_item.done", string(marshalJSON(itemDone)))
+}
+
+// marshalJSON 是 json.Marshal 的便捷封装:失败返回 "null"(不会触发,仅消除调用处的 _ = err)。
+func marshalJSON(v interface{}) []byte {
+	b, _ := json.Marshal(v)
+	return b
 }
 
 func responsesCompletedPayload(id string, createdAt int64, model, stopReason string, inTokens, outTokens int) string {
