@@ -354,11 +354,191 @@ func TestGeminiAnthropicStream_UsageCompliance_ToolUseStopReason(t *testing.T) {
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+// ===== 回归:thinking → tool_use 致 "Content block not found" 修复(Claude Code + gemini 池) =====
+//
+// 对应改动:compat.go handleStreamResponse 在 apiFormat=="anthropic" 的 tool 分支
+// 原先只关 textBlockOpen、漏关 thinkingBlockOpen。Claude Code 走 antigravity/gemini 池且
+// includeThoughts 注入后,模型常态输出"思考 → 工具调用":thought 分支开了 thinking 块(blockIndex 未推进),
+// tool 分支不关 thinking 直接开 tool_use 覆盖原索引,末尾收尾段再见 thinkingBlockOpen==true
+// 在已偏移的 blockIndex 上补发 signature_delta/content_block_stop,命中从未 start 过的索引,
+// Claude Code cr[index] 查无此块 → 抛 RangeError("Content block not found")。
+// 修复:tool 分支关 textBlockOpen 之前先对称关 thinkingBlockOpen(thinking_delta → signature_delta → stop)。
+
+// geminiFunctionCallSSE 构造一帧含 functionCall 的 Gemini 上游 SSE 响应(data 行 JSON)。
+func geminiFunctionCallSSE(name string, args map[string]interface{}) string {
+	part := map[string]interface{}{
+		"functionCall": map[string]interface{}{"name": name, "args": args},
 	}
-	return b
+	resp := map[string]interface{}{
+		"candidates": []interface{}{
+			map[string]interface{}{
+				"content": map[string]interface{}{
+					"role":  "model",
+					"parts": []interface{}{part},
+				},
+				"finishReason": "STOP",
+			},
+		},
+	}
+	b, _ := json.Marshal(resp)
+	return "data: " + string(b) + "\n\n"
+}
+
+// assertNoOrphanBlockStopDelta 校验转译后的 Anthropic SSE 中,每个 content_block_delta /
+// content_block_stop 的 index 都在它之前存在一个相同 index 的 content_block_start。
+// 这是 Claude Code 反编译出的 "Content block not found" 触发条件的逆向断言:
+//   - content_block_delta 时 cr[index] 必须已由一个 content_block_start 建过(index 已被 start);
+//   - content_block_stop 时同理。
+// 若出现孤儿 delta/stop(index 未被任何 start 开过),对应 Claude Code 客户端必抛 "Content block not found"。
+func assertNoOrphanBlockStopDelta(t *testing.T, events []sseEvent) {
+	t.Helper()
+	started := make(map[int]bool)
+	for i, ev := range events {
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(ev.data), &m); err != nil {
+			t.Fatalf("事件 %d JSON 解析失败: %v data=%q", i, err, ev.data)
+		}
+		switch ev.event {
+		case "content_block_start":
+			idxF, _ := m["index"].(float64)
+			started[int(idxF)] = true
+		case "content_block_delta", "content_block_stop":
+			idxF, _ := m["index"].(float64)
+			idx := int(idxF)
+			if !started[idx] {
+				t.Fatalf("孤儿 %s index=%d:此前无 content_block_start(index=%d)建立该块,"+
+					"Claude Code 会抛 \"Content block not found\"。events=%v",
+					ev.event, idx, idx, eventNames(events))
+			}
+		}
+	}
+}
+
+// TestGeminiAnthropicStream_ThinkingThenTool_ClosesThinking 主回归:上游"先思考后工具调用",
+// 锁定 tool 分支补关 thinking 块后,所有 content_block_delta/stop 的 index 均有前置 start 配对,
+// 不再触发 "Content block not found"。
+func TestGeminiAnthropicStream_ThinkingThenTool_ClosesThinking(t *testing.T) {
+	upstream := geminiThoughtSSE("先思考一下.", true) +
+		geminiFunctionCallSSE("read_file", map[string]interface{}{"path": "main.go"})
+	got := runGeminiAnthropicStream(t, upstream)
+	events := parseSSEEvents(got)
+
+	// 1) 核心断言:无孤儿 delta/stop(修前此断言必失败:末尾 signature_delta/stop 落在工具块之后的索引)
+	assertNoOrphanBlockStopDelta(t, events)
+
+	// 2) 序列骨架:thinking 块(idx0) → tool_use 块(idx1),thinking 块含 signature_delta + stop
+	var (
+		blockTypes   []string // 按 content_block_start 顺序记录块类型
+		thinkingSeen bool
+		toolSeen     bool
+		thinkHasSig  bool
+	)
+	curBlockType := ""
+	for _, ev := range events {
+		switch ev.event {
+		case "content_block_start":
+			m := dataMap(t, ev)
+			cb, _ := m["content_block"].(map[string]interface{})
+			if cb != nil {
+				curBlockType, _ = cb["type"].(string)
+				blockTypes = append(blockTypes, curBlockType)
+			}
+		case "content_block_delta":
+			m := dataMap(t, ev)
+			delta, _ := m["delta"].(map[string]interface{})
+			if delta == nil {
+				continue
+			}
+			if delta["type"] == "signature_delta" && curBlockType == "thinking" {
+				thinkHasSig = true
+			}
+		case "content_block_stop":
+			switch curBlockType {
+			case "thinking":
+				thinkingSeen = true
+			case "tool_use":
+				toolSeen = true
+			}
+			curBlockType = ""
+		}
+	}
+	if !thinkingSeen {
+		t.Fatalf("缺 thinking 块的 content_block_stop,blockTypes=%v", blockTypes)
+	}
+	if !toolSeen {
+		t.Fatalf("缺 tool_use 块的 content_block_stop,blockTypes=%v", blockTypes)
+	}
+	if !thinkHasSig {
+		t.Fatalf("thinking 块关块前必须补 signature_delta(空串占位),blockTypes=%v", blockTypes)
+	}
+	// 块类型须为 thinking → tool_use 顺序
+	if len(blockTypes) < 2 || blockTypes[0] != "thinking" || blockTypes[1] != "tool_use" {
+		t.Fatalf("块顺序期望 [thinking, tool_use],实际 %v", blockTypes)
+	}
+
+	// 3) stop_reason 为 tool_use(带工具调用)
+	deltaJSON := extractMessageDeltaJSON(t, got)
+	var deltaParsed struct {
+		Delta struct {
+			StopReason string `json:"stop_reason"`
+		} `json:"delta"`
+	}
+	if err := json.Unmarshal([]byte(deltaJSON), &deltaParsed); err != nil {
+		t.Fatalf("message_delta JSON 解析失败: %v raw=%s", err, deltaJSON)
+	}
+	if deltaParsed.Delta.StopReason != "tool_use" {
+		t.Errorf("带 functionCall 的 stop_reason 期望 tool_use,实际 %q", deltaParsed.Delta.StopReason)
+	}
+	// 4) 不应出现收尾误发到未 start 索引的孤儿(已被 assertNoOrphanBlockStopDelta 覆盖),
+	//    且 message_stop 形态正确
+	if !strings.Contains(got, "event: message_stop\ndata: {\"type\":\"message_stop\"}") {
+		t.Errorf("message_stop 形态应正确,sse=\n%s", got)
+	}
+}
+
+// TestGeminiAnthropicStream_ThinkingTextThenTool 补强:思考 → 正文 → 工具 三段,
+// 锁定三块索引各自配对完整无孤儿,顺序 [thinking, text, tool_use],stop_reason=tool_use。
+func TestGeminiAnthropicStream_ThinkingTextThenTool(t *testing.T) {
+	upstream := geminiThoughtSSE("推理中.", true) +
+		geminiThoughtSSE("中间正文.", false) +
+		geminiFunctionCallSSE("run_cmd", map[string]interface{}{"cmd": "ls"})
+	got := runGeminiAnthropicStream(t, upstream)
+	events := parseSSEEvents(got)
+
+	assertNoOrphanBlockStopDelta(t, events)
+
+	var blockTypes []string
+	for _, ev := range events {
+		if ev.event != "content_block_start" {
+			continue
+		}
+		m := dataMap(t, ev)
+		cb, _ := m["content_block"].(map[string]interface{})
+		if cb != nil {
+			if t, ok := cb["type"].(string); ok {
+				blockTypes = append(blockTypes, t)
+			}
+		}
+	}
+	if len(blockTypes) != 3 ||
+		blockTypes[0] != "thinking" ||
+		blockTypes[1] != "text" ||
+		blockTypes[2] != "tool_use" {
+		t.Fatalf("块顺序期望 [thinking, text, tool_use],实际 %v", blockTypes)
+	}
+
+	deltaJSON := extractMessageDeltaJSON(t, got)
+	var deltaParsed struct {
+		Delta struct {
+			StopReason string `json:"stop_reason"`
+		} `json:"delta"`
+	}
+	if err := json.Unmarshal([]byte(deltaJSON), &deltaParsed); err != nil {
+		t.Fatalf("message_delta JSON 解析失败: %v raw=%s", err, deltaJSON)
+	}
+	if deltaParsed.Delta.StopReason != "tool_use" {
+		t.Errorf("带 functionCall 的 stop_reason 期望 tool_use,实际 %q", deltaParsed.Delta.StopReason)
+	}
 }
 
 // ===== A: includeThoughts 注入回归(问题 A 根因修复) =====

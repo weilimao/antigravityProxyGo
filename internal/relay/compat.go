@@ -1464,7 +1464,38 @@ func (h *APICompatHandler) handleStreamResponse(
 				} else if apiFormat == "anthropic" {
 					hasFunctionCall = true
 
-					// 在发出 tool_use 之前，先关闭未完成的 text block
+					// 先关闭未完成的 thinking block(与 text block 互斥,任一时刻至多其一开启)。
+					// 旧实现只关 textBlockOpen、漏关 thinkingBlockOpen:模型"先思考再做工具调用"
+					// (Claude Code + gemini 注入 includeThoughts 后的常态)时,thinking 块遗留未闭合,
+					// 此处 tool_use 的 content_block_start 覆盖了 thinking 原索引(blockIndex 未推进),
+					// 末尾收尾段再见 thinkingBlockOpen==true 在已偏移的 blockIndex 上补发
+					// signature_delta/content_block_stop,命中从未 start 过的索引,
+					// Claude Code cr[index] 查无此块 → "Content block not found"。
+					// 补此闭合以对称 text 分支/末尾收尾两处的 thinking 关块逻辑。
+					if thinkingBlockOpen {
+						// 仅当确实下发过 thinking_delta 才补 signature_delta + stop(对齐官方
+						// thinking_delta → signature_delta → content_block_stop 序列);
+						// thinkingEmittedAny==false 属不可达防御(thought 分支 start 与 delta 同迭代下发),
+						// 与 text 分支/收尾段守卫语义一致,不引入新行为。
+						if thinkingEmittedAny {
+							sigEvt := map[string]interface{}{
+								"type":  "content_block_delta",
+								"index": blockIndex,
+								"delta": map[string]interface{}{"type": "signature_delta", "signature": ""},
+							}
+							sigBytes, _ := json.Marshal(sigEvt)
+							fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(sigBytes))
+							stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
+							stopBytes, _ := json.Marshal(stopEvt)
+							fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
+							blockIndex++
+						}
+						thinkingBlockOpen = false
+						thinkingEmittedAny = false
+						flusher.Flush()
+					}
+
+					// 再关闭未完成的 text block
 					if textBlockOpen {
 						stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
 						stopBytes, _ := json.Marshal(stopEvt)
