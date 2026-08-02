@@ -709,6 +709,26 @@ func (a *App) connectRemote(host, port, path, key, password string) error {
 		}
 	})
 
+	// 注入自动重连回调:健康检查探测到链路恢复、或外部网络监听器
+	// 触发重连时调用。复用保存凭据,经 reconnectRemoteSafely 串行化
+	// 避免与网络恢复回调并发重复 Login。uses the saved credentials to re-login.
+	a.remoteRelay.SetAutoReconnectFn(func() {
+		savedHost := a.settingsMgr.GetRemoteHost()
+		savedPort := a.settingsMgr.GetRemotePort()
+		savedPath := a.settingsMgr.GetRemotePath()
+		savedKey := a.settingsMgr.GetRemoteKey()
+		savedPwd := a.settingsMgr.GetRemotePassword()
+		if savedHost == "" || savedKey == "" {
+			a.AddLog("⚠️ [自动重连] 无保存的远程中继凭据,跳过自动重连")
+			return
+		}
+		if err := a.reconnectRemoteSafely(savedHost, savedPort, savedPath, savedKey, savedPwd); err != nil {
+			a.AddLog(fmt.Sprintf("❌ [自动重连] 远程中继重连失败: %v", err))
+		} else {
+			a.AddLog("✅ [自动重连] 远程中继重连成功")
+		}
+	})
+
 	// Set remote relay on proxy engine
 	a.proxyEngine.SetRemoteRelay(a.remoteRelay)
 

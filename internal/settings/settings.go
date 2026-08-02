@@ -77,6 +77,11 @@ type Config struct {
 	CompressionStrategy     string `json:"compressionStrategy"`
 	SummaryModel            string `json:"summaryModel"`
 	KeepRecentTurns         int    `json:"keepRecentTurns"`
+	// OcrModel 是入站 image 自愈降级时调用的本地 Gemini OCR 模型名。
+	// 默认 gemini-2.5-flash。前端下拉默认显示中继模型映射列表 + 兜底,可改任意 Gemini 系模型。
+	// 影响:NVIDIA/Gemini 入站 image 降级链路(URL)与 descHeader 文案。
+	// 空字符串走默认(见 GetOcrModel),不阻断主请求。
+	OcrModel string `json:"ocrModel"`
 	// NVIDIA 号池 ResourceExhausted 时的服务端就地压缩参数（公共 chatcompress 引擎）。
 	NvidiaCompressEnabled        bool `json:"nvidiaCompressEnabled"`
 	NvidiaCompressThresholdTokens int  `json:"nvidiaCompressThresholdTokens"`
@@ -97,6 +102,10 @@ type Config struct {
 	// 配置后,前端"获取模型"直接返回该清单(不请求远端);为空时才请求远端 /v1/models。
 	NvidiaPreferredModels []string `json:"nvidiaPreferredModels"`
 }
+
+// DefaultOcrModel 是入站 image 自愈降级时调用的本地 Gemini OCR 模型默认值。
+// 与 relay.defaultOcrModel 同值,供 GetOcrModel 空值兜底与 EnsureConfigExists 默认注入。
+const DefaultOcrModel = "gemini-2.5-flash"
 
 func GetDefaultModelMappings() []ModelMappingEntry {
 	return []ModelMappingEntry{
@@ -212,6 +221,7 @@ func (m *Manager) Init(defaultPath string) {
 		CompressionStrategy:     "summarize",
 		SummaryModel:            "gemini-2.5-flash-lite",
 		KeepRecentTurns:         5,
+		OcrModel:                DefaultOcrModel,
 		NvidiaCompressEnabled:         true,
 		NvidiaCompressThresholdTokens: 80000,
 		NvidiaCompressKeepToolResults: 4,
@@ -265,6 +275,7 @@ func (m *Manager) loadConfig() {
 		CompressionStrategy:     "summarize",
 		SummaryModel:            "gemini-2.5-flash-lite",
 		KeepRecentTurns:         5,
+		OcrModel:                DefaultOcrModel,
 		NvidiaCompressEnabled:         true,
 		NvidiaCompressThresholdTokens: 80000,
 		NvidiaCompressKeepToolResults: 4,
@@ -305,6 +316,11 @@ func (m *Manager) loadConfig() {
 
 	if parsed.DebuggerLogPath == "" {
 		parsed.DebuggerLogPath = "logs/debugger"
+	}
+
+	// 旧配置文件无 ocrModel 字段 → 兜底默认,避免升级后 OCR 链路回首版硬编码语义漂移。
+	if strings.TrimSpace(parsed.OcrModel) == "" {
+		parsed.OcrModel = DefaultOcrModel
 	}
 
 	if parsed.CustomThinkingMinBudget <= 0 {
@@ -893,6 +909,7 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			FallbackProxyUsername: "",
 			FallbackProxyPassword: "",
 			RequestTimeout:       300,
+			OcrModel:             DefaultOcrModel,
 			EnableThinkingMode:   true,
 		}
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")
@@ -1324,6 +1341,26 @@ func (m *Manager) SetEnableThinkingMode(val bool) error {
 	return m.SaveConfig()
 }
 
+// GetOcrModel 读取入站 image 自愈降级使用的本地 Gemini OCR 模型名。
+// 空值(旧配置或未设置)走 DefaultOcrModel,保持与历史行为一致。
+func (m *Manager) GetOcrModel() string {
+	m.RLock()
+	defer m.RUnlock()
+	if strings.TrimSpace(m.config.OcrModel) == "" {
+		return DefaultOcrModel
+	}
+	return m.config.OcrModel
+}
+
+// SetOcrModel 持久化 OCR 模型名。前端下拉切换后经 IPC 调用此方法落盘。
+// 空字符串写入会被 GetOcrModel 兜底为默认值,不阻断主请求。
+func (m *Manager) SetOcrModel(val string) error {
+	m.Lock()
+	defer m.Unlock()
+	m.config.OcrModel = strings.TrimSpace(val)
+	return m.SaveConfig()
+}
+
 type SessionOptimizationConfig struct {
 	EnableCustomCompression bool   `json:"enableCustomCompression"`
 	MaxTokensThreshold      int    `json:"maxTokensThreshold"`
@@ -1461,6 +1498,9 @@ type ManagerInterface interface {
 	SetReasoningAsText(val bool) error
 	GetEnableThinkingMode() bool
 	SetEnableThinkingMode(val bool) error
+	// GetOcrModel/SetOcrModel: 入站 image 自愈降级使用的本地 Gemini OCR 模型,前端可配置。
+	GetOcrModel() string
+	SetOcrModel(val string) error
 	GetEnableDebuggerMode() bool
 	SetEnableDebuggerMode(enable bool) error
 	GetDebuggerLogPath() string

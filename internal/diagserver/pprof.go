@@ -14,11 +14,13 @@
 package diagserver
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/pprof"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -29,6 +31,11 @@ const (
 var (
 	startOnce sync.Once
 	started   atomic.Bool
+
+	// srvMu 保护 srv / listener,供 Stop 安全关闭已启动的诊断服务。
+	srvMu     sync.Mutex
+	srv       *http.Server
+	listener  net.Listener
 )
 
 // Start 启动 pprof 诊断 HTTP 服务。幂等：重复调用安全。
@@ -58,12 +65,33 @@ func Start() {
 			// 端口被占用或不可用：静默放弃，不影响主流程
 			return
 		}
-		srv := &http.Server{Handler: mux}
+		srvMu.Lock()
+		listener = ln
+		srv = &http.Server{Handler: mux}
+		srvMu.Unlock()
 		go func() {
 			started.Store(true)
 			_ = srv.Serve(ln)
 		}()
 	})
+}
+
+// Stop 关闭诊断 HTTP 服务并释放监听端口。幂等安全，可多次调用。
+// 用于程序关闭流程，避免 pprof 诊断 goroutine 持 listener 句柄导致进程退出后端口残留。
+func Stop() {
+	srvMu.Lock()
+	defer srvMu.Unlock()
+	if srv != nil {
+		// Shutdown 超时 3s,避免长期阻塞 shutdown 主路径
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = srv.Shutdown(ctx)
+		cancel()
+		srv = nil
+	}
+	if listener != nil {
+		_ = listener.Close()
+		listener = nil
+	}
 }
 
 // RuntimeStarted 返回诊断服务是否已成功启动，供上层日志使用。

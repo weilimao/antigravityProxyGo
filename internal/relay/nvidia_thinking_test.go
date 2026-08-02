@@ -469,7 +469,7 @@ func TestMapReasoningEffort_DeepSeekMode(t *testing.T) {
 func TestAnthropicToOpenAIChat_InjectsChatTemplateKwargs(t *testing.T) {
 	// max 等级 → chat_template_kwargs:{thinking:true, reasoning_effort:max}
 	req := makeAnthReq(t, "deepseek-ai/deepseek-v4-flash", `{"type":"adaptive"}`, "")
-	out, err := AnthropicToOpenAIChat(req)
+	out, err := AnthropicToOpenAIChat(req, false)
 	if err != nil {
 		t.Fatalf("AnthropicToOpenAIChat failed: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestAnthropicToOpenAIChat_InjectsChatTemplateKwargs(t *testing.T) {
 
 	// low 等级(deepseek mode 落回 high)→ reasoning_effort:high
 	req2 := makeAnthReq(t, "deepseek-ai/deepseek-v4-flash", `{"type":"enabled","budget_tokens":1024}`, "")
-	out2, _ := AnthropicToOpenAIChat(req2)
+	out2, _ := AnthropicToOpenAIChat(req2, false)
 	kw2 := ctKwargs(t, out2)
 	if kw2["reasoning_effort"] != "high" {
 		t.Fatalf("low 经 deepseek mode 映射应→high,实际=%v", kw2["reasoning_effort"])
@@ -491,7 +491,7 @@ func TestAnthropicToOpenAIChat_InjectsChatTemplateKwargs(t *testing.T) {
 
 	// 客户端明示 disabled → 不注入 chat_template_kwargs(回归安全)
 	req3 := makeAnthReq(t, "deepseek-ai/deepseek-v4-flash", `{"type":"disabled"}`, "")
-	out3, _ := AnthropicToOpenAIChat(req3)
+	out3, _ := AnthropicToOpenAIChat(req3, false)
 	if out3.ChatTemplateKwargs != nil {
 		t.Fatalf("disabled 不应注入 chat_template_kwargs,实际=%v", out3.ChatTemplateKwargs)
 	}
@@ -500,7 +500,7 @@ func TestAnthropicToOpenAIChat_InjectsChatTemplateKwargs(t *testing.T) {
 // TestAnthropicToOpenAIChat_ReasoningModelDefaultThinking 锁定:推理型模型客户端未发思考时仍发 thinking:true。
 func TestAnthropicToOpenAIChat_ReasoningModelDefaultThinking(t *testing.T) {
 	req := makeAnthReq(t, "deepseek-ai/deepseek-v4-flash", "", "")
-	out, _ := AnthropicToOpenAIChat(req)
+	out, _ := AnthropicToOpenAIChat(req, false)
 	if out.ChatTemplateKwargs == nil || out.ChatTemplateKwargs["thinking"] != true {
 		t.Fatalf("推理模型未发思考时应注入 thinking:true,实际=%v", out.ChatTemplateKwargs)
 	}
@@ -516,7 +516,7 @@ func TestInjectNvidiaChatTemplateKwargs_OpenAIEffort(t *testing.T) {
 	body := mustJSONString(map[string]interface{}{
 		"model": "x", "reasoning_effort": "high", "messages": []interface{}{},
 	})
-	injectNvidiaChatTemplateKwargs(chatReq, []byte(body), "deepseek-ai/deepseek-v4-flash")
+	injectNvidiaChatTemplateKwargs(chatReq, []byte(body), "deepseek-ai/deepseek-v4-flash", false)
 	if chatReq.ChatTemplateKwargs == nil {
 		t.Fatalf("应注入 chat_template_kwargs")
 	}
@@ -534,7 +534,7 @@ func TestInjectNvidiaChatTemplateKwargs_ReasoningObjectForm(t *testing.T) {
 	body := mustJSONString(map[string]interface{}{
 		"model": "x", "reasoning": map[string]interface{}{"effort": "max"}, "messages": []interface{}{},
 	})
-	injectNvidiaChatTemplateKwargs(chatReq, []byte(body), "deepseek-ai/deepseek-v4-flash")
+	injectNvidiaChatTemplateKwargs(chatReq, []byte(body), "deepseek-ai/deepseek-v4-flash", false)
 	if chatReq.ChatTemplateKwargs["reasoning_effort"] != "max" {
 		t.Fatalf("reasoning.effort:max 应映射→max,实际=%v", chatReq.ChatTemplateKwargs)
 	}

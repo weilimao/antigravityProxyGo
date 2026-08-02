@@ -171,6 +171,20 @@ type AnthropicContent struct {
 	ToolUseID        string          `json:"tool_use_id,omitempty"`
 	ToolResultContent json.RawMessage `json:"content,omitempty"` // string 或 []block
 	IsError          *bool           `json:"is_error,omitempty"`
+	// image 块字段(请求历史解析 + NVIDIA 入站自愈降级):承载 Anthropic image content block 的
+	// base64 数据,仅当 Type=="image" 时有意义。NVIDIA 上游不支持多模态,见 nvidia.go 注入的降级
+	// 会先用本地 Gemini 把 Source.Data OCR 成纯文本并改写为 text 块,再走 AnthropicToOpenAIChat,
+	// 故上游段永远只见 text、永远零负担。omitted 时不影响现有序列化形态。
+	Source *AnthropicImageSource `json:"source,omitempty"`
+}
+
+// AnthropicImageSource 对齐 Anthropic image content block 的 source 字段:
+// {"type":"base64","media_type":"image/png","data":"<base64>"}。
+// type 目前仅 base64(本地可 OCR);url 类型本机无法直取,降级时以占位文本兜底。
+type AnthropicImageSource struct {
+	Type      string `json:"type"`       // "base64" | "url"
+	MediaType string `json:"media_type"` // "image/png" 等
+	Data      string `json:"data"`       // base64 数据(base64 类型时非空)
 }
 
 type AnthropicMessage struct {
@@ -751,6 +765,14 @@ func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 	// 自动为 flash / pro / thinking 等思考型推理模型注入 thinkingConfig 预算,防止谷歌上游截断返回 0 OutTokens;
 	// 同时在思考模式开启时注入 includeThoughts:true,使上游返回 thought:true 明文思考,
 	// 回译侧(compat.go part.Thought 分支)据此产出 Codex/Claude Code 的推理增量显示。
+	//
+	// 注意:本分支关键字含 "thinking",故 claude-opus-4-6-thinking / claude-sonnet-*-thinking 等
+	// 经 MapClientModelToGemini 保留原样的 claude 模型也会命中,无条件注入 ThinkingBudget:8192。
+	// 这类 claude 经 antigravity 号池(daily-cloudcode-pa)上游会重译为 Vertex Anthropic messages,
+	// 严格校验 max_tokens > thinking.budget_tokens;若 Codex 的 max_tokens 小于 8192(常态)即触发
+	// 400 INVALID_ARGUMENT("max_tokens must be greater than thinking.budget_tokens",req_vrtx_...)。
+	// 故注入预算后,对 claude-sonnet/opus 路径补守护:确保 MaxOutputTokens > ThinkingBudget。
+	// gemini flash/pro 走原生 Gemini 协议无该约束,IsClaudeModelForBudget=false 不触发守护,零回归。
 	lowerModel := strings.ToLower(openReq.Model)
 	if strings.Contains(lowerModel, "flash") || strings.Contains(lowerModel, "pro") || strings.Contains(lowerModel, "thinking") {
 		if gemReq.GenerationConfig == nil {
@@ -765,10 +787,39 @@ func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 		if IsEnableThinkingMode() {
 			gemReq.GenerationConfig.ThinkingConfig.IncludeThoughts = includeThoughtsTrue()
 		}
+
+		// 守护 claude 路径 Vertex Anthropic "max_tokens > thinking.budget_tokens" 不变式:
+		// 仅当本分支确会向上游写入固定 ThinkingBudget(>0)且模型为 claude-sonnet/opus 时,
+		// 把 MaxOutputTokens 抬升到 ThinkingBudget+ClaudeBudgetMargin,避免上游 400。
+		// 客户端已设 ThinkingConfig(非 nil)但 ThinkingBudget=0(includeThoughts-only)时不触发,
+		// 保持既有语义。
+		committedBudget := 0
+		if gemReq.GenerationConfig.ThinkingConfig != nil {
+			committedBudget = gemReq.GenerationConfig.ThinkingConfig.ThinkingBudget
+		}
+		if committedBudget > 0 {
+			cur := 0
+			if gemReq.GenerationConfig.MaxOutputTokens != nil {
+				cur = *gemReq.GenerationConfig.MaxOutputTokens
+			}
+			guaranteed := CalcClaudeGuaranteedMaxOutput(committedBudget, cur, IsClaudeModelForBudget(openReq.Model))
+			if guaranteed > 0 {
+				gemReq.GenerationConfig.MaxOutputTokens = &guaranteed
+			}
+		}
 	}
 
 	// 强制满足 Gemini 的严格 user/model 角色交替约束
 	gemReq.Contents = mergeConsecutiveRoles(gemReq.Contents)
+
+	// 兼容 Vertex Anthropic(daily-cloudcode-pa 重译)的 tool_use/tool_result 紧邻约束:
+	// mergeConsecutiveRoles 会把 [FC] + [T] 合并成 model[FC, T],使 tool_use 不再处于助手回合末尾,
+	// 触发 "tool_use ids were found without tool_result blocks immediately after" 400。
+	// 合并之后规整单条消息内 parts 顺序为 Anthropic 典范(model:[text, FC] / user:[FR, text]),
+	// 不动 id/不删 part/不跨消息移动,仅稳定分区。详见 NormalizePartOrderForClaudeVertex 文档。
+	if IsClaudeModelForBudget(openReq.Model) {
+		gemReq.Contents = NormalizePartOrderForClaudeVertex(gemReq.Contents)
+	}
 
 	return gemReq
 }
@@ -902,10 +953,60 @@ func TranslateAnthropicToGemini(anthReq *AnthropicRequest) *GeminiRequest {
 		gemReq.GenerationConfig.ThinkingConfig.IncludeThoughts = includeThoughtsTrue()
 	}
 
+	// 守护 claude 路径的 Vertex Anthropic "max_tokens > thinking.budget_tokens" 不变式:
+	// daily-cloudcode-pa(antigravity 号池上游)把 Gemini generationConfig.thinkingBudget/maxOutputTokens
+	// 重译为 Vertex Anthropic messages 的 thinking.budget_tokens / max_tokens;Vertex Claude 严格校验
+	// max_tokens > thinking.budget_tokens,违反返回 400 INVALID_ARGUMENT
+	// ("max_tokens must be greater than thinking.budget_tokens",request_id 形如 req_vrtx_...)。
+	// Anthropic 客户端(Claude Code)可能把 max_tokens 设得 ≤ thinking.budget_tokens 而触发该 400。
+	// 仅当模型为 claude-sonnet/opus(MapClientModelToGemini 保留原样的 claude,上游才走 Vertex Anthropic
+	// 协议)且本函数确会向上游写入固定 thinkingBudget(committedBudget>0,即 thinking.type=enabled 且
+	// BudgetTokens>0)时,补默认 maxOutputTokens 到 committedBudget+ClaudeBudgetMargin。
+	// 降级为 gemini 的旧 claude-3-*、纯 gemini flash/pro、includeThoughts-only(无 budget)、disabled
+	// 等路径 committedBudget<=0,守护不动作,既有 maxOutputTokens 语义零回归。
+	committedBudget := calcAnthropicCommittedBudget(anthReq)
+	if committedBudget > 0 {
+		cur := 0
+		if gemReq.GenerationConfig != nil && gemReq.GenerationConfig.MaxOutputTokens != nil {
+			cur = *gemReq.GenerationConfig.MaxOutputTokens
+		}
+		guaranteed := CalcClaudeGuaranteedMaxOutput(committedBudget, cur, IsClaudeModelForBudget(anthReq.Model))
+		if guaranteed > 0 {
+			if gemReq.GenerationConfig == nil {
+				// committedBudget>0 时上方 thinking 注入分支必已建 GenerationConfig;此处防御性兜底。
+				gemReq.GenerationConfig = &GeminiConfig{}
+			}
+			gemReq.GenerationConfig.MaxOutputTokens = &guaranteed
+		}
+	}
+
 	// 强制满足 Gemini 的严格 user/model 角色交替约束
 	gemReq.Contents = mergeConsecutiveRoles(gemReq.Contents)
 
+	// 兼容 Vertex Anthropic(daily-cloudcode-pa 重译)的 tool_use/tool_result 紧邻约束:
+	// mergeConsecutiveRoles 合并连续同角色消息后,可能产出 model[FC, T] / user[T, FR] 这类与
+	// Anthropic 典范相反的顺序,导致 daily-cloudcode-pa 重译时 tool_use 不再紧邻其 tool_result,
+	// 触发 "tool_use ids were found without tool_result blocks immediately after" 400。
+	// 合并之后规整单条消息内 parts 顺序为 Anthropic 典范(model:[text, FC] / user:[FR, text])。
+	// TranslateAnthropicToGemini 入口本就产出典范顺序,此处为防御性兜底(对 claude 路径为 no-op 或更稳)。
+	if IsClaudeModelForBudget(anthReq.Model) {
+		gemReq.Contents = NormalizePartOrderForClaudeVertex(gemReq.Contents)
+	}
+
 	return gemReq
+}
+
+// calcAnthropicCommittedBudget 计算本函数最终会向上游写入的 thinking.BudgetTokens 数值(对齐上方翻译逻辑)。
+// 仅 thinking.type==enabled 且 BudgetTokens>0 时返回 BudgetTokens;其余(includeThoughts-only、disabled、
+// 负值/零值)一律返回 0,表示不会向上游写入 thinkingBudget 字段,无需守护 max_tokens 不变式。
+func calcAnthropicCommittedBudget(anthReq *AnthropicRequest) int {
+	if anthReq.Thinking == nil || !strings.EqualFold(anthReq.Thinking.Type, "enabled") {
+		return 0
+	}
+	if anthReq.Thinking.BudgetTokens <= 0 {
+		return 0
+	}
+	return anthReq.Thinking.BudgetTokens
 }
 
 func findToolNameByID(messages []AnthropicMessage, toolUseID string) string {

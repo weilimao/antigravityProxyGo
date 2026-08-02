@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -327,8 +328,19 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	bodyBytes, err := io.ReadAll(r.Body)
+	bodyBytes, err := readBodyWithTimeout(r, nvidiaInboundReadTimeout)
 	if err != nil {
+		if errors.Is(err, ErrBodyReadTimeout) {
+			// 入站 body 读取超时:客户端只发了 header 不发 body,或入站链路半死
+			// (TCP keep-alive 最快 2h 才探测,应用层会永久挂在 io.ReadAll)。
+			// 回写 408 让 Claude Code 等 Anthropic 客户端识别后自动换连接重试,
+			// 而非让 handler 永久卡死、上游日志 🟢 永远打不出。
+			kind := inboundKindOfPath(path)
+			h.log("⏱️ [NVIDIA 中继] 入站 body 读取超时(%s),路径 %s,判定客户端未发完整请求体/链路半死,回写 408 %s", nvidiaInboundReadTimeout, path, kind)
+			writeNvidiaInboundTimeout(w, kind)
+			return
+		}
+		h.log("❌ [NVIDIA 中继] 入站 body 读取失败(路径 %s): %v", path, err)
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "failed to read request body"})
 		return
 	}
@@ -345,11 +357,35 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 	}
 	GetGlobalDebugger().LogClientRequest(reqID, r.Method, r.URL.Path, r.Header, bodyBytes)
 
+	// 会话级隔离键注入:与 antigravity 号池链路(handler.go:ExtractSessionKey + auth:acc: 前缀)
+	// 同款口径算出 stablySessionKey,写入 userSession.SessionKey,供 OCR 缓存等按会话隔离的
+	// 特性共享同一会话 ID(同用户不同会话不共享缓存槽),并贯穿下方日志让"哪个会话在打"可观测。
+	// sessionRouter==nil(单测未注入)时跳过注入,OCR 缓存回退 UserKey 隔离,行为不变。
+	if h.sessionRouter != nil && userSession != nil && strings.TrimSpace(userSession.SessionKey) == "" {
+		rawKey := h.sessionRouter.ExtractSessionKey(r, bodyBytes)
+		if strings.HasPrefix(rawKey, "auth:") {
+			userSession.SessionKey = "auth:acc:" + strings.TrimPrefix(rawKey, "auth:")
+		} else if strings.HasPrefix(rawKey, "sock:") {
+			userSession.SessionKey = "sock:acc:" + strings.TrimPrefix(rawKey, "sock:")
+		} else if rawKey != "" {
+			userSession.SessionKey = "acc:" + rawKey
+		}
+	}
+
 	// 入站协议判定：按路径决定（三选一）
 	inboundAnthropic := strings.HasSuffix(path, "/v1/messages")
 	inboundOpenAI     := strings.HasSuffix(path, "/v1/chat/completions")
 	inboundResponses  := strings.HasSuffix(path, "/v1/responses")
+	// count_tokens:Anthropic 可选端点(官方 LLM Gateway Protocol 标 optional),CLI 用它预估 input_tokens。
+	// 纯本地字符级粗估后回 200,不请求上游、不消耗号池、不计费(见 anthropic_count_tokens.go)。
+	// 必须在下方三个生成端点的 404 兜底之前识别,否则会被当成"不支持的端点"回 404 —— 虽官方允许降级,
+	// 但那样 CLI 拿不到 relay 侧估算值且日志噪声明显。
+	if strings.HasSuffix(path, "/v1/messages/count_tokens") {
+		h.handleNvidiaCountTokens(w, bodyBytes)
+		return
+	}
 	if !inboundAnthropic && !inboundOpenAI && !inboundResponses {
+		h.log("🚫 [NVIDIA 中继] 不支持的端点 %s (仅支持 /nvidia/v1/messages, /nvidia/v1/chat/completions, /nvidia/v1/responses),回写 404", path)
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error": "unsupported nvidia endpoint: use /nvidia/v1/messages, /nvidia/v1/chat/completions or /nvidia/v1/responses",
 		})
@@ -364,6 +400,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 	if inboundAnthropic {
 		var req AnthropicRequest
 		if err := json.Unmarshal(bodyBytes, &req); err != nil {
+			h.log("🚫 [NVIDIA 中继] Anthropic 入站请求体解析失败(路径 %s): %v,回写 400", path, err)
 			writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid anthropic request: " + err.Error()})
 			return
 		}
@@ -374,6 +411,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		// model/stream 取用统一产物的对应字段。
 		req, err := ParseUnifiedOpenAIRequest(bodyBytes)
 		if err != nil {
+			h.log("🚫 [NVIDIA 中继] Responses 入站请求体解析失败(路径 %s): %v,回写 400", path, err)
 			writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid responses request: " + err.Error()})
 			return
 		}
@@ -382,6 +420,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 	} else {
 		var req OpenAIChatRequest
 		if err := json.Unmarshal(bodyBytes, &req); err != nil {
+			h.log("🚫 [NVIDIA 中继] OpenAI Chat 入站请求体解析失败(路径 %s): %v,回写 400", path, err)
 			writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid openai request: " + err.Error()})
 			return
 		}
@@ -396,6 +435,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		user := h.authMgr.userMgr.GetUserByID(userSession.UserID)
 		if user != nil {
 			if err := nvidiaQuotaCheck(userSession.UserID, user.Quotas.Nvidia); err != nil {
+				h.log("🚦 [NVIDIA 中继] 用户 %s NVIDIA 配额校验未通过: %v,回写 429 quota_exceeded", userSession.UserKey, err)
 				writeJSON(w, http.StatusTooManyRequests, map[string]interface{}{
 					"error": map[string]interface{}{
 						"type":    "quota_exceeded",
@@ -412,6 +452,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 	available := h.accountMgr.GetAvailableAccountsForChannel(poolChannel, inModel)
 
 	if len(available) == 0 {
+		h.log("⛔ [NVIDIA 中继] NVIDIA 号池无可用账号(channel=nvidia, model=%s),回写 503 nvidia_pool_empty", inModel)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
 			"error": map[string]interface{}{
 				"type":    "nvidia_pool_empty",
@@ -465,17 +506,43 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		// 模型映射(账号级四档位)
 		upstreamModel := mapNvidiaModel(inModel, poolAccount)
 
+		// 关思考信号解析:Anthropic-Beta 头部 redact-thinking-* 是 Claude Code 表达"关闭思考"
+		// 的协议标志(Claude Code 关闭思考开关时,body 常不带 thinking 字段,但头部带
+		// redact-thinking-2026-02-12)。在请求体翻译前一次性解析,贯穿 Anthropic 与 OpenAI Chat
+		// 两条入站链路,确保客户端关思考后代理绝不向上游注入 chat_template_kwargs.thinking。
+		// Responses 入站(codex /v1/responses)不携带 Anthropic 头部,本判定对其恒为 false(无副作用)。
+		thinkingRedacted := anthropicBetaThinkingRedacted(r.Header)
+
 		// 根据入站协议构造发往上游的 OpenAI Chat 请求体
 		var upstreamReq *OpenAIChatRequest
 		if inboundAnthropic {
 			var anthReq AnthropicRequest
 			if err := json.Unmarshal(bodyBytes, &anthReq); err != nil {
+				h.log("🚫 [NVIDIA 中继] 选号后 Anthropic 请求体二次解析失败(账号 %s): %v,回写 400", poolAccount.Email, err)
 				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid anthropic request: " + err.Error()})
 				return
 			}
 			anthReq.Model = upstreamModel
-			u, err := AnthropicToOpenAIChat(&anthReq)
+
+			// image 自愈降级:NVIDIA 上游(glm-5.2 等)不支持多模态,入站 Anthropic 的 image
+			// content block 不能直送上游(否则触发 400/内容丢失)。在转 OpenAI 之前先用本地
+			// Gemini(gemini-2.5-flash)对每张图 OCR,把 image 块原地改写为纯文本块,上游段
+			// 永远只见 text、永远零负担;非多模态模型无任何报错风险。失败不阻断(占位文本兜底)。
+			// 仅 AnthropicMessage.UnmarshalJSON 解析出 Source 字段后才命中(见 compat_translate.go)。
+			replaced, errDown, ocrHits, ocrMisses, ocrSkipped := h.downgradeAnthropicImagesToText(&anthReq, userSession)
+			if errDown != nil {
+				h.log("⚠️ [NVIDIA 中继] image 自愈降级出错(账号 %s | 会话 %s): %v,继续原始请求", poolAccount.Email, ocrSessionDisplay(userSession), errDown)
+			} else if replaced > 0 {
+				// 透出三计数(命中/未命中/窗外占位)与会话 ID,消除"每次请求都打印 OCR 降级"日志的歧义:
+				// 命中=历史图纳秒级直接返回(不烧 antigravity 额度、无 ~3s 延迟);
+				// 未命中=cache miss 真打了 gemini 上游重新 OCR;窗外占位=末尾 10 条之外的图缓存未命中,
+				// 走占位文本兜底,绝不重新 OCR(省配额)。
+				h.log("✅ [NVIDIA 中继] 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(账号 %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replaced, poolAccount.Email, ocrSessionDisplay(userSession), ocrHits, ocrMisses, ocrSkipped)
+			}
+
+			u, err := AnthropicToOpenAIChat(&anthReq, thinkingRedacted)
 			if err != nil {
+				h.log("🚫 [NVIDIA 中继] Anthropic→OpenAI 转换失败(账号 %s): %v,回写 400", poolAccount.Email, err)
 				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "anthropic->openai transform failed: " + err.Error()})
 				return
 			}
@@ -484,6 +551,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			// Responses(含 codex /v1/responses) → 统一解析 → OpenAIChatRequest
 			u, err := ResponsesToOpenAIChat(bodyBytes, upstreamModel)
 			if err != nil {
+				h.log("🚫 [NVIDIA 中继] Responses→OpenAI 转换失败(账号 %s): %v,回写 400", poolAccount.Email, err)
 				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "responses->openai transform failed: " + err.Error()})
 				return
 			}
@@ -491,6 +559,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		} else {
 			var chatReq OpenAIChatRequest
 			if err := json.Unmarshal(bodyBytes, &chatReq); err != nil {
+				h.log("🚫 [NVIDIA 中继] 选号后 OpenAI Chat 请求体二次解析失败(账号 %s): %v,回写 400", poolAccount.Email, err)
 				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid openai request: " + err.Error()})
 				return
 			}
@@ -504,7 +573,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			// 让 NIM 推理模型按等级思考。客户端未传思考 → 不注入 → 上游行为不变(回归安全)。
 			// 注意:顶层 reasoning_effort 不是 NIM 认的字段(NIM 认 chat_template_kwargs),
 			// 故 OpenAIChatRequest 无该字段,从原始 bodyBytes 单独取,避免污染上游请求结构。
-			injectNvidiaChatTemplateKwargs(&chatReq, bodyBytes, upstreamModel)
+			injectNvidiaChatTemplateKwargs(&chatReq, bodyBytes, upstreamModel, thinkingRedacted)
 			upstreamReq = &chatReq
 		}
 
@@ -531,7 +600,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		req.Header.Set("Accept", "application/json")
 		// NVIDIA 上游不识别 anthropic 头，不注入
 
-		h.log("🟢 [NVIDIA 中继 %d/%d] 用户 %s 分配账号 %s | 模型 %s -> %s | %s", attempt+1, maxAttempts, userSession.UserID, poolAccount.Email, inModel, upstreamModel, targetURL)
+		h.log("🟢 [NVIDIA 中继 %d/%d] 用户 %s 分配账号 %s | 模型 %s -> %s | 会话 %s | %s", attempt+1, maxAttempts, userSession.UserID, poolAccount.Email, inModel, upstreamModel, ocrSessionDisplay(userSession), targetURL)
 
 		httpClient := h.client
 		if isStreaming {

@@ -15,8 +15,12 @@ type RelaySession struct {
 	UserID    string
 	UserKey   string
 	APIKeyID  string
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	// SessionKey 是会话级隔离键,由请求入口(ExtractSessionKey + auth:acc: 前缀)算出后注入,
+	// 供 OCR 缓存等按会话隔离的特性共享同款口径(与 antigravity 链路日志显示的会话 ID 一致)。
+	// 空串=未注入,OCR 缓存等回退到按 UserKey 隔离(保单测/旧行为兼容)。
+	SessionKey string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
 }
 
 type AuthManager struct {

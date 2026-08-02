@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"antigravity-proxy/internal/db"
@@ -90,6 +91,16 @@ type RemoteRelay struct {
 	warmPool     chan net.Conn
 	warmPoolDone chan struct{}
 	warmPoolMu   sync.Mutex
+
+	// 健康检查心跳:周期性探测远端可达性,连续失败置 Connected=false,
+	// 触发保存凭据的自动重连(由注入的 reconnectFn 完成)。
+	healthStopCh chan struct{}
+	healthMu     sync.Mutex
+	onAutoReconnect  func()         // 注入的自动重连回调(上层 App 用保存凭据重新 Login)
+
+	consecutiveFailures atomic.Uint32
+	healthInterval     time.Duration // 心跳周期(默认 30s)
+	healthFailThreshold uint32        // 连续失败多少次判定离线(默认 3)
 }
 
 // NewRemoteRelay creates a new RemoteRelay instance
@@ -104,6 +115,127 @@ func (rr *RemoteRelay) SetOnTokenExpired(fn func()) {
 	rr.Lock()
 	rr.onTokenExpired = fn
 	rr.Unlock()
+}
+
+// SetAutoReconnectFn 注入自动重连回调。
+// 健康检查探测到链路从离线恢复时,或连续失败次数超过阈值时,调用此回调
+// 让上层(App)用保存的凭据重新 Login。回调内须自行处理并发与失败重试。
+func (rr *RemoteRelay) SetAutoReconnectFn(fn func()) {
+	rr.Lock()
+	rr.onAutoReconnect = fn
+	rr.Unlock()
+}
+
+// MarkOffline 强制将连接状态置为离线,并重置预热连接池。
+// 供外部网络监听器在判定断网时主动调用,终止向死链路继续路由请求。
+func (rr *RemoteRelay) MarkOffline() {
+	rr.Lock()
+	wasConnected := rr.config.Connected
+	if wasConnected {
+		rr.config.Connected = false
+	}
+	rr.Unlock()
+
+	if wasConnected && rr.logFn != nil {
+		rr.logFn("⚠️ 远程中继被标记为离线(网络中断或健康检查失败)")
+	}
+}
+
+// StartHealthCheck 启动健康检查心跳 goroutine。
+// 周期性探测远端可达性:
+//   - 连续 healthFailThreshold 次失败 → 置 Connected=false(避免路由死链路)
+//   - 链路恢复后自动触发 onAutoReconnect 重连
+// 幂等:重复调用安全。
+func (rr *RemoteRelay) StartHealthCheck() {
+	rr.healthMu.Lock()
+	defer rr.healthMu.Unlock()
+
+	if rr.healthStopCh != nil {
+		return
+	}
+
+	rr.consecutiveFailures.Store(0)
+	rr.healthStopCh = make(chan struct{})
+	interval := rr.healthInterval
+	failThreshold := rr.healthFailThreshold
+	if failThreshold == 0 {
+		failThreshold = 3
+	}
+
+	go func() {
+		if interval <= 0 {
+			interval = 30 * time.Second
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-rr.healthStopCh:
+				return
+			case <-ticker.C:
+				rr.doHealthCheck(failThreshold)
+			}
+		}
+	}()
+}
+
+// StopHealthCheck 停止健康检查心跳 goroutine。幂等安全。
+func (rr *RemoteRelay) StopHealthCheck() {
+	rr.healthMu.Lock()
+	ch := rr.healthStopCh
+	rr.healthStopCh = nil
+	rr.healthMu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
+// doHealthCheck 执行一次健康探测并维护连接状态机。
+func (rr *RemoteRelay) doHealthCheck(failThreshold uint32) {
+	rr.RLock()
+	connected := rr.config.Connected
+	host := rr.config.Host
+	port := rr.config.Port
+	path := rr.config.Path
+	reconnectFn := rr.onAutoReconnect
+	rr.RUnlock()
+
+	// 未配置远程中继时不做探测
+	if host == "" {
+		return
+	}
+
+	err := rr.TestConnection(host, port, path)
+	if err == nil {
+		rr.consecutiveFailures.Store(0)
+		// 探测成功但状态却是离线(被 MarkOffline 过):触发自动重连恢复
+		if !connected && reconnectFn != nil {
+			if rr.logFn != nil {
+				rr.logFn("🔄 [健康检查] 探测到远程中继已恢复可达,触发自动重连...")
+			}
+			go reconnectFn()
+		}
+		return
+	}
+
+	// 探测失败
+	fails := rr.consecutiveFailures.Add(1)
+	if rr.logFn != nil && fails == 1 {
+		rr.logFn(fmt.Sprintf("⚠️ [健康检查] 远程中继探测失败(第 %d 次): %v", fails, err))
+	}
+
+	if fails >= failThreshold {
+		rr.Lock()
+		wasConnected := rr.config.Connected
+		if wasConnected {
+			rr.config.Connected = false
+		}
+		rr.Unlock()
+		if wasConnected && rr.logFn != nil {
+			rr.logFn(fmt.Sprintf("❌ [健康检查] 远程中继连续 %d 次探测失败,已标记为离线,停止向其路由请求", fails))
+		}
+	}
 }
 
 func (rr *RemoteRelay) buildURL(endpoint string) string {
@@ -215,11 +347,17 @@ func (rr *RemoteRelay) Login(host, port, path, key, password string) error {
 	// 登录成功后启动连接预热池，消除后续首次请求的冷启动延迟
 	rr.StartWarmPool()
 
+	// 登录成功后启动健康检查心跳,持续守护链路可达性
+	rr.StartHealthCheck()
+
 	return nil
 }
 
 // Disconnect logs out from the remote relay server and clears the session
 func (rr *RemoteRelay) Disconnect() {
+	// 先停止健康检查心跳,避免断开期间误探测触发重连
+	rr.StopHealthCheck()
+
 	// 先停止预热连接池，释放所有预建连接
 	rr.StopWarmPool()
 

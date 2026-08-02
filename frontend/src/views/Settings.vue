@@ -8,6 +8,7 @@
 <!-- Sub Tab Menu -->
 <div class="flex gap-1 bg-slate-100 dark:bg-white/5 p-1 rounded-lg text-[12px]">
 <button class="px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200" id="btnSettingsTabGeneral" data-i18n="settingsTabGeneral">参数配置</button>
+<button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabNvidia" data-i18n="settingsTabNvidia">NVIDIA设置</button>
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" data-i18n="settingsTabRelay" id="btnSettingsTabRelay">中继服务器</button>
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabNetwork" data-i18n="settingsTabNetwork">网络监控</button>
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabHelp" data-i18n="settingsTabHelp">使用说明</button>
@@ -72,66 +73,21 @@
 <span class="material-symbols-outlined text-primary text-[20px]">psychology</span>
 <span>思维链与思考模式设置</span>
 </h2>
-<p class="text-xs text-outline leading-relaxed">
-控制上游思维链（Reasoning Content）在客户端上的开启与实时展现形式。关闭后代理将屏蔽所有思考参数，让模型快速输出正文。
+<p class="text-xs text-outline leading-relaxed" data-i18n="thinkingModeCardTip">
+全局总开关：控制 NVIDIA NIM 与 Gemini 转译链路是否向请求注入思考参数（让上游输出明文思维链）。关闭后代理透明剥离所有思考配置，模型直出正文。Claude 协议直通不经此开关。NVIDIA 链路专属的「思考过程直吐正文」展现项已移至「NVIDIA设置」tab。
 </p>
 
 <!-- 开关 1：启用思考模式 -->
 <div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
 <div class="flex flex-col gap-0.5">
 <span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="enableThinkingModeLabel">开启思考模式 (Enable Thinking Mode)</span>
-<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="enableThinkingModeDesc">默认开启。关闭后代理将透明拦截并自动剥离请求 Payload 中的思考参数，让上游模型直出正文回答，降低响应开销。</span>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="enableThinkingModeDesc">默认开启。作用于 NVIDIA NIM 与 Gemini 转译链路：关闭后代理将透明剥离请求 Payload 中的思考参数，让上游模型直出正文回答，降低响应开销。</span>
 </div>
 <!-- Toggle Switch -->
 <label class="relative inline-flex items-center cursor-pointer">
 <input class="sr-only peer" id="chkEnableThinkingMode" type="checkbox" checked />
 <div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
 </label>
-</div>
-
-<!-- 开关 2：思考过程直吐正文 (打字机模式) -->
-<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
-<div class="flex flex-col gap-0.5">
-<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="reasoningAsTextLabel">思考过程直吐正文 (打字机模式)</span>
-<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="reasoningAsTextDesc">开启后，将上游思维链 (Reasoning Content) 直接作为文本流逐字打屏输出，避免 CLI 客户端界面默认收起折叠。</span>
-</div>
-<!-- Toggle Switch -->
-<label class="relative inline-flex items-center cursor-pointer">
-<input class="sr-only peer" id="chkReasoningAsText" type="checkbox"/>
-<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
-</label>
-</div>
-</div>
-
-<!-- Debugger 调试模式与日志落盘卡片 -->
-<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
-<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
-<span class="material-symbols-outlined text-primary text-[20px]">bug_report</span>
-<span>Debugger 调试模式与全量请求日志落盘</span>
-</h2>
-<p class="text-xs text-outline leading-relaxed">
-开启后，系统将把每一笔中继请求的 Headers、Body、上游地址、状态码以及原始 SSE 流逐帧毫秒级实时记录存储到指定日志文件中，便于精准诊断断流与异常排查。
-</p>
-<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
-<div class="flex flex-col gap-0.5">
-<span class="text-[13px] font-bold text-on-surface dark:text-white">启用 Debugger 调试模式</span>
-<span class="text-[11px] text-outline text-wrap max-w-[80%]">开启后实时将中继与上游交互的全量原始字节与 SSE 帧落盘到指定的调试日志文件夹中（默认关闭）。</span>
-</div>
-<!-- Toggle Switch -->
-<label class="relative inline-flex items-center cursor-pointer">
-<input class="sr-only peer" id="chkEnableDebuggerMode" type="checkbox"/>
-<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
-</label>
-</div>
-<div class="flex flex-col gap-2 mt-2 pt-3 border-t border-outline-variant/10">
-<label class="text-[12px] font-bold text-outline">调试日志保存目录</label>
-<div class="flex gap-2">
-<input class="flex-grow px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtDebuggerLogPath" type="text" placeholder="logs/debugger">
-<button class="px-4 py-2 bg-primary text-white hover:bg-primary/90 rounded-md text-[13px] font-bold transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer" id="btnBrowseDebuggerDir">
-<span class="material-symbols-outlined text-[16px]">folder</span>
-<span>更改目录</span>
-</button>
-</div>
 </div>
 </div>
 <!-- 抓包分析设置卡片 -->
@@ -240,34 +196,6 @@
 </div>
 </div>
 <div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
-<div class="flex items-center justify-between">
-<div class="flex flex-col gap-0.5">
-<label class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="fallbackProxyEnabledLabel">启用 NVIDIA 断流兜底出站代理</label>
-<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="fallbackProxyEnabledDesc">仅 NVIDIA 上游链路：直连 5s×5 蓄流重试全部耗尽后，换此代理再试 1 轮（单次请求级，不记忆，不换号）。系统代理与虚拟网卡优先，仅当它们都不通才走此兜底。配置独立于上方专属 SOCKS5。</span>
-</div>
-<label class="relative inline-flex items-center cursor-pointer">
-<input class="sr-only peer" id="chkFallbackProxyEnabled" type="checkbox"/>
-<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
-</label>
-</div>
-<div class="flex flex-col gap-3 mt-1" id="divFallbackProxyAddress">
-<div class="flex flex-col gap-1.5">
-<label class="text-[12px] font-bold text-outline" data-i18n="fallbackProxyAddressLabel">兜底代理地址 (协议必须显式配置，如 http:// 或 socks5://)</label>
-<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtFallbackProxyAddress" placeholder="例如：http://127.0.0.1:8080 或 socks5://127.0.0.1:1080" data-i18n-placeholder="fallbackProxyAddressPlaceholder" type="text"/>
-</div>
-<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-<div class="flex flex-col gap-1.5">
-<label class="text-[12px] font-bold text-outline" data-i18n="fallbackProxyUsernameLabel">兜底代理用户名 (可选)</label>
-<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtFallbackProxyUsername" placeholder="无" data-i18n-placeholder="optionalPlaceholder" type="text"/>
-</div>
-<div class="flex flex-col gap-1.5">
-<label class="text-[12px] font-bold text-outline" data-i18n="fallbackProxyPasswordLabel">兜底代理密码 (可选)</label>
-<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtFallbackProxyPassword" placeholder="无" data-i18n-placeholder="optionalPlaceholder" type="password"/>
-</div>
-</div>
-</div>
-</div>
-<div class="flex flex-col gap-2 border-t border-outline-variant/20 pt-4">
 <div class="flex flex-col gap-0.5">
 <span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="fallbackPortsLabel">Fallback 自定义探测端口</span>
 <span class="text-[11px] text-outline text-wrap" data-i18n="fallbackPortsDesc">当系统没有配置代理时（只开 TUN 模式），除了默认扫描常用端口（7890/7897等），还会扫描此处的端口做代理回退。多个端口用英文逗号分隔。</span>
@@ -351,6 +279,24 @@
 		</div>
 	</div>
 
+	<!-- OCR 图片分析设置卡片 -->
+	<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+		<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+			<span class="material-symbols-outlined text-primary text-[20px]">image_search</span>
+			<span data-i18n="ocrCardTitle">OCR 图片分析设置</span>
+		</h2>
+		<p class="text-xs text-outline leading-relaxed" data-i18n="ocrCardTip">
+			当上游模型不支持多模态（如 NVIDIA 中继）时，代理会自动把入站的图片内容块 OCR 降级为纯文本后再送上游。此处选择用于执行 OCR 的本地 Gemini 系模型。
+		</p>
+		<div class="flex flex-col gap-1.5 border-t border-outline-variant/20 pt-4 mt-2">
+			<label class="text-[12px] font-bold text-outline" data-i18n="ocrModelLabel">OCR 图片分析模型</label>
+			<select class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-medium" id="selOcrModel">
+				<!-- 动态填充 -->
+			</select>
+			<span class="text-[11px] text-outline leading-relaxed" data-i18n="ocrModelDesc">入站图片自动 OCR 降级时调用的本地模型,默认 gemini-2.5-flash,可从中继模型映射列表任选 Gemini 系模型。</span>
+		</div>
+	</div>
+
 	<!-- 会话优化与压缩设置卡片 -->
 	<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 		<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
@@ -425,6 +371,103 @@
 </div>
 </div>
 <!-- End settings-panel-general -->
+
+<!-- 英伟达设置面板:NVIDIA 链路专属配置(思考直吐/Debugger/断流兜底代理),与参数配置独立 -->
+<div class="hidden flex-col gap-6 w-full" id="settings-panel-nvidia">
+<!-- NVIDIA 流式思考回译设置卡片 -->
+<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">psychology</span>
+<span data-i18n="nvidiaReasoningAsTextTitle">NVIDIA 流式思考回译</span>
+</h2>
+<p class="text-xs text-outline leading-relaxed" data-i18n="nvidiaReasoningAsTextTip">
+仅作用于 NVIDIA 上游链路的流式回译：开启后，将上游思维链 (Reasoning Content) 直接作为文本流逐字打屏输出，避免 CLI 客户端界面默认收起折叠。
+</p>
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex flex-col gap-0.5">
+<span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="reasoningAsTextLabel">思考过程直吐正文 (打字机模式)</span>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="reasoningAsTextDesc">开启后，将上游思维链 (Reasoning Content) 直接作为文本流逐字打屏输出，避免 CLI 客户端界面默认收起折叠。</span>
+</div>
+<!-- Toggle Switch -->
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="chkReasoningAsText" type="checkbox"/>
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
+</div>
+
+<!-- Debugger 调试模式与日志落盘卡片 (NVIDIA 入站专属落盘) -->
+<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">bug_report</span>
+<span>Debugger 调试模式与全量请求日志落盘</span>
+</h2>
+<p class="text-xs text-outline leading-relaxed">
+开启后，系统将把每一笔中继请求的 Headers、Body、上游地址、状态码以及原始 SSE 流逐帧毫秒级实时记录存储到指定日志文件中，便于精准诊断断流与异常排查。
+</p>
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex flex-col gap-0.5">
+<span class="text-[13px] font-bold text-on-surface dark:text-white">启用 Debugger 调试模式</span>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]">开启后实时将中继与上游交互的全量原始字节与 SSE 帧落盘到指定的调试日志文件夹中（默认关闭）。</span>
+</div>
+<!-- Toggle Switch -->
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="chkEnableDebuggerMode" type="checkbox"/>
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
+<div class="flex flex-col gap-2 mt-2 pt-3 border-t border-outline-variant/10">
+<label class="text-[12px] font-bold text-outline">调试日志保存目录</label>
+<div class="flex gap-2">
+<input class="flex-grow px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtDebuggerLogPath" type="text" placeholder="logs/debugger">
+<button class="px-4 py-2 bg-primary text-white hover:bg-primary/90 rounded-md text-[13px] font-bold transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer" id="btnBrowseDebuggerDir">
+<span class="material-symbols-outlined text-[16px]">folder</span>
+<span>更改目录</span>
+</button>
+</div>
+</div>
+</div>
+
+<!-- NVIDIA 断流兜底出站代理卡片 (仅 NVIDIA Anthropic 流式重试耗尽后切此代理再试 1 轮) -->
+<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">dns</span>
+<span data-i18n="nvidiaFallbackProxyTitle">NVIDIA 断流兜底出站代理</span>
+</h2>
+<p class="text-xs text-outline leading-relaxed" data-i18n="nvidiaFallbackProxyTip">
+仅 NVIDIA 上游链路：直连 5s×5 蓄流重试全部耗尽后，换此代理再试 1 轮（单次请求级，不记忆，不换号）。系统代理与虚拟网卡优先，仅当它们都不通才走此兜底。配置独立于「参数配置」中的专属 SOCKS5。
+</p>
+<div class="flex flex-col gap-3 border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex items-center justify-between">
+<div class="flex flex-col gap-0.5">
+<label class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="fallbackProxyEnabledLabel">启用 NVIDIA 断流兜底出站代理</label>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="fallbackProxyEnabledDesc">仅 NVIDIA 上游链路：直连 5s×5 蓄流重试全部耗尽后，换此代理再试 1 轮（单次请求级，不记忆，不换号）。系统代理与虚拟网卡优先，仅当它们都不通才走此兜底。配置独立于上方专属 SOCKS5。</span>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="chkFallbackProxyEnabled" type="checkbox"/>
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
+<div class="flex flex-col gap-3 mt-1" id="divFallbackProxyAddress">
+<div class="flex flex-col gap-1.5">
+<label class="text-[12px] font-bold text-outline" data-i18n="fallbackProxyAddressLabel">兜底代理地址 (协议必须显式配置，如 http:// 或 socks5://)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtFallbackProxyAddress" placeholder="例如：http://127.0.0.1:8080 或 socks5://127.0.0.1:1080" data-i18n-placeholder="fallbackProxyAddressPlaceholder" type="text"/>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+<div class="flex flex-col gap-1.5">
+<label class="text-[12px] font-bold text-outline" data-i18n="fallbackProxyUsernameLabel">兜底代理用户名 (可选)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtFallbackProxyUsername" placeholder="无" data-i18n-placeholder="optionalPlaceholder" type="text"/>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="text-[12px] font-bold text-outline" data-i18n="fallbackProxyPasswordLabel">兜底代理密码 (可选)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtFallbackProxyPassword" placeholder="无" data-i18n-placeholder="optionalPlaceholder" type="password"/>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- End settings-panel-nvidia -->
 
 <!-- 网络监控面板 -->
 <div class="hidden flex-col gap-6 w-full" id="settings-panel-network">

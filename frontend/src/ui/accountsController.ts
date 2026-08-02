@@ -2,12 +2,55 @@ import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
 import { showOneStopAuthModal } from './accountsAuthModal';
-import { 
-    initRendererElements, 
-    renderAccounts, 
-    updateAggregateQuotaUI, 
-    loadAccountQuota 
+import {
+    initRendererElements,
+    renderAccounts,
+    updateAggregateQuotaUI,
+    loadAccountQuota,
+    getNvidiaCooldownRemaining
 } from './accountsRenderer';
+
+// NVIDIA 冷却秒级翻牌倒计时定时器：单实例、自驱动、自停止。
+// 由 renderAccounts 末尾的 ensureNvidiaCooldownTimer 启动；tick 每秒只更新
+// .nvidia-cooldown-tick 节点的 textContent + className，零 IPC、零整列重渲染。
+let nvidiaCooldownTimer: any = null;
+
+export function ensureNvidiaCooldownTimer() {
+    if (nvidiaCooldownTimer) return;
+    nvidiaCooldownTimer = setInterval(tickNvidiaCooldown, 1000);
+}
+
+export function stopNvidiaCooldownTimer() {
+    if (nvidiaCooldownTimer) {
+        clearInterval(nvidiaCooldownTimer);
+        nvidiaCooldownTimer = null;
+    }
+}
+
+function tickNvidiaCooldown() {
+    // 切走账号池视图则自停（renderAccounts 切回时会重新 ensure）。
+    if (state.activeView !== 'accounts') {
+        stopNvidiaCooldownTimer();
+        return;
+    }
+    let anyActive = false;
+    const ticks = document.querySelectorAll('.nvidia-cooldown-tick');
+    ticks.forEach((el: any) => {
+        const until = parseInt(el.getAttribute('data-until') || '0', 10);
+        const { text, expired, seconds } = getNvidiaCooldownRemaining(until);
+        el.textContent = text;
+        const colorCls = expired
+            ? 'text-slate-500'
+            : seconds <= 10 ? 'text-red-500 animate-pulse'
+            : seconds <= 60 ? 'text-amber-600'
+            : 'text-amber-500/80';
+        el.className = `nvidia-cooldown-tick ${colorCls}`;
+        if (!expired) anyActive = true;
+    });
+    // 全部到期或无冷却账号 → 自停，下次 renderAccounts 再 ensure。
+    if (!anyActive) stopNvidiaCooldownTimer();
+}
+
 
 let btnAddAccount: HTMLButtonElement | null;
 let addAccountDropdown: HTMLDivElement | null;

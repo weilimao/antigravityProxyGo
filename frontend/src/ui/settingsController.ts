@@ -70,24 +70,28 @@ export function initSettings() {
             const settingsPanelRelay = document.getElementById('settings-panel-relay');
             const settingsPanelNetwork = document.getElementById('settings-panel-network');
             const settingsPanelHelp = document.getElementById('settings-panel-help');
+            const settingsPanelNvidia = document.getElementById('settings-panel-nvidia');
 
             const btnSettingsTabGeneral = document.getElementById('btnSettingsTabGeneral');
             const btnSettingsTabAbout = document.getElementById('btnSettingsTabAbout');
             const btnSettingsTabRelay = document.getElementById('btnSettingsTabRelay');
             const btnSettingsTabNetwork = document.getElementById('btnSettingsTabNetwork');
             const btnSettingsTabHelp = document.getElementById('btnSettingsTabHelp');
+            const btnSettingsTabNvidia = document.getElementById('btnSettingsTabNvidia');
 
             if (settingsPanelGeneral) settingsPanelGeneral.style.setProperty('display', activePanel === 'general' ? 'flex' : 'none', 'important');
             if (settingsPanelAbout) settingsPanelAbout.style.setProperty('display', activePanel === 'about' ? 'flex' : 'none', 'important');
             if (settingsPanelRelay) settingsPanelRelay.style.setProperty('display', activePanel === 'relay' ? 'flex' : 'none', 'important');
             if (settingsPanelNetwork) settingsPanelNetwork.style.setProperty('display', activePanel === 'network' ? 'flex' : 'none', 'important');
             if (settingsPanelHelp) settingsPanelHelp.style.setProperty('display', activePanel === 'help' ? 'flex' : 'none', 'important');
+            if (settingsPanelNvidia) settingsPanelNvidia.style.setProperty('display', activePanel === 'nvidia' ? 'flex' : 'none', 'important');
 
             if (btnSettingsTabGeneral) btnSettingsTabGeneral.className = activePanel === 'general' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabAbout) btnSettingsTabAbout.className = activePanel === 'about' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabRelay) btnSettingsTabRelay.className = activePanel === 'relay' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabNetwork) btnSettingsTabNetwork.className = activePanel === 'network' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabHelp) btnSettingsTabHelp.className = activePanel === 'help' ? activeTabClass : inactiveTabClass;
+            if (btnSettingsTabNvidia) btnSettingsTabNvidia.className = activePanel === 'nvidia' ? activeTabClass : inactiveTabClass;
 
             if (activePanel === 'network') {
                 try {
@@ -109,12 +113,14 @@ export function initSettings() {
         const btnSettingsTabRelay = document.getElementById('btnSettingsTabRelay');
         const btnSettingsTabNetwork = document.getElementById('btnSettingsTabNetwork');
         const btnSettingsTabHelp = document.getElementById('btnSettingsTabHelp');
+        const btnSettingsTabNvidia = document.getElementById('btnSettingsTabNvidia');
 
         if (btnSettingsTabGeneral) btnSettingsTabGeneral.addEventListener('click', () => switchSettingsTab('general'));
         if (btnSettingsTabAbout) btnSettingsTabAbout.addEventListener('click', () => switchSettingsTab('about'));
         if (btnSettingsTabRelay) btnSettingsTabRelay.addEventListener('click', () => switchSettingsTab('relay'));
         if (btnSettingsTabNetwork) btnSettingsTabNetwork.addEventListener('click', () => switchSettingsTab('network'));
         if (btnSettingsTabHelp) btnSettingsTabHelp.addEventListener('click', () => switchSettingsTab('help'));
+        if (btnSettingsTabNvidia) btnSettingsTabNvidia.addEventListener('click', () => switchSettingsTab('nvidia'));
 
         const btnRefreshNetLogs = document.getElementById('btnRefreshNetLogs');
         if (btnRefreshNetLogs) {
@@ -860,6 +866,7 @@ export function refreshSettingsUI() {
 					divSessionCompressionOptions.style.display = cfg.enableCustomCompression ? 'flex' : 'none';
 				}
 
+				// 单次 relay:get-model-mapping 填充摘要模型下拉(OCR 模型已解耦,改由 refreshOcrModelSelect 独立填充)。
 				ipcRenderer.invoke('relay:get-model-mapping').then((mappings: any) => {
 					const modelNames = (mappings || []).map((m: any) => m.clientModel).filter(Boolean);
 					selSummaryModel.innerHTML = '';
@@ -889,9 +896,70 @@ export function refreshSettingsUI() {
 				});
 			}
 		}
+		// OCR 图片分析模型下拉:已从会话压缩块内解耦,始终填充并绑定,不依赖压缩开关。
+		const selOcrModel = document.getElementById('selOcrModel') as HTMLSelectElement | null;
+		if (selOcrModel) {
+			refreshOcrModelSelect(selOcrModel);
+		}
     } catch (err) {
         console.error('[SettingsController] Failed to refresh settings UI:', err);
     }
+}
+
+// OCR 图片分析模型下拉独立填充:读后端 settings:get-ocr-model(空串兜底 gemini-2.5-flash)
+// -> 单次 relay:get-model-mapping 拉取中继模型映射 -> 合并多模态 Gemini 系兜底数组 -> 填充 + 绑定 change 即时保存。
+// 独立于会话压缩开关,无论压缩是否启用都保证 OCR 下拉可见、可选、可保存。
+function refreshOcrModelSelect(selOcrModel: HTMLSelectElement): void {
+	let ocrModelVal = 'gemini-2.5-flash';
+	if ((window as any).wailsConfigCache && (window as any).wailsConfigCache['settings:get-ocr-model']) {
+		ocrModelVal = (window as any).wailsConfigCache['settings:get-ocr-model'];
+	} else {
+		try {
+			const m = ipcRenderer.sendSync('settings:get-ocr-model');
+			if (m) ocrModelVal = m;
+		} catch (_) { /* 兜底默认 gemini-2.5-flash */ }
+	}
+	const finalOcrModelVal = ocrModelVal;
+
+	const ocrDefaults = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-pro'];
+
+	ipcRenderer.invoke('relay:get-model-mapping').then((mappings: any) => {
+		const modelNames = (mappings || []).map((m: any) => m.clientModel).filter(Boolean);
+		const ocrAll = Array.from(new Set([...modelNames, ...ocrDefaults]));
+		selOcrModel.innerHTML = '';
+		ocrAll.forEach(m => {
+			const opt = document.createElement('option');
+			opt.value = m;
+			opt.textContent = m;
+			if (m === finalOcrModelVal) {
+				opt.selected = true;
+			}
+			selOcrModel.appendChild(opt);
+		});
+	}).catch(() => {
+		selOcrModel.innerHTML = '';
+		ocrDefaults.forEach(m => {
+			const opt = document.createElement('option');
+			opt.value = m;
+			opt.textContent = m;
+			if (m === finalOcrModelVal) {
+				opt.selected = true;
+			}
+			selOcrModel.appendChild(opt);
+		});
+	});
+
+	// OCR 模型下拉切换 -> 立即保存(独立于摘要模型,走单独 IPC channel)。
+	if (!(selOcrModel as any)._ocrBound) {
+		selOcrModel.addEventListener('change', () => {
+			try {
+				ipcRenderer.send('settings:set-ocr-model', selOcrModel.value);
+			} catch (err) {
+				console.error('[SettingsController] Failed to save ocr model:', err);
+			}
+		});
+		(selOcrModel as any)._ocrBound = true;
+	}
 }
 
 // Global hook

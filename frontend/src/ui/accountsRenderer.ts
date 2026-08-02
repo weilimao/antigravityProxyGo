@@ -1,6 +1,7 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
+import { ensureNvidiaCooldownTimer } from './accountsController';
 
 // DOM Elements cache
 let accountsList: HTMLElement | null;
@@ -65,7 +66,60 @@ export function formatCooldownTime(cooldownTime: any): string {
     }
 }
 
-// renderNvidiaAccountQuota 渲染 NVIDIA 第三方 API Key 账号的配额探活气泡。
+// getNvidiaCooldownRemaining 计算 NVIDIA 账号冷却剩余时间并返回秒级翻牌文案。
+// 返回 { text, expired, seconds }：
+//   - expired: 倒计时已归 0（含 until<=now 或非法值），文案 nvidiaCooldownExpired
+//   - <60s / <60min / 否则 分别对应 nvidiaCooldownSeconds/Minutes/Hours
+// 与 accountsController 的秒级定时器配合：定时器每秒读 data-until 重算 text，此处仅负责单次渲染。
+export function getNvidiaCooldownRemaining(untilMs: any): { text: string; expired: boolean; seconds: number } {
+    const dict = i18n[state.currentLanguage] || i18n.zh;
+    const until = Number(untilMs) || 0;
+    const diffMs = until - Date.now();
+    if (diffMs <= 0) {
+        return { text: dict.nvidiaCooldownExpired || '已到期，等待验证', expired: true, seconds: 0 };
+    }
+    const totalSeconds = Math.ceil(diffMs / 1000);
+    if (totalSeconds < 60) {
+        return {
+            text: (dict.nvidiaCooldownSeconds || '{seconds}s 后恢复').replace('{seconds}', String(totalSeconds)),
+            expired: false,
+            seconds: totalSeconds,
+        };
+    }
+    const totalMinutes = Math.floor(totalSeconds / 60);
+    const remSeconds = totalSeconds % 60;
+    if (totalMinutes < 60) {
+        return {
+            text: (dict.nvidiaCooldownMinutes || '{minutes}m {seconds}s 后恢复')
+                .replace('{minutes}', String(totalMinutes))
+                .replace('{seconds}', String(remSeconds)),
+            expired: false,
+            seconds: totalSeconds,
+        };
+    }
+    const hours = Math.floor(totalMinutes / 60);
+    const remMinutes = totalMinutes % 60;
+    return {
+        text: (dict.nvidiaCooldownHours || '{hours}h {minutes}m 后恢复')
+            .replace('{hours}', String(hours))
+            .replace('{minutes}', String(remMinutes)),
+        expired: false,
+        seconds: totalSeconds,
+    };
+}
+
+// buildNvidiaCooldownTickSpan 构造秒级翻牌倒计时 span 的初始 innerHTML。
+// 定时器(accountsController)每秒依据 data-until 用 getNvidiaCooldownRemaining 重算 text 与 className。
+function buildNvidiaCooldownTickSpan(untilMs: number): string {
+    const { text, seconds, expired } = getNvidiaCooldownRemaining(untilMs);
+    const cls = expired
+        ? 'text-slate-500'
+        : seconds <= 10 ? 'text-red-500 animate-pulse'
+        : seconds <= 60 ? 'text-amber-600'
+        : 'text-amber-500/80';
+    return `<span class="nvidia-cooldown-tick ${cls}" data-until="${untilMs}">${escapeHtml(text)}</span>`;
+}
+
 // 状态优先级：停用 > 刷新失败 > 刷新成功(带模型数) > 未刷新兜底。
 // 与后端 fetchNvidiaQuota 的语义 QuotaBucket(GROUP=NVIDIA 第三方 API Key, ModelID="可用模型数 N 个")配合：
 // 成功时直接展示 cache[0].modelId 文案作为模型数副标题。
@@ -79,6 +133,29 @@ function renderNvidiaAccountQuota(containerEl: HTMLElement, acc: any, isZH: bool
             <div class="flex items-center gap-1.5 bg-slate-500/10 dark:bg-slate-500/5 border border-slate-500/20 rounded-lg p-2.5 mt-1">
                 <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
                 <span class="text-[10px] font-medium text-slate-500 dark:text-slate-400" data-i18n="nvidiaAccountDisabled">${isZH ? '账号已停用' : (dict.accountDisabled || 'Account Disabled')}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 1.5 冷却中：琥珀泡 + 秒级翻牌倒计时 + 绝对恢复时间。
+    // 优先读 cooldowns.nvidia，兜底 cooldownUntil。冷却期不发探活（见 loadAccountQuota 短路）。
+    const now = Date.now();
+    let nvidiaCooldownUntil = 0;
+    if (acc.cooldowns && typeof acc.cooldowns.nvidia === 'number' && acc.cooldowns.nvidia > now) {
+        nvidiaCooldownUntil = acc.cooldowns.nvidia;
+    } else if (acc.cooldownUntil && acc.cooldownUntil > now) {
+        nvidiaCooldownUntil = acc.cooldownUntil;
+    }
+    if (nvidiaCooldownUntil > 0) {
+        const resumeAbs = formatCooldownTime(nvidiaCooldownUntil);
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-amber-500/10 dark:bg-amber-500/5 border border-amber-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                <span class="material-symbols-outlined text-amber-500 text-[12px]">hourglass_empty</span>
+                <span class="text-[10px] font-bold text-amber-600 dark:text-amber-400" data-i18n="nvidiaCooldownBubble">${dict.nvidiaCooldownBubble || '冷静中'}</span>
+                ${buildNvidiaCooldownTickSpan(nvidiaCooldownUntil)}
+                <span class="text-[9px] text-amber-500/70 dark:text-amber-400/60 ml-auto">${isZH ? `${resumeAbs} 恢复` : `Resumes ${resumeAbs}`}</span>
             </div>
         `;
         return;
@@ -313,6 +390,26 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
     // 统一流程后，特定 provider 的差异化渲染由下方 success/error 分支中的
     // accForProbe.provider === 'nvidia' 判定负责。
 
+    // 当前账号对象，提前取用以判断 NVIDIA 冷却短路（与下方 accForProbe 同源）。
+    const accForProbe0 = state.currentAccountsList?.find(a => a.id === accountId);
+    if (accForProbe0 && accForProbe0.provider === 'nvidia') {
+        const now = Date.now();
+        const cdNv = accForProbe0.cooldowns && typeof accForProbe0.cooldowns.nvidia === 'number'
+            ? accForProbe0.cooldowns.nvidia : 0;
+        const cdUntil = (cdNv > now) ? cdNv
+            : (accForProbe0.cooldownUntil && accForProbe0.cooldownUntil > now ? accForProbe0.cooldownUntil : 0);
+        if (cdUntil > 0) {
+            // 冷却中：直接走冷静气泡渲染，不发 quota:fetch 探活，避免浪费上游请求。
+            const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
+            if (activeContainer) renderQuotaBars(activeContainer, [], accForProbe0.cooldowns || cooldowns);
+            if (refreshBtn) {
+                const icon = refreshBtn.querySelector('.material-symbols-outlined') || refreshBtn;
+                if (icon) icon.classList.remove('animate-spin');
+            }
+            return;
+        }
+    }
+
     if (!force && state.quotaCache[accountId]) {
         const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
         renderQuotaBars(activeContainer, state.quotaCache[accountId], cooldowns);
@@ -511,9 +608,13 @@ export function renderAccounts(accounts: any[]) {
             }
         }
         isCooling = coolingCategories.length > 0;
-        
-        const totalCategoriesCount = 2;
-        const isOverallCooling = coolingCategories.includes('all') || (coolingCategories.length === totalCategoriesCount);
+
+        // NVIDIA 只有一个冷却族 'nvidia'，单族冷却即应判为整体冷静，使头部徽标走琥珀分支。
+        // 其他 provider 维持原双族聚合判定不变。
+        const isNvidiaAcc = acc.provider === 'nvidia';
+        const isOverallCooling = isCooling && (isNvidiaAcc
+            ? coolingCategories.length >= 1
+            : (coolingCategories.includes('all') || (coolingCategories.length === 2)));
 
         if (!card) {
             // Card doesn't exist, create it from scratch and bind events
@@ -602,8 +703,14 @@ export function renderAccounts(accounts: any[]) {
             statusBadge.className = 'acc-status-badge';
             if (isOverallCooling) {
                 statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
-                const dateStr = formatCooldownTime(minCooldownTime);
-                statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> ${(dict.cooldownText || '冷静中 ({time}恢复)').replace('{time}', dateStr)}`;
+                if (isNvidiaAcc) {
+                    // NVIDIA 用秒级翻牌倒计时 span，配色与文本由 accountsController 定时器每秒刷新。
+                    // 静态"NVIDIA"卷标 + 琥珀气泡已足够表明冷却语境，tick 文案自带"恢复/已到期"语义，避免出现"恢复恢复"。
+                    statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> ${buildNvidiaCooldownTickSpan(minCooldownTime)}`;
+                } else {
+                    const dateStr = formatCooldownTime(minCooldownTime);
+                    statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> ${(dict.cooldownText || '冷静中 ({time}恢复)').replace('{time}', dateStr)}`;
+                }
             } else {
                 statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
                 statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">check_circle</span> ${dict.statusActive || '有效'}`;
@@ -848,8 +955,13 @@ export function renderAccounts(accounts: any[]) {
             if (statusBadge) {
                 if (isOverallCooling) {
                     statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
-                    const dateStr = formatCooldownTime(minCooldownTime);
-                    statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> ${(dict.cooldownText || '冷静中 ({time}恢复)').replace('{time}', dateStr)}`;
+                    if (isNvidiaAcc) {
+                        // NVIDIA 秒级翻牌倒计时 span（patch 路径），同新建路径。
+                        statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> ${buildNvidiaCooldownTickSpan(minCooldownTime)}`;
+                    } else {
+                        const dateStr = formatCooldownTime(minCooldownTime);
+                        statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">hourglass_empty</span> ${(dict.cooldownText || '冷静中 ({time}恢复)').replace('{time}', dateStr)}`;
+                    }
                 } else {
                     statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
                     statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">check_circle</span> ${dict.statusActive || '有效'}`;
@@ -926,6 +1038,9 @@ export function renderAccounts(accounts: any[]) {
 
     renderPaginationUI(totalItems, startIndex, endIndex, totalPages);
     document.dispatchEvent(new CustomEvent('account-selection-changed'));
+
+    // NVIDIA 冷却秒级翻牌：卡片渲染完即时 ensure 定时器（幂等），驱动 .nvidia-cooldown-tick 每秒更新。
+    ensureNvidiaCooldownTimer();
 }
 
 function renderPaginationUI(totalItems: number, startIndex: number, endIndex: number, totalPages: number) {

@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"os"
 	"runtime"
+	"time"
 
 	"antigravity-proxy/internal/tray"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// quitWatchdogStarted 防止重复启动退出看门狗
+var quitWatchdogStarted = false
 
 // IsQuitting 返回当前应用是否正在被主动退出
 func (a *App) IsQuitting() bool {
@@ -35,7 +40,28 @@ func (a *App) initTray() {
 		func() {
 			// 点击“退出代理引擎”：设置退出标志并异步调用退出，避免阻塞托盘自身的事件协程
 			a.SetQuitting(true)
+
+			// 立即隐藏窗口,避免退出过程中窗口停留在"无响应"假死态
+			wailsRuntime.WindowHide(a.ctx)
+
+			// 异步发起 Wails 退出流程
 			go wailsRuntime.Quit(a.ctx)
+
+			// 进程级硬退出看门狗兜底:
+			// wailsRuntime.Quit → OnShutdown 是异步链路,其中 shutdown() 内有
+			// PatchAll(false) 文件 IO、scheduler.Stop()、proxyEngine.Stop() 等多个
+			// 同步阻塞点,叠加问题①的死链路网络,极易导致 wails.Run 永不返回、
+			//  main.go 末尾的 os.Exit(0) 兜底到不了 → 进程在任务管理器里残留不消失。
+			// 此处启动一个独立 goroutine,若 5 秒内 wails.Run 仍未返回,
+			// 直接 os.Exit(0) 强制终结进程,确保托盘"退出"一定能真正退出。
+			if !quitWatchdogStarted {
+				quitWatchdogStarted = true
+				go func() {
+					time.Sleep(5 * time.Second)
+					// 进程末尾的 os.Exit(0) 应已执行;若仍运行至此,说明退出链路卡死。
+					os.Exit(0)
+				}()
+			}
 		},
 	)
 }

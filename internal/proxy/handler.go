@@ -753,6 +753,17 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 									"includeThoughts": true,
 									"thinkingBudget":  clampedBudget,
 								}
+
+								// claude-* 经 antigravity 号池(daily-cloudcode-pa)上游会重译为 Vertex Anthropic messages,
+								// 严格校验 max_tokens > thinking.budget_tokens;违反返回 400 INVALID_ARGUMENT
+								// ("max_tokens must be greater than thinking.budget_tokens",request_id 形如 req_vrtx_...)。
+								// 仅当注入了固定 thinkingBudget(clampedBudget>0)且目标为 claude-sonnet/opus
+								// (MapClientModelToGemini 保留原样的 claude)时,确保 maxOutputTokens > thinkingBudget,
+								// 避免 Codex/Claude Code 走 antigravity 号池 claude 模型时触发 400。
+								// gemini flash/pro、includeThoughts:false、-1 自适应等路径 committedBudget<=0 不受守护。
+								maxOutputTokens = relay.CalcClaudeGuaranteedMaxOutput(
+									clampedBudget, maxOutputTokens, relay.IsClaudeModelForBudget(checkModel),
+								)
 							}
 
 							// 1. 处理 v1internal 结构的 request.generationConfig

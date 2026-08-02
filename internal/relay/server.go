@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 type contextKey string
@@ -135,6 +136,16 @@ func (s *RelayServer) Start(port string, caCertPath, caKeyPath string) error {
 	s.trackedListener = &trackedListener{Listener: listener}
 	s.server = &http.Server{
 		Handler: s,
+		// ReadHeaderTimeout 仅约束"收连接→读完整 header"这一阶段。既有的出站流式
+		// (NVIDIA SSE 长生成 / Gemini streamGenerateContent 大于 5min)与向客户端的流式
+		// 响应写出,均不在该计时器管辖范围,不会被砍——故流式长生成行为零回归。
+		// 治理目标:此前 http.Server 零超时配置下,客户端/中间链路偶发只发部分 header
+		// 或半死连接,会令 Accept 后的 header 读取 goroutine 永久挂起(TCP keep-alive
+		// 最快 2h 才探测死连接),挤占连接/goroutine 资源。此处把该阶段封顶为 15s,
+		// 超时即由 server 主动 400/关闭连接释放资源。
+		// 刻意不设 ReadTimeout/WriteTimeout:前者是连接级会砍流式 body 读取与上游长生成,
+		// 后者会砍 SSE 向客户端的写出,二者均为本中继链路的红线,故保留零值(不限)。
+		ReadHeaderTimeout: 15 * time.Second,
 	}
 
 	go func() {

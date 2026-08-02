@@ -72,6 +72,12 @@ type App struct {
 	autoTriggerScheduler *autotrigger.Scheduler
 	pendingLogs     []string
 	pendingLogsMu   sync.Mutex
+
+	// netWatch 周期性监听本机网络连通性,网络从断→通时触发
+	// 代理引擎重置 + 远程中继自动重连,修复"断网后程序废"。
+	netWatch *proxy.NetWatch
+	// reloginMu 防止自动重连与网络恢复回调并发重复 Login 同一远端。
+	reloginMu sync.Mutex
 }
 
 func NewApp() *App {
@@ -553,10 +559,76 @@ func (a *App) startup(ctx context.Context) {
 	}(monitorCtx)
 
 	a.initTray()
+
+	// 启动网络连通性监听:网络从断→通时触发连接池重置 + 远程中继自动重连,
+	// 从根本修复"网络断开后程序废了、再联网也无法使用中继服务"的问题。
+	a.startNetWatch()
+}
+
+// startNetWatch 启动网络连通性监听器。
+// 仅在配置了远程中继(或代理引擎在跑)时才有意义;未配置也不报错。
+// 网络从离线恢复到在线时触发 onNetRecover 回调。
+func (a *App) startNetWatch() {
+	a.netWatch = proxy.NewNetWatch(a.onNetRecover)
+	a.netWatch.Start()
+	if a.settingsMgr.GetEnableSystemLog() {
+		a.AddLog("📡 [网络监听] 网络连通性监听器已启动,断网恢复后将自动重置连接与重连远程中继")
+	}
+}
+
+// onNetRecover 网络从断→通的边沿恢复回调。
+// 重置代理引擎本地连接池(消除休眠/断网残留死连接),
+// 并在已配置远程中继凭据时尝试自动重连。
+func (a *App) onNetRecover() {
+	a.AddLog("🌐 [网络恢复] 检测到网络已恢复,正在重置本地连接池与远程中继链路...")
+
+	// 1. 重置代理引擎连接池与活跃隧道,强制客户端重建连接
+	if a.proxyEngine != nil {
+		a.proxyEngine.ResetConnections()
+	}
+	if a.remoteRelay != nil {
+		a.proxyEngine.ResetRemoteClient()
+	}
+
+	// 2. 已配置远程中继凭据但当前未连接(或被健康检查标为离线)→ 自动重连
+	if a.remoteRelay != nil && a.settingsMgr.GetRemoteEnabled() {
+		host := a.settingsMgr.GetRemoteHost()
+		port := a.settingsMgr.GetRemotePort()
+		path := a.settingsMgr.GetRemotePath()
+		key := a.settingsMgr.GetRemoteKey()
+		pwd := a.settingsMgr.GetRemotePassword()
+		if host != "" && key != "" {
+			go func() {
+				if err := a.reconnectRemoteSafely(host, port, path, key, pwd); err != nil {
+					a.AddLog(fmt.Sprintf("⚠️ [网络恢复] 自动重连远程中继失败: %v", err))
+				} else {
+					a.AddLog("✅ [网络恢复] 远程中继自动重连成功")
+				}
+			}()
+		}
+	}
+}
+
+// reconnectRemoteSafely 线程安全地执行一次远程中继重连。
+// 通过 reloginMu 串行化,避免网络恢复回调与健康检查重连回调并发重复 Login。
+func (a *App) reconnectRemoteSafely(host, port, path, key, pwd string) error {
+	a.reloginMu.Lock()
+	defer a.reloginMu.Unlock()
+
+	// 若此刻已连接,无需重连(健康检查可能已抢先恢复)
+	if a.remoteRelay != nil && a.remoteRelay.IsConnected() {
+		return nil
+	}
+	return a.connectRemote(host, port, path, key, pwd)
 }
 
 func (a *App) shutdown() {
 	tray.QuitTray()
+
+	// 停止网络监听,释放后台探测 goroutine
+	if a.netWatch != nil {
+		a.netWatch.Stop()
+	}
 
 	if a.autoTriggerScheduler != nil {
 		a.autoTriggerScheduler.Stop()
@@ -574,6 +646,13 @@ func (a *App) shutdown() {
 		a.sessionRouter.SaveToDisk()
 	}
 
+	// 停止账号冷静期/Token 刷新监控 goroutine,避免进程退出后仍持 ticker 句柄残留。
+	// 此前这两个 Stop 方法从未被调用,是进程退出后"任务管理器残留不消失"的孤儿协程来源之一。
+	if a.accountMgr != nil {
+		a.accountMgr.StopCooldownMonitor()
+		a.accountMgr.StopTokenRefreshMonitor()
+	}
+
 	// Clean up patches on exit
 	homeDir, _ := os.UserHomeDir()
 	activeDir := a.settingsMgr.GetActiveDataDirectory()
@@ -586,6 +665,10 @@ func (a *App) shutdown() {
 
 	// 通知签名缓存的清理协程退出，释放后台 goroutine。
 	sigcache.StopGlobal()
+
+	// 关闭 pprof 诊断服务,释放其 listener 句柄与后台 serve goroutine,
+	// 避免"退出窗口后 18765 端口仍被占用、进程残留"。
+	diagserver.Stop()
 }
 
 func (a *App) AddLog(msg string) {
@@ -687,6 +770,7 @@ func (a *App) domReady(ctx context.Context) {
 		"settings:get-enable-thinking-mode":            a.settingsMgr.GetEnableThinkingMode(),
 		"settings:get-language":               a.settingsMgr.GetLanguage(),
 		"settings:get-session-optimization":   a.settingsMgr.GetSessionOptimization(),
+		"settings:get-ocr-model":              a.settingsMgr.GetOcrModel(),
 	}
 
 	bytesCache, _ := json.Marshal(cache)

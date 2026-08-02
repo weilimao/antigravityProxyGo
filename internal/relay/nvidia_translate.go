@@ -33,7 +33,12 @@ import (
 //   - 消息 content blocks: text→content 字符串；tool_use→tool_calls；tool_result→role=tool
 //   - tools: AnthropicTool{name,input_schema} → OpenAI tools{type:function,function:{name,description,parameters}}
 //   - max_tokens / temperature / stream 透传
-func AnthropicToOpenAIChat(req *AnthropicRequest) (*OpenAIChatRequest, error) {
+//
+// thinkingRedacted 表达客户端是否通过 Anthropic-Beta 头部 redact-thinking-* 显式关闭思考
+// (Claude Code 关闭思考开关时,body 常不带 thinking 字段,但头部带 redact-thinking-2026-02-12)。
+// 命中即绝对跳过所有 thinking 注入(含 effort 解析与推理模型默认 fallback),
+// 优先级高于 IsEnableThinkingMode() 全局开关与 body 显式 disabled,与客户端关闭意图严格对齐。
+func AnthropicToOpenAIChat(req *AnthropicRequest, thinkingRedacted bool) (*OpenAIChatRequest, error) {
 	if req == nil {
 		return nil, fmt.Errorf("nvidia: nil anthropic request")
 	}
@@ -114,7 +119,14 @@ func AnthropicToOpenAIChat(req *AnthropicRequest) (*OpenAIChatRequest, error) {
 	// 再按 NIM 上游取值模式映射,注入 chat_template_kwargs:{thinking:true, reasoning_effort:<mapped>}。
 	// 客户端不发思考配置时 effort 为空 → 不注入 → 上游行为与改动前一致(回归安全)。
 	// 仅对支持思考的 NIM 推理模型注入,避免往不支持 chat_template_kwargs 的上游误塞引发 400。
-	if !IsEnableThinkingMode() {
+	//
+	// thinkingRedacted:客户端通过 Anthropic-Beta 头部 redact-thinking-* 标志位表达"关闭思考"意图
+	// (Claude Code 关闭思考开关时,body 不带 thinking 字段但头部带 redact-thinking-2026-02-12)。
+	// 命中即绝对跳过所有 thinking 注入(effort 解析与推理模型 fallback 全部短路),
+	// 优先级高于 IsEnableThinkingMode() 全局开关、高于 body 显式 disabled,与 body 路径同等强力。
+	if thinkingRedacted {
+		out.ChatTemplateKwargs = nil
+	} else if !IsEnableThinkingMode() {
 		out.ChatTemplateKwargs = nil
 	} else if effort := resolveReasoningEffort(req); effort != "" {
 		mode := nvidiaThinkingEffortMode(req.Model)
@@ -254,8 +266,16 @@ func nvidiaModelSupportsThinking(model string) bool {
 //
 // 设计要点:reasoning_effort 不是 OpenAIChatRequest 字段(顶层该字段 NIM 不认,会 400),
 // 既不在结构体里接、也不往上游顶层发,只在原始 body 里提后转进 chat_template_kwargs。
-func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte, upstreamModel string) {
+//
+// thinkingRedacted:OpenAI Chat 入站本身无 Anthropic 头部协议,该入参由上游调用方根据
+// Anthropic-Beta redact-thinking-* 头部解析后传入(直连 OpenAI/Codex 客户端恒为 false)。
+// 命中即绝对跳过所有 thinking 注入,与 Anthropic 链路保持强一致的关思考语义。
+func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte, upstreamModel string, thinkingRedacted bool) {
 	if chatReq == nil {
+		return
+	}
+	if thinkingRedacted {
+		chatReq.ChatTemplateKwargs = nil
 		return
 	}
 	if !IsEnableThinkingMode() {
@@ -276,6 +296,33 @@ func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte
 	if nvidiaModelSupportsThinking(upstreamModel) && !openAIBodyExplicitlyDisabled(bodyBytes) {
 		chatReq.ChatTemplateKwargs = map[string]interface{}{"thinking": true}
 	}
+}
+
+// anthropicBetaThinkingRedacted 判定 HTTP 请求头里的 Anthropic-Beta 是否带 redact-thinking-* 标志。
+// Claude Code 的思考开关在"关闭"态发送 redact-thinking-2026-02-12 beta 头(此时 body 常不带 thinking 字段),
+// 这是客户端表达"关闭思考"的协议信号。本函数从标准 http.Header 多值字段中按逗号切分逐项前缀匹配,
+// 命中任意 redact-thinking- 前缀即返回 true。头部缺失或无匹配返回 false(回归安全)。
+//
+// 设计依据:Anthropic SDK 把 anthropic-beta 多值用逗号分隔写成单条 header
+// (如 "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,..."),
+// 同时 http.Header 允许多条同名 header,$values 数组再逐条逗号拆分覆盖两种形态。
+// 大小写不敏感(http.Header.Get 已规范化键名),前缀匹配容忍 beta 末尾日期版本号变化。
+func anthropicBetaThinkingRedacted(header http.Header) bool {
+	if header == nil {
+		return false
+	}
+	for _, raw := range header["Anthropic-Beta"] {
+		if raw == "" {
+			continue
+		}
+		for _, tok := range strings.Split(raw, ",") {
+			t := strings.TrimSpace(strings.ToLower(tok))
+			if strings.HasPrefix(t, "redact-thinking-") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isThinkingExplicitlyDisabled 判定 Anthropic 客户端是否显式关闭思考。
@@ -2158,4 +2205,158 @@ func IsEnableThinkingMode() bool {
 		return env == "true" || env == "1" || env == "yes"
 	}
 	return globalEnableThinkingMode.Load()
+}
+
+// nvidiaImageOcrDescHeader 把 OCR 识别出的纯文本包装成一段带上下文标记的描述,
+// 供 downgradeAnthropicImagesToText 把 image 块原地改写为 text 块时使用。
+//
+// ocrModel 参数化:文案里展示真实使用的 OCR 模型,前端改模型后文案随之变化,
+// 与 compat.go Gemini 入站自愈链路的 inline 文案语义完全一致。
+func nvidiaImageOcrDescHeader(ocrModel, ocrText string) string {
+	if strings.TrimSpace(ocrModel) == "" {
+		ocrModel = "gemini-2.5-flash"
+	}
+	return fmt.Sprintf("\n\n[本地中继服务已自动调用 %s 协助分析了用户发送的截图，内容提取如下：]\n%s\n[图片分析内容结束]\n", ocrModel, ocrText)
+}
+
+// imageNotExtractablePlaceholder 用于 image 块无法本地 OCR 时的占位文本(url 类型、
+// 空数据、或 OCR 服务不可达)。绝不阻断主请求,确保用户至少能看到"此处有图但未能识别"的信号。
+const imageNotExtractablePlaceholder = "[用户发送了一张图片，但本地中继未能识别其内容（OCR 不可用或图源不可直取），请提示用户改用 analyze_clipboard_image 工具或补充文字描述]"
+
+// ocrRecentWindowMessages 是 downwards 降级时"真打上游 OCR"的消息窗口口径。
+// 仅 req.Messages 末尾 N 条内的图片在 cache miss 时才真打 gemini 上游;窗口之外的图片
+// 只查缓存(命中→复用历史 OCR 文本,未命中→占位文本兜底,绝不重新 OCR)。
+//
+// 取 10 的依据:Claude Code 客户端无状态,每轮重发完整历史;若窗口全开就会把几十张老图
+// 全部重新 OCR 烧爆配额,若窗口过小则用户在长会话里翻回去追问老图时无法复用 OCR 结果。
+// 10 条覆盖大多数追问场景下"用户当前关注的消息段",与前端历史面板可视线量级匹配,
+// 同时给缓存(成功 TTL 24h)+ LRU 容量上限留出回收空间,兼顾实时性与配额成本。
+const ocrRecentWindowMessages = 10
+
+// downgradeAnthropicImagesToText 扫 AnthropicRequest 所有消息的 content 块,
+// 把 type=="image" 的块用本地 Gemini OCR 降级:OCR 成功则替换为
+// [{"type":"text","text":"<OCR 识别文本>"}];OCR 失败则替换为占位文本。
+// 绝不向 NVIDIA 上游直送 image_url,避免非多模态模型解析失败(400)。
+//
+// 设计要点:
+//   - 原地替换 block(blocks[bi]),不动数组顺序、不增删 block,保证 [Image #N] 芯片
+//     与 text/tool_result 块的相对位置不变,后续 AnthropicToOpenAIChat 的 text 合并 +
+//     tool_result 拆分逻辑零变更。
+//   - 降级后 Type=="text"、Source 置空 → AnthropicToOpenAIChat 走 case "text" 正常消化,
+//     ChatMessage.Content 永远是 string,上游段零侵入。
+//   - 失败不中止:返回 error 供调用方记日志,但仍把 block 改写成占位文本后继续,优先保证可用性。
+//
+// 返回:成功降级的 image 块数 + 遇到的最后一个错误(若有) + ocrHits/ocrMisses/ocrSkipped。
+// ocrHits   = 命中缓存直接返回(窗口内命中,纳秒级不烧配额) + 窗口外缓存复用的总数;
+// ocrMisses = 窗口内 cache miss 真打 gemini 上游的图数(含成功与失败);
+// ocrSkipped = 窗口外图缓存未命中 → 走占位文本兜底的块数(绝不重新 OCR,省配额)。
+//
+// 最近 N 条消息窗口:仅对 req.Messages 末尾 ocrRecentWindowMessages 条内的图片走"miss 即真打上游";
+// 窗口之外的图片只查缓存(ocrImageCacheOnlyLookup):命中则复用历史 OCR 文本(不烧配额),
+// 未命中写占位文本兜底。这样既防 NVIDIA 上游 400(永远只见 text 块),又避免 Claude Code 每轮
+// 重发完整历史时把几十张老图全部重新 OCR 烧爆 antigravity 号池配额。
+func (h *APICompatHandler) downgradeAnthropicImagesToText(req *AnthropicRequest, userSession *RelaySession) (replaced int, lastErr error, ocrHits, ocrMisses, ocrSkipped int) {
+	if req == nil {
+		return 0, nil, 0, 0, 0
+	}
+	// 窗口起点:消息数 <= 窗口口径时全覆盖;> 窗口口径时只覆盖末尾 N 条,前序消息内的图视为"窗外"。
+	msgCount := len(req.Messages)
+	windowStart := 0
+	if msgCount > ocrRecentWindowMessages {
+		windowStart = msgCount - ocrRecentWindowMessages
+	}
+	var ocrModel string
+	for mi := range req.Messages {
+		inWindow := mi >= windowStart
+		// 收集同消息或上下文的用户文案
+		var userTextBuilder strings.Builder
+		for _, b := range req.Messages[mi].Content {
+			if b.Type == "text" && b.Text != "" {
+				if userTextBuilder.Len() > 0 {
+					userTextBuilder.WriteString("\n")
+				}
+				userTextBuilder.WriteString(b.Text)
+			}
+		}
+		if userTextBuilder.Len() == 0 && mi > 0 {
+			for prev := mi - 1; prev >= 0; prev-- {
+				if req.Messages[prev].Role == "user" {
+					for _, b := range req.Messages[prev].Content {
+						if b.Type == "text" && b.Text != "" {
+							if userTextBuilder.Len() > 0 {
+								userTextBuilder.WriteString("\n")
+							}
+							userTextBuilder.WriteString(b.Text)
+						}
+					}
+					if userTextBuilder.Len() > 0 {
+						break
+					}
+				}
+			}
+		}
+		userPromptCtx := userTextBuilder.String()
+
+		blocks := req.Messages[mi].Content
+		for bi := range blocks {
+			if blocks[bi].Type != "image" || blocks[bi].Source == nil {
+				continue
+			}
+			src := blocks[bi].Source
+			mime := src.MediaType
+			if mime == "" {
+				mime = "image/jpeg"
+			}
+			// 非 base64(如 url 类型)本机无法直取 → 占位文本兜底,不调 OCR,不计数。
+			if src.Type != "base64" || src.Data == "" {
+				blocks[bi].Source = nil
+				blocks[bi].Type = "text"
+				blocks[bi].Text = imageNotExtractablePlaceholder
+				continue
+			}
+			// 窗外历史图:只查缓存复用,绝不重新打上游。命中→复用历史 OCR 文本(replaced+1);
+			// 未命中→占位文本兜底,跳过(ocrSkipped+1),省下昂贵的 antigravity 号池 ORC 配额。
+			if !inWindow {
+				cachedText, hit := h.ocrImageCacheOnlyLookup(userSession, src.Data, userPromptCtx)
+				if hit && strings.TrimSpace(cachedText) != "" {
+					if ocrModel == "" {
+						ocrModel = h.getOcrModel()
+					}
+					blocks[bi].Source = nil
+					blocks[bi].Type = "text"
+					blocks[bi].Text = nvidiaImageOcrDescHeader(ocrModel, cachedText)
+					replaced++
+					ocrHits++
+				} else {
+					blocks[bi].Source = nil
+					blocks[bi].Type = "text"
+					blocks[bi].Text = imageNotExtractablePlaceholder
+					ocrSkipped++
+				}
+				continue
+			}
+			// 窗内图:走完整缓存+singleflight+miss 真打上游链路。
+			ocrText, ocrErr, cachedHit := h.ocrImageViaLocalGemini(userSession, src.Data, mime, userPromptCtx)
+			if cachedHit {
+				ocrHits++
+			} else {
+				ocrMisses++
+			}
+			if ocrErr != nil || strings.TrimSpace(ocrText) == "" {
+				lastErr = ocrErr
+				blocks[bi].Source = nil
+				blocks[bi].Type = "text"
+				blocks[bi].Text = imageNotExtractablePlaceholder
+				continue
+			}
+			if ocrModel == "" {
+				ocrModel = h.getOcrModel()
+			}
+			blocks[bi].Source = nil
+			blocks[bi].Type = "text"
+			blocks[bi].Text = nvidiaImageOcrDescHeader(ocrModel, ocrText)
+			replaced++
+		}
+	}
+	return replaced, lastErr, ocrHits, ocrMisses, ocrSkipped
 }
