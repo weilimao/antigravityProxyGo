@@ -36,13 +36,15 @@ func TestRecordNvidiaUsage_FiresLandings4And5_WhenTrackerInjected(t *testing.T) 
 	// userSession 必须非 nil: recordNvidiaUsage 落点2(usageTracker)有 `userSession==nil → return`,
 	// 若传 nil 会提前 return 而跳过落点3/4/5。本用例落点1(relay StatsTracker)因 newNvidiaTestHandler
 	// 把 h.statsTracker 装成 nil 而自动跳过, 不影响对落点4/5 的聚焦断言。
-	userSession := &RelaySession{Token: "tok-1", UserID: "u-1"}
+	// SessionKey 注入模拟正式生产口径:handleNvidia 入口经 ExtractSessionKey + auth:acc: 前缀算出后
+	// 注入,recordNvidiaUsage 经 ocrSessionDisplay 取它填 logCtx.SessionID → 请求日志会话 ID 列。
+	userSession := &RelaySession{Token: "tok-1", UserID: "u-1", SessionKey: "auth:acc:abc123def4567890"}
 	start := time.Now()
 	logCtx := nvidiaLogCtx{
 		Method:     "POST",
 		Host:       "integrate.api.nvidia.com",
 		Path:       "/nvidia/v1/chat/completions",
-		SessionID:  "tok-1",
+		SessionID:  "auth:acc:abc123def4567890",
 		Account:    "u-1",
 		StatusCode: 200,
 		StartTs:    start,
@@ -64,12 +66,12 @@ func TestRecordNvidiaUsage_SkipsLandings4And5_WhenTrackerNil(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	// 不调 SetGlobalStatsTracker → globalStatsTracker 保持 nil
 
-	userSession := &RelaySession{Token: "tok-2", UserID: "u-2"}
+	userSession := &RelaySession{Token: "tok-2", UserID: "u-2", SessionKey: "auth:acc:failbeef01234567"}
 	logCtx := nvidiaLogCtx{
 		Method:     "POST",
 		Host:       "integrate.api.nvidia.com",
 		Path:       "/nvidia/v1/chat/completions",
-		SessionID:  "tok-2",
+		SessionID:  "auth:acc:failbeef01234567",
 		Account:    "u-2",
 		StatusCode: 200,
 		StartTs:    time.Now(),

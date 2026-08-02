@@ -1,3 +1,14 @@
+### v1.2.3 更新日志
+
+- **NVIDIA 入站图片自愈 OCR 降级**：针对 NVIDIA NIM 上游（如 `z-ai/glm-5.2`）不支持多模态图片的问题，增加入站 Anthropic 请求图片 Content Block 的自动识别与降级机制。在发往 NVIDIA 上游前自动调用本地 Gemini (`gemini-2.5-flash`) 进行图片 OCR，原地改写为纯文本块，防止上游 400 报错。
+- **账号配额刷新与持久化无锁优化**：重构 `SaveAccounts` 的磁盘 IO 写入逻辑，剥离保护内存读写状态的全局写锁 `sync.RWMutex`，采用专用 `fileLock` 保护文件写顺序，彻底解决了高并发代理请求在后台刷新配额或保存配置时被阻塞卡死的问题。
+- **OCR 提示词与上下文/缓存隔离优化**：优化图片 OCR 识别提示词，引入用户上下文关联与会话级缓存隔离机制，提升文本提取精度并避免重复耗时请求。
+- **NVIDIA / Gemini 思考模式 (Thinking) 与推理控制**：
+  - 修复 Gemini / NVIDIA 思考模式流式输出展示问题，优化思考块（reasoning content）流式渲染；
+  - 支持 NIM `chat_template_kwargs` 推理等级 (Reasoning Effort) 透传与回译；
+  - 补充空串思考签名 (Thought Signature) 守卫，防止因解析空签名导致断流。
+- **接口格式兼容与协议响应优化**：优化 Gemini 与 OpenAI 格式转换响应，修复模型与流式正文内容的响应格式；补充 i18n 多语言占位符 `{time}` 与 UI 弹窗关闭回落逻辑。
+
 ### v1.2.2 更新日志
 
 - **系统设置全新「使用说明」模块**：新增模块化帮助视图（`UsageHelpPanel.vue`），提供排查 IDE 更新至 2.4.2 后代理失效的“三步恢复法”、根证书 (CA) 解密原理以及系统代理开启/关闭机制的详细指引。

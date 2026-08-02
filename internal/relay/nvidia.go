@@ -27,7 +27,8 @@ import (
 // 「请求日志」与顶部指标卡; family="nvidia" 做逻辑隔离, nvidiaTrends 物理隔离桶仍由
 // TrackNvidiaRequest 单独累加, 互不污染。Host 为上游账号 BaseURL 的裸 host; Method/Path 取自
 // 入站 r; StatusCode 取自上游响应(recordNvidiaUsage 仅在成功路径调用, 恒 200); SessionID
-// 取自 userSession.Token; DurationMs 由 handleNvidia 入口起算的 startTs 算得端到端耗时。
+// 经 ocrSessionDisplay 取 userSession.SessionKey(auth:acc:<16hex>,与 antigravity 号池链路同款口径)
+// 优先,空则回退 Token,再空回退 UserID; DurationMs 由 handleNvidia 入口起算的 startTs 算得端到端耗时。
 type nvidiaLogCtx struct {
 	Method     string
 	Host       string
@@ -357,18 +358,30 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 	}
 	GetGlobalDebugger().LogClientRequest(reqID, r.Method, r.URL.Path, r.Header, bodyBytes)
 
-	// 会话级隔离键注入:与 antigravity 号池链路(handler.go:ExtractSessionKey + auth:acc: 前缀)
-	// 同款口径算出 stablySessionKey,写入 userSession.SessionKey,供 OCR 缓存等按会话隔离的
-	// 特性共享同一会话 ID(同用户不同会话不共享缓存槽),并贯穿下方日志让"哪个会话在打"可观测。
-	// sessionRouter==nil(单测未注入)时跳过注入,OCR 缓存回退 UserKey 隔离,行为不变。
-	if h.sessionRouter != nil && userSession != nil && strings.TrimSpace(userSession.SessionKey) == "" {
-		rawKey := h.sessionRouter.ExtractSessionKey(r, bodyBytes)
-		if strings.HasPrefix(rawKey, "auth:") {
-			userSession.SessionKey = "auth:acc:" + strings.TrimPrefix(rawKey, "auth:")
-		} else if strings.HasPrefix(rawKey, "sock:") {
-			userSession.SessionKey = "sock:acc:" + strings.TrimPrefix(rawKey, "sock:")
-		} else if rawKey != "" {
-			userSession.SessionKey = "acc:" + rawKey
+	// 会话级隔离键注入:供 OCR 缓存等按会话隔离的特性共享同一会话 ID(同用户不同会话不共享
+	// 缓存槽),并贯穿下方日志让"哪个会话在打"可观测。
+	//
+	// 取键优先级(与 antigravity 号池链路 handler.go:422 同款口径,但补上 Claude Code 原生会话头):
+	//   1. X-Claude-Code-Session-Id 头(Claude Code CLI/VSCode 客户端原生携带的会话 UUID):
+	//      Claude Code 用 X-Api-Key 鉴权(不带 Authorization: Bearer),原 ExtractSessionKey 兜底走
+	//      sock 分支 → 全部本地 Claude Code 会话共一个 "sock:acc:127.0.0.1",会话级隔离失效。
+	//      优先取该头并以 "claude:" 前缀落地,日志一眼可辨来源,且 UUID 跨进程重启稳定可对照。
+	//      空串/纯空白视为未携带,回退第 2 优先级。
+	//   2. ExtractSessionKey + auth:acc:/sock:acc:/acc: 前缀(antigravity 链路同款口径作兜底):
+	//      适用于用 Authorization: Bearer 的非 Claude Code 客户端(脚本/SDK 直调 /nvidia/*)。
+	// sessionRouter==nil(单测未注入)且无 Claude Code 头时跳过注入,OCR 缓存回退 UserKey 隔离。
+	if userSession != nil && strings.TrimSpace(userSession.SessionKey) == "" {
+		if sid := strings.TrimSpace(r.Header.Get("X-Claude-Code-Session-Id")); sid != "" {
+			userSession.SessionKey = "claude:" + sid
+		} else if h.sessionRouter != nil {
+			rawKey := h.sessionRouter.ExtractSessionKey(r, bodyBytes)
+			if strings.HasPrefix(rawKey, "auth:") {
+				userSession.SessionKey = "auth:acc:" + strings.TrimPrefix(rawKey, "auth:")
+			} else if strings.HasPrefix(rawKey, "sock:") {
+				userSession.SessionKey = "sock:acc:" + strings.TrimPrefix(rawKey, "sock:")
+			} else if rawKey != "" {
+				userSession.SessionKey = "acc:" + rawKey
+			}
 		}
 	}
 
@@ -802,7 +815,11 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Re
 	// logCtx: 在分发出站协议前统一组装请求日志上下文, 共享给四个下行函数的 recordNvidiaUsage 调用点。
 	// Host 优先取上游账号 BaseURL 的裸 host; poolAccount 为空时优先用入站 r.Host, 再回退占位 "nvidia"
 	// (r.Host 为入站 Host 头, 比 "nvidia" 更可读; 整段不直接解引用 poolAccount, 故无 nil panic)。
-	// Path/Method 取入站 r; Account 优先号池 Email, 缺则 userSession.UserID; SessionID 用 userSession.Token。
+	// Path/Method 取入站 r; Account 优先号池 Email, 缺则 userSession.UserID; SessionID 用
+	// ocrSessionDisplay:SessionKey 优先(auth:acc:<16hex>,与 antigravity 号池链路 handler.go:442
+	// 同款口径,也跟选号/降级日志里打出的会话 ID 同源),空则回退 userSession.Token(正式登录态),
+	// 再空则回退 UserID(sk-ant bypass 场景 Token 恒空,SessionKey 已注入故走首项)。这样请求日志
+	// 「会话 ID」列从恒 "-" 变为 auth:acc 口径值,与 antigravity 行可观测性对齐。
 	var logCtx nvidiaLogCtx
 	logCtx.Method = r.Method
 	logCtx.Path = r.URL.Path
@@ -818,7 +835,7 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Re
 		logCtx.Account = poolAccount.Email
 	}
 	if userSession != nil {
-		logCtx.SessionID = userSession.Token
+		logCtx.SessionID = ocrSessionDisplay(userSession)
 		if logCtx.Account == "" {
 			logCtx.Account = userSession.UserID
 		}

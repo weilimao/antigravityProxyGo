@@ -925,3 +925,87 @@ func TestOCR_CacheKeyIsolatesBySessionKey(t *testing.T) {
 	}
 }
 
+// TestHandleNvidia_ClaudeCodeSessionHeader_InjectsSessionKey 锁定:Claude Code 客户端用
+// X-Api-Key 鉴权(不带 Authorization: Bearer),原 ExtractSessionKey 会兜底走 sock 分支 →
+// 全部本地 Claude Code 会话共一个 "sock:acc:127.0.0.1",会话级隔离失效。修复后 handleNvidia
+// 入口优先读 X-Claude-Code-Session-Id 头,以 "claude:<UUID>" 注入 userSession.SessionKey。
+// 断言:入站带该头 → userSession.SessionKey == "claude:<UUID>";不带该头(空)→ 回退 ExtractSessionKey。
+func TestHandleNvidia_ClaudeCodeSessionHeader_InjectsSessionKey(t *testing.T) {
+	ocr := ocrFlashServer(t, "OCR-SESSION", http.StatusOK)
+	defer ocr.Close()
+	origAddr := localProxyAddr
+	localProxyAddr = strings.TrimPrefix(ocr.URL, "http://")
+	t.Cleanup(func() { localProxyAddr = origAddr })
+
+	var upstreamBody []byte
+	upstream := nvidiaChatUpstreamWithImageAssertion(t, &upstreamBody)
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-sess", "nv-sess@x.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+
+	anthReq := &AnthropicRequest{
+		Model:     "claude-sonnet-4-5",
+		MaxTokens: func() *int { v := 50; return &v }(),
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+	// 模拟 Claude Code:用 X-Api-Key 鉴权 + 带原生会话头。
+	req.Header.Set("X-Api-Key", "sk-ant-testsession")
+	req.Header.Set("X-Claude-Code-Session-Id", "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+
+	sess := &RelaySession{UserID: "u-sess", UserKey: "k1"}
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, sess)
+
+	if sess.SessionKey != "claude:a1b2c3d4-e5f6-7890-abcd-ef1234567890" {
+		t.Fatalf("SessionKey should be claude:<UUID> when X-Claude-Code-Session-Id present, got %q", sess.SessionKey)
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestHandleNvidia_NoClaudeSessionHeader_FallsBackToExtractSessionKey 锁定:无
+// X-Claude-Code-Session-Id 头时(如直接调 /nvidia/* 的脚本/SDK),回退 ExtractSessionKey。
+// 走 Authorization: Bearer 分支 → "auth:acc:<16hex>";走 sock 兜底 → "sock:acc:<host>"。
+func TestHandleNvidia_NoClaudeSessionHeader_FallsBackToExtractSessionKey(t *testing.T) {
+	ocr := ocrFlashServer(t, "OCR-NOSID", http.StatusOK)
+	defer ocr.Close()
+	origAddr := localProxyAddr
+	localProxyAddr = strings.TrimPrefix(ocr.URL, "http://")
+	t.Cleanup(func() { localProxyAddr = origAddr })
+
+	var upstreamBody []byte
+	upstream := nvidiaChatUpstreamWithImageAssertion(t, &upstreamBody)
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-nosid", "nv-nosid@x.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler, _, router, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+	_ = router
+
+	anthReq := &AnthropicRequest{
+		Model:     "claude-sonnet-4-5",
+		MaxTokens: func() *int { v := 50; return &v }(),
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+	// 用 Authorization: Bearer(非 Claude Code 路径),不带 X-Claude-Code-Session-Id。
+	req.Header.Set("Authorization", "Bearer test-bearer-token-no-claude-sid")
+
+	sess := &RelaySession{UserID: "u-nosid", UserKey: "k1"}
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, sess)
+
+	// 应回退到 ExtractSessionKey 的 auth 分支:auth:acc:<16hex>(Bearer token SHA256 前 16 hex)。
+	if !strings.HasPrefix(sess.SessionKey, "auth:acc:") {
+		t.Fatalf("SessionKey should fall back to auth:acc:<hex> without X-Claude-Code-Session-Id, got %q", sess.SessionKey)
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+

@@ -426,3 +426,62 @@ func TestUpdateAccountCooldownFromQuota_NvidiaNoSpuriousRestored(t *testing.T) {
 		t.Errorf("unexpected Cooldowns[gemini] leaked into nvidia account")
 	}
 }
+
+func TestAccountManager_QuotaRefreshNonBlocking(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "account_nonblock_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	m := NewManager()
+	m.Init(tempDir)
+
+	acc := &Account{
+		ID:          "test-nb-acc",
+		Email:       "test_nb@example.com",
+		AccessToken: "dummy-token",
+		Provider:    "antigravity",
+		Enabled:     true,
+	}
+	m.AddAccount(acc)
+
+	// 模拟后台持续密集 SaveAccounts（磁盘写入）
+	stopCh := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopCh:
+				return
+			default:
+				_ = m.SaveAccounts(true)
+				time.Sleep(1 * time.Millisecond)
+			}
+		}
+	}()
+
+	start := time.Now()
+	// 并发 100 个请求发起账号读取
+	doneCh := make(chan bool, 100)
+	for i := 0; i < 100; i++ {
+		go func() {
+			accounts := m.GetAvailableAccountsForChannel("antigravity", "gemini-2.5-flash")
+			if len(accounts) == 0 {
+				t.Errorf("expected available account, got none")
+			}
+			doneCh <- true
+		}()
+	}
+
+	for i := 0; i < 100; i++ {
+		<-doneCh
+	}
+	close(stopCh)
+
+	elapsed := time.Since(start)
+	t.Logf("100 concurrent GetAvailableAccountsForChannel calls finished in %v during SaveAccounts", elapsed)
+	if elapsed > 1*time.Second {
+		t.Errorf("GetAvailableAccountsForChannel was blocked by SaveAccounts disk IO, elapsed: %v", elapsed)
+	}
+}
+

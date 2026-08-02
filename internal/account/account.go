@@ -90,6 +90,7 @@ type AccountsData struct {
 
 type Manager struct {
 	sync.RWMutex
+	fileLock          sync.Mutex
 	userDataPath      string
 	accountsFilePath  string
 	accounts          []*Account
@@ -272,9 +273,9 @@ func (m *Manager) SaveAccounts(silent bool) error {
 		return err
 	}
 
-	m.Lock()
+	m.fileLock.Lock()
 	err = os.WriteFile(m.accountsFilePath, bytesData, 0644)
-	m.Unlock()
+	m.fileLock.Unlock()
 
 	if err != nil {
 		return err
