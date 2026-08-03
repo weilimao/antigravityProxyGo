@@ -1436,13 +1436,39 @@ export function renderActiveView() {
         if (barTokensIn) barTokensIn.style.width = `${inPercent}%`;
         if (barTokensOut) barTokensOut.style.width = `${outPercent}%`;
 
-        // 缓存命中率分母优先用 cacheEligibleInputTokens: 它只累加支持 cache 的 provider
-        // (gemini/claude) 的输入, 刻意排除 NVIDIA(NVIDIA 上游 OpenAI Chat 协议无 cache,
-        // cachedTokens 恒 0, 若其 input 计入分母会永久稀释命中率)。
-        // 回退路径: 历史本地 stats.json(无此字段)或旧版中继服务器(未升级 internal/relay)下发 0/缺省,
-        // 此时退化为 totalInputTokens 口径(即改动前行为), 保证升级期零回归、无报错。
-        const hitDenom = (typeof stats.cacheEligibleInputTokens === 'number' && stats.cacheEligibleInputTokens > 0)
-            ? stats.cacheEligibleInputTokens : stats.totalInputTokens;
+        // 缓存命中率分母：
+        // 1. 优先读取后端下发的 totalCacheEligibleInputTokens 或 cacheEligibleInputTokens；
+        // 2. 若分母不存在/为0（如旧版或未算分母的场景），自动从 models 列表中聚合 cachedTokens > 0 的模型的 inTokens，
+        //    彻底剔除 0% 缓存的模型（如 NVIDIA z-ai/glm-5.2 等 7,500 次 0% 缓存请求），避免稀释命中率；
+        // 3. 兜底回退 totalInputTokens。
+        let hitDenom = 0;
+        if (typeof stats.totalCacheEligibleInputTokens === 'number' && stats.totalCacheEligibleInputTokens > 0) {
+            hitDenom = stats.totalCacheEligibleInputTokens;
+        } else if (typeof stats.cacheEligibleInputTokens === 'number' && stats.cacheEligibleInputTokens > 0) {
+            hitDenom = stats.cacheEligibleInputTokens;
+        }
+
+        if (hitDenom <= 0 && stats.models && typeof stats.models === 'object') {
+            let modelEligibleSum = 0;
+            for (const mKey in stats.models) {
+                const m = stats.models[mKey];
+                if (m) {
+                    const cTokens = Number(m.cachedTokens || m.CachedTokens || 0);
+                    const iTokens = Number(m.inTokens || m.InTokens || 0);
+                    if (cTokens > 0) {
+                        modelEligibleSum += iTokens;
+                    }
+                }
+            }
+            if (modelEligibleSum > 0) {
+                hitDenom = modelEligibleSum;
+            }
+        }
+
+        if (hitDenom <= 0) {
+            hitDenom = stats.totalInputTokens || 0;
+        }
+
         const hitRate = hitDenom > 0 ? (stats.totalCachedTokens / hitDenom * 100) : 0;
         if (valHitRate) valHitRate.textContent = hitRate.toFixed(1) + '%';
         if (valCached) valCached.textContent = chartRenderer.formatCompactNumber(stats.totalCachedTokens);
