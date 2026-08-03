@@ -12,23 +12,21 @@ package relay
 //   compat_ratelimit.go     RateLimiter 限流器(已在 Step 2-b 拆出)
 
 import (
-	"fmt"
-	"net/http"
-	"strings"
-	"time"
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/netutil"
 	"antigravity-proxy/internal/session"
 	"antigravity-proxy/internal/settings"
 	"antigravity-proxy/internal/stats"
+	"fmt"
 	"golang.org/x/sync/singleflight"
+	"net/http"
+	"strings"
+	"time"
 )
 
 var localProxyAddr = "127.0.0.1:18443"
 
-
 const defaultOcrModel = "gemini-2.5-flash"
-
 
 type APICompatHandler struct {
 	authMgr       *AuthManager
@@ -39,7 +37,7 @@ type APICompatHandler struct {
 	// “账号使用统计”(usage.json)，与 Gemini/claude 直连链路口径一致。
 	// NVIDIA 中继链路在 recordNvidiaUsage 内调用它，使每个号池账号
 	// (AccountMeta.ID/Email/Provider/ProjectID/ScopeType) 在前端账号使用统计页可见。
-	usageTracker  *stats.UsageTracker
+	usageTracker *stats.UsageTracker
 	// globalStatsTracker 是全局 *stats.Tracker(主进程 handler 用的那个, 非 relay 的 StatsTracker)。
 	// NVIDIA 中继链路在 recordNvidiaUsage 末尾用它把号池用量计入「使用趋势-NVIDIA」专用桶
 	// (TrackNvidiaRequest), 与综合全局桶 trends 物理隔离。装配点在 app_relay.go 经
@@ -47,11 +45,11 @@ type APICompatHandler struct {
 	// 不影响既有 relay 维度统计。保持非构造参数 + setter 形式, 避免改动 NewAPICompatHandler
 	// 签名牵连 7 处现有调用点与单测。
 	globalStatsTracker *stats.Tracker
-	logFn         func(string)
-	client        *http.Client
-	streamClient  *http.Client // 流式请求专用，不设全局超时，避免长生成被截断
-	settingsMgr   settings.ManagerInterface
-	rateLimiter   *RateLimiter
+	logFn              func(string)
+	client             *http.Client
+	streamClient       *http.Client // 流式请求专用，不设全局超时，避免长生成被截断
+	settingsMgr        settings.ManagerInterface
+	rateLimiter        *RateLimiter
 	// nvidiaCursor 是 round-robin 模式下用于打破"最少计数平局"的全局游标, 单调递增。
 	// 历史上它是纯取模轮询游标; 接入 nvidiaStats 后退化为"候选集合内取模打破平局"用。
 	nvidiaCursor uint64
@@ -63,6 +61,10 @@ type APICompatHandler struct {
 	// 生产默认 5 秒(见 nvidia.go pullAnthropicStreamWithRetry);测试可覆盖为小值以快跑重试用例,
 	// 避免 fix 的 5s×N 退避把单测拖到分钟级。零值时构造兜底为 5s。
 	nvidiaStreamRetryWait time.Duration
+	// nvidiaStreamCycleWait 是 Anthropic 流式断流"周期之间"的等待间隔:每个周期 = 5 次直连蓄流重试
+	// + 1 次兜底出站代理,周期之间等本字段后把请求计数归零继续下一周期,连续 3 个周期(由 maxCycles 控制)
+	// 全失败才回 overloaded_error 取消请求。生产默认 10 秒;测试可覆盖为小值避免把单测拖到 20s+。零值兜底 10s。
+	nvidiaStreamCycleWait time.Duration
 	// ocrCache 是 NVIDIA/Gemini 入站 image 降级时,本地 Gemini OCR 结果的进程内缓存。
 	// 键 = UserKey|ocrModel|sha256(b64)[:16],LRU 限条数 + TTL,叠加 singleflight 防并发击穿。
 	// 解决 Claude Code 无状态每轮重发历史图导致同一张图被重复 OCR 的浪费(每图 ~3s + 一次号池额度)。
@@ -75,7 +77,6 @@ type APICompatHandler struct {
 	ocrCounters ocrCacheCounters
 }
 
-
 func NewAPICompatHandler(
 	authMgr *AuthManager,
 	accountMgr *account.Manager,
@@ -86,25 +87,25 @@ func NewAPICompatHandler(
 	logFn func(string),
 ) *APICompatHandler {
 	return &APICompatHandler{
-		authMgr:       authMgr,
-		accountMgr:    accountMgr,
-		sessionRouter: sessionRouter,
-		statsTracker:  statsTracker,
-		usageTracker:  usageTracker,
-		settingsMgr:   settingsMgr,
-		logFn:         logFn,
-		client:        netutil.NewClient(5 * time.Minute),
-		streamClient:  &http.Client{Transport: netutil.NewTransport(), Timeout: 0},
-		rateLimiter:   NewRateLimiter(),
-		nvidiaStats:   newNvidiaReqStats(),
+		authMgr:               authMgr,
+		accountMgr:            accountMgr,
+		sessionRouter:         sessionRouter,
+		statsTracker:          statsTracker,
+		usageTracker:          usageTracker,
+		settingsMgr:           settingsMgr,
+		logFn:                 logFn,
+		client:                netutil.NewClient(5 * time.Minute),
+		streamClient:          &http.Client{Transport: netutil.NewTransport(), Timeout: 0},
+		rateLimiter:           NewRateLimiter(),
+		nvidiaStats:           newNvidiaReqStats(),
 		nvidiaStreamRetryWait: 5 * time.Second,
+		nvidiaStreamCycleWait: 10 * time.Second,
 		// ocrCache 默认参数:容量 256 / 成功 TTL 30min / 失败 TTL 30s。
 		// 容量按"每用户活跃历史图"估算,256 足够覆盖一段长会话的不重复图;
 		// 失败短 TTL 30s 熔断窗口,避免持续重打挂的 OCR 服务。
 		ocrCache: newOcrLRUCache(0, 0, 0),
 	}
 }
-
 
 // SetGlobalStatsTracker 注入全局 *stats.Tracker, 使 NVIDIA 中继链路能把号池用量计入
 // 「使用趋势-NVIDIA」专用桶 (TrackNvidiaRequest)。仅 app_relay.go 装配处调用一次;
@@ -116,7 +117,6 @@ func (h *APICompatHandler) SetGlobalStatsTracker(t *stats.Tracker) {
 	h.globalStatsTracker = t
 }
 
-
 func (h *APICompatHandler) getModelMapping() []settings.ModelMappingEntry {
 	if h.settingsMgr != nil {
 		return h.settingsMgr.GetRelayModelMapping()
@@ -124,13 +124,11 @@ func (h *APICompatHandler) getModelMapping() []settings.ModelMappingEntry {
 	return settings.GetDefaultModelMappings()
 }
 
-
 func (h *APICompatHandler) log(format string, args ...interface{}) {
 	if h.logFn != nil {
 		h.logFn(fmt.Sprintf("[APICompat] "+format, args...))
 	}
 }
-
 
 func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -198,6 +196,14 @@ func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 6. 通用按模型路由入口 /route/*:按入站 model 匹配 RelayModelRoutes 规则,
+	// 分发到对应 Provider 号池(复用 handleNvidia 的重特化链路,或走通用透传转发器)。
+	// 入口由 router_entry.go 实现,这里只做前缀分流。
+	if routedRoutePrefixMatch(path) {
+		h.handleRoutedForward(w, r, session)
+		return
+	}
+
 	// 5. v1internal 接口 (支持 /v1internal:generateContent 或 /v1internal:streamGenerateContent)
 	if strings.HasPrefix(path, "/v1internal:") && r.Method == http.MethodPost {
 		h.handleV1Internal(w, r, session)
@@ -206,5 +212,3 @@ func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusNotFound, map[string]interface{}{"error": "endpoint not found"})
 }
-
-

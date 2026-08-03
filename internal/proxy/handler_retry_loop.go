@@ -124,6 +124,7 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 		// Process Errors (Rate Limits, Quota Exceeded, Token Expired)
 		isRetryable := errAttempt.Error() == "CAPACITY_EXHAUSTED" ||
 			errAttempt.Error() == "QUOTA_EXHAUSTED" ||
+			errAttempt.Error() == "RATE_LIMITED" ||
 			errAttempt.Error() == "TOKEN_EXPIRED" ||
 			errAttempt.Error() == "CREDITS_EXHAUSTED" ||
 			errAttempt.Error() == "SERVER_ERROR" ||
@@ -149,6 +150,25 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 				sc.h.logFn(fmt.Sprintf("❌ [负载均衡] 检测到账号 %s 积分已耗尽。标记冷静期并获取真实配额...", email))
 				sc.h.accountMgr.UpdateAccountCredits(accId, 0)
 				sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+5*60*1000, sc.currentModel)
+
+				go func(a *account.Account) {
+					res, qErr := sc.h.quotaFetch(a)
+					if qErr == nil && res != nil {
+						sc.h.accountMgr.UpdateAccountQuota(a.ID, res)
+					}
+				}(lastUsedAccount)
+			}
+
+			if errAttempt.Error() == "RATE_LIMITED" {
+				// 瞬时速率/并发限制(classify 拆分:无 long-term 配额信号的 429 RESOURCE_EXHAUSTED)。
+				// 不挂 5 分钟冷静期(会误拉黑正常账号几秒后被配额恢复日志擦除但其间连锁误伤并发请求),
+				// 改挂 10s 短冷静期 + 异步 quotaFetch 真实配额兜底自愈:
+				//   - 几秒后 quotaFetch 回来若配额正常,冷静期被 UpdateAccountQuota->OnQuotaRestored 提前清零;
+				//   - 若配额真有问题则维持冷静期,下轮 retry 自然 reassign 切号。
+				// 这把 antigravity 个人号同 sessionKey 并发挤同号产生的 200ms~3s 瞬时拒绝,
+				// 与主请求占槽的并发争用隔离开,不再升级成 5 分钟拉黑 -> 子 agent 雪崩。
+				sc.h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 瞬时速率/并发限制 (RATE_LIMITED)。标记 10s 短冷静期并异步校准配额...", email))
+				sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+10*1000, sc.currentModel)
 
 				go func(a *account.Account) {
 					res, qErr := sc.h.quotaFetch(a)

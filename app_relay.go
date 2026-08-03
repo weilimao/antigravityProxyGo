@@ -116,6 +116,23 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		a.AddLog("🔄 中继大模型映射配置已保存")
 		return marshalResponse(map[string]interface{}{"success": true})
 
+	case "relay:get-model-routes":
+		// 「按模型路由到号池」规则表(/route/* 入口按入站 model 分发到对应 Provider 号池)。
+		return marshalResponse(a.settingsMgr.GetRelayModelRoutes())
+
+	case "relay:set-model-routes":
+		var routes []settings.ModelRouteRule
+		if len(args) > 0 {
+			b, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(b, &routes)
+		}
+		err := a.settingsMgr.SetRelayModelRoutes(routes)
+		if err != nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		a.AddLog("🔀 模型路由规则表已保存并热加载")
+		return marshalResponse(map[string]interface{}{"success": true})
+
 	case "relay:get-config":
 		return marshalResponse(map[string]interface{}{
 			"enabled": a.settingsMgr.GetRelayEnabled(),

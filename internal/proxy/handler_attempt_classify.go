@@ -97,9 +97,35 @@ func (sc *serveContext) classifyResponse(attemptIndex int, ro *routeOutcome, fo 
 		}
 
 		if status == 429 || status == 403 || status == 402 {
-			isQuotaError := strings.Contains(bodyStr, "RESOURCE_EXHAUSTED") || strings.Contains(bodyStr, "quota") || strings.Contains(bodyStr, "exhausted") || strings.Contains(bodyStr, "limit") || strings.Contains(bodyStr, "MODEL_CAPACITY_EXHAUSTED")
-			if isQuotaError {
+			bodyStrLower := strings.ToLower(bodyStr)
+			// 区分「真配额耗尽」与「瞬时速率/并发限制」:
+			// antigravity 个人号(v1internal 上游)在同一 sessionKey 瞬时并发打同一账号时,
+			// Google 回 429 RESOURCE_EXHAUSTED 但 body 内无任何 long-term 配额信号
+			// (无 resetTime / quota limit / daily / concurrent 等字样),仅通用 exhausted 语。
+			// 这种 3~5 秒后异步 quotaFetch 即测得配额正常(见 retry loop「配额恢复」日志),
+			// 实质是瞬时速率/并发槽满,而非长期配额耗尽。
+			// 旧逻辑一律判 QUOTA_EXHAUSTED -> 挂 5 分钟冷静期 -> 主+子并发挤同号时雪崩。
+			// 现拆分:仅当 body 含明确长期配额信号(daily/resetTime/quota limit/duration/sustainable)
+			// 才判 QUOTA_EXHAUSTED;否则判 RATE_LIMITED,由 retry loop 短冷静期(10s)+ 异步 quotaFetch
+			// 兜底自愈,避免把几秒的瞬时拒绝延展成 5 分钟拉黑。
+			isLongTermQuota := strings.Contains(bodyStrLower, "daily") ||
+				strings.Contains(bodyStrLower, "resettime") ||
+				strings.Contains(bodyStrLower, "reset_time") ||
+				strings.Contains(bodyStrLower, "quota limit") ||
+				strings.Contains(bodyStrLower, "duration") ||
+				strings.Contains(bodyStrLower, "sustainable") ||
+				strings.Contains(bodyStrLower, "per day") ||
+				strings.Contains(bodyStrLower, "perminutequota")
+
+			if isLongTermQuota {
 				return 429, headers, body, false, errors.New("QUOTA_EXHAUSTED")
+			}
+
+			// 通用速率/资源瞬时限制(MODEL_CAPACITY_EXHAUSTED 走 503 分支,此处不命中):
+			// RESOURCE_EXHAUSTED / exhausted / limit / rate / quota(无 long-term 信号时)统一归 RATE_LIMITED。
+			isRateLimited := strings.Contains(bodyStr, "RESOURCE_EXHAUSTED") || strings.Contains(bodyStr, "RATE_LIMIT_EXCEEDED") || strings.Contains(bodyStr, "exhausted") || strings.Contains(bodyStr, "limit") || strings.Contains(bodyStrLower, "rate") || strings.Contains(bodyStrLower, "quota")
+			if isRateLimited {
+				return 429, headers, body, false, errors.New("RATE_LIMITED")
 			}
 		}
 	}

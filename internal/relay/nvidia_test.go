@@ -40,16 +40,16 @@ func newNvidiaTestHandler(t *testing.T, accounts []*account.Account) (*APICompat
 
 func mkNvidiaAccount(id, email, key, baseURL, model string) *account.Account {
 	return &account.Account{
-		ID:          id,
-		Email:       email,
-		Provider:    "nvidia",
-		ScopeType:   "nvidia",
-		AccessToken: key,
-		BaseURL:     baseURL,
-		Enabled:     true,
-		ModelSonnet: model,
+		ID:           id,
+		Email:        email,
+		Provider:     "nvidia",
+		ScopeType:    "nvidia",
+		AccessToken:  key,
+		BaseURL:      baseURL,
+		Enabled:      true,
+		ModelSonnet:  model,
 		DefaultModel: model,
-		Cooldowns:   map[string]int64{},
+		Cooldowns:    map[string]int64{},
 	}
 }
 
@@ -90,8 +90,8 @@ func TestHandleNvidia_NonStreamAnthropic(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
 
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5",
-		System:   "You are helpful.",
+		Model:     "claude-sonnet-4-5",
+		System:    "You are helpful.",
 		MaxTokens: func() *int { v := 100; return &v }(),
 		Messages:  []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
@@ -140,8 +140,8 @@ func TestHandleNvidia_StreamAnthropic(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
 
 	anthReq := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
-		Stream:  true,
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -306,7 +306,7 @@ func TestHandleNvidia_RetriesOn401(t *testing.T) {
 	handler, accMgr, _, _ := newNvidiaTestHandler(t, []*account.Account{acc1, acc2})
 
 	anthReq := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
+		Model:    "claude-sonnet-4-5",
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -354,7 +354,7 @@ func TestHandleNvidia_Retries5TimesOn429ThenSwitchesAccount(t *testing.T) {
 	handler, accMgr, _, _ := newNvidiaTestHandler(t, []*account.Account{acc1, acc2})
 
 	anthReq := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
+		Model:    "claude-sonnet-4-5",
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -377,7 +377,6 @@ func TestHandleNvidia_Retries5TimesOn429ThenSwitchesAccount(t *testing.T) {
 		t.Errorf("429 account should be cooled down after 5 retries")
 	}
 }
-
 
 // ===== 空号池返回 503 =====
 
@@ -590,7 +589,7 @@ func TestRecordNvidiaUsage_AccountBucket_NonStreamAnthropic(t *testing.T) {
 	handler, _, _, uTracker := newNvidiaTestHandler(t, []*account.Account{acc})
 
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5",
+		Model:     "claude-sonnet-4-5",
 		MaxTokens: func() *int { v := 100; return &v }(),
 		Messages:  []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
@@ -691,8 +690,8 @@ func TestRecordNvidiaUsage_AccountBucket_Stream(t *testing.T) {
 	handler, _, _, uTracker := newNvidiaTestHandler(t, []*account.Account{acc})
 
 	anthReq := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
-		Stream:  true,
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -735,7 +734,7 @@ func TestRecordNvidiaUsage_NilUsageTracker(t *testing.T) {
 	handler := NewAPICompatHandler(nil, accMgr, session.NewRouter(), nil, nil, nil, nil)
 
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5",
+		Model:     "claude-sonnet-4-5",
 		MaxTokens: func() *int { v := 100; return &v }(),
 		Messages:  []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
@@ -795,7 +794,7 @@ func TestHandleNvidia_LeastCountPreferred(t *testing.T) {
 
 	// 新请求(round-robin): acc1 计数 3, acc2 计数 0, 最少计数优先应选中 acc2 (key-idle)。
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5",
+		Model:     "claude-sonnet-4-5",
 		MaxTokens: func() *int { v := 100; return &v }(),
 		Messages:  []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
@@ -846,7 +845,7 @@ func TestHandleNvidia_FirstRoundDegradesToRoundRobin(t *testing.T) {
 
 	makeReq := func() {
 		anthReq := &AnthropicRequest{
-			Model:    "claude-sonnet-4-5",
+			Model:     "claude-sonnet-4-5",
 			MaxTokens: func() *int { v := 100; return &v }(),
 			Messages:  []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 		}
@@ -879,6 +878,7 @@ func TestHandleNvidia_FirstRoundDegradesToRoundRobin(t *testing.T) {
 //   - message_delta.usage.{input_tokens,output_tokens} 用上游末帧的累计真实值
 //     （官方标注 "token counts shown in the usage field of the message_delta event are cumulative"）；
 //   - message_stop 的 data 必须为 {"type":"message_stop"}，而非早期 "{}"。
+//
 // 这是对 "Claude Code CLI 等下次请求才整条显示" 的协议合规修正的回归保护。
 func TestOpenAIChatSSEToAnthropicSSE_AnthropicUsageCompliance(t *testing.T) {
 	sseInput := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n" +
@@ -921,7 +921,7 @@ func TestOpenAIChatSSEToAnthropicSSE_AnthropicUsageCompliance(t *testing.T) {
 		var parsed struct {
 			Type  string `json:"type"`
 			Delta struct {
-				StopReason   string `json:"stop_reason"`
+				StopReason   string  `json:"stop_reason"`
 				StopSequence *string `json:"stop_sequence"`
 			} `json:"delta"`
 			Usage struct {
@@ -1322,7 +1322,7 @@ func flakyNvidiaUpstream(t *testing.T, failN int) (*httptest.Server, *int32) {
 func draftChunkLines(bodyFragments []string) string {
 	parts := make([]string, 0, len(bodyFragments)+2)
 	for _, frag := range bodyFragments {
-		parts = append(parts, `data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":`+ jsonString(frag) +`}}]}`)
+		parts = append(parts, `data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":`+jsonString(frag)+`}}]}`)
 	}
 	parts = append(parts, `data: {"error":{"message":"upstream interrupted mid-stream","type":"internal","code":"stream_broken"}}`)
 	parts = append(parts, `data: [DONE]`, "")
@@ -1368,6 +1368,7 @@ func flakyNvidiaUpstreamWithDraft(t *testing.T, failN int, draftFragments []stri
 
 // TestPullAnthropicStream_RetryOnEOFThenSuccess 断流重试命中:前 2 次中途断流,第 3 次完整。
 // 断言:客户端收 200 + 完整 Anthropic SSE 事件序列 + 文本 delta, 且全程未换号(同一账号)。
+// 3 周期结构下:命中发生在第 1 周期内(attempt 0、1 断流,attempt 2 完整),calls==3 不变。
 func TestPullAnthropicStream_RetryOnEOFThenSuccess(t *testing.T) {
 	upstream, calls := flakyNvidiaUpstream(t, 2)
 	defer upstream.Close()
@@ -1375,10 +1376,11 @@ func TestPullAnthropicStream_RetryOnEOFThenSuccess(t *testing.T) {
 	acc := mkNvidiaAccount("nv-retry", "retrybot@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
 	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
 	handler.nvidiaStreamRetryWait = 5 * time.Millisecond // 加速退避,避免 5s×N 拖垮单测
+	handler.nvidiaStreamCycleWait = 5 * time.Millisecond // 命中第 1 周期内,不实际生效,设小值防御
 
 	anthReq := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
-		Stream:  true,
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -1410,19 +1412,21 @@ func TestPullAnthropicStream_RetryOnEOFThenSuccess(t *testing.T) {
 	}
 }
 
-// TestPullAnthropicStream_RetryExhausted_RepliesOverloaded 5 次均中途断流,重试用尽。
-// 断言:回写 503 + Anthropic overloaded_error(取代旧的 end_turn 假闭合),调用记录为 5 次。
+// TestPullAnthropicStream_RetryExhausted_RepliesOverloaded 3 周期每周期 5 次直连均中途断流,重试用尽。
+// 该用例无 settingsMgr→兜底每周期跳过,3×5=15 次直连全失败才回 503。
+// 断言:回写 503 + Anthropic overloaded_error(取代旧的 end_turn 假闭合),调用记录为 15 次。
 func TestPullAnthropicStream_RetryExhausted_RepliesOverloaded(t *testing.T) {
-	upstream, calls := flakyNvidiaUpstream(t, 10) // failN 远超 5 次,确保次次断流
+	upstream, calls := flakyNvidiaUpstream(t, 30) // failN 远超 15 次,确保次次断流
 	defer upstream.Close()
 
 	acc := mkNvidiaAccount("nv-exh", "exhbot@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
 	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
 	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+	handler.nvidiaStreamCycleWait = 5 * time.Millisecond // 加速周期间 10s 退避,避免 3 周期拖到 20s+
 
 	anthReq := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
-		Stream:  true,
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -1437,9 +1441,9 @@ func TestPullAnthropicStream_RetryExhausted_RepliesOverloaded(t *testing.T) {
 	if !strings.Contains(out, `"type":"overloaded_error"`) {
 		t.Errorf("expected overloaded_error payload, got:\n%s", out)
 	}
-	// 重试用尽:恰好 5 次上游请求(不换号,同一账号重拉满 5 次)。
-	if got := atomic.LoadInt32(calls); got != 5 {
-		t.Errorf("expected exactly 5 upstream calls (retry max) without switch, got %d", got)
+	// 3 周期×5 直连(无 settingsMgr 兜底每周期跳过)= 15 次上游请求(不换号,同一账号重拉满 15 次)。
+	if got := atomic.LoadInt32(calls); got != 15 {
+		t.Errorf("expected exactly 15 upstream calls (3 cycles x 5 direct, no fallback) without switch, got %d", got)
 	}
 }
 
@@ -1462,17 +1466,18 @@ func TestPullAnthropicLive_RetryResumesNotReplays(t *testing.T) {
 	// 前 2 轮断流且吐不同草稿片段;第 3 轮完整,正文与草稿不同。
 	upstream, calls := flakyNvidiaUpstreamWithDraft(t, 2,
 		[]string{"DRAFT_A_", "PART2_"}, // 第 1 轮草稿(第 2 轮草稿也为 draftSSE 同样内容,但只取第 1 轮落 live)
-		"FINAL_FULL_ANSWER", // 第 3 轮完整正文(重启段)
+		"FINAL_FULL_ANSWER",            // 第 3 轮完整正文(重启段)
 	)
 	defer upstream.Close()
 
 	acc := mkNvidiaAccount("nv-resume", "resumebot@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
 	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
 	handler.nvidiaStreamRetryWait = 5 * time.Millisecond // 加速退避
+	handler.nvidiaStreamCycleWait = 5 * time.Millisecond // 命中第 1 周期内,设小值防御
 
 	anthReq := &AnthropicRequest{
-		Model:  "claude-sonnet-4-5",
-		Stream: true,
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -1615,10 +1620,10 @@ type fallbackSettings struct {
 	fbPass    string
 }
 
-func (m *fallbackSettings) GetFallbackProxyAddress() string { return m.fbAddr }
-func (m *fallbackSettings) GetFallbackProxyEnabled() bool   { return m.fbEnabled }
-func (m *fallbackSettings) GetFallbackProxyUsername() string { return m.fbUser }
-func (m *fallbackSettings) GetFallbackProxyPassword() string { return m.fbPass }
+func (m *fallbackSettings) GetFallbackProxyAddress() string    { return m.fbAddr }
+func (m *fallbackSettings) GetFallbackProxyEnabled() bool      { return m.fbEnabled }
+func (m *fallbackSettings) GetFallbackProxyUsername() string   { return m.fbUser }
+func (m *fallbackSettings) GetFallbackProxyPassword() string   { return m.fbPass }
 func (m *fallbackSettings) GetNvidiaPreferredModels() []string { return []string{} }
 
 // newNvidiaTestHandlerWithFallback 在 newNvidiaTestHandler 基础上注入兜底 settings mock。
@@ -1646,10 +1651,11 @@ func TestPullAnthropicStream_FallbackRoundSucceeds(t *testing.T) {
 	// 兜底地址指向上游自身:fbClient.Do 经 proxy 协议把请求再发回同一 server(探测已验证可行),兜底轮拿到完整流。
 	handler := newNvidiaTestHandlerWithFallback(t, []*account.Account{acc}, upstream.URL, true)
 	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+	handler.nvidiaStreamCycleWait = 5 * time.Millisecond // 第 1 周期兜底即成功,本字段不实际生效,设小值防御
 
 	anthReq := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
-		Stream:  true,
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -1675,19 +1681,20 @@ func TestPullAnthropicStream_FallbackRoundSucceeds(t *testing.T) {
 	}
 }
 
-// TestPullAnthropicStream_FallbackAlsoFails_RepliesOverloaded 直连 5 轮 + 兜底 1 轮全断流。
-// 断言:503 overloaded_error + calls==6(兜底被触达但同样失败),不换号。
+// TestPullAnthropicStream_FallbackAlsoFails_RepliesOverloaded 3 周期(每周期 5 直连 + 1 兜底)全断流。
+// 断言:503 overloaded_error + calls==18(兜底每周期各被触达但同样失败),不换号。
 func TestPullAnthropicStream_FallbackAlsoFails_RepliesOverloaded(t *testing.T) {
-	upstream, calls := flakyNvidiaUpstream(t, 10) // 持续断流,兜底轮也击中 error chunk
+	upstream, calls := flakyNvidiaUpstream(t, 30) // 持续断流,兜底轮也击中 error chunk
 	defer upstream.Close()
 
 	acc := mkNvidiaAccount("nv-fb-fail", "fbfail@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
 	handler := newNvidiaTestHandlerWithFallback(t, []*account.Account{acc}, upstream.URL, true)
 	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+	handler.nvidiaStreamCycleWait = 5 * time.Millisecond // 加速周期间 10s 退避
 
 	anthReq := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
-		Stream:  true,
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -1701,25 +1708,26 @@ func TestPullAnthropicStream_FallbackAlsoFails_RepliesOverloaded(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), `"type":"overloaded_error"`) {
 		t.Errorf("expected overloaded_error payload after fallback also failed, got:\n%s", rr.Body.String())
 	}
-	// 5 轮直连 + 1 轮兜底(同样失败)= 6 次,calls 必须 == 6 证明兜底分支确实被触达而非跳过。
-	if got := atomic.LoadInt32(calls); got != 6 {
-		t.Errorf("expected 6 upstream calls (5 direct + 1 fallback failed), got %d (fallback branch may be skipped)", got)
+	// 3 周期×(5 直连 + 1 兜底)全失败 = 18 次,calls 必须 == 18 证明兜底分支每周期被触达而非跳过。
+	if got := atomic.LoadInt32(calls); got != 18 {
+		t.Errorf("expected 18 upstream calls (3 cycles x (5 direct + 1 fallback failed)), got %d (fallback branch may be skipped)", got)
 	}
 }
 
 // TestPullAnthropicStream_FallbackInvalidAddressSkipped 启用兜底但地址协议不支持(ftp://)。
-// GetFallbackClient 返回 err → 跳过兜底 → 503 overloaded。断言 calls==5(只走直连,兜底未触达)且不崩。
+// GetFallbackClient 返回 err → 每周期跳过兜底 → 503 overloaded。断言 calls==15(只走直连,兜底未触达)且不崩。
 func TestPullAnthropicStream_FallbackInvalidAddressSkipped(t *testing.T) {
-	upstream, calls := flakyNvidiaUpstream(t, 10)
+	upstream, calls := flakyNvidiaUpstream(t, 30)
 	defer upstream.Close()
 
 	acc := mkNvidiaAccount("nv-fb-bad", "fbbad@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
 	handler := newNvidiaTestHandlerWithFallback(t, []*account.Account{acc}, "ftp://1.2.3.4:21", true)
 	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+	handler.nvidiaStreamCycleWait = 5 * time.Millisecond
 
 	anthReq := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
-		Stream:  true,
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -1730,25 +1738,26 @@ func TestPullAnthropicStream_FallbackInvalidAddressSkipped(t *testing.T) {
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 when fallback addr invalid (skipped), got %d body=%s", rr.Code, rr.Body.String())
 	}
-	// 兜底被跳过(地址无效):只走 5 轮直连,calls==5。
-	if got := atomic.LoadInt32(calls); got != 5 {
-		t.Errorf("expected 5 upstream calls (fallback skipped due to invalid addr), got %d", got)
+	// 兜底被跳过(地址无效,每周期都跳):只走 3 周期×5 直连,calls==15。
+	if got := atomic.LoadInt32(calls); got != 15 {
+		t.Errorf("expected 15 upstream calls (3 cycles x 5 direct, fallback skipped due to invalid addr), got %d", got)
 	}
 }
 
 // TestPullAnthropicStream_FallbackDisabledSkipped 配置了地址但 enabled=false。
-// 守护"未启用即不触达兜底"语义:calls==5(只走直连)+ 503 overloaded。
+// 守护"未启用即不触达兜底"语义:calls==15(只走直连)+ 503 overloaded。
 func TestPullAnthropicStream_FallbackDisabledSkipped(t *testing.T) {
-	upstream, calls := flakyNvidiaUpstream(t, 10)
+	upstream, calls := flakyNvidiaUpstream(t, 30)
 	defer upstream.Close()
 
 	acc := mkNvidiaAccount("nv-fb-off", "fboff@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
 	handler := newNvidiaTestHandlerWithFallback(t, []*account.Account{acc}, upstream.URL, false)
 	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+	handler.nvidiaStreamCycleWait = 5 * time.Millisecond
 
 	anthReq := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
-		Stream:  true,
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -1762,25 +1771,26 @@ func TestPullAnthropicStream_FallbackDisabledSkipped(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), `"type":"overloaded_error"`) {
 		t.Errorf("expected overloaded_error payload, got:\n%s", rr.Body.String())
 	}
-	if got := atomic.LoadInt32(calls); got != 5 {
-		t.Errorf("expected 5 upstream calls (fallback disabled), got %d", got)
+	if got := atomic.LoadInt32(calls); got != 15 {
+		t.Errorf("expected 15 upstream calls (3 cycles x 5 direct, fallback disabled), got %d", got)
 	}
 }
 
 // TestPullAnthropicStream_FirstFlakyThenSuccess_NoAccountSwitch 隐式校验"不换号":
 // 用唯一可用账号(池中仅 1 个),断流重试全程只能复用它。若重试换号,换号循环会因无其它账号而提前 502。
-// 这里与 RetryOnEOFThenSuccess 组合,确证不换号语义(同账号重试满 5 次/calls)。已在 exhaust 用例体现。
+// 这里与 RetryOnEOFThenSuccess 组合,确证不换号语义(同账号重试满 3 周期/calls)。已在 exhaust 用例体现。
 func TestPullAnthropicStream_ClientCancelAbortsRetry(t *testing.T) {
-	upstream, calls := flakyNvidiaUpstream(t, 10) // 一直断流
+	upstream, calls := flakyNvidiaUpstream(t, 30) // 一直断流
 	defer upstream.Close()
 
 	acc := mkNvidiaAccount("nv-cancel", "cancelbot@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
 	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
 	handler.nvidiaStreamRetryWait = 300 * time.Millisecond // 中等退避便于观察取消时机
+	handler.nvidiaStreamCycleWait = 300 * time.Millisecond // 周期间等待也设中等值;但 50ms 内取消应远未到此
 
 	anthReq := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
-		Stream:  true,
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -1804,13 +1814,60 @@ func TestPullAnthropicStream_ClientCancelAbortsRetry(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("client cancel did not abort retry within 3s (backoff loop did not honor ctx)")
 	}
-	// 取消后上游请求次数应远小于 5 次(理想为 1~2 次),证明重试在 ctx 取消时立即停止。
+	// 取消后上游请求次数应远小于 5 次(理想为 1~2 次),证明重试在 ctx 取消时立即停止(未到周期间等待)。
 	if got := atomic.LoadInt32(calls); got >= 5 {
 		t.Errorf("client cancel should stop further retries, but %d upstream calls occurred", got)
 	}
 	// 客户端取消后不应返回 200 成功流(本轮未完整),状态码非 200 即视为重试被正确终止。
 	if rr != nil && rr.Code == http.StatusOK {
 		t.Errorf("client-cancelled stream should not surface as 200 success, got %d", rr.Code)
+	}
+}
+
+// TestPullAnthropicStream_ThreeCyclesThenSuccess 锁定"3 周期重试 + 周期间 10s 等待归零"新行为:
+// 前 2 周期每周期 5 直连全断流(10 次上游调用),周期间等 cycleWait 归零继续;第 3 周期
+// 第 1 个 attempt 完整 → 200 + 完整 Anthropic SSE。calls==11(10 断流 + 1 完整),证明周期之间确实
+// 「计数归零继续」第 3 周期重跑 attempt 0 而非提前取消。本用例无 settingsMgr → 兜底每周期跳过,纯 3×5 直连。
+// 用 cycleWait=5ms 加速,断言总耗时显著小于生产 2×10s=20s。
+func TestPullAnthropicStream_ThreeCyclesThenSuccess(t *testing.T) {
+	upstream, calls := flakyNvidiaUpstream(t, 10) // call 1-10 断流(2 周期各 5 直连),call 11(第3周期首attempt)完整
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-3cyc", "cycbot@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+	handler.nvidiaStreamCycleWait = 5 * time.Millisecond // 加速周期间 10s 等待
+
+	anthReq := &AnthropicRequest{
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+	rr := httptest.NewRecorder()
+	start := time.Now()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-3cyc", UserKey: "k-3cyc"})
+	elapsed := time.Since(start)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 after 3-cycle retry success, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	out := rr.Body.String()
+	if !strings.Contains(out, "event: message_start") || !strings.Contains(out, "event: message_stop") {
+		t.Errorf("expected complete Anthropic SSE after 3-cycle success, got:\n%s", out)
+	}
+	if !strings.Contains(out, `"text":"Hi"`) {
+		t.Errorf("expected text delta Hi from completed attempt, got:\n%s", out)
+	}
+	// 2 个完整周期耗尽(各 5 直连,无 settingsMgr 兜底跳过)+ 第 3 周期首个 attempt 完整 = 11 次上游调用。
+	// (周期 1: 5 断;周期之间等待;周期 2: 5 断;周期之间等待;周期 3: attempt 0 即完整 → 共 11 次。)
+	if got := atomic.LoadInt32(calls); got != 11 {
+		t.Errorf("expected 11 upstream calls (2 cycles x 5 EOF + 1 success on cycle 3), got %d", got)
+	}
+	// 周期间等待被加逫到 5ms:总耗时应远小于生产 2×10s=20s。
+	if elapsed > 2*time.Second {
+		t.Errorf("inter-cycle wait not accelerated, elapsed=%v (nvidiaStreamCycleWait workaround failed)", elapsed)
 	}
 }
 
@@ -1915,5 +1972,3 @@ func TestVCRoute_UnknownEndpoint_404(t *testing.T) {
 		t.Fatalf("/vc 404 文案应含 /vc alias 提示,实际=%s", rec.Body.String())
 	}
 }
-
-

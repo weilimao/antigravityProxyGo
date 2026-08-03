@@ -26,6 +26,23 @@ type ModelMappingEntry struct {
 	ClientModel string `json:"clientModel"`
 	TargetModel string `json:"targetModel"`
 	Expose      bool   `json:"expose"`
+	// OwnedBy 是该模型在 /v1/models 列表里 owned_by 字段的归属(号池/Provider)。
+	// 留空时由 relay.inferOwnedBy 按模型名前缀兜底推断(如 "deepseek-*" -> "deepseek")。
+	// 与下方 RelayModelRoutes 的路由规则解耦:这里只决定展示归类,不决定转发去向。
+	OwnedBy string `json:"ownedBy,omitempty"`
+}
+
+// ModelRouteRule 是「按模型路由到号池」的单条规则。
+// 入站请求(model=ClientModel) 命中 Pattern 后,转发到 TargetProvider 号池,
+// 并把请求体里的 model 字段改写为 TargetModel(空则原样透传)。
+// Pattern 支持三种写法:精确匹配("deepseek-chat")、前缀通配("deepseek-*")、
+// 正则("regexp:^ds-.*")。多条规则按 Priority 降序匹配,首个命中即止。
+type ModelRouteRule struct {
+	Pattern        string `json:"pattern"`
+	TargetProvider string `json:"targetProvider"` // 号池 Provider,如 "nvidia"/"deepseek";对应 Account.Provider
+	TargetModel    string `json:"targetModel,omitempty"`
+	Priority       int    `json:"priority,omitempty"`
+	Enabled        bool   `json:"enabled"`
 }
 
 type Config struct {
@@ -50,6 +67,9 @@ type Config struct {
 	RelayDomainWhitelist []string `json:"relayDomainWhitelist"`
 	RelayModelMapping    []ModelMappingEntry `json:"relayModelMapping"`
 	DeletedModelMappings []string            `json:"deletedModelMappings"`
+	// RelayModelRoutes 是「按模型路由到号池」的规则表,供 /route/* 专属入口按入站 model
+	// 分发到对应 Provider 号池。空表则 /route/* 退化为「交给 nvidia 号池兜底」(向后兼容)。
+	RelayModelRoutes []ModelRouteRule `json:"relayModelRoutes,omitempty"`
 	EnablePacketCapture  bool   `json:"enablePacketCapture"`
 	FallbackProxyPorts   string `json:"fallbackProxyPorts"`
 	CustomSocks5Address  string `json:"customSocks5Address"`
@@ -288,6 +308,10 @@ type ManagerInterface interface {
 	GetResolvedDebuggerLogPath() string
 	GetNvidiaPreferredModels() []string
 	SetNvidiaPreferredModels(val []string) error
+	// GetRelayModelRoutes/SetRelayModelRoutes:「按模型路由到号池」规则表。
+	// /route/* 专属入口按入站 model 命中规则,分发到 TargetProvider 号池。
+	GetRelayModelRoutes() []ModelRouteRule
+	SetRelayModelRoutes(val []ModelRouteRule) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,
