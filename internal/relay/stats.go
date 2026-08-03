@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,12 @@ type RelayUserStats struct {
 	TotalInputTokens  int                         `json:"totalInputTokens"`
 	TotalOutputTokens int                         `json:"totalOutputTokens"`
 	TotalCachedTokens int                         `json:"totalCachedTokens"`
+	// TotalCacheEligibleInputTokens 是“缓存命中率”分母专用累加器: 仅当本次请求所属模型
+	// 非 NVIDIA(NVIDIA 上游 OpenAI Chat 协议无 cache, cachedTokens 恒 0) 时累加 inTokens。
+	// 供远端 /api/stats 下发, 前端「缓存命中率」用其作分母, 避免被 NVIDIA input 稀释。
+	// 判定依据: recordNvidiaUsage 落点1 喂入本方法时模型名带 "nvidia/" 前缀
+	// (nvidia_usage.go: pref前缀装配), 故按 strings.HasPrefix(..., "nvidia/") 排除。
+	TotalCacheEligibleInputTokens int             `json:"totalCacheEligibleInputTokens"`
 	TotalCost         float64                     `json:"totalCost"`
 	Models            map[string]*RelayModelStats `json:"models"`
 	LastActiveAt      string                      `json:"lastActiveAt"`
@@ -166,6 +173,13 @@ func (s *StatsTracker) RecordUsage(sample RelaySample) {
 	userBucket.TotalInputTokens += inTokens
 	userBucket.TotalOutputTokens += outTokens
 	userBucket.TotalCachedTokens += cachedTokens
+	// 命中率分母: NVIDIA 号池(modelName 带 "nvidia/" 前缀) 不累加——上游 OpenAI Chat 协议
+	// 无 cache, cachedTokens 恒 0, 若计入分母会永久稀释命中率。其余(gemini/claude)累加。
+	// 前缀判定依据 recordNvidiaUsage 落点1 的 pref前缀装配(nvidia_usage.go), 不会误伤
+	// gemini/claude 链路(其 modelName 不含 "nvidia/" 前缀)。
+	if !strings.HasPrefix(sample.ModelName, "nvidia/") {
+		userBucket.TotalCacheEligibleInputTokens += inTokens
+	}
 	userBucket.TotalCost = math.Round((userBucket.TotalCost+cost)*1000000.0) / 1000000.0
 	userBucket.LastActiveAt = timestamp
 

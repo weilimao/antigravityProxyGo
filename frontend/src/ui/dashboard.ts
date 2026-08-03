@@ -1243,7 +1243,7 @@ export function initDashboardEvents() {
         const { stats, trends, nvidiaTrends, requests, usage } = payload;
 
         // Construct current payload signature for dirty-checking
-        const statsSig = stats ? `${stats.totalRequests}_${stats.totalErrors}_${stats.totalRetries}_${stats.totalInputTokens}_${stats.totalOutputTokens}_${stats.totalCachedTokens}_${stats.totalCost}` : '';
+        const statsSig = stats ? `${stats.totalRequests}_${stats.totalErrors}_${stats.totalRetries}_${stats.totalInputTokens}_${stats.totalOutputTokens}_${stats.totalCachedTokens}_${stats.totalCacheEligibleInputTokens || 0}_${stats.totalCost}` : '';
         const trendsLen = trends ? trends.length : 0;
         // nvidiaTrendsLen 纳入 sig: NVIDIA 号池桶有新数据时强制通过 renderActiveView 重画,
         // 否则 sig 不变会被短路, 导致「NVIDIA」Tab 曲线不更新。
@@ -1436,7 +1436,14 @@ export function renderActiveView() {
         if (barTokensIn) barTokensIn.style.width = `${inPercent}%`;
         if (barTokensOut) barTokensOut.style.width = `${outPercent}%`;
 
-        const hitRate = stats.totalInputTokens > 0 ? (stats.totalCachedTokens / stats.totalInputTokens * 100) : 0;
+        // 缓存命中率分母优先用 cacheEligibleInputTokens: 它只累加支持 cache 的 provider
+        // (gemini/claude) 的输入, 刻意排除 NVIDIA(NVIDIA 上游 OpenAI Chat 协议无 cache,
+        // cachedTokens 恒 0, 若其 input 计入分母会永久稀释命中率)。
+        // 回退路径: 历史本地 stats.json(无此字段)或旧版中继服务器(未升级 internal/relay)下发 0/缺省,
+        // 此时退化为 totalInputTokens 口径(即改动前行为), 保证升级期零回归、无报错。
+        const hitDenom = (typeof stats.cacheEligibleInputTokens === 'number' && stats.cacheEligibleInputTokens > 0)
+            ? stats.cacheEligibleInputTokens : stats.totalInputTokens;
+        const hitRate = hitDenom > 0 ? (stats.totalCachedTokens / hitDenom * 100) : 0;
         if (valHitRate) valHitRate.textContent = hitRate.toFixed(1) + '%';
         if (valCached) valCached.textContent = chartRenderer.formatCompactNumber(stats.totalCachedTokens);
         if (valSavedCost) valSavedCost.textContent = `$${(stats.totalCachedTokens * 0.3125 / 1000000).toFixed(2)}`;

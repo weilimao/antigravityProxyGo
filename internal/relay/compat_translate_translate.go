@@ -1,0 +1,587 @@
+package relay
+
+// compat_translate_translate.go implements the client-protocol -> Gemini core
+// translate functions: MapClientModelToGemini / ParseUnifiedOpenAIRequest /
+// parseOpenAIContentString / geminiModelSupportsThinking / includeThoughtsTrue /
+// TranslateOpenAIToGemini / TranslateAnthropicToGemini.
+// Split from compat_translate.go, physical move only, line-for-line equivalent.
+
+import (
+	"encoding/json"
+	"strings"
+
+	"antigravity-proxy/internal/settings"
+)
+
+func MapClientModelToGemini(clientModel string, customMapping []settings.ModelMappingEntry) string {
+	// 1. Check custom mapping first (case-insensitive lookup)
+	if len(customMapping) > 0 {
+		// Exact match
+		for _, entry := range customMapping {
+			if entry.ClientModel == clientModel {
+				return entry.TargetModel
+			}
+		}
+		// Case-insensitive match
+		for _, entry := range customMapping {
+			if strings.EqualFold(entry.ClientModel, clientModel) {
+				return entry.TargetModel
+			}
+		}
+	}
+
+	m := strings.ToLower(clientModel)
+
+	// 如果本身已经是含有 gemini / gpt-cos / tab_ / claude-sonnet 等原生或中继映射的模型名字，直接保留原样返回，不进行 fallback 转换
+	if strings.Contains(m, "gemini") || strings.Contains(m, "gpt-cos") || strings.Contains(m, "tab_") || strings.Contains(m, "claude-sonnet") || strings.Contains(m, "claude-opus") {
+		return clientModel
+	}
+
+	// Anthropic Maps
+	if strings.Contains(m, "claude-3-5-sonnet") {
+		return "gemini-1.5-pro"
+	}
+	if strings.Contains(m, "claude-3-opus") {
+		return "gemini-1.5-pro"
+	}
+	if strings.Contains(m, "claude-3-haiku") || strings.Contains(m, "claude-3-5-haiku") {
+		return "gemini-1.5-flash"
+	}
+	if strings.Contains(m, "claude") {
+		return "gemini-1.5-pro"
+	}
+
+	// OpenAI Maps
+	if strings.Contains(m, "gpt-4o") || strings.Contains(m, "gpt-4-turbo") || strings.Contains(m, "gpt-4") {
+		return "gemini-1.5-pro"
+	}
+	if strings.Contains(m, "gpt-3.5") || strings.Contains(m, "o1-mini") {
+		return "gemini-1.5-flash"
+	}
+	if strings.Contains(m, "o1-pro") || strings.Contains(m, "o1-preview") {
+		return "gemini-2.0-flash"
+	}
+	if strings.Contains(m, "gpt-5") {
+		return "gemini-3-flash-agent"
+	}
+
+	// Default Fallback
+	return "gemini-1.5-pro"
+}
+
+// ===== Convert Requests =====
+
+// ParseUnifiedOpenAIRequest 统一解析 Chat Completions 与 Responses 报文格式
+func ParseUnifiedOpenAIRequest(bodyBytes []byte) (*OpenAIRequest, error) {
+	type TempReq struct {
+		Model        string               `json:"model"`
+		Messages     []OpenAIMessage      `json:"messages"`
+		Input        []ResponsesInputItem `json:"input"`
+		Tools        []ResponsesToolDef   `json:"tools,omitempty"`
+		Instructions string               `json:"instructions"`
+		Temperature  *float64             `json:"temperature,omitempty"`
+		MaxTokens    *int                 `json:"max_tokens,omitempty"`
+		Stream       bool                 `json:"stream,omitempty"`
+		Request      *TempReq             `json:"request,omitempty"`
+	}
+
+	var temp TempReq
+	if err := json.Unmarshal(bodyBytes, &temp); err != nil {
+		return nil, err
+	}
+
+	if temp.Request != nil {
+		if temp.Model == "" && temp.Request.Model != "" {
+			temp.Model = temp.Request.Model
+		}
+		if len(temp.Messages) == 0 && len(temp.Request.Messages) > 0 {
+			temp.Messages = temp.Request.Messages
+		}
+		if len(temp.Input) == 0 && len(temp.Request.Input) > 0 {
+			temp.Input = temp.Request.Input
+		}
+		if len(temp.Tools) == 0 && len(temp.Request.Tools) > 0 {
+			temp.Tools = temp.Request.Tools
+		}
+		if temp.Instructions == "" && temp.Request.Instructions != "" {
+			temp.Instructions = temp.Request.Instructions
+		}
+		if temp.Temperature == nil && temp.Request.Temperature != nil {
+			temp.Temperature = temp.Request.Temperature
+		}
+		if temp.MaxTokens == nil && temp.Request.MaxTokens != nil {
+			temp.MaxTokens = temp.Request.MaxTokens
+		}
+		if !temp.Stream && temp.Request.Stream {
+			temp.Stream = temp.Request.Stream
+		}
+	}
+
+	req := &OpenAIRequest{
+		Model:       temp.Model,
+		Temperature: temp.Temperature,
+		MaxTokens:   temp.MaxTokens,
+		Stream:      temp.Stream,
+	}
+
+	// 1. 如果是标准的 Chat Completions，直接返回
+	if len(temp.Messages) > 0 {
+		req.Messages = temp.Messages
+		return req, nil
+	}
+
+	// 2. 如果是 Responses 格式，将其翻译为 Messages 数组
+	var messages []OpenAIMessage
+	if temp.Instructions != "" {
+		messages = append(messages, OpenAIMessage{
+			Role:    "system",
+			Content: temp.Instructions,
+		})
+	}
+
+	if len(temp.Input) > 0 {
+		parsedMessages := parseResponsesInput(temp.Input)
+		messages = append(messages, parsedMessages...)
+	}
+
+	req.Tools = parseResponsesTools(temp.Tools)
+	req.Messages = messages
+	return req, nil
+}
+
+// parseOpenAIContentString 尝试将可能包含数组格式或纯文本的 OpenAI Content 转换为 GeminiPart 切片，支持图片（Base64）。
+func parseOpenAIContentString(contentStr string) []GeminiPart {
+	if contentStr == "" {
+		return nil
+	}
+	trimmed := strings.TrimSpace(contentStr)
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []map[string]interface{}
+		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+			var parts []GeminiPart
+			for _, item := range arr {
+				t, _ := item["type"].(string)
+				if t == "text" || t == "output_text" || t == "input_text" {
+					if text, ok := item["text"].(string); ok && text != "" {
+						clean := SanitizeAllThoughtSignatures(text)
+						if clean != "" {
+							parts = append(parts, GeminiPart{Text: clean})
+						}
+					}
+				} else if t == "image_url" {
+					if imgObj, ok := item["image_url"].(map[string]interface{}); ok {
+						if urlStr, ok := imgObj["url"].(string); ok && strings.HasPrefix(urlStr, "data:") {
+							idx := strings.Index(urlStr, ";base64,")
+							if idx > 0 {
+								parts = append(parts, GeminiPart{
+									InlineData: &GeminiBlob{
+										MimeType: urlStr[5:idx],
+										Data:     urlStr[idx+8:],
+									},
+								})
+							}
+						}
+					}
+				} else if t == "image" { // Anthropic / Claude Code style tool result
+					if source, ok := item["source"].(map[string]interface{}); ok {
+						if data, ok := source["data"].(string); ok {
+							mime := "image/jpeg"
+							if m, ok := source["media_type"].(string); ok {
+								mime = m
+							}
+							parts = append(parts, GeminiPart{
+								InlineData: &GeminiBlob{
+									MimeType: mime,
+									Data:     data,
+								},
+							})
+						}
+					}
+				}
+			}
+			if len(parts) > 0 {
+				return parts
+			}
+		}
+	}
+	return []GeminiPart{{Text: SanitizeAllThoughtSignatures(contentStr)}}
+}
+
+// geminiModelSupportsThinking 判定入站模型是否为 Gemini 推理型(会产出 thought:true 思考内容)。
+// 仅对这类模型注入 includeThoughts:true,避免对非推理型模型(如 gemini-1.5-flash 纯文本)
+// 发送上游不认的字段触发 400。判定关键字与 TranslateOpenAIToGemini 的 thinkingConfig 注入条件对齐。
+//
+// 注意:这是 antigravity/generativelanguage 路径专用,NVIDIA 链路思考注入由 thinkingRequested 判定。
+func geminiModelSupportsThinking(model string) bool {
+	m := strings.ToLower(model)
+	return strings.Contains(m, "flash") ||
+		strings.Contains(m, "pro") ||
+		strings.Contains(m, "thinking") ||
+		strings.Contains(m, "reasoning")
+}
+
+// includeThoughtsTrue 返回指向 true 的 *bool,用于注入 IncludeThoughts 字段。
+func includeThoughtsTrue() *bool { v := true; return &v }
+
+func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
+	gemReq := &GeminiRequest{
+		Contents: make([]GeminiContent, 0),
+	}
+
+	// 翻译工具定义
+	gemReq.Tools = translateToolsToGemini(openReq.Tools)
+	if len(gemReq.Tools) > 0 {
+		gemReq.ToolConfig = &GeminiToolConfig{
+			FunctionCallingConfig: &GeminiFCConfig{Mode: "VALIDATED"},
+		}
+	}
+
+	var systemInstructionParts []GeminiPart
+
+	for _, msg := range openReq.Messages {
+		role := strings.ToLower(msg.Role)
+		if role == "system" {
+			systemInstructionParts = append(systemInstructionParts, parseOpenAIContentString(msg.Content)...)
+			continue
+		}
+
+		// 处理 assistant 消息（可能包含工具调用）
+		if role == "assistant" {
+			parts := parseOpenAIContentString(msg.Content)
+			for _, tc := range msg.ToolCalls {
+				args := parseToolCallArgs(tc.Arguments)
+				parts = append(parts, GeminiPart{
+					FunctionCall: &GeminiFunctionCall{
+						Name: tc.Name,
+						Args: args,
+						ID:   tc.ID,
+					},
+					ThoughtSignature: "skip_thought_signature_validator",
+				})
+			}
+			if len(parts) > 0 {
+				gemReq.Contents = append(gemReq.Contents, GeminiContent{
+					Role:  "model",
+					Parts: parts,
+				})
+			}
+		} else if role == "tool" {
+			// 工具结果 → Gemini functionResponse
+			toolName := msg.ToolName
+			if toolName == "" {
+				toolName = findOpenAIToolNameByID(openReq.Messages, msg.ToolCallID)
+			}
+
+			// 提取 text 部分作为 functionResponse 的 result，将图片部分（如果有）作为独立的 user 内容块（Gemini 不支持 FunctionResponse 中带图片，但可通过 user 消息附加图片上下文）
+			contentParts := parseOpenAIContentString(msg.Content)
+			var textResult strings.Builder
+			var imageParts []GeminiPart
+
+			for _, p := range contentParts {
+				if p.InlineData != nil {
+					imageParts = append(imageParts, p)
+				} else if p.Text != "" {
+					if textResult.Len() > 0 {
+						textResult.WriteString("\n")
+					}
+					textResult.WriteString(p.Text)
+				}
+			}
+
+			if textResult.Len() == 0 && len(imageParts) > 0 {
+				textResult.WriteString("[Image Result attached]")
+			}
+
+			funcPart := GeminiPart{
+				FunctionResponse: &GeminiFunctionResponse{
+					Name:     toolName,
+					Response: map[string]interface{}{"result": truncateToolResultText(textResult.String(), 30000)},
+					ID:       msg.ToolCallID,
+				},
+			}
+
+			n := len(gemReq.Contents)
+			if n > 0 && gemReq.Contents[n-1].Role == "user" {
+				gemReq.Contents[n-1].Parts = append(gemReq.Contents[n-1].Parts, funcPart)
+			} else {
+				gemReq.Contents = append(gemReq.Contents, GeminiContent{
+					Role:  "user",
+					Parts: []GeminiPart{funcPart},
+				})
+			}
+
+			if len(imageParts) > 0 {
+				n = len(gemReq.Contents)
+				if n > 0 && gemReq.Contents[n-1].Role == "user" {
+					gemReq.Contents[n-1].Parts = append(gemReq.Contents[n-1].Parts, imageParts...)
+				} else {
+					gemReq.Contents = append(gemReq.Contents, GeminiContent{
+						Role:  "user",
+						Parts: imageParts,
+					})
+				}
+			}
+
+		} else {
+			// user 消息
+			userParts := parseOpenAIContentString(msg.Content)
+			if len(userParts) > 0 {
+				n := len(gemReq.Contents)
+				if n > 0 && gemReq.Contents[n-1].Role == "user" {
+					gemReq.Contents[n-1].Parts = append(gemReq.Contents[n-1].Parts, userParts...)
+				} else {
+					gemReq.Contents = append(gemReq.Contents, GeminiContent{
+						Role:  "user",
+						Parts: userParts,
+					})
+				}
+			}
+		}
+	}
+
+	if len(systemInstructionParts) > 0 {
+		gemReq.SystemInstruction = &GeminiInstruction{
+			Parts: systemInstructionParts,
+		}
+	}
+
+	if openReq.Temperature != nil || openReq.MaxTokens != nil {
+		gemReq.GenerationConfig = &GeminiConfig{
+			Temperature:     openReq.Temperature,
+			MaxOutputTokens: openReq.MaxTokens,
+		}
+	}
+
+	// 自动为 flash / pro / thinking 等思考型推理模型注入 thinkingConfig 预算,防止谷歌上游截断返回 0 OutTokens;
+	// 同时在思考模式开启时注入 includeThoughts:true,使上游返回 thought:true 明文思考,
+	// 回译侧(compat.go part.Thought 分支)据此产出 Codex/Claude Code 的推理增量显示。
+	//
+	// 注意:本分支关键字含 "thinking",故 claude-opus-4-6-thinking / claude-sonnet-*-thinking 等
+	// 经 MapClientModelToGemini 保留原样的 claude 模型也会命中,无条件注入 ThinkingBudget:8192。
+	// 这类 claude 经 antigravity 号池(daily-cloudcode-pa)上游会重译为 Vertex Anthropic messages,
+	// 严格校验 max_tokens > thinking.budget_tokens;若 Codex 的 max_tokens 小于 8192(常态)即触发
+	// 400 INVALID_ARGUMENT("max_tokens must be greater than thinking.budget_tokens",req_vrtx_...)。
+	// 故注入预算后,对 claude-sonnet/opus 路径补守护:确保 MaxOutputTokens > ThinkingBudget。
+	// gemini flash/pro 走原生 Gemini 协议无该约束,IsClaudeModelForBudget=false 不触发守护,零回归。
+	lowerModel := strings.ToLower(openReq.Model)
+	if strings.Contains(lowerModel, "flash") || strings.Contains(lowerModel, "pro") || strings.Contains(lowerModel, "thinking") {
+		if gemReq.GenerationConfig == nil {
+			gemReq.GenerationConfig = &GeminiConfig{}
+		}
+		if gemReq.GenerationConfig.ThinkingConfig == nil {
+			gemReq.GenerationConfig.ThinkingConfig = &GeminiThinkingConfig{
+				ThinkingBudget: 8192,
+			}
+		}
+		// 思考模式开启时要求上游输出明文思考(指针类型,显式 true)
+		if IsEnableThinkingMode() {
+			gemReq.GenerationConfig.ThinkingConfig.IncludeThoughts = includeThoughtsTrue()
+		}
+
+		// 守护 claude 路径 Vertex Anthropic "max_tokens > thinking.budget_tokens" 不变式:
+		// 仅当本分支确会向上游写入固定 ThinkingBudget(>0)且模型为 claude-sonnet/opus 时,
+		// 把 MaxOutputTokens 抬升到 ThinkingBudget+ClaudeBudgetMargin,避免上游 400。
+		// 客户端已设 ThinkingConfig(非 nil)但 ThinkingBudget=0(includeThoughts-only)时不触发,
+		// 保持既有语义。
+		committedBudget := 0
+		if gemReq.GenerationConfig.ThinkingConfig != nil {
+			committedBudget = gemReq.GenerationConfig.ThinkingConfig.ThinkingBudget
+		}
+		if committedBudget > 0 {
+			cur := 0
+			if gemReq.GenerationConfig.MaxOutputTokens != nil {
+				cur = *gemReq.GenerationConfig.MaxOutputTokens
+			}
+			guaranteed := CalcClaudeGuaranteedMaxOutput(committedBudget, cur, IsClaudeModelForBudget(openReq.Model))
+			if guaranteed > 0 {
+				gemReq.GenerationConfig.MaxOutputTokens = &guaranteed
+			}
+		}
+	}
+
+	// 强制满足 Gemini 的严格 user/model 角色交替约束
+	gemReq.Contents = mergeConsecutiveRoles(gemReq.Contents)
+
+	// 兼容 Vertex Anthropic(daily-cloudcode-pa 重译)的 tool_use/tool_result 紧邻约束:
+	// mergeConsecutiveRoles 会把 [FC] + [T] 合并成 model[FC, T],使 tool_use 不再处于助手回合末尾,
+	// 触发 "tool_use ids were found without tool_result blocks immediately after" 400。
+	// 合并之后规整单条消息内 parts 顺序为 Anthropic 典范(model:[text, FC] / user:[FR, text]),
+	// 不动 id/不删 part/不跨消息移动,仅稳定分区。详见 NormalizePartOrderForClaudeVertex 文档。
+	if IsClaudeModelForBudget(openReq.Model) {
+		gemReq.Contents = NormalizePartOrderForClaudeVertex(gemReq.Contents)
+	}
+
+	return gemReq
+}
+
+func TranslateAnthropicToGemini(anthReq *AnthropicRequest) *GeminiRequest {
+	gemReq := &GeminiRequest{
+		Contents: make([]GeminiContent, 0),
+	}
+
+	if anthReq.System != "" {
+		gemReq.SystemInstruction = &GeminiInstruction{
+			Parts: []GeminiPart{{Text: SanitizeAllThoughtSignatures(anthReq.System)}},
+		}
+	}
+
+	// 翻译工具定义: Anthropic tools 转换 Gemini functionDeclarations
+	gemReq.Tools = translateToolsToGemini(anthReq.Tools)
+	gemReq.ToolConfig = translateToolChoiceToGemini(anthReq.ToolChoice)
+
+	// 如果提供了工具，则强制设置为 VALIDATED 模式，防止 Gemini-3-flash-agent 偷懒不调用
+	if len(gemReq.Tools) > 0 {
+		if gemReq.ToolConfig == nil {
+			gemReq.ToolConfig = &GeminiToolConfig{
+				FunctionCallingConfig: &GeminiFCConfig{
+					Mode: "VALIDATED",
+				},
+			}
+		} else if gemReq.ToolConfig.FunctionCallingConfig == nil {
+			gemReq.ToolConfig.FunctionCallingConfig = &GeminiFCConfig{
+				Mode: "VALIDATED",
+			}
+		} else if gemReq.ToolConfig.FunctionCallingConfig.Mode == "" || gemReq.ToolConfig.FunctionCallingConfig.Mode == "AUTO" || gemReq.ToolConfig.FunctionCallingConfig.Mode == "ANY" {
+			gemReq.ToolConfig.FunctionCallingConfig.Mode = "VALIDATED"
+		}
+	}
+
+	// 翻译消息历史，支持 text / tool_use / tool_result 三种 content block 类型
+	for _, msg := range anthReq.Messages {
+		role := strings.ToLower(msg.Role)
+
+		// 分离普通 Part 和 functionResponse Part，因为 Gemini 要求 functionResponse 使用 role:"function"
+		var normalParts []GeminiPart
+		var funcRespParts []GeminiPart
+
+		for _, block := range msg.Content {
+			switch block.Type {
+			case "text":
+				if block.Text != "" {
+					cleanText := SanitizeAllThoughtSignatures(block.Text)
+					if cleanText != "" {
+						normalParts = append(normalParts, GeminiPart{Text: cleanText})
+					}
+				}
+			case "tool_use":
+				// assistant 消息中的工具调用 → Gemini functionCall Part
+				normalParts = append(normalParts, GeminiPart{
+					FunctionCall: &GeminiFunctionCall{
+						Name: block.Name,
+						Args: block.Input,
+						ID:   block.ID,
+					},
+					ThoughtSignature: "skip_thought_signature_validator",
+				})
+			case "tool_result":
+				// user 消息中的工具结果 → Gemini functionResponse Part
+				toolName := findToolNameByID(anthReq.Messages, block.ToolUseID)
+				resultText := truncateToolResultText(SanitizeAllThoughtSignatures(extractToolResultText(block)), 30000)
+				funcRespParts = append(funcRespParts, GeminiPart{
+					FunctionResponse: &GeminiFunctionResponse{
+						Name:     toolName,
+						Response: map[string]interface{}{"result": resultText},
+						ID:       block.ToolUseID,
+					},
+				})
+			}
+		}
+
+		// 添加 functionResponse 消息（Gemini 要求 role:"function"但在 Antigravity backend 中必须是 "user"）
+		if len(funcRespParts) > 0 {
+			gemReq.Contents = append(gemReq.Contents, GeminiContent{
+				Role:  "user",
+				Parts: funcRespParts,
+			})
+		}
+
+		// 添加普通消息
+		if len(normalParts) > 0 {
+			gemRole := "user"
+			if role == "assistant" {
+				gemRole = "model"
+			}
+			gemReq.Contents = append(gemReq.Contents, GeminiContent{
+				Role:  gemRole,
+				Parts: normalParts,
+			})
+		}
+	}
+
+	if anthReq.Temperature != nil || anthReq.MaxTokens != nil || anthReq.Thinking != nil {
+		gemReq.GenerationConfig = &GeminiConfig{
+			Temperature:     anthReq.Temperature,
+			MaxOutputTokens: anthReq.MaxTokens,
+		}
+		if anthReq.Thinking != nil && anthReq.Thinking.BudgetTokens > 0 {
+			gemReq.GenerationConfig.ThinkingConfig = &GeminiThinkingConfig{
+				ThinkingBudget: anthReq.Thinking.BudgetTokens,
+			}
+		}
+	}
+
+	// Claude Code 出思考的核心注入:只要客户端显式开启思考(thinking.type=enabled 且有预算),
+	// 且全局思考模式开启,即注入 includeThoughts:true,要求上游返回 thought:true 明文思考。
+	// 这是 Claude Code 走 antigravity 号池能看到思考过程的根因修复:
+	// 缺 includeThoughts 时上游永远不返 thought:true,回译侧 part.Thought 分支永不命中。
+	//
+	// 判定依据:anthReq.Model 是客户端原始模型名(如 claude-sonnet-4-5),经 MapClientModelToGemini
+	// 映射后的 gemini 模型(flash/pro 系)天然支持思考,故此处以"客户端显式开思考"为准注入,
+	// 而非用入站 model 名做关键字判定(否则 claude-* 永不命中)。
+	// 尊重显式 disabled:thinking.type=="disabled" 时绝不注入。
+	thinkEnabled := anthReq.Thinking != nil && strings.EqualFold(anthReq.Thinking.Type, "enabled")
+	thinkDisabled := anthReq.Thinking != nil && strings.EqualFold(anthReq.Thinking.Type, "disabled")
+	if !thinkDisabled && IsEnableThinkingMode() && (thinkEnabled || geminiModelSupportsThinking(anthReq.Model)) {
+		if gemReq.GenerationConfig == nil {
+			gemReq.GenerationConfig = &GeminiConfig{}
+		}
+		if gemReq.GenerationConfig.ThinkingConfig == nil {
+			// 客户端未给预算时,不强制 ThinkingBudget(避免对已含默认预算的模型触发 400),
+			// 仅注入 includeThoughts:true 让上游输出明文思考。
+			gemReq.GenerationConfig.ThinkingConfig = &GeminiThinkingConfig{}
+		}
+		gemReq.GenerationConfig.ThinkingConfig.IncludeThoughts = includeThoughtsTrue()
+	}
+
+	// 守护 claude 路径的 Vertex Anthropic "max_tokens > thinking.budget_tokens" 不变式:
+	// daily-cloudcode-pa(antigravity 号池上游)把 Gemini generationConfig.thinkingBudget/maxOutputTokens
+	// 重译为 Vertex Anthropic messages 的 thinking.budget_tokens / max_tokens;Vertex Claude 严格校验
+	// max_tokens > thinking.budget_tokens,违反返回 400 INVALID_ARGUMENT
+	// ("max_tokens must be greater than thinking.budget_tokens",request_id 形如 req_vrtx_...)。
+	// Anthropic 客户端(Claude Code)可能把 max_tokens 设得 ≤ thinking.budget_tokens 而触发该 400。
+	// 仅当模型为 claude-sonnet/opus(MapClientModelToGemini 保留原样的 claude,上游才走 Vertex Anthropic
+	// 协议)且本函数确会向上游写入固定 thinkingBudget(committedBudget>0,即 thinking.type=enabled 且
+	// BudgetTokens>0)时,补默认 maxOutputTokens 到 committedBudget+ClaudeBudgetMargin。
+	// 降级为 gemini 的旧 claude-3-*、纯 gemini flash/pro、includeThoughts-only(无 budget)、disabled
+	// 等路径 committedBudget<=0,守护不动作,既有 maxOutputTokens 语义零回归。
+	committedBudget := calcAnthropicCommittedBudget(anthReq)
+	if committedBudget > 0 {
+		cur := 0
+		if gemReq.GenerationConfig != nil && gemReq.GenerationConfig.MaxOutputTokens != nil {
+			cur = *gemReq.GenerationConfig.MaxOutputTokens
+		}
+		guaranteed := CalcClaudeGuaranteedMaxOutput(committedBudget, cur, IsClaudeModelForBudget(anthReq.Model))
+		if guaranteed > 0 {
+			if gemReq.GenerationConfig == nil {
+				// committedBudget>0 时上方 thinking 注入分支必已建 GenerationConfig;此处防御性兜底。
+				gemReq.GenerationConfig = &GeminiConfig{}
+			}
+			gemReq.GenerationConfig.MaxOutputTokens = &guaranteed
+		}
+	}
+
+	// 强制满足 Gemini 的严格 user/model 角色交替约束
+	gemReq.Contents = mergeConsecutiveRoles(gemReq.Contents)
+
+	// 兼容 Vertex Anthropic(daily-cloudcode-pa 重译)的 tool_use/tool_result 紧邻约束:
+	// mergeConsecutiveRoles 合并连续同角色消息后,可能产出 model[FC, T] / user[T, FR] 这类与
+	// Anthropic 典范相反的顺序,导致 daily-cloudcode-pa 重译时 tool_use 不再紧邻其 tool_result,
+	// 触发 "tool_use ids were found without tool_result blocks immediately after" 400。
+	// 合并之后规整单条消息内 parts 顺序为 Anthropic 典范(model:[text, FC] / user:[FR, text])。
+	// TranslateAnthropicToGemini 入口本就产出典范顺序,此处为防御性兜底(对 claude 路径为 no-op 或更稳)。
+	if IsClaudeModelForBudget(anthReq.Model) {
+		gemReq.Contents = NormalizePartOrderForClaudeVertex(gemReq.Contents)
+	}
+
+	return gemReq
+}

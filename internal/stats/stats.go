@@ -27,6 +27,13 @@ type GlobalStats struct {
 	TotalInputTokens  int                    `json:"totalInputTokens"`
 	TotalOutputTokens int                    `json:"totalOutputTokens"`
 	TotalCachedTokens int                     `json:"totalCachedTokens"`
+	// TotalCacheEligibleInputTokens 是“缓存命中率”分母专用累加器: 仅在 TrackRequest
+	// (gemini/claude 直连链路, 上游响应携带真实 cachedTokens) 时累加 inputTokens,
+	// 刻意不含 TrackRequestForModel 走的 NVIDIA 号池链路——NVIDIA 上游(OpenAI Chat 协议)
+	// 无 cache 概念, cachedTokens 恒为 0, 若其 input 计入分母会永久稀释命中率。
+	// TotalInputTokens(口径不变, 含 NVIDIA) 仍用于总 Token / 成本 / 模型表 / 综合趋势,
+	// 二者各司其职: 前者是命中率分母, 后者是“含 NVIDIA 的全部输入”分母。
+	TotalCacheEligibleInputTokens int          `json:"totalCacheEligibleInputTokens"`
 	TotalCost         float64                `json:"totalCost"`
 	TotalRetries      int                    `json:"totalRetries"`
 	TotalErrors       int                    `json:"totalErrors"`
@@ -210,6 +217,9 @@ func (t *Tracker) TrackRequest(modelName string, inTokens, outTokens, cachedToke
 	t.stats.TotalInputTokens += inTokens
 	t.stats.TotalOutputTokens += outTokens
 	t.stats.TotalCachedTokens += cachedTokens
+	// 命中率分母: 仅 gemini/claude 直连链路(本方法)累加, NVIDIA 经 TrackRequestForModel
+	// 走专属方法不触达此行, 故其 input 不会稀释缓存命中率(详见 TotalCacheEligibleInputTokens 注释)。
+	t.stats.TotalCacheEligibleInputTokens += inTokens
 	t.stats.TotalCost = math.Round((t.stats.TotalCost+cost)*1000000.0) / 1000000.0
 
 	// 2. Update model specific stats
@@ -241,7 +251,6 @@ func (t *Tracker) TrackRequest(modelName string, inTokens, outTokens, cachedToke
 }
 
 // TrackRequestForModel 将一次请求计入全局综合统计(顶部指标卡 + stats.Models 模型表 + trends
-// 综合趋势桶), 与 TrackRequest 口径完全一致——复用 CalculateCost/GetPricingForModel, 累加全部是
 // 全局桶, 与 nvidiaTrends(NVIDIA 专用桶)物理隔离, 不会与 TrackNvidiaRequest 产生重复累加。
 //
 // 设计目的: 纳入 NVIDIA 号池链路的用量到「模型统计」Tab / 顶部指标卡 / 「综合趋势」曲线, 使其与
@@ -270,6 +279,10 @@ func (t *Tracker) TrackRequestForModel(modelName string, inTokens, outTokens, ca
 	t.stats.TotalInputTokens += inTokens
 	t.stats.TotalOutputTokens += outTokens
 	t.stats.TotalCachedTokens += cachedTokens
+	// 注意: 本方法不累加 TotalCacheEligibleInputTokens。该字段是“缓存命中率”分母,
+	// 仅 TrackRequest(gemini/claude 直连) 累加。本方法服务于 NVIDIA 号池链路(上游 OpenAI Chat
+	// 协议无 cache, cachedTokens 恒 0), 若把其 input 计入命中率分母会永久稀释命中率——故刻意排除。
+	// TotalInputTokens 仍累加, 保证“总 Token / 成本 / 模型表 / 综合趋势”口径含 NVIDIA 不变。
 	t.stats.TotalCost = math.Round((t.stats.TotalCost+cost)*1000000.0) / 1000000.0
 
 	// 2. Update model specific stats
@@ -610,14 +623,15 @@ func (t *Tracker) GetPayload(usagePayload interface{}) map[string]interface{} {
 	}
 
 	statsCopy := GlobalStats{
-		TotalRequests:     t.stats.TotalRequests,
-		TotalInputTokens:  t.stats.TotalInputTokens,
-		TotalOutputTokens: t.stats.TotalOutputTokens,
-		TotalCachedTokens: t.stats.TotalCachedTokens,
-		TotalCost:         t.stats.TotalCost,
-		TotalRetries:      t.stats.TotalRetries,
-		TotalErrors:       t.stats.TotalErrors,
-		Models:            modelsCopy,
+		TotalRequests:                t.stats.TotalRequests,
+		TotalInputTokens:             t.stats.TotalInputTokens,
+		TotalOutputTokens:            t.stats.TotalOutputTokens,
+		TotalCachedTokens:            t.stats.TotalCachedTokens,
+		TotalCacheEligibleInputTokens: t.stats.TotalCacheEligibleInputTokens,
+		TotalCost:                    t.stats.TotalCost,
+		TotalRetries:                 t.stats.TotalRetries,
+		TotalErrors:                  t.stats.TotalErrors,
+		Models:                       modelsCopy,
 	}
 
 	trendsCopy := make([]*HourlyTrend, len(t.trends))
@@ -685,14 +699,15 @@ func (t *Tracker) GetPayloadSimplified(usagePayload interface{}) map[string]inte
 	}
 
 	statsCopy := GlobalStats{
-		TotalRequests:     t.stats.TotalRequests,
-		TotalInputTokens:  t.stats.TotalInputTokens,
-		TotalOutputTokens: t.stats.TotalOutputTokens,
-		TotalCachedTokens: t.stats.TotalCachedTokens,
-		TotalCost:         t.stats.TotalCost,
-		TotalRetries:      t.stats.TotalRetries,
-		TotalErrors:       t.stats.TotalErrors,
-		Models:            modelsCopy,
+		TotalRequests:                t.stats.TotalRequests,
+		TotalInputTokens:             t.stats.TotalInputTokens,
+		TotalOutputTokens:            t.stats.TotalOutputTokens,
+		TotalCachedTokens:            t.stats.TotalCachedTokens,
+		TotalCacheEligibleInputTokens: t.stats.TotalCacheEligibleInputTokens,
+		TotalCost:                    t.stats.TotalCost,
+		TotalRetries:                 t.stats.TotalRetries,
+		TotalErrors:                  t.stats.TotalErrors,
+		Models:                       modelsCopy,
 	}
 
 	requestsCopy := make([]RequestLogLite, len(t.requests))
@@ -758,14 +773,15 @@ func (t *Tracker) SaveToDisk() {
 	// Deep-copy all mutable slices while holding the read lock so that
 	// json.Marshal (which uses reflection) never races with concurrent writes.
 	statsCopy := GlobalStats{
-		TotalRequests:     t.stats.TotalRequests,
-		TotalInputTokens:  t.stats.TotalInputTokens,
-		TotalOutputTokens: t.stats.TotalOutputTokens,
-		TotalCachedTokens: t.stats.TotalCachedTokens,
-		TotalCost:         t.stats.TotalCost,
-		TotalRetries:      t.stats.TotalRetries,
-		TotalErrors:       t.stats.TotalErrors,
-		Models:            make(map[string]*ModelStats, len(t.stats.Models)),
+		TotalRequests:                t.stats.TotalRequests,
+		TotalInputTokens:             t.stats.TotalInputTokens,
+		TotalOutputTokens:            t.stats.TotalOutputTokens,
+		TotalCachedTokens:            t.stats.TotalCachedTokens,
+		TotalCacheEligibleInputTokens: t.stats.TotalCacheEligibleInputTokens,
+		TotalCost:                    t.stats.TotalCost,
+		TotalRetries:                 t.stats.TotalRetries,
+		TotalErrors:                  t.stats.TotalErrors,
+		Models:                       make(map[string]*ModelStats, len(t.stats.Models)),
 	}
 	for k, v := range t.stats.Models {
 		ms := *v // value copy, not pointer

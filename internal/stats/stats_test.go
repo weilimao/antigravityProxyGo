@@ -168,3 +168,71 @@ func TestGetPayload_IncludesNvidiaTrends(t *testing.T) {
 	}
 }
 
+// TestCacheEligibleInputTokens_GeminiOnlyNvidiaExcluded 验证缓存命中率分母专用累加器
+// TotalCacheEligibleInputTokens 的口径: 仅 TrackRequest(gemini/claude 直连) 累加其 input,
+// TrackRequestForModel(NVIDIA 号池链路) 与 TrackNvidiaRequest(nvidiaTrends 专用桶) 均不累积。
+// 这是前端「缓存命中率」不被 NVIDIA input 永久稀释的关键不变式——NVIDIA 上游 OpenAI Chat
+// 协议无 cache, cachedTokens 恒 0, 若其 input 计入分母会导致命中率虚假偏低。
+func TestCacheEligibleInputTokens_GeminiOnlyNvidiaExcluded(t *testing.T) {
+	pm := pricing.NewManager()
+	tracker := NewTracker(pm)
+	tracker.persistPath = "" // Prevent file serialization during testing
+
+	// gemini 直连: input=200, cached=10 → 分母应累加 200
+	tracker.TrackRequest("gemini-3.5-flash", 200, 100, 10)
+	// NVIDIA 号池(经 TrackRequestForModel): input=500, cached=0 → 分母不应累加
+	tracker.TrackRequestForModel("z-ai/glm-5.2", 500, 250, 0)
+	// NVIDIA 趋势桶(经 TrackNvidiaRequest): 仅写 nvidiaTrends, 不动全局 stats
+	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 300, 150)
+
+	tracker.RLock()
+	defer tracker.RUnlock()
+
+	// 分母: 只含 gemini 那次 200, NVIDIA 完全排除。
+	if tracker.stats.TotalCacheEligibleInputTokens != 200 {
+		t.Errorf("TotalCacheEligibleInputTokens = %d, want 200 (only gemini, NVIDIA excluded)",
+			tracker.stats.TotalCacheEligibleInputTokens)
+	}
+	// 总输入口径不变(含 NVIDIA): 200 + 500 = 700; TrackNvidiaRequest 不写全局 stats。
+	if tracker.stats.TotalInputTokens != 700 {
+		t.Errorf("TotalInputTokens = %d, want 700 (gemini 200 + nvidia 500)", tracker.stats.TotalInputTokens)
+	}
+	// 命中 Token 分子: 只 gemini 贡献 10。
+	if tracker.stats.TotalCachedTokens != 10 {
+		t.Errorf("TotalCachedTokens = %d, want 10", tracker.stats.TotalCachedTokens)
+	}
+
+	// 期望命中率 = 10 / 200 = 5%。若分母误含 NVIDIA(700), 命中率会被稀释为 1.43%。
+	wantHitRate := 5.0
+	gotHitRate := 0.0
+	if tracker.stats.TotalCacheEligibleInputTokens > 0 {
+		gotHitRate = float64(tracker.stats.TotalCachedTokens) / float64(tracker.stats.TotalCacheEligibleInputTokens) * 100.0
+	}
+	if gotHitRate != wantHitRate {
+		t.Errorf("hit rate = %.2f%%, want %.2f%% (got diluted by NVIDIA?)", gotHitRate, wantHitRate)
+	}
+}
+
+// TestCacheEligibleInputTokens_GetPayloadProjection 验证新增字段经 GetPayload 深拷贝下行,
+// 供前端「缓存命中率」作分母; 与既有 TotalInputTokens 字段并存, 二者各司其职。
+func TestCacheEligibleInputTokens_GetPayloadProjection(t *testing.T) {
+	pm := pricing.NewManager()
+	tracker := NewTracker(pm)
+	tracker.persistPath = ""
+
+	tracker.TrackRequest("gemini-3.5-flash", 200, 100, 10)
+	tracker.TrackRequestForModel("z-ai/glm-5.2", 500, 250, 0)
+
+	payload := tracker.GetPayload(nil)
+	statsObj, ok := payload["stats"].(GlobalStats)
+	if !ok {
+		t.Fatalf("payload stats wrong type: %T", payload["stats"])
+	}
+	if statsObj.TotalCacheEligibleInputTokens != 200 {
+		t.Errorf("payload TotalCacheEligibleInputTokens = %d, want 200", statsObj.TotalCacheEligibleInputTokens)
+	}
+	if statsObj.TotalInputTokens != 700 {
+		t.Errorf("payload TotalInputTokens = %d, want 700", statsObj.TotalInputTokens)
+	}
+}
+

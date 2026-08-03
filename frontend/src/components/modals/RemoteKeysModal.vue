@@ -17,7 +17,7 @@
         <input class="flex-1 px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none" id="remoteNewKeyName" placeholder="新 Key 备注名称..." data-i18n-placeholder="newKeyPlaceholder" type="text" />
         <button class="px-4 py-2 text-[12px] font-medium text-white bg-primary hover:bg-primary/90 rounded-lg transition-colors flex items-center gap-1 shadow-sm whitespace-nowrap cursor-pointer" id="btnRemoteCreateKey">
           <span class="material-symbols-outlined text-[16px]">add</span>
-          <span data-i18n="btnCreateKey">+ 创建 Key</span>
+          <span data-i18n="btnCreateKey">创建 Key</span>
         </button>
       </div>
       <div class="flex-1 overflow-y-auto pr-1 min-h-[200px]">

@@ -41,6 +41,11 @@ func TestTrackRequestForModel_AccumulatesCorrectly(t *testing.T) {
 	if tracker.stats.TotalCachedTokens != 0 {
 		t.Errorf("TotalCachedTokens = %d, want 0 (NVIDIA no cache)", tracker.stats.TotalCachedTokens)
 	}
+	// 命中率分母(accumulator) TrackRequestForModel 不累积, 应保持 0——NVIDIA input 不会稀释缓存命中率。
+	if tracker.stats.TotalCacheEligibleInputTokens != 0 {
+		t.Errorf("TotalCacheEligibleInputTokens = %d, want 0 (TrackRequestForModel must not accumulate it)",
+			tracker.stats.TotalCacheEligibleInputTokens)
+	}
 
 	m, ok := tracker.stats.Models["z-ai/glm-5.2"]
 	if !ok {

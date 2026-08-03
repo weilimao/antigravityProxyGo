@@ -1341,11 +1341,9 @@ func completeChunkLines(body string) string {
 	}, "\n\n")
 }
 
-// jsonString 把字符串编为 JSON 字符串字面量(含引号),用于手工拼接上游 SSE 帧。
-func jsonString(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
-}
+// draftChunkLines / completeChunkLines 内联拼接 JSON 字符串字面量时复用 sse_payload.go 的
+// jsonString(v interface{}):对 string 入参,json.Marshal 产出带引号的 JSON 字符串字面量,
+// 与原测试本地 helper 行为逐字节等价 —— 该 helper 已收口到包级 jsonString,不再单独定义。
 
 // flakyNvidiaUpstreamWithDraft 构造可控 mock:前 failN 次请求返回"先吐 draftFragments 草稿正文再断流"
 // (模拟生产"吐了一截后断流"),自第 failN+1 次起返回完整正文 completeBody(与草稿不同)。
@@ -1813,6 +1811,108 @@ func TestPullAnthropicStream_ClientCancelAbortsRetry(t *testing.T) {
 	// 客户端取消后不应返回 200 成功流(本轮未完整),状态码非 200 即视为重试被正确终止。
 	if rr != nil && rr.Code == http.StatusOK {
 		t.Errorf("client-cancelled stream should not surface as 200 success, got %d", rr.Code)
+	}
+}
+
+// TestVCRoute 验证 /vc 别名前缀路由能够正确转发至 NVIDIA 处理链路,与 /nvidia 等价。
+//
+// /vc 是 /nvidia 的纯别名前缀,经 compat.go:194 的 nvidiaAliasPrefixMatch 收敛后分发到同一
+// handleNvidia。本用例覆盖三条端到端正向链路(GET models / POST messages / POST chat completions),
+// 确保 /vc/* 在选号→翻译→上游→回译全链路与 /nvidia/* 行为一致。
+func TestVCRoute(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"z-ai/glm-5.2"}]}`))
+			return
+		}
+		resp := &OpenAIChatResponse{
+			ID: "chatcmpl-vc", Model: "z-ai/glm-5.2",
+			Choices: []OpenAIChatChoice{{
+				Index: 0, Message: ChatMessage{Role: "assistant", Content: "Hello from VC NVIDIA"}, FinishReason: "stop",
+			}},
+			Usage: OpenAIChatUsage{PromptTokens: 10, CompletionTokens: 3, TotalTokens: 13},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-vc", "vc@test.cloud", "k-vc", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+
+	// 1. GET /vc/v1/models
+	recModels := httptest.NewRecorder()
+	reqModels := httptest.NewRequest(http.MethodGet, "/vc/v1/models", nil)
+	handler.handleNvidia(recModels, reqModels, &RelaySession{UserID: "u-vc", UserKey: "k-vc"})
+	if recModels.Code != http.StatusOK {
+		t.Fatalf("GET /vc/v1/models status = %d, want 200", recModels.Code)
+	}
+
+	// 2. POST /vc/v1/messages
+	recMsg := httptest.NewRecorder()
+	anthReq := &AnthropicRequest{
+		Model:    "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	bodyMsg, _ := json.Marshal(anthReq)
+	reqMsg := httptest.NewRequest(http.MethodPost, "/vc/v1/messages", bytesReader(bodyMsg))
+	handler.handleNvidia(recMsg, reqMsg, &RelaySession{UserID: "u-vc", UserKey: "k-vc"})
+	if recMsg.Code != http.StatusOK {
+		t.Fatalf("POST /vc/v1/messages status = %d, want 200", recMsg.Code)
+	}
+
+	// 3. POST /vc/v1/chat/completions
+	recChat := httptest.NewRecorder()
+	chatReq := &OpenAIChatRequest{
+		Model:    "z-ai/glm-5.2",
+		Messages: []ChatMessage{{Role: "user", Content: "hi"}},
+	}
+	bodyChat, _ := json.Marshal(chatReq)
+	reqChat := httptest.NewRequest(http.MethodPost, "/vc/v1/chat/completions", bytesReader(bodyChat))
+	handler.handleNvidia(recChat, reqChat, &RelaySession{UserID: "u-vc", UserKey: "k-vc"})
+	if recChat.Code != http.StatusOK {
+		t.Fatalf("POST /vc/v1/chat/completions status = %d, want 200", recChat.Code)
+	}
+}
+
+// TestVCRoute_EmptyPool_503 覆盖 /vc 别名链路空池兜底:号池无可用账号时回 503 nvidia_pool_empty,
+// 与 /nvidia 链路唯一可观测差异仅在入站前缀(Path 落 logCtx.Path),选号/兜底逻辑共用一处。
+func TestVCRoute_EmptyPool_503(t *testing.T) {
+	handler, _, _, _ := newNvidiaTestHandler(t, nil)
+
+	rec := httptest.NewRecorder()
+	anthReq := &AnthropicRequest{
+		Model:    "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/vc/v1/messages", bytesReader(body))
+	handler.handleNvidia(rec, req, &RelaySession{UserID: "u-vcempty", UserKey: "k-vcempty"})
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/vc 空池 status = %d, want 503, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestVCRoute_UnknownEndpoint_404 覆盖 /vc 别名链路打错端点:回 404 且文案含 /vc alias 提示,
+// 让客户端知道 /vc 别名可用、仅是该端点不存在(locks nvidia.go 404 文案泛化)。
+func TestVCRoute_UnknownEndpoint_404(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected upstream call for 404 case: %s", r.URL.Path)
+	}))
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-vc404", "vc404@test.cloud", "k-vc404", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+
+	rec := httptest.NewRecorder()
+	// 空正文也无所谓——选号在 endpoint 判定之后,404 前置返回不触达 body 读取(端点判定在读 body 前)。
+	req := httptest.NewRequest(http.MethodPost, "/vc/v1/foo", bytesReader([]byte("{}")))
+	handler.handleNvidia(rec, req, &RelaySession{UserID: "u-vc404", UserKey: "k-vc404"})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("/vc/v1/foo status = %d, want 404, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "/vc") {
+		t.Fatalf("/vc 404 文案应含 /vc alias 提示,实际=%s", rec.Body.String())
 	}
 }
 

@@ -268,10 +268,9 @@ func (h *APICompatHandler) writeNvidiaResponsesNormal(w http.ResponseWriter, res
 		return
 	}
 	rr := OpenAIChatToResponses(&chatResp, model)
-	payload, _ := json.Marshal(rr)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(payload)
+	_, _ = w.Write([]byte(jsonString(rr)))
 
 	// 配额/统计回调，与 Chat 透传链路口径一致
 	h.recordNvidiaUsage(userSession, model, rr.Usage.InputTokens, rr.Usage.OutputTokens, poolAccount, logCtx)
@@ -534,12 +533,11 @@ func responsesCreatedPayload(id string, createdAt int64, model string) string {
 		"status":     "in_progress",
 		"model":      model,
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.created",
 		"sequence_number": 0,
 		"response":        resp,
 	})
-	return string(payload)
 }
 
 func responsesInProgressPayload(id string, createdAt int64) string {
@@ -549,12 +547,11 @@ func responsesInProgressPayload(id string, createdAt int64) string {
 		"created_at": createdAt,
 		"status":     "in_progress",
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.in_progress",
 		"sequence_number": 1,
 		"response":        resp,
 	})
-	return string(payload)
 }
 
 // responsesMessageItemAddedPayload 发文本 message 条目的 output_item.added。
@@ -566,19 +563,18 @@ func responsesMessageItemAddedPayload(itemID string, outIdx int) string {
 		"role":    "assistant",
 		"content": []interface{}{},
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.output_item.added",
 		"sequence_number": 0,
 		"output_index":    outIdx,
 		"item":            item,
 	})
-	return string(payload)
 }
 
 // responsesContentPartAddedPayload 发 content_part.added，part.type 通常为 output_text。
 func responsesContentPartAddedPayload(itemID, partType string, outIdx int) string {
 	part := map[string]interface{}{"type": partType, "text": ""}
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.content_part.added",
 		"sequence_number": 0,
 		"item_id":         itemID,
@@ -586,11 +582,10 @@ func responsesContentPartAddedPayload(itemID, partType string, outIdx int) strin
 		"content_index":   0,
 		"part":            part,
 	})
-	return string(payload)
 }
 
 func responsesOutputTextDeltaPayload(itemID string, outIdx int, delta string) string {
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.output_text.delta",
 		"sequence_number": 0,
 		"item_id":         itemID,
@@ -598,11 +593,10 @@ func responsesOutputTextDeltaPayload(itemID string, outIdx int, delta string) st
 		"content_index":   0,
 		"delta":           delta,
 	})
-	return string(payload)
 }
 
 func responsesOutputTextDonePayload(itemID string, outIdx int, text string) string {
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.output_text.done",
 		"sequence_number": 0,
 		"item_id":         itemID,
@@ -610,12 +604,11 @@ func responsesOutputTextDonePayload(itemID string, outIdx int, text string) stri
 		"content_index":   0,
 		"text":            text,
 	})
-	return string(payload)
 }
 
 func responsesContentPartDonePayload(itemID string, outIdx int, text string) string {
 	part := map[string]interface{}{"type": "output_text", "text": text}
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.content_part.done",
 		"sequence_number": 0,
 		"item_id":         itemID,
@@ -623,7 +616,6 @@ func responsesContentPartDonePayload(itemID string, outIdx int, text string) str
 		"content_index":   0,
 		"part":            part,
 	})
-	return string(payload)
 }
 
 func responsesOutputItemDoneMessagePayload(itemID string, outIdx int, text string) string {
@@ -634,13 +626,12 @@ func responsesOutputItemDoneMessagePayload(itemID string, outIdx int, text strin
 		"role":    "assistant",
 		"content": []interface{}{map[string]interface{}{"type": "output_text", "text": text}},
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.output_item.done",
 		"sequence_number": 0,
 		"output_index":    outIdx,
 		"item":            item,
 	})
-	return string(payload)
 }
 
 // responsesFunctionCallItemAddedPayload 发 function_call 条目的 output_item.added。
@@ -653,35 +644,32 @@ func responsesFunctionCallItemAddedPayload(it *responsesStreamItem) string {
 		"name":      it.name,
 		"arguments": "",
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.output_item.added",
 		"sequence_number": 0,
 		"output_index":    it.index,
 		"item":            item,
 	})
-	return string(payload)
 }
 
 func responsesFunctionCallArgsDeltaPayload(itemID, delta string) string {
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.function_call_arguments.delta",
 		"sequence_number": 0,
 		"item_id":         itemID,
 		"output_index":    0,
 		"delta":           delta,
 	})
-	return string(payload)
 }
 
 func responsesFunctionCallArgsDonePayload(itemID, args string) string {
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.function_call_arguments.done",
 		"sequence_number": 0,
 		"item_id":         itemID,
 		"output_index":    0,
 		"arguments":       args,
 	})
-	return string(payload)
 }
 
 func responsesFunctionCallItemDonePayload(it *responsesStreamItem, args string) string {
@@ -693,13 +681,12 @@ func responsesFunctionCallItemDonePayload(it *responsesStreamItem, args string) 
 		"name":      it.name,
 		"arguments": args,
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.output_item.done",
 		"sequence_number": 0,
 		"output_index":    it.index,
 		"item":            item,
 	})
-	return string(payload)
 }
 
 // ===== reasoning(思考)item 的 Responses SSE payload 构造器(C) =====
@@ -714,18 +701,17 @@ func responsesReasoningItemAddedPayload(itemID string, outIdx int) string {
 		"role":    "assistant",
 		"content": []interface{}{},
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.output_item.added",
 		"sequence_number": 0,
 		"output_index":    outIdx,
 		"item":            item,
 	})
-	return string(payload)
 }
 
 func responsesReasoningPartAddedPayload(itemID string, outIdx int) string {
 	part := map[string]interface{}{"type": "reasoning_text", "text": ""}
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.content_part.added",
 		"sequence_number": 0,
 		"item_id":         itemID,
@@ -733,11 +719,10 @@ func responsesReasoningPartAddedPayload(itemID string, outIdx int) string {
 		"content_index":   0,
 		"part":            part,
 	})
-	return string(payload)
 }
 
 func responsesReasoningDeltaPayload(itemID string, outIdx int, delta string) string {
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.reasoning_text.delta",
 		"sequence_number": 0,
 		"item_id":         itemID,
@@ -745,7 +730,6 @@ func responsesReasoningDeltaPayload(itemID string, outIdx int, delta string) str
 		"content_index":   0,
 		"delta":           delta,
 	})
-	return string(payload)
 }
 
 // responsesCloseReasoning 闭合已开启的 reasoning item:发 reasoning_text.done +
@@ -760,7 +744,7 @@ func responsesCloseReasoning(fw *flushWriter, itemID string, outIdx int, reasons
 		"content_index":   0,
 		"text":            reasonsText,
 	}
-	fw.writeEvent("response.reasoning_text.done", string(marshalJSON(reasonDone)))
+	fw.writeEvent("response.reasoning_text.done", jsonString(reasonDone))
 
 	reasonPartDone := map[string]interface{}{
 		"type":            "response.content_part.done",
@@ -773,7 +757,7 @@ func responsesCloseReasoning(fw *flushWriter, itemID string, outIdx int, reasons
 			"text": reasonsText,
 		},
 	}
-	fw.writeEvent("response.content_part.done", string(marshalJSON(reasonPartDone)))
+	fw.writeEvent("response.content_part.done", jsonString(reasonPartDone))
 
 	itemDone := map[string]interface{}{
 		"type":            "response.output_item.done",
@@ -787,14 +771,10 @@ func responsesCloseReasoning(fw *flushWriter, itemID string, outIdx int, reasons
 			"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": reasonsText}},
 		},
 	}
-	fw.writeEvent("response.output_item.done", string(marshalJSON(itemDone)))
+	fw.writeEvent("response.output_item.done", jsonString(itemDone))
 }
 
-// marshalJSON 是 json.Marshal 的便捷封装:失败返回 "null"(不会触发,仅消除调用处的 _ = err)。
-func marshalJSON(v interface{}) []byte {
-	b, _ := json.Marshal(v)
-	return b
-}
+// 注意:marshal 逻辑已统一收口到 jsonString(sse_payload.go),本文件不再单独定义 marshal helper。
 
 func responsesCompletedPayload(id string, createdAt int64, model, stopReason string, inTokens, outTokens int) string {
 	resp := map[string]interface{}{
@@ -813,12 +793,11 @@ func responsesCompletedPayload(id string, createdAt int64, model, stopReason str
 	if stopReason != "" {
 		resp["stop_reason"] = stopReason
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
+	return jsonString(map[string]interface{}{
 		"type":            "response.completed",
 		"sequence_number": 0,
 		"response":        resp,
 	})
-	return string(payload)
 }
 
 // writeResponsesError 把上游错误体包成 Responses 风格的 JSON 错误并写回。
@@ -838,6 +817,5 @@ func writeResponsesError(w http.ResponseWriter, statusCode int, body []byte) {
 			"message": string(body),
 		},
 	}
-	payload, _ := json.Marshal(errObj)
-	_, _ = w.Write(payload)
+	fmt.Fprintf(w, "%s", jsonString(errObj))
 }

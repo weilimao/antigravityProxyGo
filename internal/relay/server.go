@@ -59,8 +59,9 @@ func (s *RelayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Route OpenAI/Anthropic compat API requests, v1internal endpoints, and NVIDIA pool requests
-	if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/v1internal:") || strings.HasPrefix(r.URL.Path, "/nvidia") || strings.HasPrefix(r.URL.Path, "/responses") {
+	// Route OpenAI/Anthropic compat API requests, v1internal endpoints, and NVIDIA pool requests.
+	// NVIDIA 入口收敛到 nvidiaAliasPrefixMatch:/nvidia 与别名 /vc 共用,精确化排除 /vcard 等误吞路径(见 nvidiaPathPrefix.go)。
+	if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/v1internal:") || nvidiaAliasPrefixMatch(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/responses") {
 		s.compatHandler.ServeHTTP(w, r)
 		return
 	}
