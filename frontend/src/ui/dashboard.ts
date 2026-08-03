@@ -1436,19 +1436,14 @@ export function renderActiveView() {
         if (barTokensIn) barTokensIn.style.width = `${inPercent}%`;
         if (barTokensOut) barTokensOut.style.width = `${outPercent}%`;
 
-        // 缓存命中率分母：
-        // 1. 优先读取后端下发的 totalCacheEligibleInputTokens 或 cacheEligibleInputTokens；
-        // 2. 若分母不存在/为0（如旧版或未算分母的场景），自动从 models 列表中聚合 cachedTokens > 0 的模型的 inTokens，
-        //    彻底剔除 0% 缓存的模型（如 NVIDIA z-ai/glm-5.2 等 7,500 次 0% 缓存请求），避免稀释命中率；
-        // 3. 兜底回退 totalInputTokens。
+        // 缓存命中率分母计算（消除历史残余小分母导致 > 100% 的异常）：
+        // 1. 优先从 models 模型列表中聚合 cachedTokens > 0 的模型的 inTokens，精准剔除 0% 缓存的模型（如 NVIDIA z-ai/glm-5.2 等无缓存请求）；
+        // 2. 若 Backend 下发的 totalCacheEligibleInputTokens >= totalCachedTokens，使用该字段；
+        // 3. 兜底使用 totalInputTokens。
+        const totalCached = Number(stats.totalCachedTokens || 0);
         let hitDenom = 0;
-        if (typeof stats.totalCacheEligibleInputTokens === 'number' && stats.totalCacheEligibleInputTokens > 0) {
-            hitDenom = stats.totalCacheEligibleInputTokens;
-        } else if (typeof stats.cacheEligibleInputTokens === 'number' && stats.cacheEligibleInputTokens > 0) {
-            hitDenom = stats.cacheEligibleInputTokens;
-        }
 
-        if (hitDenom <= 0 && stats.models && typeof stats.models === 'object') {
+        if (stats.models && typeof stats.models === 'object') {
             let modelEligibleSum = 0;
             for (const mKey in stats.models) {
                 const m = stats.models[mKey];
@@ -1460,16 +1455,27 @@ export function renderActiveView() {
                     }
                 }
             }
-            if (modelEligibleSum > 0) {
+            if (modelEligibleSum >= totalCached && modelEligibleSum > 0) {
                 hitDenom = modelEligibleSum;
             }
         }
 
         if (hitDenom <= 0) {
-            hitDenom = stats.totalInputTokens || 0;
+            const rawCE = Number(stats.totalCacheEligibleInputTokens || stats.cacheEligibleInputTokens || 0);
+            if (rawCE >= totalCached && rawCE > 0) {
+                hitDenom = rawCE;
+            }
         }
 
-        const hitRate = hitDenom > 0 ? (stats.totalCachedTokens / hitDenom * 100) : 0;
+        if (hitDenom <= 0) {
+            hitDenom = Number(stats.totalInputTokens || 0);
+        }
+
+        let rawHitRate = hitDenom > 0 ? (totalCached / hitDenom * 100) : 0;
+        if (rawHitRate > 100) {
+            rawHitRate = 100;
+        }
+        const hitRate = rawHitRate;
         if (valHitRate) valHitRate.textContent = hitRate.toFixed(1) + '%';
         if (valCached) valCached.textContent = chartRenderer.formatCompactNumber(stats.totalCachedTokens);
         if (valSavedCost) valSavedCost.textContent = `$${(stats.totalCachedTokens * 0.3125 / 1000000).toFixed(2)}`;
