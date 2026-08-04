@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"antigravity-proxy/internal/db"
+
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
@@ -38,12 +40,12 @@ type ocrCacheEntry struct {
 	expiresAt time.Time
 }
 
-// ocrLRUCache 是 OCR 结果的进程内缓存。
+// ocrLRUCache 是 OCR 结果的进程内 + SQLite 磁盘持久化缓存。
 // 键: UserKey|ocrModel|sha256(b64)[:16],按用户与 OCR 模型双重隔离。
 type ocrLRUCache struct {
 	mu     sync.Mutex
 	lru    *lru.Cache[string, ocrCacheEntry]
-	ttlOk  time.Duration // OCR 成功条目 TTL,默认 30 分钟
+	ttlOk  time.Duration // OCR 成功条目 TTL,默认 24 小时
 	ttlBad time.Duration // OCR 失败条目 TTL(熔断窗口),默认 30 秒
 }
 
@@ -90,35 +92,60 @@ func ocrCacheKey(userKey, ocrModel, b64Data string, userPromptText ...string) st
 	return key
 }
 
-// get 命中且未过期返回 entry 与 true;否则 false(过期则主动淘汰释放槽位)。
+// get 命中且未过期返回 entry 与 true;若内存 miss 则回退查询 SQLite 持久化表并回填内存。
 func (c *ocrLRUCache) get(key string) (ocrCacheEntry, bool) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	e, ok := c.lru.Get(key)
-	if !ok {
-		return ocrCacheEntry{}, false
+	if ok {
+		if time.Now().After(e.expiresAt) {
+			c.lru.Remove(key)
+			c.mu.Unlock()
+			return ocrCacheEntry{}, false
+		}
+		c.mu.Unlock()
+		return e, true
 	}
-	if time.Now().After(e.expiresAt) {
-		c.lru.Remove(key)
-		return ocrCacheEntry{}, false
+	c.mu.Unlock()
+
+	// 内存未命中(如程序重启后)，检查 SQLite 数据库持久化缓存 (24h TTL)
+	if text, okDB := db.GetOcrCache(key); okDB && strings.TrimSpace(text) != "" {
+		entry := ocrCacheEntry{
+			text:      text,
+			err:       nil,
+			ok:        true,
+			expiresAt: time.Now().Add(c.ttlOk),
+		}
+		c.mu.Lock()
+		c.lru.Add(key, entry)
+		c.mu.Unlock()
+		return entry, true
 	}
-	return e, true
+
+	return ocrCacheEntry{}, false
 }
 
-// set 写入一条缓存,根据 ok 选 TTL(成功长 TTL / 失败短 TTL 熔断窗口)。
+// set 写入一条缓存,根据 ok 选 TTL(成功长 TTL / 失败短 TTL 熔断窗口),成功识别条目写盘持久化。
 func (c *ocrLRUCache) set(key string, text string, err error, ok bool) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	ttl := c.ttlOk
 	if !ok {
 		ttl = c.ttlBad
 	}
+	expiresAt := time.Now().Add(ttl)
 	c.lru.Add(key, ocrCacheEntry{
 		text:      text,
 		err:       err,
 		ok:        ok,
-		expiresAt: time.Now().Add(ttl),
+		expiresAt: expiresAt,
 	})
+	c.mu.Unlock()
+
+	// 识别成功的图片 OCR 文本写盘存入 SQLite 数据库
+	if ok && strings.TrimSpace(text) != "" {
+		go func() {
+			_ = db.SaveOcrCache(key, text, expiresAt)
+		}()
+	}
 }
 
 // ocrCacheCounters 统计缓存命中/未命中,供日志显示降级收益。计数器走 atomic,

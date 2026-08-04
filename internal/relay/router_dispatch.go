@@ -80,6 +80,19 @@ func matchModelPattern(pattern, model string) bool {
 //   - 命中规则:返回规则的 TargetProvider / TargetModel(TargetModel 为空则原样透传入站 model);
 //   - 未命中:返回 ("", "", false),由调用方决定是否兜底。
 func (h *APICompatHandler) resolveRoutedTarget(model string) (targetProvider, targetModel string, matched bool) {
+	if h.settingsMgr != nil {
+		mappings := h.settingsMgr.GetRelayModelMapping()
+		for _, m := range mappings {
+			if strings.EqualFold(strings.TrimSpace(m.ClientModel), strings.TrimSpace(model)) && strings.TrimSpace(m.TargetProvider) != "" {
+				tm := strings.TrimSpace(m.TargetModel)
+				if tm == "" {
+					tm = model
+				}
+				return strings.TrimSpace(m.TargetProvider), tm, true
+			}
+		}
+	}
+
 	var rules []settings.ModelRouteRule
 	if h.settingsMgr != nil {
 		rules = h.settingsMgr.GetRelayModelRoutes()

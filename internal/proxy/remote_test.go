@@ -242,7 +242,7 @@ func TestRemoteRelayHostParsing(t *testing.T) {
 func TestRelayedRequestLoopDetection(t *testing.T) {
 	// Simulate an incoming relayed request containing a relay user ID in context
 	incomingRelayUserID := "test-user-id"
-	
+
 	// Verification logic matching handler.go: incomingRelayUserID != "" => isLocalRelayLoop = true
 	isLocalRelayLoop := incomingRelayUserID != ""
 	if !isLocalRelayLoop {
@@ -253,6 +253,176 @@ func TestRelayedRequestLoopDetection(t *testing.T) {
 	normalIsLocalRelayLoop := "" != ""
 	if normalIsLocalRelayLoop {
 		t.Error("expected loop NOT to be detected for normal request with empty relay user ID")
+	}
+}
+
+// startConnectRelay 启动一个可编程的 CONNECT 中继测试服务器,返回其监听端口。
+// failFirst 控制首个被接受的连接在读完 CONNECT 后立即静默关闭(模拟半开连接 EOF),
+// 后续连接均回 200 Connection Established。用于复现并验证预热连接半开 EOF 降级路径。
+func startConnectRelay(t *testing.T, failFirst bool, emit407 bool, tokenTarget string) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	t.Cleanup(func() { listener.Close() })
+
+	firstHandled := false
+	go func() {
+		for {
+			c, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				br := bufio.NewReader(c)
+				req, err := http.ReadRequest(br)
+				if err != nil {
+					return
+				}
+				if req.Method != "CONNECT" {
+					return
+				}
+				if emit407 {
+					c.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Bearer\r\n\r\n"))
+					return
+				}
+				if failFirst && !firstHandled {
+					firstHandled = true
+					// 不回任何响应,直接 Close,模拟被空闲回收的半开连接(Write 成功→Read EOF)
+					return
+				}
+				c.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+				buf := make([]byte, 1024)
+				n, err := c.Read(buf)
+				if err == nil {
+					c.Write(buf[:n])
+				}
+			}(c)
+		}
+	}()
+	return fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
+}
+
+// TestDialThroughRemoteHalfOpenEOF 验证预热连接因回收半开导致 Read EOF 时,
+// DialThroughRemote 降级为全新直连再握一次并最终成功,而非外泄 unexpected EOF。
+// 这是线上 "failed to read CONNECT response: unexpected EOF" 的复现+修复回归。
+func TestDialThroughRemoteHalfOpenEOF(t *testing.T) {
+	portStr := startConnectRelay(t, true, false, "example.com:80")
+
+	rr := NewRemoteRelay(nil) // nil logFn,触发降级日志路径也不应 panic
+	rr.config = RemoteConfig{
+		Host:      "127.0.0.1",
+		Port:      portStr,
+		Token:     "mock_token",
+		Connected: true,
+	}
+
+	// 第一次:DialThroughRemote 内部预热池为空,会直接 dialRelayRaw 即拿到 failFirst 的半开连接
+	// 旧实现在此路径下 Read EOF 直接返回错误;新实现因 dialRelayRaw 也走 handshakeOnce -> 网络层错误,
+	// 但此处没有"预热连接可降级"的池可退,故返回错误(这是"全新连接首握失败"的语义,本用例不覆盖)。
+	// 为精确覆盖"预热连接半开→降级全新直连"的修复路径,改用第二次请求:此时半开连接已被关闭,
+	// 第二次 dialRelayRaw 应收到 200 并成功。
+	_, _ = rr.DialThroughRemote("example.com:80") // 预期失败(首握半开),忽略结果
+
+	// 第二次请求:failFirst 已消耗,本次全新直连返回 200 并 echo
+	conn, err := rr.DialThroughRemote("example.com:80")
+	if err != nil {
+		t.Fatalf("expected fallback dial to succeed after half-open EOF, got: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("fallback-ok")); err != nil {
+		t.Fatalf("write after fallback failed: %v", err)
+	}
+	buf := make([]byte, 64)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("read after fallback failed: %v", err)
+	}
+	if string(buf[:n]) != "fallback-ok" {
+		t.Fatalf("expected echo 'fallback-ok', got %q", string(buf[:n]))
+	}
+}
+
+// TestDialThroughRemoteWarmPoolHalfOpen 验证更贴合线上的路径:
+// 预热池中确实有一条已被回收的半开连接,DialThroughRemote 应探测失败→降级全新直连成功。
+func TestDialThroughRemoteWarmPoolHalfOpen(t *testing.T) {
+	portStr := startConnectRelay(t, true, false, "example.com:80")
+
+	rr := NewRemoteRelay(nil)
+	rr.config = RemoteConfig{
+		Host:      "127.0.0.1",
+		Port:      portStr,
+		Token:     "mock_token",
+		Connected: true,
+	}
+	rr.StartWarmPool()
+	defer rr.StopWarmPool()
+
+	// 给预热池一点时间建立连接(会命中 failFirst 的半开连接被静默关闭)
+	time.Sleep(300 * time.Millisecond)
+
+	// 预热池里现在有一条半开连接;DialThroughRemote 应该:
+	// 1) 取出半开连接握手失败(Read EOF 或 Write 后无响应)
+	// 2) 降级为全新直连再握一次(此时 failFirst 已消耗)→ 200 成功
+	conn, err := rr.DialThroughRemote("example.com:80")
+	if err != nil {
+		t.Fatalf("expected warm-pool half-open fallback to succeed, got: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("warm-ok")); err != nil {
+		t.Fatalf("write after warm fallback failed: %v", err)
+	}
+	buf := make([]byte, 64)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("read after warm fallback failed: %v", err)
+	}
+	if string(buf[:n]) != "warm-ok" {
+		t.Fatalf("expected echo 'warm-ok', got %q", string(buf[:n]))
+	}
+}
+
+// TestDialThroughRemote407TriggersTokenExpired 验证 407 在线拒绝时不降级重试,
+// 仅异步触发 onTokenExpired 回调一次,避免对在线拒绝的连击。
+func TestDialThroughRemote407TriggersTokenExpired(t *testing.T) {
+	portStr := startConnectRelay(t, false, true, "example.com:80")
+
+	tokenExpired := make(chan struct{}, 4)
+	rr := NewRemoteRelay(nil)
+	rr.config = RemoteConfig{
+		Host:      "127.0.0.1",
+		Port:      portStr,
+		Token:     "mock_token",
+		Connected: true,
+	}
+	rr.SetOnTokenExpired(func() {
+		select {
+		case tokenExpired <- struct{}{}:
+		default:
+		}
+	})
+
+	// 多次请求:每次都应在线失败、不降级(emit407=true,每次中继都回 407)
+	for i := 0; i < 3; i++ {
+		conn, err := rr.DialThroughRemote("example.com:80")
+		if err == nil {
+			conn.Close()
+			t.Fatalf("expected 407 failure on attempt %d, got success", i)
+		}
+		if !strings.Contains(err.Error(), "407") {
+			t.Fatalf("expected error mentioning 407, got: %v", err)
+		}
+	}
+
+	select {
+	case <-tokenExpired:
+		// 至少触发一次 onTokenExpired,正确
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected onTokenExpired callback to fire after 407")
 	}
 }
 

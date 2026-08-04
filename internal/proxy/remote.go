@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -86,6 +87,8 @@ type RemoteRelay struct {
 	warmPool     chan net.Conn
 	warmPoolDone chan struct{}
 	warmPoolMu   sync.Mutex
+	// lastFallbackLog 记录最近一次"半开连接降级"日志时间,用于限频避免日志洪流(同 warmPoolMu 保护)
+	lastFallbackLog time.Time
 
 	// 健康检查心跳:周期性探测远端可达性,连续失败置 Connected=false,
 	// 触发保存凭据的自动重连(由注入的 reconnectFn 完成)。
@@ -610,70 +613,113 @@ func (rr *RemoteRelay) maintainWarmPool() {
 // DialThroughRemote establishes a TCP tunnel through the remote relay server.
 // It first attempts to use a pre-warmed connection from the pool to eliminate cold-start latency.
 // Falls back to creating a new connection if the pool is empty or the warm connection is stale.
+//
+// 半开连接兜底:预热连接可能被中间 NAT/中继空闲回收,Write 入本地缓冲成功但 Read 返回
+// unexpected EOF(getWarmConn 的 SetDeadline 探测对这种半开连接无效)。原有的"预热失效降级"
+// 只覆盖 Write 失败,Read EOF 路径会直接外泄成 "failed to read CONNECT response: unexpected EOF"。
+// 本实现把握手抽成 handshakeOnce,在预热连接的网络层(Write/Read)失败时降级为全新 dialRelayRaw
+// 再握一次;仅 HTTP 状态码失败(407/401 等,中继在线拒绝)不重试,只触发既有 onTokenExpired。
 func (rr *RemoteRelay) DialThroughRemote(targetHostPort string) (net.Conn, error) {
 	rr.RLock()
 	token := rr.config.Token
 	rr.RUnlock()
 
-	// 1. 尝试从预热连接池获取已建立好的连接（非阻塞）
-	conn := rr.getWarmConn()
-	usedWarm := conn != nil
+	// handshakeOnce 在已建立的底层连接上发送 CONNECT 并读取响应,返回握手结果与是否网络层错误。
+	// 网络层错误(Write/Read 失败、读截止超时)在调用方用于决定是否降级全新直连重试;
+	// HTTP 状态码失败(非 2xx)单独返回 statusErr,不降级、由调用方处理 token 过期回调。
+	handshakeOnce := func(conn net.Conn) (net.Conn, error) {
+		connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Bearer %s\r\n\r\n", targetHostPort, targetHostPort, token)
+		if _, err := conn.Write([]byte(connectReq)); err != nil {
+			conn.Close()
+			return nil, &handshakeNetErr{err: err}
+		}
 
-	// 2. 若预热池为空或获取失败，降级为即时新建连接
-	if conn == nil {
-		var err error
-		conn, err = rr.dialRelayRaw()
+		// 给 CONNECT 响应读取加 15s 截止,避免中继静默挂起拖到 http.Client 的 10 分钟超时。
+		_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+		br := bufio.NewReader(conn)
+		resp, err := http.ReadResponse(br, nil)
 		if err != nil {
+			conn.Close()
+			return nil, &handshakeNetErr{err: err}
+		}
+		_ = conn.SetReadDeadline(time.Time{}) // 握手成功后清除读截止,交由上层业务超时控制
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			statusCode := resp.StatusCode
+			resp.Body.Close()
+			conn.Close()
+			// Trigger auto-relogin on token expiry (407 Proxy Auth Required / 401 Unauthorized)
+			if statusCode == http.StatusProxyAuthRequired || statusCode == http.StatusUnauthorized {
+				rr.RLock()
+				cb := rr.onTokenExpired
+				rr.RUnlock()
+				if cb != nil {
+					go cb()
+				}
+			}
+			return nil, fmt.Errorf("remote relay CONNECT failed with status %d", statusCode)
+		}
+		resp.Body.Close()
+		return conn, nil
+	}
+
+	// 1. 尝试从预热连接池获取已建立好的连接（非阻塞）
+	if conn := rr.getWarmConn(); conn != nil {
+		result, err := handshakeOnce(conn)
+		if err == nil {
+			// 异步补充预热连接池
+			go rr.replenishPool()
+			return result, nil
+		}
+		// 仅在网络层(Write/Read EOF / 读超时)失败时降级全新直连;
+		// HTTP 状态码失败(statusErr,非网络层)直接返回,避免对在线拒绝的连击。
+		var netErr *handshakeNetErr
+		if !errors.As(err, &netErr) {
 			return nil, err
 		}
+		// fallthrough: 预热连接半开,降级全新直连再握一次
+		rr.dialFallbackLogOnce()
 	}
 
-	// 3. 在已建立的连接上发送 CONNECT 请求（此时连接已就绪，仅需网络往返）
-	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Bearer %s\r\n\r\n", targetHostPort, targetHostPort, token)
-	if _, err := conn.Write([]byte(connectReq)); err != nil {
-		conn.Close()
-		// 若预热连接已失效，降级新建连接重试一次
-		if usedWarm {
-			var err2 error
-			conn, err2 = rr.dialRelayRaw()
-			if err2 != nil {
-				return nil, fmt.Errorf("failed to connect to remote relay: %w", err2)
-			}
-			if _, err3 := conn.Write([]byte(connectReq)); err3 != nil {
-				conn.Close()
-				return nil, fmt.Errorf("failed to send CONNECT request: %w", err3)
-			}
-		} else {
-			return nil, fmt.Errorf("failed to send CONNECT request: %w", err)
-		}
-	}
-
-	br := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(br, nil)
+	// 2. 全新直连拨号 + 握手(无需再降级,失败即返回)
+	conn, err := rr.dialRelayRaw()
 	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to read CONNECT response: %w", err)
+		return nil, fmt.Errorf("failed to connect to remote relay: %w", err)
 	}
-	resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		conn.Close()
-		// Trigger auto-relogin on token expiry (407 Proxy Auth Required)
-		if resp.StatusCode == http.StatusProxyAuthRequired || resp.StatusCode == http.StatusUnauthorized {
-			rr.RLock()
-			cb := rr.onTokenExpired
-			rr.RUnlock()
-			if cb != nil {
-				go cb()
-			}
-		}
-		return nil, fmt.Errorf("remote relay CONNECT failed with status %d", resp.StatusCode)
+	result, err := handshakeOnce(conn)
+	if err != nil {
+		return nil, err
 	}
 
-	// 4. 异步补充预热连接池
+	// 3. 异步补充预热连接池
 	go rr.replenishPool()
 
-	return conn, nil
+	return result, nil
+}
+
+// handshakeNetErr 标记握手阶段的网络层(Write/Read/读超时)失败,用于 DialThroughRemote
+// 区分"半开连接 EOF 应降级直连重试"与"HTTP 状态码在线拒绝不重试"。
+type handshakeNetErr struct{ err error }
+
+func (e *handshakeNetErr) Error() string { return e.err.Error() }
+func (e *handshakeNetErr) Unwrap() error { return e.err }
+
+// dialFallbackLogOnce 记录预热连接半开降级事件(限频,避免并发突发场景下日志刷屏)。
+// logFn 在锁外调用,避免持 warmPoolMu 时回调阻塞与潜在死锁。
+func (rr *RemoteRelay) dialFallbackLogOnce() {
+	if rr.logFn == nil {
+		return
+	}
+	rr.warmPoolMu.Lock()
+	recent := !rr.lastFallbackLog.IsZero() && time.Since(rr.lastFallbackLog) < 5*time.Second
+	if !recent {
+		rr.lastFallbackLog = time.Now()
+	}
+	rr.warmPoolMu.Unlock()
+	if recent {
+		return
+	}
+	rr.logFn("⚠️ [预热] 检测到半开连接(对端已静默回收),已降级为全新直连拨号重试一次")
 }
 
 var _ RemoteRelayInterface = (*RemoteRelay)(nil)

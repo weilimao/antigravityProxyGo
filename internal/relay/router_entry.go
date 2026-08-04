@@ -39,8 +39,9 @@ func routedRoutePrefixMatch(path string) bool {
 func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Request, userSession *RelaySession) {
 	path := strings.TrimRight(r.URL.Path, "/")
 
-	// 模型列表:复用 handleModels 同款 owned_by 动态展示,挂到 /route/v1/models。
-	if (path == "/route/v1/models" || strings.HasSuffix(path, "/models")) && r.Method == http.MethodGet {
+	// GET 连通性测试与模型列表: 当客户端将 BaseURL 设为 http://[host]:18444/route，
+	// 发起 GET /route, GET /route/v1 或 GET /route/v1/models 探测时，统一返回 200 OK 与模型列表！
+	if r.Method == http.MethodGet && (path == "/route" || path == "/route/v1" || path == "/route/v1/models" || strings.HasSuffix(path, "/models")) {
 		h.handleModels(w, r)
 		return
 	}
@@ -50,10 +51,10 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// 非生成端点 → 404。
-	isChat := strings.HasSuffix(path, "/v1/chat/completions")
-	isResponses := strings.HasSuffix(path, "/v1/responses")
-	isMessages := strings.HasSuffix(path, "/v1/messages")
+	// 兼容带有或不带有 /v1 前缀的各类客户端生成端点
+	isChat := strings.HasSuffix(path, "/v1/chat/completions") || strings.HasSuffix(path, "/chat/completions")
+	isResponses := strings.HasSuffix(path, "/v1/responses") || strings.HasSuffix(path, "/responses") || strings.HasSuffix(path, "/responses/compact")
+	isMessages := strings.HasSuffix(path, "/v1/messages") || strings.HasSuffix(path, "/messages")
 	if !isChat && !isResponses && !isMessages {
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error": "unsupported /route endpoint: use /route/v1/chat/completions, /route/v1/responses or /route/v1/messages",
@@ -110,13 +111,31 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// 非 nvidia → 通用透传转发器。Anthropic 入站先转 OpenAI Chat(裸透传不做回译,保持响应原样)。
+	// 命中 antigravity / google / gcp 等 Google 族号池 → 复用既有 handleAnthropicMessages / handleOpenAIChat 核心链路(含 Gemini 官方/v1internal 动态调度与 OAuth 鉴权)。
+	if isGoogleProvider(provider) {
+		newBody := patchRoutedBodyModel(bodyBytes, upstreamModel)
+		r.Body = io.NopCloser(strings.NewReader(newBody))
+		r.ContentLength = int64(len(newBody))
+		if isMessages {
+			h.handleAnthropicMessages(w, r, userSession)
+		} else {
+			h.handleOpenAIChat(w, r, userSession)
+		}
+		return
+	}
+
+	// 非 nvidia/google 族(如第三方 OpenAI 兼容 API DeepSeek/Moonshot/Qwen) → 通用透传转发器。Anthropic 入站先转 OpenAI Chat(裸透传不做回译,保持响应原样)。
 	// 入站 /route/v1/messages 的响应是 OpenAI 形态,客户端若按 Anthropic 解析会不兼容 —— 这是本转发器
 	// 的已知取舍:Anthropic 客户端请继续走 /nvidia/v1/messages(有回译) 或上游原生 Anthropic 端点;
 	// /route/* 面向「已是 OpenAI 兼容」的客户端。若将来需要,在此加 Anthropic→OpenAI 请求 + OpenAI→Anthropic 响应回译即可。
 	pf := &passthroughForward{h: h, accountMgr: h.accountMgr}
 	res := pf.run(w, r, provider, upstreamModel, inModel, bodyBytes, isStreaming)
 	h.passthroughReply(w, r.Context(), res, isStreaming)
+}
+
+func isGoogleProvider(p string) bool {
+	c := strings.ToLower(strings.TrimSpace(p))
+	return c == "google" || c == "antigravity" || c == "gcp" || c == "project" || c == "gemini-cli" || c == ""
 }
 
 // extractRoutedModelStream 从入站 body 抽 model 与 stream。

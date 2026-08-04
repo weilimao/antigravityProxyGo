@@ -88,3 +88,36 @@ func TestResolveRoutedTarget_TargetModelPassthrough(t *testing.T) {
 		t.Errorf("fallback mismatch: provider=%q tm=%q matched=%v", provider, tm, matched)
 	}
 }
+
+type stubMappingSettings struct {
+	settings.ManagerInterface
+	mappings []settings.ModelMappingEntry
+}
+
+func (s *stubMappingSettings) GetRelayModelMapping() []settings.ModelMappingEntry {
+	return s.mappings
+}
+
+func (s *stubMappingSettings) GetRelayModelRoutes() []settings.ModelRouteRule {
+	return nil
+}
+
+func TestResolveRoutedTarget_WithModelMappingTargetProvider(t *testing.T) {
+	h := &APICompatHandler{
+		settingsMgr: &stubMappingSettings{
+			mappings: []settings.ModelMappingEntry{
+				{
+					ClientModel:    "my-custom-ds",
+					TargetModel:    "deepseek-chat",
+					TargetProvider: "deepseek",
+					Expose:         true,
+				},
+			},
+		},
+	}
+
+	provider, tm, matched := h.resolveRoutedTarget("my-custom-ds")
+	if !matched || provider != "deepseek" || tm != "deepseek-chat" {
+		t.Fatalf("expected deepseek / deepseek-chat for my-custom-ds, got provider=%q tm=%q matched=%v", provider, tm, matched)
+	}
+}

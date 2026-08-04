@@ -1,13 +1,19 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
+	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/cert"
 	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/patch"
@@ -115,6 +121,25 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 		}
 		a.AddLog("🔄 中继大模型映射配置已保存")
 		return marshalResponse(map[string]interface{}{"success": true})
+
+	case "relay:get-account-channels":
+		if a.accountMgr != nil {
+			return marshalResponse(a.accountMgr.GetAllChannels())
+		}
+		return marshalResponse([]string{"antigravity", "google", "gcp", "nvidia"})
+
+	case "relay:fetch-channel-models":
+		channel := ""
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				channel = strings.TrimSpace(s)
+			}
+		}
+		models, err := a.fetchChannelAvailableModels(channel)
+		if err != nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		return marshalResponse(map[string]interface{}{"success": true, "models": models})
 
 	case "relay:get-model-routes":
 		// 「按模型路由到号池」规则表(/route/* 入口按入站 model 分发到对应 Provider 号池)。
@@ -886,4 +911,136 @@ func checkQuotaEqual(q1, q2 relay.ModelQuota) bool {
 		q1.EnableDaily == q2.EnableDaily &&
 		q1.DailyDays == q2.DailyDays &&
 		q1.DailyTokens == q2.DailyTokens
+}
+
+func isGoogleChannel(ch string) bool {
+	c := strings.ToLower(strings.TrimSpace(ch))
+	return c == "google" || c == "antigravity" || c == "gcp" || c == "project" || c == "gemini-cli" || c == ""
+}
+
+func (a *App) fetchChannelAvailableModels(channel string) ([]string, error) {
+	ch := strings.ToLower(strings.TrimSpace(channel))
+	if ch == "" {
+		ch = "google"
+	}
+
+	// 查找账号池中属于该 Channel/Provider 的账号 (使用 GetRawAccountsByProvider 获取未掩码的真实 Token)
+	var activeAcc *account.Account
+	if a.accountMgr != nil {
+		rawAccounts := a.accountMgr.GetRawAccountsByProvider("all")
+		for _, acc := range rawAccounts {
+			if acc != nil && acc.Enabled {
+				accProv := strings.ToLower(strings.TrimSpace(acc.Provider))
+				if isGoogleChannel(ch) {
+					// 只要账号属于 Google 族 (antigravity, project, google, gcp, gemini-cli 或空) 且 token 不为空
+					if (accProv == "" || isGoogleChannel(accProv)) && accProv != "2fa" && acc.GetAccessToken() != "" {
+						activeAcc = acc
+						break
+					}
+				} else {
+					if accProv == ch {
+						activeAcc = acc
+						break
+					}
+				}
+			}
+		}
+
+		// 兜底：若寻找指定 Google 族标签未命中，回退查寻任意未冷却、具备 AccessToken 的 Antigravity/Google 账号
+		if activeAcc == nil && isGoogleChannel(ch) {
+			for _, acc := range rawAccounts {
+				if acc != nil && acc.Enabled && acc.GetAccessToken() != "" && acc.Provider != "nvidia" && acc.Provider != "2fa" {
+					activeAcc = acc
+					break
+				}
+			}
+		}
+	}
+
+	if activeAcc == nil {
+		return nil, fmt.Errorf("号池 [%s] 下暂无已启用的有效账号，请先在【账号池】中添加该号池账号", channel)
+	}
+
+	// 1. 如果是 OpenAI 兼容第三方号池 (NVIDIA, DeepSeek, Qwen, Anthropic 等)
+	if ch == "nvidia" || ch == "deepseek" || ch == "qwen" || ch == "anthropic" || ch == "moonshot" || activeAcc.Provider == "nvidia" {
+		baseURL := activeAcc.BaseURL
+		apiKey := activeAcc.GetAccessToken()
+		if baseURL == "" && ch == "nvidia" {
+			baseURL = account.DefaultNvidiaBaseURL
+		}
+		if baseURL == "" {
+			return nil, fmt.Errorf("账号 %s 未配置 BaseURL，无法打上游获取模型", activeAcc.Email)
+		}
+
+		models, err := fetchRemoteNvidiaModels(baseURL, apiKey)
+		if err != nil {
+			return nil, fmt.Errorf("打上游 [%s] 获取模型失败: %w", baseURL, err)
+		}
+		if len(models) == 0 {
+			return nil, fmt.Errorf("上游 [%s] 返回的模型列表为空", baseURL)
+		}
+		return models, nil
+	}
+
+	// 2. 对于 Google / Antigravity / GCP 号池，真正发起 v1internal:fetchAvailableModels 请求
+	models, err := fetchGeminiInternalModels(activeAcc)
+	if err != nil {
+		return nil, fmt.Errorf("打 Google 上游 v1internal:fetchAvailableModels 失败 (账号 %s): %w", activeAcc.Email, err)
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("Google 上游返回的模型列表为空")
+	}
+	return models, nil
+}
+
+func fetchGeminiInternalModels(acc *account.Account) ([]string, error) {
+	token := acc.GetAccessToken()
+	if token == "" {
+		return nil, fmt.Errorf("账号 AccessToken 为空")
+	}
+
+	projectID := acc.ProjectID
+	if projectID == "" {
+		projectID = "favorable-synapse-ttvcb"
+	}
+
+	reqBody, _ := json.Marshal(map[string]string{
+		"project": projectID,
+	})
+
+	targetURL := "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+	req, err := http.NewRequestWithContext(context.Background(), "POST", targetURL, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "antigravity/ide/2.1.1 windows/amd64")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("网络连接失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
+	}
+
+	var parsed struct {
+		Models map[string]interface{} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("解析上游响应 JSON 失败: %w", err)
+	}
+
+	var list []string
+	for k := range parsed.Models {
+		list = append(list, k)
+	}
+	sort.Strings(list)
+	return list, nil
 }

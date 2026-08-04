@@ -143,6 +143,13 @@ func runMigrations(db *sql.DB, dataDir string) error {
 			window_start TEXT NOT NULL,
 			PRIMARY KEY (user_id, quota_type)
 		);`,
+		`CREATE TABLE IF NOT EXISTS ocr_cache (
+			cache_key TEXT PRIMARY KEY,
+			ocr_text TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			expires_at DATETIME NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_ocr_cache_expires ON ocr_cache(expires_at);`,
 	}
 
 	for _, schema := range schemas {

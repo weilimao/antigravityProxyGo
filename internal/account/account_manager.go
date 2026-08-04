@@ -608,3 +608,30 @@ func (m *Manager) GetAccountProviderMap() map[string]string {
 	}
 	return res
 }
+
+// GetAllChannels 返回当前账号池中包含的所有去重 Provider/Channel 列表，
+// 默认包含预设号池 ["antigravity", "google", "gcp", "nvidia"] 及已存在账号中的任意第三方 Provider。
+func (m *Manager) GetAllChannels() []string {
+	m.RLock()
+	defer m.RUnlock()
+
+	seen := map[string]bool{
+		"antigravity": true,
+		"google":      true,
+		"gcp":         true,
+		"nvidia":      true,
+	}
+	out := []string{"antigravity", "google", "gcp", "nvidia"}
+
+	for _, acc := range m.accounts {
+		if acc != nil && acc.Provider != "" {
+			p := acc.Provider
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+

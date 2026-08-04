@@ -26,10 +26,12 @@ type ModelMappingEntry struct {
 	ClientModel string `json:"clientModel"`
 	TargetModel string `json:"targetModel"`
 	Expose      bool   `json:"expose"`
-	// OwnedBy 是该模型在 /v1/models 列表里 owned_by 字段的归属(号池/Provider)。
-	// 留空时由 relay.inferOwnedBy 按模型名前缀兜底推断(如 "deepseek-*" -> "deepseek")。
-	// 与下方 RelayModelRoutes 的路由规则解耦:这里只决定展示归类,不决定转发去向。
+	// OwnedBy 是该模型在 /v1/models 列表里 owned_by 字段的归属(号池/Provider, 如 "google", "nvidia", "deepseek")。
+	// 留空时由 relay.inferOwnedBy 按模型名前缀兜底推断。
 	OwnedBy string `json:"ownedBy,omitempty"`
+	// TargetProvider 是该模型映射自由绑定的目标路由账号池 Channel ID(如 "nvidia", "deepseek", "google", "gcp" 等)。
+	// 若配置了 TargetProvider, /route/* 路由入口会直接分发至此号池。
+	TargetProvider string `json:"targetProvider,omitempty"`
 }
 
 // ModelRouteRule 是「按模型路由到号池」的单条规则。

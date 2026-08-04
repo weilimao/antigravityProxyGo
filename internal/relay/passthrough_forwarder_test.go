@@ -27,6 +27,10 @@ func (s *stubPassThroughSettings) GetRelayModelRoutes() []settings.ModelRouteRul
 	return out
 }
 
+func (s *stubPassThroughSettings) GetRelayModelMapping() []settings.ModelMappingEntry {
+	return nil
+}
+
 // newPassThroughHandler 构造一个装配了 accountMgr + 自定义 routes 的 handler,
 // client 指向 ts(模拟上游),带 5s 超时以免测试卡死。
 func newPassThroughHandler(t *testing.T, mgr *account.Manager, routes []settings.ModelRouteRule, ts *httptest.Server) *APICompatHandler {

@@ -762,18 +762,58 @@
 <!-- 模型映射面板 (默认隐藏) -->
 <div id="relay-sub-panel-modelmapping" class="flex flex-col gap-6 w-full hidden">
     <div class="bg-white dark:bg-[#1e2538] rounded-xl border border-outline-variant/20 p-5">
-        <div class="flex items-center justify-between mb-5">
+        <!-- 顶部标题与新增 Tab 按钮 -->
+        <div class="flex items-center justify-between mb-4">
             <h3 class="text-[14px] font-bold text-on-surface dark:text-white flex items-center gap-2">
                 <span class="material-symbols-outlined text-[18px] text-primary">alt_route</span>
-                <span data-i18n="relayModelMappingTitle">自定义中继模型映射</span>
+                <span data-i18n="relayModelMappingTitle">自定义中继模型映射与号池绑定</span>
             </h3>
-            <button class="flex items-center gap-1 text-[12px] font-medium text-primary hover:text-primary/80 transition-colors cursor-pointer" onclick="window._relayAddModelMapping()">
-                <span class="material-symbols-outlined text-[16px]">add</span>
-                <span data-i18n="relayAddMapping">添加映射</span>
-            </button>
+            <div class="flex items-center gap-2">
+                <button class="flex items-center gap-1 px-3 py-1 text-[12px] font-medium bg-primary/10 text-primary hover:bg-primary/20 rounded-lg transition-colors cursor-pointer" onclick="window._relayAddTab()">
+                    <span class="material-symbols-outlined text-[16px]">add_box</span>
+                    <span>新增号池 Tab</span>
+                </button>
+            </div>
         </div>
-        
-        <div class="overflow-x-auto max-h-[400px] overflow-y-auto pr-1">
+
+        <!-- 动态号池 Tab 列表导航 -->
+        <div class="flex items-center gap-2 border-b border-outline-variant/20 pb-2 mb-4 overflow-x-auto" id="modelMappingTabsNav">
+            <!-- 动态渲染 Tab 按钮 -->
+        </div>
+
+        <!-- 当前 Tab 绑定账号池配置区 -->
+        <div class="bg-slate-50 dark:bg-white/5 p-3 rounded-lg border border-outline-variant/15 flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div class="flex items-center gap-3">
+                <span class="text-[12px] font-bold text-on-surface dark:text-white flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[16px] text-primary">hub</span>
+                    <span>路由目标账号池 (Target Provider):</span>
+                </span>
+                <select id="tabTargetProviderSelect" class="px-2 py-1 text-[12px] font-mono rounded border border-outline-variant/30 bg-white dark:bg-[#1e2538] text-on-surface dark:text-white focus:outline-none focus:border-primary">
+                    <!-- 动态渲染可用账号池列表 -->
+                </select>
+                <input type="text" id="tabTargetProviderCustom" class="px-2 py-1 text-[12px] font-mono rounded border border-outline-variant/30 bg-white dark:bg-[#1e2538] text-on-surface dark:text-white hidden w-32" placeholder="自定义号池ID" />
+                <button id="btnFetchChannelModels" class="flex items-center gap-1 px-2.5 py-1 text-[12px] font-medium bg-primary/10 text-primary hover:bg-primary/20 rounded-lg transition-colors cursor-pointer border border-primary/20" onclick="window._relayFetchChannelModels()">
+                    <span class="material-symbols-outlined text-[15px]">sync</span>
+                    <span>获取号池模型</span>
+                </button>
+                <span id="lblFetchedModelsCount" class="text-[11px] text-primary font-medium hidden"></span>
+            </div>
+            <div class="flex items-center gap-2">
+                <button id="btnDeleteCurrentTab" class="text-red-500 hover:text-red-700 text-[12px] font-medium flex items-center gap-1 transition-colors cursor-pointer hidden" onclick="window._relayDeleteCurrentTab()">
+                    <span class="material-symbols-outlined text-[15px]">delete</span>
+                    <span>删除当前 Tab</span>
+                </button>
+                <button class="flex items-center gap-1 text-[12px] font-medium text-primary hover:text-primary/80 transition-colors cursor-pointer px-2 py-1 rounded bg-primary/10" onclick="window._relayAddModelMapping()">
+                    <span class="material-symbols-outlined text-[16px]">add</span>
+                    <span data-i18n="relayAddMapping">添加映射模型</span>
+                </button>
+            </div>
+        </div>
+
+        <datalist id="channelModelsDatalist"></datalist>
+
+        <!-- 当前 Tab 下的模型映射表格 -->
+        <div class="overflow-x-auto max-h-[360px] overflow-y-auto pr-1">
             <table class="w-full text-left text-[12px]">
                 <thead>
                     <tr class="border-b border-outline-variant/25 text-outline/80">
@@ -788,11 +828,11 @@
                 </tbody>
             </table>
         </div>
-        
-        <div class="flex justify-end gap-3 mt-6 border-t border-outline-variant/20 pt-4">
+
+        <div class="flex justify-end gap-3 mt-5 border-t border-outline-variant/20 pt-4">
             <button class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white rounded-lg hover:bg-primary/90 transition-all duration-200 cursor-pointer shadow-md shadow-primary/20 flex items-center gap-1" onclick="window._relaySaveModelMapping()" id="btnSaveModelMapping">
                 <span class="material-symbols-outlined text-[16px]">save</span>
-                <span data-i18n="relaySaveMapping">保存映射配置</span>
+                <span data-i18n="relaySaveMapping">保存全部映射与号池配置</span>
             </button>
         </div>
     </div>
@@ -890,7 +930,11 @@
 <p class="text-[12px] text-outline leading-relaxed" data-i18n="tutorialStep7Desc">
 网关地址形如 <code class="text-[11px]">http://[中继主机IP]:18444</code>，API Key 通过 <code class="text-[11px]">Authorization: Bearer sk-ant-...</code> 或 <code class="text-[11px]">x-api-key: sk-ant-...</code> 传递。各客户端按入站协议选路径：
 </p>
-<pre class="text-[11px] bg-slate-50 dark:bg-black/30 border border-outline-variant/20 rounded-lg p-3 overflow-x-auto text-outline leading-relaxed font-mono"># Claude Code (Anthropic 协议)
+<pre class="text-[11px] bg-slate-50 dark:bg-black/30 border border-outline-variant/20 rounded-lg p-3 overflow-x-auto text-outline leading-relaxed font-mono"># 统一模型路由模式（按「模型映射/规则」自动路由分发至指定号池）
+base_url=http://[host]:18444/route/v1/chat/completions
+# 也支持 Anthropic 协议: ANTHROPIC_BASE_URL=http://[host]:18444/route/v1/messages
+
+# Claude Code (Anthropic 协议)
 ANTHROPIC_BASE_URL=http://[host]:18444/v1/messages
 ANTHROPIC_API_KEY=sk-ant-...
 
@@ -900,9 +944,10 @@ base_url=http://[host]:18444/v1/chat/completions
 # Codex Responses 模式
 base_url=http://[host]:18444/v1/responses
 
-# NVIDIA 兼容客户端（直连号池 NVIDIA 账号）
+# NVIDIA 兼容客户端（直连号池 NVIDIA 账号；/vc 为 /nvidia 的纯别名快捷前缀）
 base_url=http://[host]:18444/nvidia/v1/chat/completions
-# 也可 /nvidia/v1/messages 走 Anthropic 协议回译
+# 快捷别名: base_url=http://[host]:18444/vc/v1/chat/completions
+# 也可 /nvidia/v1/messages 或 /vc/v1/messages 走 Anthropic 协议回译
 
 # antigravity v1internal 非流式接口（一次性返回完整 JSON）
 POST http://[host]:18444/v1internal:generateContent
@@ -928,10 +973,11 @@ Authorization: Bearer sk-ant-...</pre>
 </tr>
 </thead>
 <tbody class="text-outline">
+<tr class="border-t border-outline-variant/20"><td class="p-2 font-mono text-primary font-bold">/route/*</td><td class="p-2">OpenAI / Anthropic / v1internal</td><td class="p-2"><b>统一模型路由</b>：匹配「自定义模型映射」自动分发到目标号池 (google/nvidia/deepseek等)</td></tr>
 <tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/v1/messages</td><td class="p-2">Anthropic</td><td class="p-2">转译→Gemini/Vertex 回环 ProxyEngine</td></tr>
 <tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/v1/chat/completions</td><td class="p-2">OpenAI Chat</td><td class="p-2">转译→Gemini/Vertex 回环 ProxyEngine</td></tr>
 <tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/v1/responses</td><td class="p-2">OpenAI Responses</td><td class="p-2">转译→Gemini/Vertex 回环 ProxyEngine</td></tr>
-<tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/nvidia/v1/*</td><td class="p-2">OpenAI Chat / Anthropic</td><td class="p-2">直连号池 NVIDIA 账号 BaseURL</td></tr>
+<tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/nvidia/v1/* 或 /vc/v1/*</td><td class="p-2">OpenAI Chat / Anthropic</td><td class="p-2">直连号池 NVIDIA 账号 BaseURL（<code>/vc</code> 为 <code>/nvidia</code> 纯别名快捷前缀）</td></tr>
 <tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/v1internal:generateContent</td><td class="p-2">antigravity 内部</td><td class="p-2">按当前通道直选号发包（非流式；加 ?alt=sse 升流）</td></tr>
 <tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">/v1internal:streamGenerateContent</td><td class="p-2">antigravity 内部</td><td class="p-2">按当前通道直选号发包（流式 SSE）</td></tr>
 <tr class="border-t border-outline-variant/20"><td class="p-2 font-mono">CONNECT</td><td class="p-2">HTTPS 隧道(MITM)</td><td class="p-2">透传 ProxyEngine 走原生直连</td></tr>
