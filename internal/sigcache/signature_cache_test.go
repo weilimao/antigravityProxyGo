@@ -207,8 +207,11 @@ func TestInjectCachedSignatures_FlashKeepSentinel(t *testing.T) {
 	}
 }
 
-// TestInjectCachedSignatures_NonFlashRemoveSentinel 非 Flash 模型无缓存删除字段
-func TestInjectCachedSignatures_NonFlashRemoveSentinel(t *testing.T) {
+// TestInjectCachedSignatures_NonFlashNoCacheKeepsSentinelInStruct 非闪存结构体路径:
+// 验证非 Flash 推理模型在无缓存签名时,thoughtSignature 字段被保留为哨兵值(而非删除)。
+// 旧实现 delete(partMap,"thoughtSignature") 触发上游 daily-cloudcode-pa 400
+// "Function call is missing a thought_signature";本用例以结构体直接构造方式覆盖。
+func TestInjectCachedSignatures_NonFlashNoCacheKeepsSentinelInStruct(t *testing.T) {
 	cache := New()
 	// 不存储任何签名
 
@@ -232,8 +235,12 @@ func TestInjectCachedSignatures_NonFlashRemoveSentinel(t *testing.T) {
 
 	parts := req["contents"].([]interface{})[0].(map[string]interface{})["parts"].([]interface{})
 	part := parts[0].(map[string]interface{})
-	if _, hasSig := part["thoughtSignature"]; hasSig {
-		t.Error("Non-Flash model should have thoughtSignature removed when no cached signature")
+	sig, hasSig := part["thoughtSignature"]
+	if !hasSig {
+		t.Fatal("Non-Flash reasoning model should keep thoughtSignature field as sentinel when no cached signature")
+	}
+	if sig != SentinelValue {
+		t.Errorf("thoughtSignature should remain sentinel %q, got %q", SentinelValue, sig)
 	}
 }
 
@@ -372,5 +379,66 @@ func TestInjectCachedSignatures_ComplexRequest(t *testing.T) {
 	}
 	if !strings.Contains(outStr, sig) {
 		t.Error("Cached signature should be present in output")
+	}
+}
+
+// TestInjectCachedSignatures_NonFlashNoCacheKeepsSentinel 验证非 Flash 推理模型
+// 在无缓存签名时保留哨兵值,而非删除 thoughtSignature 字段。
+// 这是 gemini-pro-agent 等推理模型触发上游 400
+// "Function call is missing a thought_signature" 的根因回归测试。
+func TestInjectCachedSignatures_NonFlashNoCacheKeepsSentinel(t *testing.T) {
+	cache := New() // 空 cache,无缓存签名(hasSig=false)
+
+	inputJSON := `{
+		"contents": [
+			{"role": "user", "parts": [{"text": "read this"}]},
+			{"role": "model", "parts": [{"functionCall": {"name": "default_api:Read", "args": {"path": "file.txt"}}, "thoughtSignature": "skip_thought_signature_validator"}]},
+			{"role": "user", "parts": [{"functionResponse": {"name": "default_api:Read", "response": {"result": "ok"}}}]}
+		]
+	}`
+
+	var req map[string]interface{}
+	if err := json.Unmarshal([]byte(inputJSON), &req); err != nil {
+		t.Fatalf("Failed to parse test JSON: %v", err)
+	}
+
+	InjectCachedSignatures(req, cache, "session1", "gemini-pro-agent")
+
+	out, _ := json.Marshal(req)
+	outStr := string(out)
+
+	if !strings.Contains(outStr, SentinelValue) {
+		t.Errorf("非 Flash 推理模型无缓存签名时应保留哨兵值,但输出中找不到哨兵: %s", outStr)
+	}
+}
+
+// TestInjectCachedSignatures_NonFlashWithCacheReplacesSentinel 验证非 Flash 推理模型
+// 在有缓存签名时,哨兵被替换为真实签名(覆盖"有缓存"分支未回归)。
+func TestInjectCachedSignatures_NonFlashWithCacheReplacesSentinel(t *testing.T) {
+	cache := New()
+	sig := strings.Repeat("EpAEBk", 20)
+	cache.Store("session1", sig)
+
+	inputJSON := `{
+		"contents": [
+			{"role": "model", "parts": [{"functionCall": {"name": "default_api:Read", "args": {"path": "file.txt"}}, "thoughtSignature": "skip_thought_signature_validator"}]}
+		]
+	}`
+
+	var req map[string]interface{}
+	if err := json.Unmarshal([]byte(inputJSON), &req); err != nil {
+		t.Fatalf("Failed to parse test JSON: %v", err)
+	}
+
+	InjectCachedSignatures(req, cache, "session1", "gemini-pro-agent")
+
+	out, _ := json.Marshal(req)
+	outStr := string(out)
+
+	if strings.Contains(outStr, SentinelValue) {
+		t.Errorf("有缓存签名时哨兵应被替换,但输出中仍含哨兵: %s", outStr)
+	}
+	if !strings.Contains(outStr, sig) {
+		t.Error("有缓存签名时输出应含真实缓存签名")
 	}
 }

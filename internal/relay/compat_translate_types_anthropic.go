@@ -36,12 +36,15 @@ type AnthropicContent struct {
 }
 
 // AnthropicImageSource 对齐 Anthropic image content block 的 source 字段:
-// {"type":"base64","media_type":"image/png","data":"<base64>"}。
-// type 目前仅 base64(本地可 OCR);url 类型本机无法直取,降级时以占位文本兜底。
+// {"type":"base64","media_type":"image/png","data":"<base64>"}  或
+// {"type":"url","url":"https://..."}。
+// type=base64 时 Data 承载纯 base64(本地直取 OCR);type=url 时 Url 承载网络图片地址,
+// 由 OCRService.fetchImageAsBase64 在 SSRF 防护下下载转 base64 后再 OCR(P2)。
 type AnthropicImageSource struct {
-	Type      string `json:"type"`       // "base64" | "url"
-	MediaType string `json:"media_type"` // "image/png" 等
-	Data      string `json:"data"`       // base64 数据(base64 类型时非空)
+	Type      string `json:"type"`         // "base64" | "url"
+	MediaType string `json:"media_type"`   // "image/png" 等
+	Data      string `json:"data"`        // base64 数据(base64 类型时非空)
+	Url       string `json:"url,omitempty"` // url 类型时的网络图片地址(http/https)
 }
 
 type AnthropicMessage struct {

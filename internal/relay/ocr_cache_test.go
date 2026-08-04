@@ -69,7 +69,7 @@ func callOcrWithCache(
 	mime, b64Data string,
 ) (string, error, bool) {
 	t.Helper()
-	return h.ocrImageViaLocalGemini(sess, b64Data, mime)
+	return h.ocr.OcrImage(sess, b64Data, mime)
 }
 
 func TestOCR_CacheHitSkipsUpstream(t *testing.T) {
@@ -82,7 +82,7 @@ func TestOCR_CacheHitSkipsUpstream(t *testing.T) {
 	t.Cleanup(func() { localProxyAddr = origAddr })
 
 	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.ocrCache = newOcrLRUCache(8, time.Minute, time.Minute) // 命中模式
+	h.ocr.cache = newOcrLRUCache(8, time.Minute, time.Minute) // 命中模式
 	sess := &RelaySession{UserID: "u1", UserKey: "k1"}
 
 	if _, err, _ := callOcrWithCache(t, h, sess, "image/png", fakeNvidiaImageB64); err != nil {
@@ -99,7 +99,7 @@ func TestOCR_CacheHitSkipsUpstream(t *testing.T) {
 		t.Fatalf("cache hit should skip upstream, hits still %d (want 1)", hits.Load())
 	}
 
-	hits2, misses := h.ocrCounters.snapshot()
+	hits2, misses := h.ocr.counters.snapshot()
 	if hits2 != 1 || misses != 1 {
 		t.Errorf("counters want hits=1 misses=1, got hits=%d misses=%d", hits2, misses)
 	}
@@ -115,7 +115,7 @@ func TestOCR_CacheMissCallsUpstream(t *testing.T) {
 	t.Cleanup(func() { localProxyAddr = origAddr })
 
 	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.ocrCache = newOcrLRUCache(0, 0, 0) // 默认参数
+	h.ocr.cache = newOcrLRUCache(0, 0, 0) // 默认参数
 	sess := &RelaySession{UserID: "u1", UserKey: "k1"}
 
 	if _, err, _ := callOcrWithCache(t, h, sess, "image/png", fakeNvidiaImageB64); err != nil {
@@ -124,7 +124,7 @@ func TestOCR_CacheMissCallsUpstream(t *testing.T) {
 	if hits.Load() != 1 {
 		t.Fatalf("first call should hit upstream once, got %d", hits.Load())
 	}
-	_, misses := h.ocrCounters.snapshot()
+	_, misses := h.ocr.counters.snapshot()
 	if misses != 1 {
 		t.Errorf("counters want misses=1, got misses=%d", misses)
 	}
@@ -140,7 +140,7 @@ func TestOCR_ConcurrentSameImageSingleflight(t *testing.T) {
 	t.Cleanup(func() { localProxyAddr = origAddr })
 
 	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.ocrCache = newOcrLRUCache(0, 0, 0)
+	h.ocr.cache = newOcrLRUCache(0, 0, 0)
 	sess := &RelaySession{UserID: "u1", UserKey: "k1"}
 
 	const N = 50
@@ -183,7 +183,7 @@ func TestOCR_TTLExpiredReCallsUpstream(t *testing.T) {
 
 	// 注入 50ms 超短成功 TTL,便于测试内验证过期重算。
 	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.ocrCache = newOcrLRUCache(8, 50*time.Millisecond, 50*time.Millisecond)
+	h.ocr.cache = newOcrLRUCache(8, 50*time.Millisecond, 50*time.Millisecond)
 	sess := &RelaySession{UserID: "u1", UserKey: "k1"}
 
 	if _, err, _ := callOcrWithCache(t, h, sess, "image/png", fakeNvidiaImageB64); err != nil {
@@ -227,7 +227,7 @@ func TestOCR_FailureShortTTLNoSpam(t *testing.T) {
 
 	// 失败短 TTL 50ms。
 	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.ocrCache = newOcrLRUCache(8, time.Minute, 50*time.Millisecond)
+	h.ocr.cache = newOcrLRUCache(8, time.Minute, 50*time.Millisecond)
 	sess := &RelaySession{UserID: "u1", UserKey: "k1"}
 
 	// 第 1 次:真打上游,失败,缓存失败条目(短 TTL)。
@@ -270,7 +270,7 @@ func TestOCR_LRU_Eviction(t *testing.T) {
 	t.Cleanup(func() { localProxyAddr = origAddr })
 
 	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.ocrCache = newOcrLRUCache(2, time.Minute, time.Minute) // 容量 2
+	h.ocr.cache = newOcrLRUCache(2, time.Minute, time.Minute) // 容量 2
 	sess := &RelaySession{UserID: "u1", UserKey: "k1"}
 
 	// 塞 3 张不同的图,容量 2 → 最旧的图 1 被淘汰。

@@ -242,6 +242,8 @@ func (h *APICompatHandler) dispatchToGemini(
 	}
 
 	// 假多模态转换自愈逻辑：检测当非 Gemini 模型遇到多模态图片时，自动调用本地多模态模型执行 OCR 转换
+	// 由 L2 协议适配层 OCRService.DowngradeGeminiImagesToText 统一承载,替代原内联循环,
+	// 行为逐行等价且可被第三方号池复用、可独立单测。
 	hasImage := false
 	for _, c := range geminiReq.Contents {
 		for _, p := range c.Parts {
@@ -256,52 +258,14 @@ func (h *APICompatHandler) dispatchToGemini(
 	}
 
 	if hasImage && !strings.Contains(strings.ToLower(targetModelToQuery), "gemini") {
-		// ocrModel 与降级链路同源(h.getOcrModel()),保证自愈文案与真实调用的 OCR 模型一致。
-		ocrModel := h.getOcrModel()
+		ocrModel := h.ocr.getOcrModel()
 		h.log("⚠️ [Relay Compat] 检测到目标模型 %s 不支持多模态，但请求包含图片。正在自动通过本地 Gemini(%s)执行 OCR 和图片描述...", targetModelToQuery, ocrModel)
-
-		for i, c := range geminiReq.Contents {
-			var userTextBuilder strings.Builder
-			for _, p := range c.Parts {
-				if p.Text != "" {
-					if userTextBuilder.Len() > 0 {
-						userTextBuilder.WriteString("\n")
-					}
-					userTextBuilder.WriteString(p.Text)
-				}
-			}
-			userPromptCtx := userTextBuilder.String()
-
-			for j, p := range c.Parts {
-				if p.InlineData == nil || p.InlineData.Data == "" {
-					continue
-				}
-				mime := p.InlineData.MimeType
-				if mime == "" {
-					mime = "image/jpeg"
-				}
-				ocrText, ocrErr, cachedHit := h.ocrImageViaLocalGemini(userSession, p.InlineData.Data, mime, userPromptCtx)
-				if ocrErr != nil {
-					h.log("❌ [Relay Compat] OCR 调用失败(字节 %d): %v", len(p.InlineData.Data), ocrErr)
-					continue
-				}
-				if strings.TrimSpace(ocrText) == "" {
-					h.log("⚠️ [Relay Compat] OCR 响应 candidates 为空")
-					continue
-				}
-				h.log("✅ [Relay Compat] 图片 OCR 转换成功。字节大小: %d | 识别出字符数: %d | 缓存命中: %t", len(p.InlineData.Data), len(ocrText), cachedHit)
-
-				// 文案模型名随 ocrModel 参数化,与 nvidiaImageOcrDescHeader 共享语义。
-				descHeader := fmt.Sprintf("\n\n[本地中继服务已自动调用 %s 协助分析了用户发送的截图，内容提取如下：]\n%s\n[图片分析内容结束]\n", ocrModel, ocrText)
-
-				// 把这个 part 里的图片清除，变成一个纯文本 part 并拼接识别到的内容
-				geminiReq.Contents[i].Parts[j].InlineData = nil
-				if geminiReq.Contents[i].Parts[j].Text != "" {
-					geminiReq.Contents[i].Parts[j].Text += descHeader
-				} else {
-					geminiReq.Contents[i].Parts[j].Text = descHeader
-				}
-			}
+		downgraded, ocrHits, ocrMisses, ocrErrDown := h.ocr.DowngradeGeminiImagesToText(geminiReq, userSession, targetModelToQuery)
+		if ocrErrDown != nil {
+			h.log("❌ [Relay Compat] %v", ocrErrDown)
+		}
+		if downgraded > 0 {
+			h.log("✅ [Relay Compat] 图片 OCR 转换完成:降级 %d 张 | 缓存命中 %d / 未命中 %d", downgraded, ocrHits, ocrMisses)
 		}
 	}
 

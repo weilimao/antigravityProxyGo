@@ -8,7 +8,12 @@ package relay
 //   compat_response.go      Gemini 非流式响应 -> 客户端协议回译
 //   compat_stream.go        Gemini 流式 SSE -> 客户端协议流式 SSE 回译
 //   compat_v1internal.go    /v1internal:* 桥接 + mapModelForProjectInRelay
-//   compat_ocr.go           入站 image 本地 Gemini OCR 降级(已在 Step 2-b 拆出)
+//   compat_ocr.go           OCR 包级共享辅助(ocrOwnerKey/ocrSessionDisplay,无运行时状态)
+//   ocr_engine.go            OCR 引擎核心 L1(OCRService,从 compat_ocr.go 抽离)
+//   ocr_downgrade_anthropic.go  Anthropic 协议降级 L2
+//   ocr_downgrade_gemini.go     Gemini 协议降级 L2
+//   ocr_downgrade_openai.go     OpenAI Chat 协议降级 L2
+//   ocr_fetch.go / ocr_dataurl.go  URL/Data URL 图片抓取(P2)
 //   compat_ratelimit.go     RateLimiter 限流器(已在 Step 2-b 拆出)
 
 import (
@@ -18,7 +23,6 @@ import (
 	"antigravity-proxy/internal/settings"
 	"antigravity-proxy/internal/stats"
 	"fmt"
-	"golang.org/x/sync/singleflight"
 	"net/http"
 	"strings"
 	"time"
@@ -65,16 +69,12 @@ type APICompatHandler struct {
 	// + 1 次兜底出站代理,周期之间等本字段后把请求计数归零继续下一周期,连续 3 个周期(由 maxCycles 控制)
 	// 全失败才回 overloaded_error 取消请求。生产默认 10 秒;测试可覆盖为小值避免把单测拖到 20s+。零值兜底 10s。
 	nvidiaStreamCycleWait time.Duration
-	// ocrCache 是 NVIDIA/Gemini 入站 image 降级时,本地 Gemini OCR 结果的进程内缓存。
-	// 键 = UserKey|ocrModel|sha256(b64)[:16],LRU 限条数 + TTL,叠加 singleflight 防并发击穿。
-	// 解决 Claude Code 无状态每轮重发历史图导致同一张图被重复 OCR 的浪费(每图 ~3s + 一次号池额度)。
-	// nil 时降级为零缓存(纯内存命中),保持旧行为兼容,供单测与未注入场景使用。
-	ocrCache *ocrLRUCache
-	// ocrInflight 管理同图并发的 singleflight,键同 ocrCache。Do(key, fn) 按 key 串行化,
-	// 同图 N 路并发只真打上游 1 次,其余阻塞等待结果共享,防缓存击穿。
-	ocrInflight singleflight.Group
-	// ocrCounters 统计 OCR 缓存命中/未命中,供日志显示降级收益。计数走 atomic 不进 LRU 锁。
-	ocrCounters ocrCacheCounters
+	// ocr 是入站 image 自愈降级的本地 Gemini OCR 引擎(L1),与号池入口解耦。
+	// 由 OCRService 承载 cache(LRU + SQLite 持久化 + TTL)+ singleflight + 计数器,
+	// 协议适配层(L2: DowngradeAnthropicImagesToText / DowngradeGeminiImagesToText /
+	// DowngradeOpenAIChatImagesToText)挂在 OCRService 上,各号池入口只调 L2。
+	// nil 时降级为无 OCR 能力(号池入口应在用前判空),保持单测与未注入场景兼容。
+	ocr *OCRService
 }
 
 func NewAPICompatHandler(
@@ -100,10 +100,10 @@ func NewAPICompatHandler(
 		nvidiaStats:           newNvidiaReqStats(),
 		nvidiaStreamRetryWait: 5 * time.Second,
 		nvidiaStreamCycleWait: 10 * time.Second,
-		// ocrCache 默认参数:容量 256 / 成功 TTL 30min / 失败 TTL 30s。
-		// 容量按"每用户活跃历史图"估算,256 足够覆盖一段长会话的不重复图;
-		// 失败短 TTL 30s 熔断窗口,避免持续重打挂的 OCR 服务。
-		ocrCache: newOcrLRUCache(0, 0, 0),
+		// ocr 引擎默认 cache 参数:容量 256 / 成功 TTL 24h / 失败 TTL 30s(见 ocr_cache.go)。
+		// 与原 ocrCache: newOcrLRUCache(0,0,0) 等价;OCRService 内部自构 cache,
+		// 并承接 settingsMgr / client / logFn,使 L1 与号池入口解耦。
+		ocr: NewOCRService(settingsMgr, netutil.NewClient(5*time.Minute), logFn),
 	}
 }
 

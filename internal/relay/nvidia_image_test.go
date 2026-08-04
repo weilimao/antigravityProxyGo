@@ -187,7 +187,7 @@ func TestDowngradeAnthropicImagesToText_OCROk(t *testing.T) {
 			},
 		}},
 	}
-	replaced, err, _, _, _ := h.downgradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
+	replaced, err, _, _, _ := h.ocr.DowngradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestDowngradeAnthropicImagesToText_OCRFail(t *testing.T) {
 			},
 		}},
 	}
-	replaced, err, _, _, _ := h.downgradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
+	replaced, err, _, _, _ := h.ocr.DowngradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
 	if err == nil {
 		t.Fatalf("expected err on OCR failure, got nil")
 	}
@@ -254,7 +254,7 @@ func TestDowngradeAnthropicImagesToText_OCREmptyCandidates(t *testing.T) {
 			},
 		}},
 	}
-	replaced, _, _, _, _ := h.downgradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
+	replaced, _, _, _, _ := h.ocr.DowngradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
 	if replaced != 0 {
 		t.Errorf("replaced want 0 on empty ocr, got %d", replaced)
 	}
@@ -276,7 +276,7 @@ func TestDowngradeAnthropicImagesToText_NoImage(t *testing.T) {
 			},
 		}},
 	}
-	replaced, err, _, _, _ := h.downgradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
+	replaced, err, _, _, _ := h.ocr.DowngradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
 	if err != nil || replaced != 0 {
 		t.Fatalf("no-image case: replaced=%d err=%v", replaced, err)
 	}
@@ -302,7 +302,7 @@ func TestDowngradeAnthropicImagesToText_MultipleImages(t *testing.T) {
 			},
 		}},
 	}
-	replaced, err, _, _, _ := h.downgradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
+	replaced, err, _, _, _ := h.ocr.DowngradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
 	if err != nil || replaced != 2 {
 		t.Fatalf("replaced want 2 got %d err=%v", replaced, err)
 	}
@@ -324,7 +324,10 @@ func TestDowngradeAnthropicImagesToText_MultipleImages(t *testing.T) {
 }
 
 func TestDowngradeAnthropicImagesToText_UrlSourcePlaceholder(t *testing.T) {
-	// url 类型 source 本机无法 OCR,应走占位文本兜底,不调 OCR 服务。
+	// 窗内 url 类型 source 且 urlCache 未命中时,应尝试下载;但本用例 URL 指向一个不可达地址,
+	// fetchImageAsBase64 必然失败 → 走占位文本兜底,不调 OCR 服务。
+	// (P2 前:此用例锁定"url 一律占位";P2 后:URL 图改为下载尝试,失败仍兜底,行为等价:
+	//  即不真调 OCR 上游、块为占位文本。故断言 replaced==0/OCR 上游零触达/占位文本保持不变。)
 	ocr := ocrFlashServer(t, "should-not-be-called", http.StatusOK)
 	defer ocr.Close()
 	h := newImageTestHandler(t, ocr)
@@ -333,13 +336,13 @@ func TestDowngradeAnthropicImagesToText_UrlSourcePlaceholder(t *testing.T) {
 		Messages: []AnthropicMessage{{
 			Role: "user",
 			Content: []AnthropicContent{
-				{Type: "image", Source: &AnthropicImageSource{Type: "url", MediaType: "image/png", Data: "http://x/a.png"}},
+				{Type: "image", Source: &AnthropicImageSource{Type: "url", MediaType: "image/png", Url: "http://127.0.0.1:1/unreachable.png"}},
 			},
 		}},
 	}
-	replaced, _, _, _, _ := h.downgradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
+	replaced, _, _, _, _ := h.ocr.DowngradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
 	if replaced != 0 {
-		t.Errorf("url source should not count as replaced, got %d", replaced)
+		t.Errorf("url source(failed download) should not count as replaced, got %d", replaced)
 	}
 	if req.Messages[0].Content[0].Text != imageNotExtractablePlaceholder {
 		t.Errorf("url placeholder wrong: %s", req.Messages[0].Content[0].Text)
@@ -661,7 +664,7 @@ func TestOCR_ModelSwitchReOCRs(t *testing.T) {
 	sess := &RelaySession{UserID: "u-switch", UserKey: "k1"}
 
 	// 第 1 次:flash handler,缓存 gemini-2.5-flash 的结果。
-	t1, err1, _ := hFlash.ocrImageViaLocalGemini(sess, fakeNvidiaImageB64, "image/png")
+	t1, err1, _ := hFlash.ocr.OcrImage(sess, fakeNvidiaImageB64, "image/png")
 	if err1 != nil {
 		t.Fatalf("flash ocr err: %v", err1)
 	}
@@ -673,7 +676,7 @@ func TestOCR_ModelSwitchReOCRs(t *testing.T) {
 	}
 
 	// 第 2 次:同 flash handler 同图 → 命中缓存,不触达上游。
-	t2, err2, _ := hFlash.ocrImageViaLocalGemini(sess, fakeNvidiaImageB64, "image/png")
+	t2, err2, _ := hFlash.ocr.OcrImage(sess, fakeNvidiaImageB64, "image/png")
 	if err2 != nil || t2 != t1 {
 		t.Fatalf("flash cache hit should equal first result, got %q err=%v", t2, err2)
 	}
@@ -682,7 +685,7 @@ func TestOCR_ModelSwitchReOCRs(t *testing.T) {
 	}
 
 	// 第 3 次:切到 pro handler,键变化 → 重新 OCR 一次(不同模型)。
-	t3, err3, _ := hPro.ocrImageViaLocalGemini(sess, fakeNvidiaImageB64, "image/png")
+	t3, err3, _ := hPro.ocr.OcrImage(sess, fakeNvidiaImageB64, "image/png")
 	if err3 != nil {
 		t.Fatalf("pro ocr err: %v", err3)
 	}
@@ -694,7 +697,7 @@ func TestOCR_ModelSwitchReOCRs(t *testing.T) {
 	}
 
 	// 第 4 次:pro handler 同图 → 命中 pro 缓存,不触达上游。
-	t4, err4, _ := hPro.ocrImageViaLocalGemini(sess, fakeNvidiaImageB64, "image/png")
+	t4, err4, _ := hPro.ocr.OcrImage(sess, fakeNvidiaImageB64, "image/png")
 	if err4 != nil || t4 != t3 {
 		t.Fatalf("pro cache hit should equal third result, got %q err=%v", t4, err4)
 	}
@@ -730,7 +733,7 @@ func TestOCR_DowngradeWindow_OutOfRangeMiss_Placeholder(t *testing.T) {
 
 	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
 	// 显式启用缓存(默认参数),让"窗外只查缓存"路径真正命中缓存查找分支而非零缓存降级。
-	h.ocrCache = newOcrLRUCache(0, 0, 0)
+	h.ocr.cache = newOcrLRUCache(0, 0, 0)
 	sess := &RelaySession{UserID: "u-win1", UserKey: "k1"}
 
 	// 构造 11 条消息:第 1 条含图(窗外),其余 10 条纯文本塞满窗口。
@@ -750,7 +753,7 @@ func TestOCR_DowngradeWindow_OutOfRangeMiss_Placeholder(t *testing.T) {
 	}
 	req := &AnthropicRequest{Messages: msgs}
 
-	replaced, _, _, _, ocrSkipped := h.downgradeAnthropicImagesToText(req, sess)
+	replaced, _, _, _, ocrSkipped := h.ocr.DowngradeAnthropicImagesToText(req, sess)
 	if replaced != 0 {
 		t.Fatalf("out-of-window miss should not count as replaced, got %d", replaced)
 	}
@@ -782,7 +785,7 @@ func TestOCR_DowngradeWindow_OutOfRangeHit_Reused(t *testing.T) {
 	t.Cleanup(func() { localProxyAddr = origAddr })
 
 	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.ocrCache = newOcrLRUCache(0, 0, 0)
+	h.ocr.cache = newOcrLRUCache(0, 0, 0)
 	sess := &RelaySession{UserID: "u-win2", UserKey: "k1"}
 
 	// 老消息的伴随文本:两轮完全一致(模拟 Claude Code 逐字重发历史),保证 promptCtx 维度稳定。
@@ -796,7 +799,7 @@ func TestOCR_DowngradeWindow_OutOfRangeHit_Reused(t *testing.T) {
 			{Type: "text", Text: oldMsgText},
 		},
 	}}}
-	r1, _, _, _, _ := h.downgradeAnthropicImagesToText(req1, sess)
+	r1, _, _, _, _ := h.ocr.DowngradeAnthropicImagesToText(req1, sess)
 	if r1 != 1 || ocrHits.Load() != 1 {
 		t.Fatalf("turn1 want replaced=1 hits=1, got replaced=%d hits=%d", r1, ocrHits.Load())
 	}
@@ -818,7 +821,7 @@ func TestOCR_DowngradeWindow_OutOfRangeHit_Reused(t *testing.T) {
 	}
 	req2 := &AnthropicRequest{Messages: msgs}
 
-	r2, _, ocrHits2, _, ocrSkipped2 := h.downgradeAnthropicImagesToText(req2, sess)
+	r2, _, ocrHits2, _, ocrSkipped2 := h.ocr.DowngradeAnthropicImagesToText(req2, sess)
 	if r2 != 1 {
 		t.Fatalf("turn2 out-of-window cache hit should reuse text (replaced=1), got %d", r2)
 	}
@@ -849,7 +852,7 @@ func TestOCR_DowngradeWindow_InRange_ReOCRsOnMiss(t *testing.T) {
 	t.Cleanup(func() { localProxyAddr = origAddr })
 
 	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.ocrCache = newOcrLRUCache(0, 0, 0)
+	h.ocr.cache = newOcrLRUCache(0, 0, 0)
 	sess := &RelaySession{UserID: "u-win3", UserKey: "k1"}
 
 	// 5 条消息,均在窗口内;第 3 条含图。
@@ -872,7 +875,7 @@ func TestOCR_DowngradeWindow_InRange_ReOCRsOnMiss(t *testing.T) {
 	}
 	req := &AnthropicRequest{Messages: msgs}
 
-	r, _, _, ocrMisses, ocrSkipped := h.downgradeAnthropicImagesToText(req, sess)
+	r, _, _, ocrMisses, ocrSkipped := h.ocr.DowngradeAnthropicImagesToText(req, sess)
 	if r != 1 {
 		t.Fatalf("in-window miss should replace 1, got %d", r)
 	}
@@ -905,16 +908,16 @@ func TestOCR_CacheKeyIsolatesBySessionKey(t *testing.T) {
 	t.Cleanup(func() { localProxyAddr = origAddr })
 
 	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
-	h.ocrCache = newOcrLRUCache(0, 0, 0)
+	h.ocr.cache = newOcrLRUCache(0, 0, 0)
 
 	// 同 UserKey(同用户),仅 SessionKey 不同 → 缓存键首维 SessionKey 隔离。
 	sessA := &RelaySession{UserID: "u-iso", UserKey: "k1", SessionKey: "auth:acc:sessionA"}
 	sessB := &RelaySession{UserID: "u-iso", UserKey: "k1", SessionKey: "auth:acc:sessionB"}
 
-	if _, errA, _ := h.ocrImageViaLocalGemini(sessA, fakeNvidiaImageB64, "image/png"); errA != nil {
+	if _, errA, _ := h.ocr.OcrImage(sessA, fakeNvidiaImageB64, "image/png"); errA != nil {
 		t.Fatalf("sessA ocr err: %v", errA)
 	}
-	if _, errB, _ := h.ocrImageViaLocalGemini(sessB, fakeNvidiaImageB64, "image/png"); errB != nil {
+	if _, errB, _ := h.ocr.OcrImage(sessB, fakeNvidiaImageB64, "image/png"); errB != nil {
 		t.Fatalf("sessB ocr err: %v", errB)
 	}
 

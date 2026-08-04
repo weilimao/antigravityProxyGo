@@ -129,7 +129,7 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 	// 的已知取舍:Anthropic 客户端请继续走 /nvidia/v1/messages(有回译) 或上游原生 Anthropic 端点;
 	// /route/* 面向「已是 OpenAI 兼容」的客户端。若将来需要,在此加 Anthropic→OpenAI 请求 + OpenAI→Anthropic 响应回译即可。
 	pf := &passthroughForward{h: h, accountMgr: h.accountMgr}
-	res := pf.run(w, r, provider, upstreamModel, inModel, bodyBytes, isStreaming)
+	res := pf.run(w, r, provider, upstreamModel, inModel, bodyBytes, isStreaming, userSession)
 	h.passthroughReply(w, r.Context(), res, isStreaming)
 }
 

@@ -293,7 +293,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			// Gemini(gemini-2.5-flash)对每张图 OCR,把 image 块原地改写为纯文本块,上游段
 			// 永远只见 text、永远零负担;非多模态模型无任何报错风险。失败不阻断(占位文本兜底)。
 			// 仅 AnthropicMessage.UnmarshalJSON 解析出 Source 字段后才命中(见 compat_translate.go)。
-			replaced, errDown, ocrHits, ocrMisses, ocrSkipped := h.downgradeAnthropicImagesToText(&anthReq, userSession)
+			replaced, errDown, ocrHits, ocrMisses, ocrSkipped := h.ocr.DowngradeAnthropicImagesToText(&anthReq, userSession)
 			if errDown != nil {
 				h.log("⚠️ [NVIDIA 中继] image 自愈降级出错(账号 %s | 会话 %s): %v,继续原始请求", poolAccount.Email, ocrSessionDisplay(userSession), errDown)
 			} else if replaced > 0 {
@@ -321,6 +321,20 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			}
 			upstreamReq = u
 		} else {
+			// OpenAI Chat 入站(含 Vision 数组形态 content):先降级 image_url 块为纯文本,再 Unmarshal。
+			// 必要性有二:(1) ChatMessage.Content 刻意是 string(nvidia_translate_types.go 注释:NVIDIA/多数
+			//   OpenAI 兼容上游用 serde 反序列化要求每条 message 显式带 content 字段),标准 json.Unmarshal
+			//   遇数组形态 content 会直接拒收整条请求 → 客户端拿到 400;降级后 content 全为 string,下游
+			//   Unmarshal 成功。(2) NVIDIA 上游(glm-5.2 等)不支持多模态,image_url 直送上游会触发 400 /
+			//   内容丢失;先用本地 Gemini OCR 把每张图降级为纯文本,上游段永远只见 text、零负担。
+			//   失败不阻断(占位文本兜底)。无图时原样返回(零变更)。
+			downBody, replacedDown, errDown, ocrHitsDown, ocrMissesDown, ocrSkippedDown := h.ocr.DowngradeOpenAIChatImagesToText(bodyBytes, userSession)
+			if errDown != nil {
+				h.log("⚠️ [NVIDIA 中继] OpenAI Chat image 自愈降级出错(账号 %s | 会话 %s): %v,继续原始请求", poolAccount.Email, ocrSessionDisplay(userSession), errDown)
+			} else if replacedDown > 0 {
+				h.log("✅ [NVIDIA 中继] OpenAI Chat 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(账号 %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replacedDown, poolAccount.Email, ocrSessionDisplay(userSession), ocrHitsDown, ocrMissesDown, ocrSkippedDown)
+				bodyBytes = downBody
+			}
 			var chatReq OpenAIChatRequest
 			if err := json.Unmarshal(bodyBytes, &chatReq); err != nil {
 				h.log("🚫 [NVIDIA 中继] 选号后 OpenAI Chat 请求体二次解析失败(账号 %s): %v,回写 400", poolAccount.Email, err)

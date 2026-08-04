@@ -72,6 +72,7 @@ func (pf *passthroughForward) run(
 	w http.ResponseWriter, r *http.Request,
 	poolChannel, upstreamModel, inModel string,
 	bodyBytes []byte, isStreaming bool,
+	userSession *RelaySession,
 ) *forwardResult {
 	res := &forwardResult{}
 
@@ -126,6 +127,26 @@ func (pf *passthroughForward) run(
 			res.statusCode = http.StatusBadRequest
 			pf.h.log("🚫 [路由转发] 构造上游请求体失败(模型 %s): %v", upstreamModel, err)
 			return res
+		}
+		// image 自愈降级:第三方号池(DeepSeek/Moonshot/Qwen 等)目标模型大多不支持多模态,
+		// 入站 OpenAI Chat 若含 image_url 数组形态 content,经 buildPassthroughUpstreamReq 的
+		// json.Unmarshal(OpenAIChatRequest) 会被拒收(ChatMessage.Content 是 string)→ 400。
+		// 故在对自然入站体(bodyBytes)降级后再重建上游请求体,确保 image_url 已转文本。
+		// 仅在首轮 attempt 执行一次(同请求内换号不重复降级,OCR 结果已确定性)。
+		if attempt == 0 {
+			downBody, replacedDown, errDown, ocrHitsDown, ocrMissesDown, ocrSkippedDown := pf.h.ocr.DowngradeOpenAIChatImagesToText(bodyBytes, userSession)
+			if errDown != nil {
+				pf.h.log("⚠️ [路由转发] OpenAI Chat image 自愈降级出错(provider %s | 会话 %s): %v,继续原始请求", poolChannel, ocrSessionDisplay(userSession), errDown)
+			} else if replacedDown > 0 {
+				pf.h.log("✅ [路由转发] OpenAI Chat 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(provider %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replacedDown, poolChannel, ocrSessionDisplay(userSession), ocrHitsDown, ocrMissesDown, ocrSkippedDown)
+				upstreamReq, err = buildPassthroughUpstreamReq(downBody, upstreamModel, isStreaming)
+				if err != nil {
+					res.err = err
+					res.statusCode = http.StatusBadRequest
+					pf.h.log("🚫 [路由转发] 降级后重建上游请求体失败(模型 %s): %v", upstreamModel, err)
+					return res
+				}
+			}
 		}
 		upstreamBody, err := json.Marshal(upstreamReq)
 		if err != nil {

@@ -211,11 +211,13 @@ func (c *Cache) extractFromCandidates(data map[string]interface{}, sessionKey st
 //
 // 规则：
 //   - 有缓存签名 -> 替换哨兵为真实签名
-//   - Flash 模型无缓存 -> 保留哨兵
-//   - 非 Flash 模型无缓存 -> 删除 thoughtSignature 字段
+//   - 无缓存签名 -> 统一保留哨兵值（v1internal 上游要求 functionCall parts 必带 thoughtSignature）
+//
+// 注意：IsFlashModel 仍由本包导出供其他模块复用，但本注入函数不再按 isFlash 分流
+// 删除字段——旧逻辑对非 Flash 模型 delete thoughtSignature 会触发上游 400
+// "Function call is missing a thought_signature"。哨兵值已是上游识别的跳过校验标记。
 func InjectCachedSignatures(req map[string]interface{}, cache *Cache, sessionKey string, modelName string) {
 	cachedSig, hasSig := cache.Load(sessionKey)
-	isFlash := IsFlashModel(modelName)
 
 	// 遍历 request.contents[].parts[]
 	contents, ok := req["contents"].([]interface{})
@@ -242,12 +244,19 @@ func InjectCachedSignatures(req map[string]interface{}, cache *Cache, sessionKey
 				if currentSig == SentinelValue {
 					if hasSig {
 						partMap["thoughtSignature"] = cachedSig
-					} else if isFlash {
-						// Flash 模型保留哨兵
-						partMap["thoughtSignature"] = SentinelValue
 					} else {
-						// 非 Flash 模型删除 thoughtSignature
-						delete(partMap, "thoughtSignature")
+						// 无缓存签名时统一保留哨兵值,不再按 isFlash 分流删除字段。
+						// v1internal 上游(daily-cloudcode-pa)对推理模型(flash/pro/agent/thinking 等)
+						// 强制要求 functionCall parts 携带 thoughtSignature 字段,缺失即返回
+						// 400 "Function call is missing a thought_signature in functionCall parts"。
+						// 哨兵值 SentinelValue("skip_thought_signature_validator")是上游识别的
+						// "跳过签名校验"标记,Flash 路径已长期验证其被接受,故对非 Flash 推理模型
+						// (如 gemini-pro-agent)同样保留哨兵即可。
+						// 旧逻辑对非 Flash 模型走 delete(partMap,"thoughtSignature") 会删掉字段,
+						// 导致 gemini-pro-agent 等推理模型在无缓存签名时触发上游 400。
+						// 仅在纯降级路径(标准 generativelanguage)由 cleanAndPrepareGeminiRequest→
+						// stripThoughtSignature 独立全删 thoughtSignature,与本函数职责分离,零回归。
+						partMap["thoughtSignature"] = SentinelValue
 					}
 				}
 			}

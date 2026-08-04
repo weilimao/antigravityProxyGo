@@ -14,5 +14,5 @@ package relay
 //   nvidia_translate_buffer.go    sseEventSink + flushWriter/replayWriter/teeSink/resumeSink + 帧扫描/改写辅助
 //   nvidia_translate_payload.go   Anthropic SSE payload 构造 + 全局思考/reasoning 开关 + mapNvidiaModel
 //   nvidia_translate_types.go     OpenAI Chat 兼容类型定义
-//   nvidia_translate_ocr.go       入站 image 块本地 OCR 降级
+//   nvidia_translate_ocr.go       已迁出至 ocr_downgrade_anthropic.go + ocr_engine.go(本文件保留空锚点)
 
