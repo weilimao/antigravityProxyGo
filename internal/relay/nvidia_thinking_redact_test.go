@@ -335,3 +335,112 @@ func TestHandleNvidia_Disabled_NoInjection(t *testing.T) {
 		t.Fatalf("thinking.type=disabled 上游应收 ChatTemplateKwargs==nil,实际=%v", captured)
 	}
 }
+
+// ===== 第五层:Responses 入站(codex /v1/responses)思考注入决策 =====
+//
+// 锁定 handleNvidia 的 inboundResponses 分支调 injectNvidiaChatTemplateKwargs:
+//   - Codex 带 reasoning_effort:high → 上游收到 chat_template_kwargs:{thinking:true, reasoning_effort:high}
+//   - Codex 无 reasoning_effort → 不注入(opt-in,与 OpenAI Chat 入站同款语义)
+//   - 全局思考开关关闭 → 即使带 reasoning_effort 也不注入(全局总闸)
+// 注:Responses 入站此前从未注入,思考在 codex 链路实际恒关 —— 修复后与 OpenAI Chat 入站对齐。
+
+// TestHandleNvidia_Responses_ReasoningEffortHigh_Injects 端到端锁定 codex 开思考态:
+// /v1/responses + reasoning_effort:high → 上游收到 {thinking:true, reasoning_effort:high}。
+func TestHandleNvidia_Responses_ReasoningEffortHigh_Injects(t *testing.T) {
+	// 显式置全局思考开关 ON,并 defer 复位为 true(全局默认值),隔离用例间状态。
+	SetGlobalEnableThinkingMode(true)
+	defer SetGlobalEnableThinkingMode(true)
+
+	var captured map[string]interface{}
+	upstream := captureUpstreamChatTemplateKwargs(t, &captured)
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-resp-h", "nv-resp-h", "test-key", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+
+	// 真实 codex /v1/responses body:顶层 reasoning_effort + input[]
+	respReq := map[string]interface{}{
+		"model":             "gpt-5",
+		"reasoning_effort":  "high",
+		"stream":            false,
+		"instructions":      "You are a coding agent.",
+		"input":             []map[string]interface{}{{"type": "message", "role": "user", "content": "hi"}},
+	}
+	body, _ := json.Marshal(respReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/responses", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-resp-h", UserKey: "k-resp-h"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if captured == nil || captured["thinking"] != true || captured["reasoning_effort"] != "high" {
+		t.Fatalf("codex /v1/responses + reasoning_effort:high 上游应收 {thinking:true,reasoning_effort:high},实际=%v", captured)
+	}
+}
+
+// TestHandleNvidia_Responses_NoEffort_NoInjection 端到端锁定 codex 关思考态(opt-in):
+// /v1/responses 无 reasoning_effort → 上游收到 ChatTemplateKwargs==nil。
+func TestHandleNvidia_Responses_NoEffort_NoInjection(t *testing.T) {
+	// 显式置全局思考开关 ON,并 defer 复位为 true(全局默认值),隔离用例间状态。
+	SetGlobalEnableThinkingMode(true)
+	defer SetGlobalEnableThinkingMode(true)
+
+	var captured map[string]interface{}
+	upstream := captureUpstreamChatTemplateKwargs(t, &captured)
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-resp-no", "nv-resp-no", "test-key", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+
+	respReq := map[string]interface{}{
+		"model":        "gpt-5",
+		"stream":       false,
+		"instructions": "You are a coding agent.",
+		"input":        []map[string]interface{}{{"type": "message", "role": "user", "content": "hi"}},
+	}
+	body, _ := json.Marshal(respReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/responses", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-resp-no", UserKey: "k-resp-no"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if captured != nil {
+		t.Fatalf("codex /v1/responses 无 reasoning_effort 应不注入(opt-in),上游应收 ChatTemplateKwargs==nil,实际=%v", captured)
+	}
+}
+
+// TestHandleNvidia_Responses_GlobalGateOff_Suppresses 端到端锁定全局总闸:
+// 全局思考开关 OFF 时,即使 codex /v1/responses 带 reasoning_effort:high 也不注入。
+func TestHandleNvidia_Responses_GlobalGateOff_Suppresses(t *testing.T) {
+	SetGlobalEnableThinkingMode(false)
+	defer SetGlobalEnableThinkingMode(true)
+
+	var captured map[string]interface{}
+	upstream := captureUpstreamChatTemplateKwargs(t, &captured)
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-resp-off", "nv-resp-off", "test-key", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+
+	respReq := map[string]interface{}{
+		"model":            "gpt-5",
+		"reasoning_effort": "high",
+		"stream":           false,
+		"instructions":     "You are a coding agent.",
+		"input":            []map[string]interface{}{{"type": "message", "role": "user", "content": "hi"}},
+	}
+	body, _ := json.Marshal(respReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/responses", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-resp-off", UserKey: "k-resp-off"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if captured != nil {
+		t.Fatalf("全局思考开关关闭时 codex /v1/responses 不应注入,上游应收 ChatTemplateKwargs==nil,实际=%v", captured)
+	}
+}

@@ -1,5 +1,7 @@
 package settings
 
+import "strings"
+
 // settings_accessors.go 集中所有 Config 字段级 Get/Set 访问器。
 // 拆分自原 settings.go,用 settings_generic.go 的泛型 getSetting/setSetting/
 // setSettingWithPost 收口样板,保证与原实现逐段等价的锁语义:
@@ -425,6 +427,41 @@ func (m *Manager) GetCustomModelOverrideID() string {
 
 func (m *Manager) SetCustomModelOverrideID(val string) error {
 	return setSetting(m, func(c *Config, v string) { c.CustomModelOverrideID = v }, val)
+}
+
+// GetBypassOverridePrefixes 返回全局模型覆写的"按前缀绕过"名单。
+// nil 兜底为空切片,与 GetNvidiaPreferredModels 一致,避免调用方判空歧义;
+// 返回副本防止外部误改内存态。
+func (m *Manager) GetBypassOverridePrefixes() []string {
+	return getSetting(m, func(c *Config) []string {
+		if c.BypassOverridePrefixes == nil {
+			return []string{}
+		}
+		out := make([]string, len(c.BypassOverridePrefixes))
+		copy(out, c.BypassOverridePrefixes)
+		return out
+	})
+}
+
+// SetBypassOverridePrefixes 去空白去重(大小写不敏感)后存入并持久化。
+func (m *Manager) SetBypassOverridePrefixes(val []string) error {
+	return setSetting(m, func(c *Config, v []string) {
+		seen := make(map[string]bool)
+		cleaned := make([]string, 0, len(v))
+		for _, item := range v {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			key := strings.ToLower(item)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			cleaned = append(cleaned, item)
+		}
+		c.BypassOverridePrefixes = cleaned
+	}, val)
 }
 
 func (m *Manager) GetCustomThinkingOverrideEnabled() bool {

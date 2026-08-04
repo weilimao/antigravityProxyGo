@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/settings"
 )
 
 // nvidiaLogCtx 携带一次 NVIDIA 请求落地为「请求日志」+「全局综合统计」所需的最小上下文。
@@ -304,7 +305,8 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				h.log("✅ [NVIDIA 中继] 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(账号 %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replaced, poolAccount.Email, ocrSessionDisplay(userSession), ocrHits, ocrMisses, ocrSkipped)
 			}
 
-			u, err := AnthropicToOpenAIChat(&anthReq)
+			mappings := h.getRelayModelMappingSafe()
+			u, err := AnthropicToOpenAIChat(&anthReq, mappings)
 			if err != nil {
 				h.log("🚫 [NVIDIA 中继] Anthropic→OpenAI 转换失败(账号 %s): %v,回写 400", poolAccount.Email, err)
 				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "anthropic->openai transform failed: " + err.Error()})
@@ -319,6 +321,14 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "responses->openai transform failed: " + err.Error()})
 				return
 			}
+			// Codex/Responses 入站的思考等级透传:与 OpenAI Chat 入站同款口径,从原始 body 提
+			// reasoning_effort(顶层,Codex 形态)或 reasoning.effort(OpenRouter 形态),按 NIM 取值
+			// 模式映射后注入 chat_template_kwargs,让 NIM 推理模型按等级思考。
+			// ResponsesToOpenAIChat → ParseUnifiedOpenAIRequest 的解析结构未接 reasoning_effort 字段,
+			// 解析阶段即丢,故必须在此用原始 bodyBytes 二次提取后原地注入(与 injectNvidiaChatTemplateKwargs
+			// 在 OpenAI Chat 分支的用法逐行等价)。
+			mappings := h.getRelayModelMappingSafe()
+			injectNvidiaChatTemplateKwargs(u, bodyBytes, upstreamModel, mappings)
 			upstreamReq = u
 		} else {
 			// OpenAI Chat 入站(含 Vision 数组形态 content):先降级 image_url 块为纯文本,再 Unmarshal。
@@ -351,7 +361,8 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			// 让 NIM 推理模型按等级思考。客户端未传思考 → 不注入 → 上游行为不变(回归安全)。
 			// 注意:顶层 reasoning_effort 不是 NIM 认的字段(NIM 认 chat_template_kwargs),
 			// 故 OpenAIChatRequest 无该字段,从原始 bodyBytes 单独取,避免污染上游请求结构。
-			injectNvidiaChatTemplateKwargs(&chatReq, bodyBytes, upstreamModel)
+			mappings := h.getRelayModelMappingSafe()
+			injectNvidiaChatTemplateKwargs(&chatReq, bodyBytes, upstreamModel, mappings)
 			upstreamReq = &chatReq
 		}
 
@@ -567,4 +578,16 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "nvidia pool exhausted: " + errStr(lastErr)})
+}
+
+func (h *APICompatHandler) getRelayModelMappingSafe() (mappings []settings.ModelMappingEntry) {
+	if h == nil || h.settingsMgr == nil {
+		return nil
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			mappings = nil
+		}
+	}()
+	return h.settingsMgr.GetRelayModelMapping()
 }

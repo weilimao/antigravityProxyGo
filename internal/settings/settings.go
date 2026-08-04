@@ -26,12 +26,24 @@ type ModelMappingEntry struct {
 	ClientModel string `json:"clientModel"`
 	TargetModel string `json:"targetModel"`
 	Expose      bool   `json:"expose"`
+	// InjectChatTemplateKwargs 是否向 NVIDIA 等上游注入 chat_template_kwargs (思考等级参数)。
+	// 指针类型: nil 视作默认 true(开启); 显式配置为 false 时关闭注入。
+	InjectChatTemplateKwargs *bool `json:"injectChatTemplateKwargs,omitempty"`
 	// OwnedBy 是该模型在 /v1/models 列表里 owned_by 字段的归属(号池/Provider, 如 "google", "nvidia", "deepseek")。
 	// 留空时由 relay.inferOwnedBy 按模型名前缀兜底推断。
 	OwnedBy string `json:"ownedBy,omitempty"`
 	// TargetProvider 是该模型映射自由绑定的目标路由账号池 Channel ID(如 "nvidia", "deepseek", "google", "gcp" 等)。
 	// 若配置了 TargetProvider, /route/* 路由入口会直接分发至此号池。
 	TargetProvider string `json:"targetProvider,omitempty"`
+}
+
+// ShouldInjectChatTemplateKwargs 返回该映射项是否允许注入 chat_template_kwargs。
+// 缺省/未配置(nil)时默认返回 true。
+func (m ModelMappingEntry) ShouldInjectChatTemplateKwargs() bool {
+	if m.InjectChatTemplateKwargs == nil {
+		return true
+	}
+	return *m.InjectChatTemplateKwargs
 }
 
 // ModelRouteRule 是「按模型路由到号池」的单条规则。
@@ -107,6 +119,12 @@ type Config struct {
 	PromptPrefix            string `json:"promptPrefix"`
 	CustomModelOverrideEnabled    bool   `json:"customModelOverrideEnabled"`
 	CustomModelOverrideID         string `json:"customModelOverrideID"`
+	// BypassOverridePrefixes 是全局模型覆写的"按前缀绕过"名单:客户端原始模型名
+	// (去 "models/" 前缀、小写化后)若以其中任一前缀开头,则跳过 GlobalModelOverride,
+	// 原样透传。默认 ["tab"] —— Tab 补全模型(tab_flash_lite_preview 等)本属代码补全通道,
+	// 走推理上游会触发 400 INVALID_ARGUMENT,故默认放行。
+	// 与思考链覆写的 isTabModel(handler_attempt_routing.go:171) 同源思路,但更通用可配。
+	BypassOverridePrefixes []string `json:"bypassOverridePrefixes"`
 	CustomThinkingOverrideEnabled bool   `json:"customThinkingOverrideEnabled"`
 	CustomThinkingSupports        bool   `json:"customThinkingSupports"`
 	CustomThinkingBudget          int    `json:"customThinkingBudget"`
@@ -286,6 +304,8 @@ type ManagerInterface interface {
 	SetCustomModelOverrideEnabled(val bool) error
 	GetCustomModelOverrideID() string
 	SetCustomModelOverrideID(val string) error
+	GetBypassOverridePrefixes() []string
+	SetBypassOverridePrefixes(val []string) error
 	GetCustomThinkingOverrideEnabled() bool
 	SetCustomThinkingOverrideEnabled(val bool) error
 	GetCustomThinkingSupports() bool

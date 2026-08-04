@@ -68,6 +68,9 @@ func (m *Manager) Init(defaultPath string) {
 		NvidiaCompressKeepToolResults: 4,
 		CustomModelOverrideEnabled:    false,
 		CustomModelOverrideID:         "",
+		// 默认放行 Tab 补全模型(tab_flash_lite_preview 等):此类模型走代码补全通道，
+		// 被全局覆写改向推理上游会触发 400 INVALID_ARGUMENT(见 handler.go 全局覆写日志)。
+		BypassOverridePrefixes:        []string{"tab"},
 		CustomThinkingOverrideEnabled: false,
 		CustomThinkingSupports:        false,
 		CustomThinkingBudget:          0,

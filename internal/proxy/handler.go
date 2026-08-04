@@ -281,15 +281,25 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.SettingsMgr != nil && h.SettingsMgr.GetCustomModelOverrideEnabled() {
 		overrideID := h.SettingsMgr.GetCustomModelOverrideID()
 		if overrideID != "" && currentModel != "unknown" {
-			oldModel := currentModel
-			// 如果路径中包含原模型名，将其替换为新模型名
-			if strings.Contains(targetPath, "/models/"+oldModel) {
-				targetPath = strings.Replace(targetPath, "/models/"+oldModel, "/models/"+overrideID, 1)
-				r.URL.Path = strings.Replace(r.URL.Path, "/models/"+oldModel, "/models/"+overrideID, 1)
-			}
-			currentModel = overrideID
-			if h.logFn != nil {
-				h.logFn(fmt.Sprintf("🔄 [全局覆写] 无论客户端请求何种模型，强制覆写: %s -> %s", oldModel, overrideID))
+			// 按前缀绕过:客户端原始模型名(去 models/ 前缀、小写化)若以白名单中
+			// 任一前缀开头,则跳过覆写原样透传。默认白名单 ["tab"] 放行 Tab 补全模型,
+			// 避免其被改向推理上游触发 400 INVALID_ARGUMENT。
+			bypassed := shouldBypassOverride(currentModel, h.SettingsMgr.GetBypassOverridePrefixes())
+			if bypassed {
+				if h.logFn != nil {
+					h.logFn(fmt.Sprintf("⏭️ [全局覆写] 模型 %s 命中绕过前缀,跳过覆写原样透传", currentModel))
+				}
+			} else {
+				oldModel := currentModel
+				// 如果路径中包含原模型名，将其替换为新模型名
+				if strings.Contains(targetPath, "/models/"+oldModel) {
+					targetPath = strings.Replace(targetPath, "/models/"+oldModel, "/models/"+overrideID, 1)
+					r.URL.Path = strings.Replace(r.URL.Path, "/models/"+oldModel, "/models/"+overrideID, 1)
+				}
+				currentModel = overrideID
+				if h.logFn != nil {
+					h.logFn(fmt.Sprintf("🔄 [全局覆写] 无论客户端请求何种模型，强制覆写: %s -> %s", oldModel, overrideID))
+				}
 			}
 		}
 	}

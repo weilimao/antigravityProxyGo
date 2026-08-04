@@ -204,6 +204,25 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		a.AddLog("⚙️ 自定义模型覆盖 ID 已更新")
 		return true
 
+	case "settings:set-bypass-override-prefixes":
+		// args: [prefixes: []interface{<string>}]
+		// 全局模型覆写的"按前缀绕过"名单:匹配前缀的模型跳过覆写原样透传。
+		// 去空去重逻辑由 SetBypassOverridePrefixes 在持锁内完成,此处只做 interface{}→string 收集。
+		var prefixes []string
+		if len(args) > 0 {
+			if arr, ok := args[0].([]interface{}); ok {
+				for _, v := range arr {
+					if s, ok := v.(string); ok {
+						prefixes = append(prefixes, s)
+					}
+				}
+			}
+		}
+		_ = a.settingsMgr.SetBypassOverridePrefixes(prefixes)
+		saved := a.settingsMgr.GetBypassOverridePrefixes()
+		a.AddLog(fmt.Sprintf("⚙️ 覆写绕过模型前缀已更新: %d 个 (%v)", len(saved), saved))
+		return true
+
 	case "settings:set-custom-thinking-override-enabled":
 		enabled := getBoolArg(0)
 		_ = a.settingsMgr.SetCustomThinkingOverrideEnabled(enabled)

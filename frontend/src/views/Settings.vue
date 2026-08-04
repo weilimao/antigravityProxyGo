@@ -242,6 +242,9 @@
 		<div class="flex flex-col gap-1.5 mt-1" id="divCustomModelOverrideOptions">
 			<label class="text-[12px] font-bold text-outline" data-i18n="customModelOverrideIDLabel">目标模型 ID (被覆写的实际模型)</label>
 			<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomModelOverrideID" placeholder="例如：gemini-1.5-pro" data-i18n-placeholder="customModelOverrideIDPlaceholder" type="text" />
+			<label class="text-[12px] font-bold text-outline mt-2" data-i18n="bypassOverridePrefixesLabel">覆写绕过模型前缀</label>
+			<p class="text-[11px] text-outline text-wrap max-w-[80%] leading-relaxed" data-i18n="bypassOverridePrefixesTip">按前缀匹配的模型将跳过全局覆写、原样透传（例如 Tab 补全模型 tab_flash_lite_preview 不应被改向推理上游）。多个前缀用英文逗号分隔，留空表示不绕过任何模型。</p>
+			<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtBypassOverridePrefixes" placeholder="例如：tab" data-i18n-placeholder="bypassOverridePrefixesPlaceholder" type="text" />
 		</div>
 
 		<!-- 全局思维链预算 (Thinking Budget) 覆写开关与参数 -->
@@ -819,6 +822,7 @@
                     <tr class="border-b border-outline-variant/25 text-outline/80">
                         <th class="py-2.5 font-bold pl-2" data-i18n="relayMappingClientModel">客户端请求模型 (Client Model)</th>
                         <th class="py-2.5 font-bold pl-2" data-i18n="relayMappingTargetModel">真实目标模型 (Target Model)</th>
+                        <th id="thInjectKwargs" class="py-2.5 font-bold text-center w-[160px] hidden" data-i18n="relayMappingInjectKwargs">注入 Template Kwargs</th>
                         <th class="py-2.5 font-bold text-center w-[120px]" data-i18n="relayMappingExpose">是否公开 (Expose)</th>
                         <th class="py-2.5 font-bold text-center w-[80px]" data-i18n="autoTriggerColAction">操作</th>
                     </tr>

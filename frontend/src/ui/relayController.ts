@@ -465,6 +465,16 @@ export function initRelayEvents() {
         const currentTab = poolTabs.find(t => t.id === activeTabId) || poolTabs[0];
         const fetchedModels = channelModelsCache[currentTab.targetProvider || currentTab.id] || [];
 
+        const isNvidiaTab = (currentTab.targetProvider === 'nvidia' || currentTab.id === 'nvidia');
+        const thInjectKwargs = document.getElementById('thInjectKwargs');
+        if (thInjectKwargs) {
+            if (isNvidiaTab) {
+                thInjectKwargs.classList.remove('hidden');
+            } else {
+                thInjectKwargs.classList.add('hidden');
+            }
+        }
+
         if (fetchedModels.length > 0) {
             updateDatalist(fetchedModels);
         }
@@ -484,6 +494,9 @@ export function initRelayEvents() {
                             ${fetchedModels.map(m => `<option value="${m}" ${m === item.targetModel ? 'selected' : ''}>${m}</option>`).join('')}
                         </select>
                     </div>
+                </td>
+                <td class="py-2 text-center inject-kwargs-cell ${isNvidiaTab ? '' : 'hidden'}">
+                    <input type="checkbox" class="text-primary focus:ring-primary rounded inject-kwargs-checkbox" ${item.injectChatTemplateKwargs !== false ? 'checked' : ''} data-index="${index}" title="是否向 NVIDIA 等上游注入 chat_template_kwargs (默认勾选)" />
                 </td>
                 <td class="py-2 text-center">
                     <input type="checkbox" class="text-primary focus:ring-primary rounded expose-checkbox" ${item.expose ? 'checked' : ''} data-index="${index}" />
@@ -559,6 +572,14 @@ export function initRelayEvents() {
             });
         });
 
+        tbody.querySelectorAll('.inject-kwargs-checkbox').forEach(chk => {
+            chk.addEventListener('change', (e) => {
+                const target = e.target as HTMLInputElement;
+                const idx = parseInt(target.getAttribute('data-index') || '0');
+                currentTabMappings[idx].injectChatTemplateKwargs = target.checked;
+            });
+        });
+
         tbody.querySelectorAll('.expose-checkbox').forEach(chk => {
             chk.addEventListener('change', (e) => {
                 const target = e.target as HTMLInputElement;
@@ -615,6 +636,7 @@ export function initRelayEvents() {
             clientModel: '',
             targetModel: '',
             expose: true,
+            injectChatTemplateKwargs: true,
             ownedBy: activeTabId,
             targetProvider: targetProv
         });

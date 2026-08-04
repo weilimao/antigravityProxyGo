@@ -99,9 +99,12 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 如果未开启号池负载均衡（直连模式），或项目负载均衡开启但本次请求是直接透传（非模型或 Agent 请求），
-		// 失败时直接退出，不执行切换账号重试
+		// 或本次请求是 Google 侧遥测/埋点端点（recordCodeAssistMetrics 等，命中 isIgnoredTelemetry），
+		// 失败时直接退出，不执行切换账号重试 ——
+		// 避免上游瞬时 5xx 被拉成 21 次空转重试，并在耗尽后向客户端伪造 429 配额耗尽（IDE 误判）。
 		isDirectPassthrough := sc.h.accountMgr.GetProjectPoolMode() && !isRealModelRequest(sc.targetPath) && !isAgentRequest(sc.targetPath) && sc.targetHost != "aiplatform.googleapis.com"
-		if !sc.h.accountMgr.IsPoolModeForActiveChannel() || isDirectPassthrough {
+		isTelemetryEndpoint := isIgnoredTelemetry(sc.targetPath)
+		if !sc.h.accountMgr.IsPoolModeForActiveChannel() || isDirectPassthrough || isTelemetryEndpoint {
 			sc.h.logFn(fmt.Sprintf("%s ❌ [直连模式] 尝试失败: %v", sc.logPrefix, errAttempt))
 			sc.logRequestToTracker(status, errAttempt.Error())
 

@@ -787,6 +787,113 @@ func TestOpenAIChatSSEToResponsesSSE_ReasoningFieldFallback(t *testing.T) {
 	}
 }
 
+// TestOpenAIChatSSEToResponsesSSE_ReasoningAsText 锁定:开启 IsReasoningAsText() 打字机模式后,
+// 上游 reasoning_content 应伪装成普通 output_text.delta 推送(与正文共用同一 text item),
+// 不再出现独立 reasoning item 的 reasoning_text.delta —— 与 Anthropic 入站 nvidia_translate_sse.go
+// 同款口径,避免 Codex 客户端把 reasoning_text item 默认折叠收起。
+func TestOpenAIChatSSEToResponsesSSE_ReasoningAsText(t *testing.T) {
+	SetGlobalReasoningAsText(true)
+	defer SetGlobalReasoningAsText(false)
+
+	var sse strings.Builder
+	// 思考增量(两片)
+	writeSSEData(&sse, mustJSONString(map[string]interface{}{
+		"id": "chatcmpl-rat", "object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{"reasoning_content": "思考"}, "finish_reason": nil}},
+	}))
+	writeSSEData(&sse, mustJSONString(map[string]interface{}{
+		"id": "chatcmpl-rat", "object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{"reasoning_content": "过程"}, "finish_reason": nil}},
+	}))
+	// 正文增量
+	writeSSEData(&sse, mustJSONString(map[string]interface{}{
+		"id": "chatcmpl-rat", "object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{"content": "答案"}, "finish_reason": nil}},
+	}))
+	// finish
+	writeSSEData(&sse, mustJSONString(map[string]interface{}{
+		"id": "chatcmpl-rat", "object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{}, "finish_reason": "stop"}},
+	}))
+	sse.WriteString("data: [DONE]\n\n")
+
+	buf := &flushBuffer{}
+	fw := newFlushWriter("test_resp_rat", bufio.NewWriter(buf))
+	_, _ = OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "moonshotai/kimi-k2.5")
+	fw.flush()
+
+	events := parseSSEEvents(buf.String())
+	// 打字机模式不应出现独立 reasoning item 事件
+	for _, ev := range events {
+		if ev.event == "response.reasoning_text.delta" || ev.event == "response.reasoning_text.done" {
+			t.Errorf("打字机模式不应出现独立 reasoning 事件 %s: %s", ev.event, ev.data)
+		}
+	}
+	// 思考原文应以 output_text.delta 形式推送,且累积含 "思考过程"
+	textDelta := textOfDelta(events, "response.output_text.delta")
+	if !strings.Contains(textDelta, "思考过程") {
+		t.Errorf("打字机模式思考应作为 output_text.delta 推送,累积期望含 \"思考过程\",实际 %q", textDelta)
+	}
+	if !strings.Contains(textDelta, "答案") {
+		t.Errorf("正文应继续以 output_text.delta 推送,累积期望含 \"答案\",实际 %q", textDelta)
+	}
+	// output_text.done 应承载思考+正文全文
+	var doneText string
+	for _, ev := range events {
+		if ev.event == "response.output_text.done" {
+			var m map[string]interface{}
+			if err := json.Unmarshal([]byte(ev.data), &m); err == nil {
+				if s, ok := m["text"].(string); ok {
+					doneText = s
+				}
+			}
+		}
+	}
+	if !strings.Contains(doneText, "思考过程") || !strings.Contains(doneText, "答案") {
+		t.Errorf("output_text.done 应承载思考+正文全文,期望含 \"思考过程\" 与 \"答案\",实际 %q", doneText)
+	}
+}
+
+// TestOpenAIChatToResponses_ReasoningAsText 锁定:非流式打字机模式下,
+// reasoning_content 拼到正文 text 头部作为单个 output_text 输出,无独立 reasoning item。
+func TestOpenAIChatToResponses_ReasoningAsText(t *testing.T) {
+	SetGlobalReasoningAsText(true)
+	defer SetGlobalReasoningAsText(false)
+
+	resp := &OpenAIChatResponse{
+		ID:   "chatcmpl-rat2",
+		Model: "moonshotai/kimi-k2.5",
+		Choices: []OpenAIChatChoice{{
+			Index: 0,
+			Message: ChatMessage{
+				Role:             "assistant",
+				ReasoningContent: "这是思考",
+				Content:          "这是正文",
+			},
+			FinishReason: "stop",
+		}},
+		Usage: OpenAIChatUsage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8},
+	}
+	rr := OpenAIChatToResponses(resp, "moonshotai/kimi-k2.5")
+	// 打字机模式:仅 1 个 output item(text),无独立 reasoning item
+	if len(rr.Output) != 1 {
+		t.Fatalf("打字机模式应仅 1 个 output item(text),实际 %d: %+v", len(rr.Output), rr.Output)
+	}
+	if rr.Output[0].Type != "message" {
+		t.Errorf("output[0] 应为 message,实际 %v", rr.Output[0].Type)
+	}
+	if len(rr.Output[0].Content) == 0 || rr.Output[0].Content[0].Type != "output_text" {
+		t.Errorf("output[0].content[0].type 应为 output_text,实际 %+v", rr.Output[0].Content)
+	}
+	combined := rr.Output[0].Content[0].Text
+	if !strings.Contains(combined, "这是思考") || !strings.Contains(combined, "这是正文") {
+		t.Errorf("output_text 应含思考+正文,期望含 \"这是思考\" 与 \"这是正文\",实际 %q", combined)
+	}
+	if !strings.HasPrefix(combined, "这是思考") {
+		t.Errorf("思考应拼在正文前,实际 %q", combined)
+	}
+}
+
 // textOfDelta 拼接指定事件的 delta 字符串字段。
 func textOfDelta(events []sseEvent, eventName string) string {
 	var sb strings.Builder

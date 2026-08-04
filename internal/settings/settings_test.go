@@ -174,6 +174,13 @@ func TestSettings_DefaultAllOff(t *testing.T) {
 	if mgr.GetCustomThinkingBudget() != 0 {
 		t.Errorf("Expected CustomThinkingBudget to default to 0, got %d", mgr.GetCustomThinkingBudget())
 	}
+
+	// BypassOverridePrefixes 默认 ["tab"] —— Tab 补全模型走代码补全通道,
+	// 被全局覆写改向推理上游会触发 400 INVALID_ARGUMENT(见 handler.go 全局覆写日志)。
+	bypass := mgr.GetBypassOverridePrefixes()
+	if len(bypass) != 1 || bypass[0] != "tab" {
+		t.Errorf("Expected BypassOverridePrefixes to default to [tab], got %v", bypass)
+	}
 }
 
 // TestNvidiaPreferredModels 覆盖全局级 NVIDIA 专属模型清单的默认值、Set/Get 往返、
@@ -240,6 +247,73 @@ func TestNvidiaPreferredModels(t *testing.T) {
 	}
 	if len(mgr2.GetNvidiaPreferredModels()) != 0 {
 		t.Errorf("Expected empty after clear, got %v", mgr2.GetNvidiaPreferredModels())
+	}
+}
+
+// TestBypassOverridePrefixes 覆盖"按前缀绕过"名单的默认值、Set/Get 往返、
+// 去空去重(大小写不敏感)、落盘与重载一致性、返回切片的内部隔离性。
+func TestBypassOverridePrefixes(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "antigravity-bypass-prefixes-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	mgr := NewManager()
+	mgr.Init(tempDir)
+
+	// 1. 默认应为 ["tab"](放行 Tab 补全模型),非空非 nil
+	got := mgr.GetBypassOverridePrefixes()
+	if len(got) != 1 || got[0] != "tab" {
+		t.Errorf("Expected default [\"tab\"], got %v", got)
+	}
+
+	// 2. Set 后 Get 返回一致;去空去重(大小写不敏感,保留首次出现的大小写)
+	want := []string{"tab", "  ", "Tab", "", "claude-", "tab"}
+	if err := mgr.SetBypassOverridePrefixes(want); err != nil {
+		t.Fatalf("SetBypassOverridePrefixes failed: %v", err)
+	}
+	got = mgr.GetBypassOverridePrefixes()
+	expected := []string{"tab", "claude-"}
+	if len(got) != len(expected) {
+		t.Fatalf("Expected %d deduped prefixes, got %d: %v", len(expected), len(got), got)
+	}
+	for i, p := range expected {
+		if got[i] != p {
+			t.Errorf("Expected prefixes[%d]=%q, got %q", i, p, got[i])
+		}
+	}
+
+	// 3. 返回的是副本,外部修改不影响内存态
+	got[0] = "tampered"
+	again := mgr.GetBypassOverridePrefixes()
+	if again[0] == "tampered" {
+		t.Errorf("GetBypassOverridePrefixes should return a defensive copy, but mutation leaked")
+	}
+
+	// 4. 配置落盘,新 Manager 加载该清单
+	configPath := filepath.Join(tempDir, "config.json")
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("Expected config.json persisted, stat err: %v", err)
+	}
+	mgr2 := NewManager()
+	mgr2.Init(tempDir)
+	reloaded := mgr2.GetBypassOverridePrefixes()
+	if len(reloaded) != len(expected) {
+		t.Fatalf("Reloaded bypass prefixes mismatch, got %v", reloaded)
+	}
+	for i, p := range expected {
+		if reloaded[i] != p {
+			t.Errorf("Reloaded prefixes[%d]=%q, expected %q", i, reloaded[i], p)
+		}
+	}
+
+	// 5. 清空清单(nil/空数组语义一致)
+	if err := mgr2.SetBypassOverridePrefixes([]string{}); err != nil {
+		t.Fatalf("Clear bypass prefixes failed: %v", err)
+	}
+	if len(mgr2.GetBypassOverridePrefixes()) != 0 {
+		t.Errorf("Expected empty after clear, got %v", mgr2.GetBypassOverridePrefixes())
 	}
 }
 

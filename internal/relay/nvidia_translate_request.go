@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"antigravity-proxy/internal/settings"
 )
 
 // nvidia_translate_request.go: Anthropic Messages -> OpenAI Chat 请求方向转换。
@@ -25,7 +27,7 @@ import (
 //   推理模型(glm-5.2)在客户端未显式请求时不 fallback 强开,尊重 opt-in 语义。
 //   Anthropic-Beta 头里的 redact-thinking-* 不再参与本决策(该头在 claude-cli 2.1.220 开/关两态均常驻,
 //   与思考 on/off 无关;官方未文档化该头,关思考的正路是 body thinking.type=disabled 或省略 thinking 字段)。
-func AnthropicToOpenAIChat(req *AnthropicRequest) (*OpenAIChatRequest, error) {
+func AnthropicToOpenAIChat(req *AnthropicRequest, mappings ...[]settings.ModelMappingEntry) (*OpenAIChatRequest, error) {
 	if req == nil {
 		return nil, fmt.Errorf("nvidia: nil anthropic request")
 	}
@@ -102,13 +104,11 @@ func AnthropicToOpenAIChat(req *AnthropicRequest) (*OpenAIChatRequest, error) {
 		out.StreamOptions = &ChatStreamOptions{IncludeUsage: true}
 	}
 
-	// 思考注入决策(两层,修复 commit 88cf8c8 引入的 redact-thinking 头误判):
+	// 思考注入决策(三层):
 	//   第一层 thinkingRequested(req):客户端是否显式开思考(body thinking.type∈{enabled,adaptive})。
 	//   第二层 IsEnableThinkingMode():代理全局总开关(UI 可关,strip 所有 CoT)。
-	//   effort 在第一层判为 ON 时再取值定档,绝不单独驱动 on/off。
-	//   推理模型(glm-5.2)未显式请求时不 fallback 强开,尊重 opt-in。
-	//   redact-thinking-* 头不再参与(两态常驻,与 on/off 无关)。
-	if !IsEnableThinkingMode() || !thinkingRequested(req) {
+	//   第三层 isNvidiaModelNoKwargs(req.Model, mappings...):针对不支持/被取消勾选 chat_template_kwargs 的模型予以抑制,避免上游 404。
+	if !IsEnableThinkingMode() || !thinkingRequested(req) || isNvidiaModelNoKwargs(req.Model, mappings...) {
 		out.ChatTemplateKwargs = nil
 	} else {
 		effort := resolveReasoningEffort(req)
@@ -255,11 +255,11 @@ func nvidiaThinkingEffortMode(model string) string {
 //
 // 设计要点:reasoning_effort 不是 OpenAIChatRequest 字段(顶层该字段 NIM 不认,会 400),
 // 既不在结构体里接、也不往上游顶层发,只在原始 body 里提后转进 chat_template_kwargs。
-func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte, upstreamModel string) {
+func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte, upstreamModel string, mappings ...[]settings.ModelMappingEntry) {
 	if chatReq == nil {
 		return
 	}
-	if !IsEnableThinkingMode() {
+	if !IsEnableThinkingMode() || isNvidiaModelNoKwargs(upstreamModel, mappings...) {
 		chatReq.ChatTemplateKwargs = nil
 		return
 	}
@@ -278,6 +278,23 @@ func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte
 	}
 	// effort 非空但映射后为空(如未识别档):回落不注入,避免往上游塞空 reasoning_effort 触发 400。
 	chatReq.ChatTemplateKwargs = nil
+}
+
+// isNvidiaModelNoKwargs 判定模型映射配置是否显式禁用 chat_template_kwargs 思考参数。
+// 匹配规则:
+// 在 mappings 中匹配 ClientModel 或 TargetModel, 若其 InjectChatTemplateKwargs 显式配置为 false, 则禁止注入。
+func isNvidiaModelNoKwargs(model string, mappings ...[]settings.ModelMappingEntry) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if len(mappings) > 0 {
+		for _, entry := range mappings[0] {
+			if strings.EqualFold(entry.ClientModel, m) || strings.EqualFold(entry.TargetModel, m) {
+				if !entry.ShouldInjectChatTemplateKwargs() {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // extractOpenAIReasoningEffort 从原始入站 body 提取思考等级字符串。

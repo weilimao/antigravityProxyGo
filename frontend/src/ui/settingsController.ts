@@ -472,6 +472,23 @@ export function initSettings() {
             });
         }
 
+        const txtBypassOverridePrefixes = document.getElementById('txtBypassOverridePrefixes') as HTMLInputElement | null;
+        if (txtBypassOverridePrefixes) {
+            txtBypassOverridePrefixes.addEventListener('change', (e: any) => {
+                try {
+                    // 逗号分隔字符串 → 去空白后过滤空串成数组,与后端 []string IPC 对齐。
+                    const raw: string = e.target.value || '';
+                    const prefixes = raw
+                        .split(',')
+                        .map((s: string) => s.trim())
+                        .filter((s: string) => s !== '');
+                    ipcRenderer.send('settings:set-bypass-override-prefixes', prefixes);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save bypass override prefixes:', err);
+                }
+            });
+        }
+
         const chkEnableCustomThinkingOverride = document.getElementById('chkEnableCustomThinkingOverride') as HTMLInputElement | null;
         if (chkEnableCustomThinkingOverride) {
             chkEnableCustomThinkingOverride.addEventListener('change', (e: any) => {
@@ -789,6 +806,15 @@ export function refreshSettingsUI() {
             const overrideID = ipcRenderer.sendSync('settings:get-custom-model-override-id');
             if (overrideID !== null && overrideID !== undefined) {
                 txtCustomModelOverrideID.value = String(overrideID);
+            }
+        }
+
+        const txtBypassOverridePrefixes = document.getElementById('txtBypassOverridePrefixes') as HTMLInputElement | null;
+        if (txtBypassOverridePrefixes) {
+            const prefixes = ipcRenderer.sendSync('settings:get-bypass-override-prefixes');
+            if (Array.isArray(prefixes)) {
+                // []string → 逗号分隔展示,默认 ["tab"] 显示为 "tab"。
+                txtBypassOverridePrefixes.value = prefixes.filter((s: any) => typeof s === 'string' && s !== '').join(', ');
             }
         }
 

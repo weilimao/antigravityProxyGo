@@ -194,6 +194,12 @@ func openAIChoiceToResponsesItems(m ChatMessage, respID string) []ResponsesOutpu
 	if strings.TrimSpace(rrText) == "" && m.Reasoning != "" {
 		rrText = m.Reasoning
 	}
+	if IsReasoningAsText() && strings.TrimSpace(rrText) != "" {
+		// 打字机模式:思考原文拼接到正文 text 头部(注意保留思考前导空白用作分隔),
+		// 作为单个 output_text message 条目输出,与正文共用同一 item,避免 Codex 折叠 reasoning。
+		m.Content = rrText + m.Content
+		rrText = ""
+	}
 	if strings.TrimSpace(rrText) != "" {
 		items = append(items, ResponsesOutputItem{
 			Type:   "message",
@@ -384,14 +390,24 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 			rrDelta = ch.Delta.Reasoning
 		}
 		if rrDelta != "" {
-			if !reasoningOpened {
-				reasoningOpened = true
-				fw.writeEvent("response.output_item.added", responsesReasoningItemAddedPayload(reasonItem.id, reasonOutIdx))
-				fw.writeEvent("response.content_part.added", responsesReasoningPartAddedPayload(reasonItem.id, reasonOutIdx))
-				reasonItem.opened = true
+			if IsReasoningAsText() {
+				// 打字机模式(与 Anthropic 入站 nvidia_translate_sse.go 同款口径):
+				// 把思考原文伪装成普通 output_text delta,直接逐字推打屏幕,避免 Codex 客户端
+				// 把 reasoning_text item 默认折叠收起。与正文共享同一 text item(沿用 textItem.outIdx
+				// 与 fullText 累积),收尾时随正文一起 output_text.done,无独立 reasoning item 闭合。
+				textItem.ensureOpened(fw, "output_text", reasonOutIdx)
+				fullText.WriteString(rrDelta)
+				fw.writeEvent("response.output_text.delta", responsesOutputTextDeltaPayload(textItem.id, textItem.outIdx, rrDelta))
+			} else {
+				if !reasoningOpened {
+					reasoningOpened = true
+					fw.writeEvent("response.output_item.added", responsesReasoningItemAddedPayload(reasonItem.id, reasonOutIdx))
+					fw.writeEvent("response.content_part.added", responsesReasoningPartAddedPayload(reasonItem.id, reasonOutIdx))
+					reasonItem.opened = true
+				}
+				reasoningBuf.WriteString(rrDelta)
+				fw.writeEvent("response.reasoning_text.delta", responsesReasoningDeltaPayload(reasonItem.id, reasonOutIdx, rrDelta))
 			}
-			reasoningBuf.WriteString(rrDelta)
-			fw.writeEvent("response.reasoning_text.delta", responsesReasoningDeltaPayload(reasonItem.id, reasonOutIdx, rrDelta))
 		}
 
 		// 文本增量

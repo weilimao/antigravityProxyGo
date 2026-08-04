@@ -46,6 +46,27 @@ func isAgentRequest(path string) bool {
 	return strings.Contains(p, "agent")
 }
 
+// shouldBypassOverride 判定客户端原始模型名是否命中"按前缀绕过"白名单。
+// 命中则跳过全局模型覆写、原样透传,避免 Tab 补全等模型被改向推理上游触发 400。
+// 匹配规则:对 currentModel 去 "models/" 前缀后小写化,与白名单中每个非空前缀
+// (trim 后小写化)做 HasPrefix 比较。空白前缀项视为无效跳过。
+func shouldBypassOverride(currentModel string, prefixes []string) bool {
+	if len(prefixes) == 0 {
+		return false
+	}
+	checkModel := strings.ToLower(strings.TrimPrefix(currentModel, "models/"))
+	for _, p := range prefixes {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if strings.HasPrefix(checkModel, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
 func mapModelForProject(modelName string) string {
 	modelNameLower := strings.ToLower(modelName)
 	if strings.HasPrefix(modelNameLower, "models/") {

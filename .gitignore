@@ -12,4 +12,5 @@ scratch/
 logs/
 .env.local
 scripts/.secret_token
-*.secret
+scripts/.secret_token copy
+*.secret

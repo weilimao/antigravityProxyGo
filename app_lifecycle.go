@@ -660,6 +660,7 @@ func (a *App) domReady(ctx context.Context) {
 		"settings:get-prompt-prefix":                    a.settingsMgr.GetPromptPrefix(),
 		"settings:get-custom-model-override-enabled":    a.settingsMgr.GetCustomModelOverrideEnabled(),
 		"settings:get-custom-model-override-id":         a.settingsMgr.GetCustomModelOverrideID(),
+		"settings:get-bypass-override-prefixes":        a.settingsMgr.GetBypassOverridePrefixes(),
 		"settings:get-custom-thinking-override-enabled": a.settingsMgr.GetCustomThinkingOverrideEnabled(),
 		"settings:get-custom-thinking-supports":         a.settingsMgr.GetCustomThinkingSupports(),
 		"settings:get-custom-thinking-budget":           a.settingsMgr.GetCustomThinkingBudget(),
