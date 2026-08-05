@@ -238,6 +238,9 @@ export function initRelayEvents() {
     // makeMappingEntry 构造一条模型映射对象,字段口径与后端 settings.ModelMappingEntry 对齐。
     // injectChatTemplateKwargs 仅对 NVIDIA 号池有意义(默认 true;由 _relayAddModelMapping / 表格勾选控制),
     // 其余号池该字段不参与透传,保持 undefined 即可。
+    // chat_template_kwargs 是 NVIDIA NIM 专属约定, Other 号池各第三方上游思考参数格式各异
+    // (阿里云 DeepSeek v4 要 bool、NIM 要字符串、有的根本不认), 强塞会触发上游 400 类型不匹配。
+    // 故 Other 号池条目默认关闭注入(后端 isNvidiaModelNoKwargs 也会兜底抑制, 此处保持一致)。
     function makeMappingEntry(clientModel: string, targetModel: string, provider: string, expose: boolean): any {
         return {
             clientModel,
@@ -245,7 +248,7 @@ export function initRelayEvents() {
             targetProvider: provider,
             expose,
             ownedBy: '',
-            injectChatTemplateKwargs: true
+            injectChatTemplateKwargs: provider !== 'other'
         };
     }
 
@@ -920,7 +923,10 @@ export function initRelayEvents() {
             clientModel: '',
             targetModel: '',
             expose: true,
-            injectChatTemplateKwargs: true,
+            // chat_template_kwargs 是 NVIDIA NIM 专属约定, Other 号池各第三方上游思考参数格式
+            // 各异(阿里云 DeepSeek v4 要 bool、NIM 要字符串、有的根本不认), 强塞会触发上游 400。
+            // 故 Other 号池新增映射默认关闭注入(后端 isNvidiaModelNoKwargs 也会兜底抑制, 此处保持 UI 一致)。
+            injectChatTemplateKwargs: targetProv !== 'other',
             ownedBy: activeTabId,
             targetProvider: targetProv
         });

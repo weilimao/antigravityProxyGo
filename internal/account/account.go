@@ -31,6 +31,9 @@ type Account struct {
 	CooldownUntil    int64            `json:"cooldownUntil"` // min(cooldowns)
 	TwoFASecret      string           `json:"twofa_secret,omitempty"`
 	TokenRefreshedAt int64            `json:"token_refreshed_at"`
+	// MaskedKey 是 AccessToken(API Key) 的脱敏展示版(仅首尾保留,如 sk-****abcd),
+	// 仅在 GetAccounts 深拷贝时填充,供前端编辑态辨认"已配置 Key"且绝不下发明文。
+	MaskedKey        string           `json:"maskedKey,omitempty"`
 	BaseURL          string           `json:"baseUrl,omitempty"`
 	DefaultModel     string           `json:"defaultModel,omitempty"`
 	ModelSonnet      string           `json:"modelSonnet,omitempty"`
@@ -94,6 +97,8 @@ type AccountsData struct {
 	ProjectPoolMode   bool       `json:"projectPoolMode"`
 	GeminiCliPoolMode bool       `json:"geminiCliPoolMode"`
 	ActiveChannel     string     `json:"activeChannel"`
+	// OtherLBModes 按 GroupID 持久化 Other 号池各组独立 LB 算法(round-robin/sticky)。
+	OtherLBModes map[string]string `json:"otherLbModes,omitempty"`
 }
 
 type Manager struct {

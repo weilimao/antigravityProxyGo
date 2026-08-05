@@ -43,6 +43,8 @@ type OtherGroupInfo struct {
 	Formats      []string `json:"formats"`
 	AccountCount int      `json:"accountCount"`
 	EnabledCount int      `json:"enabledCount"`
+	// LbMode 是该组当前 LB 算法(round-robin/sticky),供前端组 tab 下拉展示。
+	LbMode string `json:"lbMode"`
 }
 
 // reserveOtherProviderGroupIDs 是禁止用作 GroupID 的保留值,避免与现有号池 Provider 冲突导致路由歧义。
@@ -51,9 +53,15 @@ var reserveOtherGroupIDs = map[string]bool{
 	"gemini-cli": true, "2fa": true, "": true, "all": true, "other": true,
 }
 
-// ValidateOtherAccountInput 校验 Other 账号录入参数。
-// 安全红线:GroupID 规范化后仅小写字母/数字/下划线/连字符且非保留值;BaseURL 必须 https;APIKey 非空;Formats 至少一项且仅 openai/anthropic。
+// ValidateOtherAccountInput 校验 Other 账号录入参数(新增表单,key 必填)。
 func ValidateOtherAccountInput(in OtherAccountInput) error {
+	return validateOtherFields(in, true)
+}
+
+// validateOtherFields 校验 Other 账号字段。requireKey 为 false 时允许 APIKey 留空
+// (编辑态留空表示保持原 Key 不变)。
+// 安全红线:GroupID 规范化后仅小写字母/数字/下划线/连字符且非保留值;BaseURL 必须 https;Formats 至少一项且仅 openai/anthropic。
+func validateOtherFields(in OtherAccountInput, requireKey bool) error {
 	in.GroupID = strings.ToLower(strings.TrimSpace(in.GroupID))
 	if in.GroupID == "" {
 		return errors.New("groupId 不能为空")
@@ -75,7 +83,7 @@ func ValidateOtherAccountInput(in OtherAccountInput) error {
 	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return errors.New("baseUrl 必须是合法的 https 地址")
 	}
-	if strings.TrimSpace(in.APIKey) == "" {
+	if requireKey && strings.TrimSpace(in.APIKey) == "" {
 		return errors.New("apiKey 不能为空")
 	}
 	if len(in.Formats) == 0 {
@@ -169,6 +177,71 @@ func (m *Manager) AddOtherAccount(in OtherAccountInput) (string, error) {
 	return acc.ID, nil
 }
 
+// UpdateOtherAccount 就地更新已有 other 账号的可编辑字段(GroupID/GroupName/BaseURL/APIKey/Formats/展示名/默认模型)。
+// APIKey 留空表示保持不变(前端编辑时若不改 Key 则传空),故跳过 key 必填校验。
+// 返回更新后的账号,账号不存在或非 other 类型时报错。
+func (m *Manager) UpdateOtherAccount(id string, in OtherAccountInput) (*Account, error) {
+	if err := validateOtherFields(in, false); err != nil {
+		return nil, err
+	}
+
+	m.Lock()
+	var target *Account
+	for _, a := range m.accounts {
+		if a.ID == id && a.Provider == otherProvider {
+			target = a
+			break
+		}
+	}
+	if target == nil {
+		m.Unlock()
+		return nil, errors.New("账号不存在或非 Other 类型")
+	}
+
+	groupID := strings.ToLower(strings.TrimSpace(in.GroupID))
+	groupName := strings.TrimSpace(in.GroupName)
+	if groupName == "" {
+		groupName = groupID
+	}
+	baseURL := strings.TrimSpace(strings.TrimRight(in.BaseURL, "/"))
+	label := strings.TrimSpace(in.Label)
+	defaultModel := strings.TrimSpace(in.DefaultModel)
+	if label == "" {
+		// 展示名留空回退为 {GroupName}-{Key前6位}(与 NewOtherAccount 一致)。
+		keyTail := strings.TrimSpace(in.APIKey)
+		if keyTail == "" {
+			keyTail = target.GetAccessToken()
+		}
+		if len(keyTail) > 6 {
+			keyTail = keyTail[:6]
+		}
+		if defaultModel != "" {
+			label = groupName + "-" + defaultModel + "-" + keyTail
+		} else {
+			label = groupName + "-" + keyTail
+		}
+	}
+	target.GroupID = groupID
+	target.GroupName = groupName
+	target.BaseURL = baseURL
+	target.Formats = normalizeOtherFormats(in.Formats)
+	target.DefaultModel = defaultModel
+	target.Email = label
+	// APIKey 留空表示保持不变;否则覆盖 AccessToken(复用 SetAccessToken 走 token 锁)。
+	if strings.TrimSpace(in.APIKey) != "" {
+		target.SetAccessToken(strings.TrimSpace(in.APIKey))
+	}
+
+	// 先释放写锁再 SaveAccounts(内部会 RLock;写锁持有时不可再 RLock,否则自死锁)。
+	m.Unlock()
+
+	_ = m.SaveAccounts(true)
+	if m.OnAccountsUpdated != nil {
+		go m.OnAccountsUpdated(m.accounts)
+	}
+	return target, nil
+}
+
 // GetOtherGroups 返回当前所有 Other 组的汇总信息(按 GroupID 聚合),前端按组渲染模型获取按钮用。
 // 组内多账号取首个账号的 BaseURL/Formats 作为组级元数据(同组各账号应共享同 BaseURL/Formats,
 // AddOtherAccount 校验链不强制同组追加账号时 BaseURL/Formats 一致,但前端录入时以组为单位填天然保证)。
@@ -189,6 +262,10 @@ func (m *Manager) GetOtherGroups() []OtherGroupInfo {
 				GroupName: a.GroupName,
 				BaseURL:   a.BaseURL,
 				Formats:   append([]string{}, a.Formats...),
+				LbMode:    m.otherLBModes[strings.ToLower(strings.TrimSpace(gid))],
+			}
+			if gi.LbMode == "" {
+				gi.LbMode = "round-robin"
 			}
 			groupMap[gid] = gi
 			order = append(order, gid)
@@ -243,7 +320,7 @@ func (m *Manager) GetOtherLBMode(groupID string) string {
 	return "round-robin"
 }
 
-// SetOtherLBMode 设置某组 LB 算法(不持久化为独立字段,内存态即可;若需持久化可后续补 AccountsData 字段)。
+// SetOtherLBMode 设置某组 LB 算法并持久化到 accounts.json(经 AccountsData.OtherLBModes)。
 func (m *Manager) SetOtherLBMode(groupID, mode string) {
 	gid := strings.ToLower(strings.TrimSpace(groupID))
 	mode = strings.TrimSpace(mode)
@@ -251,11 +328,12 @@ func (m *Manager) SetOtherLBMode(groupID, mode string) {
 		mode = "round-robin"
 	}
 	m.Lock()
-	defer m.Unlock()
 	if m.otherLBModes == nil {
 		m.otherLBModes = make(map[string]string)
 	}
 	m.otherLBModes[gid] = mode
+	m.Unlock()
+	_ = m.SaveAccounts(true)
 }
 
 // GetOtherGroupFormats 返回某组首个启用账号的 Formats,供中继转发层决定上游端点与协议转译方向。

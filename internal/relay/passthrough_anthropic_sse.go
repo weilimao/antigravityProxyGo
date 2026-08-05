@@ -27,7 +27,6 @@ func anthropicSSEToOpenAIChatSSEInto(reader io.Reader, writer io.Writer, model s
 	var pendingToolID string
 	var toolArgBuf strings.Builder
 	toolIndex := -1
-
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -77,11 +76,15 @@ func anthropicSSEToOpenAIChatSSEInto(reader io.Reader, writer io.Writer, model s
 					toolArgBuf.Reset()
 				}
 			case "content_block_delta":
-				// 解析 delta.type:text_delta → 拼正文;input_json_delta → 拼 tool args。
+				// 解析 delta.type:text_delta → 拼正文;input_json_delta → 拼 tool args;
+				// thinking_delta → 推 reasoning_content 增量(对齐 OpenAI 官方 reasoning_content 流式字段,
+				// 对偶 nvidia_translate_sse.go 的反向 emitThinkingDelta);signature_delta → 跳过(OpenAI 无对应)。
 				var d struct {
 					Type        string `json:"type"`
 					Text        string `json:"text"`
 					PartialJSON string `json:"partial_json"`
+					Thinking    string `json:"thinking"`
+					Signature   string `json:"signature"`
 				}
 				_ = json.Unmarshal(ev.Delta, &d)
 				if d.Type == "text_delta" && d.Text != "" {
@@ -93,6 +96,18 @@ func anthropicSSEToOpenAIChatSSEInto(reader io.Reader, writer io.Writer, model s
 						}},
 					}
 					writeSSEChunk(writer, chunk)
+				} else if d.Type == "thinking_delta" && d.Thinking != "" {
+					// 思考增量 → OpenAI delta.reasoning_content。守非空避免发空 reasoning chunk。
+					chunk := OpenAIChatStreamChunk{
+						ID: chunkID, Object: "chat.completion.chunk", Model: model,
+						Choices: []OpenAIChatStreamChoice{{
+							Index: 0,
+							Delta: OpenAIChatDelta{ReasoningContent: d.Thinking},
+						}},
+					}
+					writeSSEChunk(writer, chunk)
+				} else if d.Type == "signature_delta" {
+					// OpenAI 无思考签名字段,跳过(对齐 nvidia_translate_sse.go 关 thinking 块时 signature_delta 占位空串语义)。
 				} else if d.Type == "input_json_delta" && d.PartialJSON != "" {
 					toolArgBuf.WriteString(d.PartialJSON)
 				}

@@ -29,6 +29,12 @@ import (
 //     tool 角色消息 → user 角色含 tool_result 块(对偶 AnthropicToOpenAIChat 的 tool_result→tool 映射);
 //   - tools(OpenAI function tools)→ Anthropic tools{name,input_schema};
 //   - max_tokens / temperature / stream 透传(Anthropic MaxTokens 必填,OpenAI 留空时给一个兜底大值)。
+//
+// 思考注入(Other 号池 Anthropic 上游组专用,官方格式):
+//   入站 OpenAI 顶层 reasoning_effort(或 reasoning.effort)→ Anthropic 官方 thinking 字段
+//   {type:"enabled", budget_tokens:N}。分档预算:low→4000 / medium→12000 / high→32000 / max→64000。
+//   守护 Anthropic「max_tokens > budget_tokens」不变式:若 budget>=max_tokens,把 max_tokens 抬到
+//   budget+ClaudeBudgetMargin。opt-in OFF(reasoning_effort 空/none/off/disabled)→ 不注入 thinking。
 func OpenAIToAnthropicMessages(bodyBytes []byte, upstreamModel string, isResponses bool) (*AnthropicRequest, error) {
 	var chatReq OpenAIChatRequest
 	if isResponses {
@@ -54,6 +60,23 @@ func OpenAIToAnthropicMessages(bodyBytes []byte, upstreamModel string, isRespons
 	if out.MaxTokens == nil || *out.MaxTokens == 0 {
 		fallback := 8192
 		out.MaxTokens = &fallback
+	}
+
+	// 思考注入:入站 reasoning_effort → Anthropic thinking.budget_tokens(官方格式,对偶
+	// AnthropicToOpenAIChat 的 reasoning_effort 注入)。仅 Other anthropic 组走本函数,故无 NIM 顾虑。
+	effort := extractOpenAIReasoningEffort(bodyBytes)
+	if budget := mapReasoningEffortToAnthropicBudget(effort); budget > 0 {
+		out.Thinking = &AnthropicThinking{Type: "enabled", BudgetTokens: budget}
+		// 守护「max_tokens > budget_tokens」:Anthropic 严格校验,违反返回 400
+		// ("max_tokens must be greater than thinking.budget_tokens")。budget>=max_tokens 时抬升 max_tokens。
+		cur := 0
+		if out.MaxTokens != nil {
+			cur = *out.MaxTokens
+		}
+		if cur <= budget {
+			raised := budget + ClaudeBudgetMargin
+			out.MaxTokens = &raised
+		}
 	}
 
 	// system 消息抽出合并为顶层 system 字符串;非 system 消息按角色转译。
@@ -216,14 +239,27 @@ func anthropicStopToOpenAIFinish(stop string) string {
 }
 
 // anthropicContentToChatMessage 把 Anthropic content 块数组聚合为一个 OpenAI ChatMessage。
-// text 块拼到 Content;tool_use 块转 ToolCalls。
+// text 块拼到 Content;thinking 块写入 ReasoningContent(对齐 OpenAI 官方 reasoning_content 字段);
+// tool_use 块转 ToolCalls。
+//
+// 既往缺陷:原实现 `case "text","thinking": sb.WriteString(b.Text)` 把 thinking 块也走 b.Text,
+// 而 Anthropic thinking 块的内容存在 b.Thinking 字段(兼容 Anthropic 官方协议:thinking_delta.payload.thinking),
+// b.Text 恒空 → 思考内容被静默丢弃。此处修正为 thinking 块读 b.Thinking、写 ReasoningContent,
+// 与流式路径 anthropicSSEToOpenAIChatSSEInto 的 thinking_delta → delta.reasoning_content 翻译对齐。
+// 同时回填 Reasoning 兜底字段,对偶 nvidia_translate_sse.go:131-138 的 reasoning 字段兜底语义。
 func anthropicContentToChatMessage(blocks []AnthropicContent) ChatMessage {
 	var sb strings.Builder
 	var tools []ChatToolCall
+	var reasoningSb strings.Builder
 	for i, b := range blocks {
 		switch b.Type {
-		case "text", "thinking":
+		case "text":
 			sb.WriteString(b.Text)
+		case "thinking":
+			// 思考内容存在 b.Thinking(非 b.Text);空串/纯空白 thinking 不计入避免污染 ReasoningContent。
+			if strings.TrimSpace(b.Thinking) != "" {
+				reasoningSb.WriteString(b.Thinking)
+			}
 		case "tool_use":
 			args, _ := json.Marshal(b.Input)
 			id := b.ID
@@ -241,11 +277,16 @@ func anthropicContentToChatMessage(blocks []AnthropicContent) ChatMessage {
 			})
 		}
 	}
-	return ChatMessage{
+	msg := ChatMessage{
 		Role:      "assistant",
 		Content:   sb.String(),
 		ToolCalls: tools,
 	}
+	if reasoningSb.Len() > 0 {
+		msg.ReasoningContent = reasoningSb.String()
+		msg.Reasoning = reasoningSb.String()
+	}
+	return msg
 }
 
 // AnthropicSSEToOpenAIChatSSE 把上游 Anthropic Messages SSE 流实时重写为 OpenAI Chat Completions SSE 流。
@@ -273,3 +314,28 @@ func AnthropicSSEToOpenAIChatSSE(reader interface{ Read(p []byte) (int, error) }
 // 向后兼容占位:fetchChannelAvailableModels 等不直接依赖本文件的 mapping 透传,
 // 但保持 settings 包可见(防止未来访问器挪动时本文件 import 被自动裁剪)。
 var _ = settings.ModelMappingEntry{}
+
+// mapReasoningEffortToAnthropicBudget 把 OpenAI 官方 reasoning_effort 思考档位映射成
+// Anthropic 官方 thinking.budget_tokens 预算(单位 token)。返回 0 表示不注入思考
+// (opt-in OFF / effort 空 / none|off|disabled 经 normalizeEffort 归一为空)。
+//
+// 分档预算(均 > Anthropic 最小 1024 且对齐主流推理档),对偶 AnthropicToOpenAIChat 的
+// resolveReasoningEffort 把 thinking.budget_tokens 反向分档的同类语义:
+//   low → 4000   medium → 12000   high → 32000   max → 64000
+// 预算语义:Anthropic thinking.budget_tokens 即「思考 token 上限」,与 OpenAI reasoning_effort
+// 的「思考强度档」语义对齐 —— low 偏轻量、high/max 偏重度。max 同样映射到固定 64000(避免无限大预算
+// 触发上游「max_tokens > budget_tokens」不变式时被迫把 max_tokens 抬到不可接受量级)。
+func mapReasoningEffortToAnthropicBudget(effort string) int {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "low", "minimal":
+		return 4000
+	case "medium":
+		return 12000
+	case "high":
+		return 32000
+	case "max", "xhigh":
+		return 64000
+	default:
+		return 0
+	}
+}

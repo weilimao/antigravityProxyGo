@@ -237,7 +237,7 @@ func TestProxyNvidiaOpenAIPassthrough_ClientCancelEmitsDone(t *testing.T) {
 	var inU, outU int
 	go func() {
 		defer close(done)
-		inU, outU = handler.proxyNvidiaOpenAIPassthrough(ctx, rr, resp, true)
+		inU, outU = handler.proxyNvidiaOpenAIPassthrough(ctx, rr, resp, true, nil)
 	}()
 
 	time.Sleep(30 * time.Millisecond)

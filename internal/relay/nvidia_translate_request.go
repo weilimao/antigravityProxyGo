@@ -107,10 +107,35 @@ func AnthropicToOpenAIChat(req *AnthropicRequest, mappings ...[]settings.ModelMa
 	// 思考注入决策(三层):
 	//   第一层 thinkingRequested(req):客户端是否显式开思考(body thinking.type∈{enabled,adaptive})。
 	//   第二层 IsEnableThinkingMode():代理全局总开关(UI 可关,strip 所有 CoT)。
-	//   第三层 isNvidiaModelNoKwargs(req.Model, mappings...):针对不支持/被取消勾选 chat_template_kwargs 的模型予以抑制,避免上游 404。
-	if !IsEnableThinkingMode() || !thinkingRequested(req) || isNvidiaModelNoKwargs(req.Model, mappings...) {
+	//   第三层按目标号池分流:
+	//     a) Other 号池(isOtherProviderTarget):走官方 OpenAI 顶层 reasoning_effort 字段,
+	//        绝不碰 NIM 专属 chat_template_kwargs —— 各第三方上游思考参数格式各异(阿里云 DeepSeek v4 要 bool、
+	//        NIM 要字符串、有的根本不认),强塞会触发上游 400 "Input should be a valid boolean" 等类型不匹配。
+	//        官方 reasoning_effort 是 OpenAI 原生约定,认 OpenAI 兼容字段的上游(OpenRouter/部分中继)即认它。
+	//     b) isNvidiaModelNoKwargs:NIM 模型 chat_template_kwargs 被禁用(InjectChatTemplateKwargs=false)→ 抑制。
+	//     c) 其余(NIM 池 kwargs 开启):注入 chat_template_kwargs(原有逻辑,维持 NVIDIA 链路零回归)。
+	// effort 在第一层判为 ON 时再取值定档(mapToOfficialOpenAIEffort / mapReasoningEffort),
+	// 绝不单独驱动 on/off —— 修复 CLI 关思考态 body 仍带 output_config:{effort:max} 被误开思考的次生坑。
+	// 推理模型(glm-5.2)在客户端未显式请求时不 fallback 强开,尊重 opt-in 语义。
+	// Anthropic-Beta 头里的 redact-thinking-* 不再参与本决策(该头在 claude-cli 2.1.220 开/关两态均常驻,
+	// 与思考 on/off 无关;官方未文档化该头,关思考的正路是 body thinking.type=disabled 或省略 thinking 字段)。
+	if !IsEnableThinkingMode() || !thinkingRequested(req) {
+		// 无思考信号(opt-in OFF 或全局关)→ 两种参数都不注入,上游行为不变。
 		out.ChatTemplateKwargs = nil
+		out.ReasoningEffort = ""
+	} else if isOtherProviderTarget(req.Model, mappings...) {
+		// Other 号池 → 官方 OpenAI reasoning_effort 顶层字段。
+		effort := resolveReasoningEffort(req)
+		out.ChatTemplateKwargs = nil // Other 池绝不注入 NIM 专属 kwargs
+		if mapped := mapToOfficialOpenAIEffort(effort); mapped != "" {
+			out.ReasoningEffort = mapped
+		}
+	} else if isNvidiaModelNoKwargs(req.Model, mappings...) {
+		// NIM 模型 kwargs 被禁用 → 抑制(原有语义,NVIDIA 链路零回归)。
+		out.ChatTemplateKwargs = nil
+		out.ReasoningEffort = ""
 	} else {
+		// NIM 池 kwargs 开启 → 注入 chat_template_kwargs(原有逻辑)。
 		effort := resolveReasoningEffort(req)
 		if mapped := mapReasoningEffort(effort, nvidiaThinkingEffortMode(req.Model)); mapped != "" {
 			out.ChatTemplateKwargs = map[string]interface{}{
@@ -259,6 +284,10 @@ func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte
 	if chatReq == nil {
 		return
 	}
+	// NVIDIA NIM 上游只认 chat_template_kwargs,顶层 reasoning_effort 会被 NIM 当未知字段拒收(400)。
+	// 故 NIM 链路必须把客户端原发在顶层的 reasoning_effort 清空,绝不透传给 NIM 上游。
+	// (顶层 reasoning_effort 是 Other 号池 OpenAI 格式组的官方注入字段,NIM 链路禁用。)
+	chatReq.ReasoningEffort = ""
 	if !IsEnableThinkingMode() || isNvidiaModelNoKwargs(upstreamModel, mappings...) {
 		chatReq.ChatTemplateKwargs = nil
 		return
@@ -282,12 +311,19 @@ func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte
 
 // isNvidiaModelNoKwargs 判定模型映射配置是否显式禁用 chat_template_kwargs 思考参数。
 // 匹配规则:
-// 在 mappings 中匹配 ClientModel 或 TargetModel, 若其 InjectChatTemplateKwargs 显式配置为 false, 则禁止注入。
+//   - 在 mappings 中匹配 ClientModel 或 TargetModel,命中后:
+//     · TargetProvider=="other" 一律禁注入(chat_template_kwargs 是 NVIDIA NIM 专属约定,
+//       各第三方上游思考参数格式各异——阿里云 DeepSeek v4 要 bool、NIM 要字符串、有的根本不认;
+//       默认强塞会触发上游 400 "Input should be a valid boolean" 等类型不匹配报错)。
+//     · InjectChatTemplateKwargs 显式配置为 false 时禁注入(其余号池沿用既有口径)。
 func isNvidiaModelNoKwargs(model string, mappings ...[]settings.ModelMappingEntry) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if len(mappings) > 0 {
 		for _, entry := range mappings[0] {
 			if strings.EqualFold(entry.ClientModel, m) || strings.EqualFold(entry.TargetModel, m) {
+				if strings.EqualFold(strings.TrimSpace(entry.TargetProvider), "other") {
+					return true
+				}
 				if !entry.ShouldInjectChatTemplateKwargs() {
 					return true
 				}
@@ -295,6 +331,50 @@ func isNvidiaModelNoKwargs(model string, mappings ...[]settings.ModelMappingEntr
 		}
 	}
 	return false
+}
+
+// isOtherProviderTarget 判定模型映射目标是否为 Other 号池(TargetProvider=="other")。
+// 与 isNvidiaModelNoKwargs 同源的 mapping 查找(匹配 ClientModel 或 TargetModel),
+// 但语义独立:仅返回「目标是否为 Other 号池」,不关心 InjectChatTemplateKwargs 配置。
+// 供 AnthropicToOpenAIChat 的思考注入三分支决策使用——Other 号池走官方 OpenAI reasoning_effort,
+// 与 NVIDIA NIM 专属 chat_template_kwargs 区分。无 mapping 命中时返回 false(非 Other,走原 NIM 链路)。
+func isOtherProviderTarget(model string, mappings ...[]settings.ModelMappingEntry) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if len(mappings) == 0 {
+		return false
+	}
+	for _, entry := range mappings[0] {
+		if strings.EqualFold(entry.ClientModel, m) || strings.EqualFold(entry.TargetModel, m) {
+			if strings.EqualFold(strings.TrimSpace(entry.TargetProvider), "other") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mapToOfficialOpenAIEffort 把内部规范化思考等级(low/medium/high/max)映射为
+// OpenAI 官方 reasoning_effort 取值。返回空串表示不注入(opt-in OFF 或未识别)。
+//
+// OpenAI 官方 reasoning_effort 取值集为 {"low","medium","high"}(部分新一代推理模型支持 "minimal")。
+// 本函数统一映射为官方全集里最稳的三档:max→high(官方无 max,顶级即 high),其余 1:1。
+// 不产 "minimal" —— 仅部分 o-series 支持,通用 OpenAI 兼容中继未必认,保守起见落 low。
+//
+// 输入空串(opt-in OFF / 显式 none|off|disabled 经 normalizeEffort 归一为空)→ 返回空串:
+// 思考等级的 on/off 由上层 thinkingRequested 决定,本函数只定档,故空入即空出,绝不替客户端开思考。
+func mapToOfficialOpenAIEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high":
+		return "high"
+	case "max", "xhigh":
+		return "high" // 官方无 max,顶级克制档映射为 high
+	default:
+		return "" // 空串/未识别 → 不注入
+	}
 }
 
 // extractOpenAIReasoningEffort 从原始入站 body 提取思考等级字符串。

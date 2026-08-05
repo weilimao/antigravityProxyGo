@@ -193,6 +193,55 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		data, _ := marshalResponse(map[string]interface{}{"success": true, "id": id})
 		return data, true, nil
 
+	case "nvidia:update":
+		// args: [accountId, baseURL, apiKey, label?, defaultModel?, sonnet?, opus?, haiku?, fable?]
+		// 与 nvidia:add 位置参数对齐;apiKey 留空表示保持不变。
+		if len(args) < 2 {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "参数不足:至少需要 accountId、baseURL"})
+			return data, true, nil
+		}
+		strAtU := func(i int) string {
+			if i < len(args) {
+				if s, ok := args[i].(string); ok {
+					return s
+				}
+			}
+			return ""
+		}
+		idU := strAtU(0)
+		if idU == "" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "缺少 accountId"})
+			return data, true, nil
+		}
+		inU := account.NvidiaAccountInput{
+			BaseURL:      strAtU(1),
+			APIKey:       strAtU(2),
+			Label:        strAtU(3),
+			DefaultModel: strAtU(4),
+			ModelSonnet:  strAtU(5),
+			ModelOpus:    strAtU(6),
+			ModelHaiku:   strAtU(7),
+			ModelFable:   strAtU(8),
+		}
+		_, uerr := a.accountMgr.UpdateNvidiaAccount(idU, inU)
+		if uerr != nil {
+			a.AddLog(fmt.Sprintf("❌ [NVIDIA] 更新账号失败: %v", uerr))
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": uerr.Error()})
+			return data, true, nil
+		}
+		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
+			"accounts":          a.accountMgr.GetAccounts(),
+			"poolMode":          a.accountMgr.GetPoolMode(),
+			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
+			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
+			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
+			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
+			"activeChannel":     a.accountMgr.GetActiveChannel(),
+		})
+		a.AddLog(fmt.Sprintf("✅ [NVIDIA] 更新账号成功 id=%s", idU))
+		data, _ := marshalResponse(map[string]interface{}{"success": true})
+		return data, true, nil
+
 	case "nvidia:remove":
 		// args: [accountId]
 		id := ""
@@ -369,6 +418,56 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		data, _ := marshalResponse(map[string]interface{}{"success": true})
 		return data, true, nil
 
+	case "other:update":
+		// args: [jsonInputString] —— 单对象 JSON 中以 accountId 定位账号,其余字段为可编辑项。
+		// 与 other:add 的 JSON 形态一致,额外支持 accountId;APIKey 留空表示保持不变。
+		if len(args) < 1 {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "参数不足:至少需要 accountId 与账号字段"})
+			return data, true, nil
+		}
+		rawU, okU := args[0].(string)
+		if !okU || strings.TrimSpace(rawU) == "" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "参数必须为 JSON 对象字符串"})
+			return data, true, nil
+		}
+		var upObj struct {
+			AccountID    string   `json:"accountId"`
+			GroupID      string   `json:"groupId"`
+			GroupName    string   `json:"groupName"`
+			BaseURL      string   `json:"baseUrl"`
+			APIKey       string   `json:"apiKey"`
+			Formats      []string `json:"formats"`
+			Label        string   `json:"label"`
+			DefaultModel string   `json:"defaultModel"`
+		}
+		if err := json.Unmarshal([]byte(rawU), &upObj); err != nil {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "解析 Other 更新 JSON 失败: " + err.Error()})
+			return data, true, nil
+		}
+		if strings.TrimSpace(upObj.AccountID) == "" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "缺少 accountId"})
+			return data, true, nil
+		}
+		inU := account.OtherAccountInput{
+			GroupID:      upObj.GroupID,
+			GroupName:    upObj.GroupName,
+			BaseURL:      upObj.BaseURL,
+			APIKey:       upObj.APIKey,
+			Formats:      upObj.Formats,
+			Label:        upObj.Label,
+			DefaultModel: upObj.DefaultModel,
+		}
+		_, uerr := a.accountMgr.UpdateOtherAccount(upObj.AccountID, inU)
+		if uerr != nil {
+			a.AddLog(fmt.Sprintf("❌ [Other] 更新账号失败 (group=%s): %v", inU.GroupID, uerr))
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": uerr.Error()})
+			return data, true, nil
+		}
+		a.emitAccountsRes()
+		a.AddLog(fmt.Sprintf("✅ [Other] 更新账号成功 id=%s group=%s", upObj.AccountID, inU.GroupID))
+		data, _ := marshalResponse(map[string]interface{}{"success": true})
+		return data, true, nil
+
 	case "other:set-lb-mode":
 		// args: [groupID, mode]
 		groupID := ""
@@ -385,6 +484,9 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		}
 		a.accountMgr.SetOtherLBMode(groupID, mode)
 		a.AddLog(fmt.Sprintf("🔄 [Other] group %s LB mode → %s", groupID, a.accountMgr.GetOtherLBMode(groupID)))
+		// 关键:保存后广播 accounts-res,让前端 state.lastBackendData.otherGroups[].lbMode 同步刷新,
+		// 否则切换 tab 时 renderOtherLBMode 会用陈旧本地值把下拉还原为旧模式(与 nvidia:set-lb-mode 对齐)。
+		a.emitAccountsRes()
 		data, _ := marshalResponse(map[string]interface{}{"success": true})
 		return data, true, nil
 
@@ -414,6 +516,13 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 				if apiKey == "" {
 					apiKey = probeAcc[0].GetAccessToken()
 				}
+			}
+		} else if apiKey == "" {
+			// 编辑态:前端 Key 框留空(留空表示保持不变),但这里需要真实 Key 才能探测上游。
+			// 故按组查号池首个可用账号回退其 Key,避免 401 Token not provided。
+			probeAcc := a.accountMgr.GetEnabledOtherAccounts(groupID)
+			if len(probeAcc) > 0 {
+				apiKey = probeAcc[0].GetAccessToken()
 			}
 		}
 

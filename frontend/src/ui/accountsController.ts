@@ -69,6 +69,10 @@ let btnChannelGeminiCli: HTMLButtonElement | null;
 let btnChannelNvidia: HTMLButtonElement | null;
 let btnChannelOther: HTMLButtonElement | null;
 let btnAddOtherAccount: HTMLButtonElement | null;
+let otherGroupTabs: HTMLDivElement | null;
+let otherLBModeContainer: HTMLDivElement | null;
+let otherLBModeSelect: HTMLSelectElement | null;
+let groupSelectOther: HTMLSelectElement | null;
 let otherAccountModal: HTMLDivElement | null;
 let otherAccountModalContainer: HTMLDivElement | null;
 let btnOtherModalSave: HTMLButtonElement | null;
@@ -342,6 +346,202 @@ export function updateViewTabUI() {
     }
 }
 
+// ==================== Other 号池二级组名子 Tab + Modal 组自动填充 ====================
+// renderOtherGroupTabs:按 state.lastBackendData.otherGroups 渲染 Other 通道下方的组名子 Tab。
+// 0 组时整行隐藏。点击组 Tab 设 state.otherGroupFilter 并触发 renderAccounts 重新过滤。
+export function renderOtherGroupTabs() {
+    if (!otherGroupTabs) {
+        otherGroupTabs = document.getElementById('otherGroupTabs') as HTMLDivElement | null;
+    }
+    if (!otherGroupTabs) return;
+
+    const groups = (state.lastBackendData && Array.isArray(state.lastBackendData.otherGroups))
+        ? state.lastBackendData.otherGroups
+        : [];
+    // 仅 other 通道显示;0 组时整行隐藏。
+    if (state.currentViewTab !== 'other' || groups.length === 0) {
+        otherGroupTabs.classList.add('hidden');
+        otherGroupTabs.classList.remove('flex');
+        otherGroupTabs.innerHTML = '';
+        // 切走 other 通道或 0 组时回到「全部组」默认过滤,避免残留上一个组过滤。
+        state.otherGroupFilter = 'ALL';
+        return;
+    }
+
+    // 渲染前校验当前过滤组仍存在:若所选组被删除(删光该组最后一个账号),回落「全部组」,
+    // 避免列表空态且无高亮 Tab 提示当前过滤目标。
+    const validIds = new Set<string>();
+    for (const g of groups) {
+        const gid = String(g.groupId || g.groupID || g.id || '');
+        if (gid) validIds.add(gid);
+    }
+    if (state.otherGroupFilter !== 'ALL' && !validIds.has(state.otherGroupFilter)) {
+        state.otherGroupFilter = 'ALL';
+    }
+
+    const dict = i18n[state.currentLanguage] || i18n.zh;
+    const activeClass = 'px-3 py-1 rounded-md font-bold cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm whitespace-nowrap';
+    const inactiveClass = 'px-3 py-1 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 whitespace-nowrap';
+
+    // 总账号数 = 各组合计 accountCount(与列表默认口径一致,含停用)。
+    let totalCount = 0;
+    for (const g of groups) totalCount += Number(g.accountCount) || 0;
+
+    otherGroupTabs.innerHTML = '';
+    otherGroupTabs.className = 'flex flex-wrap items-center gap-1 bg-slate-100 dark:bg-white/5 p-1 rounded-lg text-[12px]';
+
+    const mkBtn = (label: string, filter: string, title: string) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = state.otherGroupFilter === filter ? activeClass : inactiveClass;
+        b.title = title;
+        b.textContent = label;
+        b.addEventListener('click', () => {
+            state.otherGroupFilter = filter;
+            renderOtherGroupTabs();
+            if (state.currentAccountsList) renderAccounts(state.currentAccountsList);
+        });
+        return b;
+    };
+
+    // 「全部组」首项:filter='ALL'。
+    otherGroupTabs.appendChild(mkBtn(
+        `${dict.otherAllGroups || '全部组'} (${totalCount})`,
+        'ALL',
+        dict.otherAllGroups || '全部组'
+    ));
+
+    for (const g of groups) {
+        const gid = String(g.groupId || g.groupID || g.id || '');
+        if (!gid) continue;
+        const gname = String(g.groupName || g.groupId || '');
+        const count = Number(g.accountCount) || 0;
+        const fmtTag = Array.isArray(g.formats) && g.formats.length
+            ? g.formats.join(', ')
+            : '';
+        otherGroupTabs.appendChild(mkBtn(
+            `${gname} (${count})`,
+            gid,
+            `${gid}${fmtTag ? ' · ' + fmtTag : ''}`
+        ));
+    }
+
+    // 组内 LB 模式下拉已移至工具栏(otherLBModeContainer),见 renderOtherLBMode。
+    renderOtherLBMode();
+}
+
+// renderOtherLBMode:在工具栏(otherLBModeContainer)渲染当前 Other 组过滤对应的负载均衡方式下拉。
+// 仅 Other 通道、存在组、且选中了具体组时显示;「全部组」无单一 LB 模式可配置,隐藏。
+function renderOtherLBMode() {
+    if (!otherLBModeContainer) {
+        otherLBModeContainer = document.getElementById('otherLBModeContainer') as HTMLDivElement | null;
+    }
+    if (!otherLBModeSelect) {
+        otherLBModeSelect = document.getElementById('otherLBModeSelect') as HTMLSelectElement | null;
+    }
+    if (!otherLBModeContainer || !otherLBModeSelect) return;
+
+    const groups = (state.lastBackendData && Array.isArray(state.lastBackendData.otherGroups))
+        ? state.lastBackendData.otherGroups
+        : [];
+    // 仅 Other 通道、存在组、且选中了具体组时显示;「全部组」无单一 LB 模式可配置,隐藏。
+    if (state.currentViewTab !== 'other' || groups.length === 0 || !state.otherGroupFilter || state.otherGroupFilter === 'ALL') {
+        otherLBModeContainer.classList.add('hidden');
+        otherLBModeContainer.classList.remove('flex');
+        return;
+    }
+
+    // 当前选中组的 LB 模式(未设置时回退 round-robin)。
+    let curMode = 'round-robin';
+    const g = groups.find(x => String(x.groupId || x.groupID || x.id || '') === state.otherGroupFilter);
+    if (g) curMode = String(g.lbMode || g.lb_mode || 'round-robin');
+
+    otherLBModeSelect.value = curMode;
+    otherLBModeContainer.classList.remove('hidden');
+    otherLBModeContainer.classList.add('flex');
+}
+
+// otherLBModeSelectorVisible:工具栏 LB 模式下拉是否可见(选中具体 Other 组时)。
+function otherLBModeSelectorVisible(): boolean {
+    return state.currentViewTab === 'other'
+        && !!state.otherGroupFilter
+        && state.otherGroupFilter !== 'ALL';
+}
+
+// populateOtherGroupSelect:打开 Other 账号 Modal 时,若号池已有组则填充右侧「选择已有组」下拉。
+// 0 组时隐藏下拉。每次打开不预选任何组(避免误覆盖用户手动输入)。
+function populateOtherGroupSelect() {
+    if (!groupSelectOther) {
+        groupSelectOther = document.getElementById('selectOtherGroup') as HTMLSelectElement | null;
+    }
+    if (!groupSelectOther) return;
+    const groups = (state.lastBackendData && Array.isArray(state.lastBackendData.otherGroups))
+        ? state.lastBackendData.otherGroups
+        : [];
+    if (groups.length === 0) {
+        groupSelectOther.classList.add('hidden');
+        groupSelectOther.innerHTML = '<option value="" data-i18n="otherGroupSelectPlaceholder">选择已有组...</option>';
+        groupSelectOther.value = '';
+        return;
+    }
+    groupSelectOther.innerHTML = '<option value="" data-i18n="otherGroupSelectPlaceholder">选择已有组...</option>';
+    for (const g of groups) {
+        const gid = String(g.groupId || g.groupID || g.id || '');
+        if (!gid) continue;
+        const gname = String(g.groupName || g.groupId || '');
+        const count = Number(g.accountCount) || 0;
+        const opt = document.createElement('option');
+        opt.value = gid;
+        opt.textContent = `${gname} (${count})`;
+        groupSelectOther.appendChild(opt);
+    }
+    groupSelectOther.value = '';
+    groupSelectOther.classList.remove('hidden');
+}
+
+// onOtherGroupSelectChange:选中已有组时自动填充 groupId/groupName/baseUrl/formats/默认模型,
+// 仅留 API Key 与展示名给用户填写。切回占位项("")不清空(避免误触抹掉输入)。
+function onOtherGroupSelectChange() {
+    if (!groupSelectOther || !otherModalError) return;
+    const gid = groupSelectOther.value;
+    otherModalError.classList.add('hidden');
+    otherModalError.textContent = '';
+    if (!gid) return;
+
+    const groups = (state.lastBackendData && Array.isArray(state.lastBackendData.otherGroups))
+        ? state.lastBackendData.otherGroups
+        : [];
+    const g = groups.find((x: any) => String(x.groupId || x.groupID || x.id || '') === gid);
+    if (!g) return;
+
+    const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
+    const inputGroupName = document.getElementById('inputOtherGroupName') as HTMLInputElement | null;
+    const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
+    const inputModelDefault = document.getElementById('inputOtherModelDefault') as HTMLInputElement | null;
+    const chkFmtOpenai = document.getElementById('chkOtherFmtOpenai') as HTMLInputElement | null;
+    const chkFmtAnthropic = document.getElementById('chkOtherFmtAnthropic') as HTMLInputElement | null;
+
+    if (inputGroupId) inputGroupId.value = gid;
+    if (inputGroupName) inputGroupName.value = String(g.groupName || g.groupId || '');
+    if (inputBaseUrl) inputBaseUrl.value = String(g.baseUrl || '');
+
+    // 据组 Formats 勾选协议 checkbox(openai 含则勾,否则取消;anthropic 同理)。
+    const fmts: string[] = Array.isArray(g.formats) ? g.formats.map((f: any) => String(f).toLowerCase()) : [];
+    if (chkFmtOpenai) chkFmtOpenai.checked = fmts.includes('openai');
+    if (chkFmtAnthropic) chkFmtAnthropic.checked = fmts.includes('anthropic');
+
+    // 默认模型:从该组首个带 defaultModel 的账号取;取不到留空(不强制)。
+    let defModel = '';
+    if (state.currentAccountsList) {
+        const hit = state.currentAccountsList.find(a =>
+            a && a.groupId === gid && a.defaultModel
+        );
+        if (hit) defModel = String(hit.defaultModel);
+    }
+    if (inputModelDefault) inputModelDefault.value = defModel;
+    // 不填 API Key / 展示名(用户自行填写);groupId 保持可编辑(不设 readonly)。
+}
+
 export async function refreshAllQuotas() {
     if (state.isRefreshingAll) return;
     state.isRefreshingAll = true;
@@ -566,6 +766,10 @@ export function initAccountsEvents() {
     btnChannelGeminiCli = document.getElementById('btnChannelGeminiCli') as HTMLButtonElement | null;
     btnChannelNvidia = document.getElementById('btnChannelNvidia') as HTMLButtonElement | null;
     btnChannelOther = document.getElementById('btnChannelOther') as HTMLButtonElement | null;
+    otherGroupTabs = document.getElementById('otherGroupTabs') as HTMLDivElement | null;
+    otherLBModeContainer = document.getElementById('otherLBModeContainer') as HTMLDivElement | null;
+    otherLBModeSelect = document.getElementById('otherLBModeSelect') as HTMLSelectElement | null;
+    groupSelectOther = document.getElementById('selectOtherGroup') as HTMLSelectElement | null;
     nvidiaPoolModeContainer = document.getElementById('nvidiaPoolModeContainer') as HTMLDivElement | null;
     nvidiaPoolModeToggle = document.getElementById('nvidiaPoolModeToggle') as HTMLInputElement | null;
     nvidiaLBModeContainer = document.getElementById('nvidiaLBModeContainer') as HTMLDivElement | null;
@@ -796,6 +1000,7 @@ export function initAccountsEvents() {
             state.selectedAccountIds = [];
             state.currentViewTab = 'nvidia';
             updateViewTabUI();
+            renderOtherGroupTabs();
             if (state.currentAccountsList) {
                 renderAccounts(state.currentAccountsList);
             }
@@ -810,6 +1015,7 @@ export function initAccountsEvents() {
             state.selectedAccountIds = [];
             state.currentViewTab = 'other';
             updateViewTabUI();
+            renderOtherGroupTabs();
             if (state.currentAccountsList) {
                 renderAccounts(state.currentAccountsList);
             }
@@ -836,6 +1042,7 @@ export function initAccountsEvents() {
     }
     if (btnOtherModalSave) btnOtherModalSave.addEventListener('click', submitOtherAccount);
     if (btnOtherFetchModels) btnOtherFetchModels.addEventListener('click', fetchOtherModels);
+    if (groupSelectOther) groupSelectOther.addEventListener('change', onOtherGroupSelectChange);
 
     // NVIDIA 添加账号下拉项 → 打开 NVIDIA 账号模态
     if (btnAddNvidiaAccount) {
@@ -865,6 +1072,15 @@ export function initAccountsEvents() {
             ipcRenderer.send('nvidia:set-lb-mode', e.target.value);
             updateViewTabUI();
         });
+    }
+
+    // Other 号池组内负载均衡方式选择框:作用于当前选中组(「全部组」下拉不可见,不发送)。
+    if (otherLBModeSelect) {
+        otherLBModeSelect.addEventListener('change', (e: any) => {
+            if (!otherLBModeSelectorVisible()) return;
+            ipcRenderer.send('other:set-lb-mode', state.otherGroupFilter, e.target.value);
+        });
+        otherLBModeSelect.addEventListener('click', (e) => e.stopPropagation());
     }
 
     // NVIDIA 账号模态：关闭/取消/保存
@@ -926,6 +1142,7 @@ export function initAccountsEvents() {
             state.currentViewTab = 'antigravity';
             state.selectedAccountIds = [];
             updateViewTabUI();
+            renderOtherGroupTabs();
             if (state.currentAccountsList) {
                 renderAccounts(state.currentAccountsList);
             }
@@ -938,6 +1155,7 @@ export function initAccountsEvents() {
             state.selectedAccountIds = [];
             state.currentViewTab = 'project';
             updateViewTabUI();
+            renderOtherGroupTabs();
             if (state.currentAccountsList) {
                 renderAccounts(state.currentAccountsList);
             }
@@ -1041,6 +1259,7 @@ export function initAccountsEvents() {
         updateViewTabUI();
         updatePoolModeUI();
         updateLayoutUI();
+        renderOtherGroupTabs();
         if (state.currentAccountsList) {
             renderAccounts(state.currentAccountsList);
         }
@@ -1110,6 +1329,8 @@ export function initAccountsGlobalEvents() {
 
             if (data.accounts) {
                 state.currentAccountsList = data.accounts;
+                // 每当后端广播账号快照,刷新 Other 二级组名子 Tab(新增/删除组、计数变化即时反映)。
+                renderOtherGroupTabs();
                 // 只有当 DOM 列表容器存在时才重新绘制账号卡片
                 const accountsListEl = document.getElementById('accountsList');
                 if (accountsListEl) {
@@ -1791,6 +2012,9 @@ function initAutoTriggerModalEvents() {
 function openNvidiaAccountModal() {
     if (!nvidiaAccountModal || !nvidiaAccountModalContainer) return;
 
+    // 添加态:清空编辑态标记(标题/保存按钮文案由 data-i18n 静态文本承载,无需复位)。
+    nvidiaEditId = null;
+
     // Clear previous inputs
     const inputBaseUrl = document.getElementById('inputNvidiaBaseUrl') as HTMLInputElement;
     const inputApiKey = document.getElementById('inputNvidiaApiKey') as HTMLInputElement;
@@ -1842,6 +2066,70 @@ function closeNvidiaAccountModal() {
     nvidiaAccountModal.classList.add('opacity-0', 'pointer-events-none');
 }
 
+// 当前处于编辑态的 NVIDIA 账号 id(添加态为 null),供 submitNvidiaAccount 区分 add/update。
+let nvidiaEditId: string | null = null;
+
+// openEditNvidiaAccount:预填 NVIDIA 账号模态框已有字段并切入编辑态。
+// 账号展示名 = acc.Email;API Key 因后端不下发明文,编辑框留空,留空表示保持不变。
+export function openEditNvidiaAccount(acc: any) {
+    if (!nvidiaAccountModal || !nvidiaAccountModalContainer) return;
+
+    nvidiaEditId = acc.id;
+
+    const inputBaseUrl = document.getElementById('inputNvidiaBaseUrl') as HTMLInputElement;
+    const inputApiKey = document.getElementById('inputNvidiaApiKey') as HTMLInputElement;
+    const inputLabel = document.getElementById('inputNvidiaLabel') as HTMLInputElement;
+    const inputModelSonnet = document.getElementById('inputNvidiaModelSonnet') as HTMLInputElement;
+    const inputModelOpus = document.getElementById('inputNvidiaModelOpus') as HTMLInputElement;
+    const inputModelHaiku = document.getElementById('inputNvidiaModelHaiku') as HTMLInputElement;
+    const inputModelFable = document.getElementById('inputNvidiaModelFable') as HTMLInputElement;
+    const inputModelDefault = document.getElementById('inputNvidiaModelDefault') as HTMLInputElement;
+
+    if (inputBaseUrl) inputBaseUrl.value = acc.baseUrl || '';
+    if (inputApiKey) {
+        inputApiKey.value = ''; // 不预填明文 Key,留空保持不变
+        inputApiKey.placeholder = acc.maskedKey || 'nvapi-... (留空保持不变)';
+    }
+    if (inputLabel) inputLabel.value = acc.email || '';
+    if (inputModelSonnet) inputModelSonnet.value = acc.modelSonnet || '';
+    if (inputModelOpus) inputModelOpus.value = acc.modelOpus || '';
+    if (inputModelHaiku) inputModelHaiku.value = acc.modelHaiku || '';
+    if (inputModelFable) inputModelFable.value = acc.modelFable || '';
+    if (inputModelDefault) inputModelDefault.value = acc.defaultModel || '';
+
+    // 隐藏模型选择下拉(编辑态不自动拉远端模型,保持手填;用户可点"获取模型")。
+    const selectIds = [
+        'selectNvidiaModelSonnet',
+        'selectNvidiaModelOpus',
+        'selectNvidiaModelHaiku',
+        'selectNvidiaModelFable',
+        'selectNvidiaModelDefault'
+    ];
+    selectIds.forEach(id => {
+        const selectEl = document.getElementById(id) as HTMLSelectElement | null;
+        if (selectEl) {
+            selectEl.classList.add('hidden');
+            selectEl.innerHTML = '<option value="">选择模型...</option>';
+        }
+    });
+
+    if (nvidiaModalError) {
+        nvidiaModalError.classList.add('hidden');
+        nvidiaModalError.textContent = '';
+    }
+
+    // 标题与保存按钮文案切入编辑态。
+    const titleEl = nvidiaAccountModal.querySelector('[data-i18n="nvidiaAddModalTitle"]') as HTMLElement | null;
+    if (titleEl) titleEl.textContent = '编辑 NVIDIA 号池账号';
+    if (btnNvidiaModalSave) {
+        btnNvidiaModalSave.textContent = '保存修改';
+    }
+
+    nvidiaAccountModal.classList.remove('opacity-0', 'pointer-events-none');
+    nvidiaAccountModalContainer.classList.remove('scale-95');
+    nvidiaAccountModalContainer.classList.add('scale-100');
+}
+
 async function submitNvidiaAccount() {
     const inputBaseUrl = document.getElementById('inputNvidiaBaseUrl') as HTMLInputElement;
     const inputApiKey = document.getElementById('inputNvidiaApiKey') as HTMLInputElement;
@@ -1860,7 +2148,7 @@ async function submitNvidiaAccount() {
     if (!baseUrl) {
         baseUrl = 'https://integrate.api.nvidia.com/v1';
     }
-    if (!apiKey) {
+    if (!apiKey && !nvidiaEditId) {
         if (nvidiaModalError) {
             nvidiaModalError.textContent = '请输入 API Key';
             nvidiaModalError.classList.remove('hidden');
@@ -1871,26 +2159,42 @@ async function submitNvidiaAccount() {
     try {
         if (btnNvidiaModalSave) {
             btnNvidiaModalSave.disabled = true;
-            btnNvidiaModalSave.textContent = '正在添加...';
+            btnNvidiaModalSave.textContent = nvidiaEditId ? '正在保存...' : '正在添加...';
         }
 
-        const res = await ipcRenderer.invoke('nvidia:add',
-            baseUrl,
-            apiKey,
-            inputLabel?.value.trim() || '',
-            inputModelDefault?.value.trim() || '',
-            inputModelSonnet?.value.trim() || '',
-            inputModelOpus?.value.trim() || '',
-            inputModelHaiku?.value.trim() || '',
-            inputModelFable?.value.trim() || ''
-        );
+        let res;
+        if (nvidiaEditId) {
+            // 编辑态:定位既有账号;apiKey 留空保持不变。
+            res = await ipcRenderer.invoke('nvidia:update',
+                nvidiaEditId,
+                baseUrl,
+                apiKey,
+                inputLabel?.value.trim() || '',
+                inputModelDefault?.value.trim() || '',
+                inputModelSonnet?.value.trim() || '',
+                inputModelOpus?.value.trim() || '',
+                inputModelHaiku?.value.trim() || '',
+                inputModelFable?.value.trim() || ''
+            );
+        } else {
+            res = await ipcRenderer.invoke('nvidia:add',
+                baseUrl,
+                apiKey,
+                inputLabel?.value.trim() || '',
+                inputModelDefault?.value.trim() || '',
+                inputModelSonnet?.value.trim() || '',
+                inputModelOpus?.value.trim() || '',
+                inputModelHaiku?.value.trim() || '',
+                inputModelFable?.value.trim() || ''
+            );
+        }
 
         if (res && res.success) {
             closeNvidiaAccountModal();
             ipcRenderer.send('accounts:get');
         } else {
             if (nvidiaModalError) {
-                nvidiaModalError.textContent = res?.error || '添加失败';
+                nvidiaModalError.textContent = res?.error || (nvidiaEditId ? '保存失败' : '添加失败');
                 nvidiaModalError.classList.remove('hidden');
             }
         }
@@ -1902,7 +2206,7 @@ async function submitNvidiaAccount() {
     } finally {
         if (btnNvidiaModalSave) {
             btnNvidiaModalSave.disabled = false;
-            btnNvidiaModalSave.textContent = '添加账号';
+            btnNvidiaModalSave.textContent = nvidiaEditId ? '保存修改' : '添加账号';
         }
     }
 }
@@ -1986,6 +2290,9 @@ function populateNvidiaModelSelects(models: string[]) {
 function openOtherAccountModal() {
     if (!otherAccountModal || !otherAccountModalContainer) return;
 
+    // 添加态:清空编辑态标记。
+    otherEditId = null;
+
     const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
     const inputGroupName = document.getElementById('inputOtherGroupName') as HTMLInputElement | null;
     const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
@@ -2015,6 +2322,9 @@ function openOtherAccountModal() {
         otherModalError.textContent = '';
     }
 
+    // 号池已有组则填充右侧「选择已有组」下拉(0 组时隐藏)。
+    populateOtherGroupSelect();
+
     otherAccountModal.classList.remove('opacity-0', 'pointer-events-none');
     otherAccountModalContainer.classList.remove('scale-95');
     otherAccountModalContainer.classList.add('scale-100');
@@ -2025,6 +2335,66 @@ function closeOtherAccountModal() {
     otherAccountModalContainer.classList.remove('scale-100');
     otherAccountModalContainer.classList.add('scale-95');
     otherAccountModal.classList.add('opacity-0', 'pointer-events-none');
+}
+
+// 当前处于编辑态的 Other 账号 id(添加态为 null),供 submitOtherAccount 区分 add/update。
+let otherEditId: string | null = null;
+
+// openEditOtherAccount:预填 Other 账号模态框已有字段并切入编辑态。
+// 展示名 = acc.email;API Key 因后端不下发明文,编辑框留空,留空表示保持不变。
+export function openEditOtherAccount(acc: any) {
+    if (!otherAccountModal || !otherAccountModalContainer) return;
+
+    otherEditId = acc.id;
+
+    const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
+    const inputGroupName = document.getElementById('inputOtherGroupName') as HTMLInputElement | null;
+    const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
+    const inputApiKey = document.getElementById('inputOtherApiKey') as HTMLInputElement | null;
+    const inputLabel = document.getElementById('inputOtherLabel') as HTMLInputElement | null;
+    const inputModelDefault = document.getElementById('inputOtherModelDefault') as HTMLInputElement | null;
+    const selectModelDefault = document.getElementById('selectOtherModelDefault') as HTMLSelectElement | null;
+    const chkFmtOpenai = document.getElementById('chkOtherFmtOpenai') as HTMLInputElement | null;
+    const chkFmtAnthropic = document.getElementById('chkOtherFmtAnthropic') as HTMLInputElement | null;
+
+    if (inputGroupId) inputGroupId.value = acc.groupId || '';
+    if (inputGroupName) inputGroupName.value = acc.groupName || '';
+    if (inputBaseUrl) inputBaseUrl.value = acc.baseUrl || '';
+    // 编辑态不预填明文 Key:留空表示保持不变;用脱敏掩码当 placeholder 提示已配置 Key。
+    if (inputApiKey) {
+        inputApiKey.value = '';
+        inputApiKey.placeholder = acc.maskedKey || 'sk-... (留空保持不变)';
+    }
+    if (inputLabel) inputLabel.value = acc.email || '';
+    if (inputModelDefault) inputModelDefault.value = acc.defaultModel || '';
+    if (selectModelDefault) {
+        selectModelDefault.classList.add('hidden');
+        selectModelDefault.innerHTML = '<option value="">选择模型...</option>';
+    }
+
+    // 据账号 Formats 勾选协议 checkbox(openai 含则勾,否则取消;anthropic 同理)。
+    const fmts: string[] = Array.isArray(acc.formats) ? acc.formats.map((f: any) => String(f).toLowerCase()) : [];
+    if (chkFmtOpenai) chkFmtOpenai.checked = fmts.includes('openai');
+    if (chkFmtAnthropic) chkFmtAnthropic.checked = fmts.includes('anthropic');
+    // 若两者都未开(异常数据或无 formats),默认勾 OpenAI 兜底。
+    if (!chkFmtOpenai?.checked && !chkFmtAnthropic?.checked && chkFmtOpenai) chkFmtOpenai.checked = true;
+
+    if (otherModalError) {
+        otherModalError.classList.add('hidden');
+        otherModalError.textContent = '';
+    }
+
+    // 编辑态不展示「选择已有组」下拉(避免误改已选账号所属组身份)。
+    if (groupSelectOther) groupSelectOther.classList.add('hidden');
+
+    // 标题与保存按钮文案切入编辑态。
+    const titleEl = otherAccountModal.querySelector('[data-i18n="otherAddModalTitle"]') as HTMLElement | null;
+    if (titleEl) titleEl.textContent = '编辑 Other 号池账号';
+    if (btnOtherModalSave) btnOtherModalSave.textContent = '保存修改';
+
+    otherAccountModal.classList.remove('opacity-0', 'pointer-events-none');
+    otherAccountModalContainer.classList.remove('scale-95');
+    otherAccountModalContainer.classList.add('scale-100');
 }
 
 // submitOtherAccount:校验后调 other:add(JSON 对象入参),成功关闭模态并同步账号列表。
@@ -2051,7 +2421,7 @@ async function submitOtherAccount() {
         }
         return;
     }
-    if (!apiKey) {
+    if (!apiKey && !otherEditId) {
         if (otherModalError) {
             otherModalError.textContent = '请输入 API Key';
             otherModalError.classList.remove('hidden');
@@ -2073,11 +2443,11 @@ async function submitOtherAccount() {
     try {
         if (btnOtherModalSave) {
             btnOtherModalSave.disabled = true;
-            btnOtherModalSave.textContent = '正在添加...';
+            btnOtherModalSave.textContent = otherEditId ? '正在保存...' : '正在添加...';
         }
 
-        // 采用单对象 JSON 入参形态(后端 parseOtherInputFromArgs 优先按 JSON 解析)。
-        const res = await ipcRenderer.invoke('other:add', JSON.stringify({
+        let res;
+        const payloadObj: any = {
             groupId,
             groupName: inputGroupName?.value.trim() || '',
             baseUrl,
@@ -2085,7 +2455,15 @@ async function submitOtherAccount() {
             formats,
             label: inputLabel?.value.trim() || '',
             defaultModel: inputModelDefault?.value.trim() || ''
-        }));
+        };
+        if (otherEditId) {
+            // 编辑态:以 accountId 定位既有账号;apiKey 留空保持不变。
+            payloadObj.accountId = otherEditId;
+            res = await ipcRenderer.invoke('other:update', JSON.stringify(payloadObj));
+        } else {
+            // 采用单对象 JSON 入参形态(后端 parseOtherInputFromArgs 优先按 JSON 解析)。
+            res = await ipcRenderer.invoke('other:add', JSON.stringify(payloadObj));
+        }
 
         if (res && res.success) {
             closeOtherAccountModal();
@@ -2093,7 +2471,7 @@ async function submitOtherAccount() {
             // 此处不再手动 invoke('accounts:get') 以免与广播竞态重复刷新。
         } else {
             if (otherModalError) {
-                otherModalError.textContent = res?.error || '添加失败';
+                otherModalError.textContent = res?.error || (otherEditId ? '保存失败' : '添加失败');
                 otherModalError.classList.remove('hidden');
             }
         }
@@ -2105,7 +2483,7 @@ async function submitOtherAccount() {
     } finally {
         if (btnOtherModalSave) {
             btnOtherModalSave.disabled = false;
-            btnOtherModalSave.textContent = '添加账号';
+            btnOtherModalSave.textContent = otherEditId ? '保存修改' : '添加账号';
         }
     }
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -85,6 +86,21 @@ func (m *Manager) LoadAccounts() {
 	m.projectPoolMode = parsed.ProjectPoolMode
 	m.geminiCliPoolMode = parsed.GeminiCliPoolMode
 	m.activeChannel = parsed.ActiveChannel
+	if parsed.OtherLBModes != nil {
+		// 载入时统一规范化为小写 groupID,保证与 SetOtherLBMode 的 key 口径一致。
+		m.otherLBModes = make(map[string]string, len(parsed.OtherLBModes))
+		for gid, mode := range parsed.OtherLBModes {
+			lgid := strings.ToLower(strings.TrimSpace(gid))
+			if lgid == "" {
+				continue
+			}
+			mode = strings.TrimSpace(mode)
+			if mode != "round-robin" && mode != "sticky" {
+				mode = "round-robin"
+			}
+			m.otherLBModes[lgid] = mode
+		}
+	}
 	if m.activeChannel == "gemini-cli" {
 		m.activeChannel = "antigravity"
 	}
@@ -167,6 +183,7 @@ func (m *Manager) SaveAccounts(silent bool) error {
 		ProjectPoolMode:   m.projectPoolMode,
 		GeminiCliPoolMode: m.geminiCliPoolMode,
 		ActiveChannel:     m.activeChannel,
+		OtherLBModes:      m.otherLBModes,
 	}
 	m.RUnlock()
 
@@ -315,6 +332,16 @@ func (m *Manager) GetAccounts() []*Account {
 			CooldownUntil:    a.CooldownUntil,
 			TwoFASecret:      a.TwoFASecret,
 			TokenRefreshedAt: a.GetTokenRefreshedAt(),
+			MaskedKey:        maskedKeyForAccount(a),
+			BaseURL:          a.BaseURL,
+			DefaultModel:     a.DefaultModel,
+			ModelSonnet:      a.ModelSonnet,
+			ModelOpus:        a.ModelOpus,
+			ModelHaiku:       a.ModelHaiku,
+			ModelFable:       a.ModelFable,
+			GroupID:          a.GroupID,
+			GroupName:        a.GroupName,
+			Formats:          a.Formats,
 		})
 	}
 	return list

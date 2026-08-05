@@ -75,6 +75,13 @@ type OpenAIChatRequest struct {
 	// 证实上游认 {"thinking":true,"reasoning_effort":"high"|"max"},经 OpenAI SDK 走 extra_body,
 	// 原生 HTTP 请求体里即顶层 chat_template_kwargs 对象,由 vLLM 模板注入。
 	ChatTemplateKwargs map[string]interface{} `json:"chat_template_kwargs,omitempty"`
+	// ReasoningEffort 承载 OpenAI 官方顶层 reasoning_effort 字段(low/medium/high)。
+	// 仅 Other 号池 OpenAI 格式组使用:NVIDIA NIM 走上面的 ChatTemplateKwargs,
+	// 第三方 OpenAI 兼容上游认官方顶层字段(如 OpenAI o-series、OpenRouter、部分 DeepSeek 中继)。
+	// 非空时直接透传到上游请求体顶层;空串视作未设置(omitempty 不发)。
+	// buildPassthroughUpstreamReq 的 Unmarshal→Marshal 路径靠此字段保留客户端原发的 reasoning_effort,
+	// 否则 OpenAIChatRequest 无该字段会导致 Other openai 组透传时静默丢弃思考等级。
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // OpenAIChatResponse 是 NVIDIA 上游返回的 OpenAI Chat Completions 非流式响应。
@@ -93,10 +100,33 @@ type OpenAIChatChoice struct {
 	FinishReason string     `json:"finish_reason"`
 }
 
+// OpenAIChatUsageTokensDetails 是 usage.prompt_tokens_details 的嵌套明细(OpenAI 标准缓存口径)。
+// 缓存命中 token 取 cached_tokens;部分兼容上游(如 DeepSeek)同时返回 prompt_cache_hit_tokens。
+type OpenAIChatUsageTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
 type OpenAIChatUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens     int                          `json:"prompt_tokens"`
+	CompletionTokens int                          `json:"completion_tokens"`
+	TotalTokens      int                          `json:"total_tokens"`
+	PromptTokensDetails OpenAIChatUsageTokensDetails `json:"prompt_tokens_details"`
+	// PromptCacheHitTokens 是 DeepSeek 等上游在 usage 顶层返回的缓存命中 token 数(OpenAI 标准无此字段)。
+	PromptCacheHitTokens int `json:"prompt_cache_hit_tokens"`
+}
+
+// CachedTokens 返回该 usage 的缓存命中 token 数(取 prompt_cache_hit_tokens 或 prompt_tokens_details.cached_tokens 较大者, 兼容两种口径)。
+func (u *OpenAIChatUsage) CachedTokens() int {
+	if u == nil {
+		return 0
+	}
+	if u.PromptCacheHitTokens > 0 {
+		return u.PromptCacheHitTokens
+	}
+	if u.PromptTokensDetails.CachedTokens > 0 {
+		return u.PromptTokensDetails.CachedTokens
+	}
+	return 0
 }
 
 func (r *OpenAIChatResponse) FinishReason() string {

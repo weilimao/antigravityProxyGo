@@ -1,20 +1,23 @@
-### v1.2.3 更新日志
+### v1.3.0 更新日志
 
-- **NVIDIA 入站图片自愈 OCR 降级**：针对 NVIDIA NIM 上游（如 `z-ai/glm-5.2`）不支持多模态图片的问题，增加入站 Anthropic 请求图片 Content Block 的自动识别与降级机制。在发往 NVIDIA 上游前自动调用本地 Gemini (`gemini-2.5-flash`) 进行图片 OCR，原地改写为纯文本块，防止上游 400 报错。
-- **账号配额刷新与持久化无锁优化**：重构 `SaveAccounts` 的磁盘 IO 写入逻辑，剥离保护内存读写状态的全局写锁 `sync.RWMutex`，采用专用 `fileLock` 保护文件写顺序，彻底解决了高并发代理请求在后台刷新配额或保存配置时被阻塞卡死的问题。
-- **OCR 提示词与上下文/缓存隔离优化**：优化图片 OCR 识别提示词，引入用户上下文关联与会话级缓存隔离机制，提升文本提取精度并避免重复耗时请求。
-- **NVIDIA / Gemini 思考模式 (Thinking) 与推理控制**：
-  - 修复 Gemini / NVIDIA 思考模式流式输出展示问题，优化思考块（reasoning content）流式渲染；
-  - 支持 NIM `chat_template_kwargs` 推理等级 (Reasoning Effort) 透传与回译；
-  - 补充空串思考签名 (Thought Signature) 守卫，防止因解析空签名导致断流。
-- **接口格式兼容与协议响应优化**：优化 Gemini 与 OpenAI 格式转换响应，修复模型与流式正文内容的响应格式；补充 i18n 多语言占位符 `{time}` 与 UI 弹窗关闭回落逻辑。
+- **第三方号池配置与通用 API 路由扩展 (Other Accounts Pool)**：
+  - 新增对各种第三方 OpenAI / Anthropic 兼容 OpenAPI 上游（如 SiliconFlow, OpenRouter, DeepSeek 官方等）的号池化统一管理支持；
+  - 支持多协议 Formats 动态解析、自设 BaseURL、自定义 Request Path 以及账号配置全量 JSON 导出与导入校验；
+  - 提供第三方号池专属配置模态框（`OtherAccountModal.vue`）与后端 IPC 管理调度链。
 
-### v1.2.2 更新日志
+- **跨协议双向转译与 Usage 统计闭环**：
+  - 优化 Anthropic ↔ OpenAI 双向流式/非流式响应转译与回写架构；
+  - 建立 `passthrough_usage` 统计上下文，精准捕获与落库 Prompt Tokens、Completion Tokens、Cached Tokens、TTFT（首字响应延迟）及 Cache Hit 状态，实现第三方中继与号池大盘数据的全面闭环。
 
-- **系统设置全新「使用说明」模块**：新增模块化帮助视图（`UsageHelpPanel.vue`），提供排查 IDE 更新至 2.4.2 后代理失效的“三步恢复法”、根证书 (CA) 解密原理以及系统代理开启/关闭机制的详细指引。
-- **全量中英双语国际化 (i18n)**：为使用说明模块及关联组件接入完整的双语多语言词典（`i18n.ts`），支持随系统语言动态无缝切换。
-- **NVIDIA 上游断流的服务端蓄流重试**：上游 `unexpected EOF` 等断流不再静默补 `end_turn` 假闭合导致 Claude Code 任务冻死。改用**蓄流回放**架构：整条上游 OpenAI Chat SSE 先缓存到内存 `replayWriter`，完整（收到 `finish_reason` 或 `[DONE]`/正常 EOF 且无上游错误）才回放给客户端；否则判定断流，**同账号、5s 退避、最多重试 5 次**（不换号、不冷冻账号、不改请求体）。退避可被客户端 ctx 取消立即打断，不空跑。客户端 ctx 取消则立即终止重试。
-- **NVIDIA 断流重试耗尽后的兜底出站代理**：直连 5s×5 蓄流重试全部耗尽后，若在设置中启用了兜底代理，则切换独立于全局系统代理 / 专属 SOCKS5 的兜底出站代理（http:// 或 socks5://）再试 1 轮（**单次请求级、不记忆状态、不换号，仅 NVIDIA 链路**）。系统代理与虚拟网卡优先，仅当它们都不通才走此兜底；兜底 1 轮不成即回写 Anthropic `overloaded_error`（503）。兜底代理地址为空 / 协议不支持 / 未启用时跳过兜底直接回 `overloaded_error`，不崩溃。高并发下兜底 transport 按配置级单例复用（同配置指纹共享同一连接池，无每请求重建）。
-- **NVIDIA 专属模型清单过滤与管理**：新增 NVIDIA 专属模型清单配置弹窗（`NvidiaPreferredModelsModal.vue`）。配置后 `GET /nvidia/v1/models` 将按白名单过滤，仅返回命中清单的上游模型（号池空时与默认 9 个兜底模型取交集、号池返回上游模型列表时重写为命中项）；清单为空则不过滤、返回上游全量。前端账号页新增「专属模型」入口。
-- **设置页网络状态卡扩展**：网络状态卡在「Fallback 探测代理」「专属 SOCKS5 代理」之外新增「NVIDIA 兜底代理」一格，实时显示兜底代理启用状态与地址。
-- **测试与构建**：新增兜底 transport 单例构造/复用/并发（50 goroutine 共享同 transport）、relay 蓄流重试命中/耗尽→overloaded/兜底成功/兜底失败/无效地址跳过/未启用跳过/客户端取消共 7 个端到端用例，全部 Go 单元测试与前端 vue-tsc 类型检查均全绿通过。
+- **NVIDIA 号池思考注入与 DeepSeek-V4-Pro 模型适配**：
+  - 支持 NVIDIA 号池独占式 `template_kwargs` / `chat_template_kwargs` 思考参数（Reasoning Effort）灵活配置与请求透传；
+  - 深度适配 `deepseek-v4-pro` 等最新推理模型，优化实时思考流（Reasoning Content）的流式渲染打点与空串签名守卫。
+
+- **NVIDIA 蓄流重试与兜底出站代理增强**：
+  - 实现 NVIDIA 流式断流 3 周期蓄流重试与周期间 10s 归零退避机制，大幅提升网络不稳定环境下的高可用性；
+  - 引入每个重试周期及直连失败后的兜底出站代理（SOCKS5/HTTP）独立 Transport 单例复用，提供安全平滑的故障转移。
+
+- **系统性能与 Dashboard 仪表盘修复**：
+  - 修复 `totalCacheEligibleInputTokens` 属性查询及 `hitDenom` 校验逻辑，消除缓存命中率计算异常；
+  - 新增 `/vc` 路由别名映射与远程 Key 模态框图标显示优化；
+  - 锁定 GitHub Actions 构建工作流中的 Wails CLI 版本至 v2.12.0，保障编译一致性。

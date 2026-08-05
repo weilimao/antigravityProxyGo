@@ -39,6 +39,8 @@ export interface DashboardState {
     accountSearchQuery: string;
     accountStatusFilter: string;
     accountTierFilter: string;
+    // otherGroupFilter: Other 号池二级组名子 Tab 的当前过滤组('ALL' = 全部组, 其它为 groupId)。
+    otherGroupFilter: string;
     accountCurrentPage: number;
     accountItemsPerPage: number;
     selectedAccountIds: string[];
@@ -110,6 +112,7 @@ const state: DashboardState = {
     accountSearchQuery: '',
     accountStatusFilter: 'all',
     accountTierFilter: 'all',
+    otherGroupFilter: 'ALL',
     accountCurrentPage: 1,
     accountItemsPerPage: 10,
     selectedAccountIds: [],

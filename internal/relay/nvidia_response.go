@@ -84,7 +84,7 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Re
 		// 入站是 OpenAI Chat：直接透传上游响应（含流式 SSE）。
 		// 方案 A：边透传边嗅探 usage，非流式从全量 JSON 提 usage，
 		// 流式从 SSE 末帧 data:{...usage...} 提 usage，统计口径与 Anthropic 入站一致。
-		inUsage, outUsage := h.proxyNvidiaOpenAIPassthrough(r.Context(), w, resp, isStreaming)
+		inUsage, outUsage := h.proxyNvidiaOpenAIPassthrough(r.Context(), w, resp, isStreaming, logCtx.FirstByteRec)
 		h.recordNvidiaUsage(userSession, model, inUsage, outUsage, poolAccount, logCtx)
 	}
 }
@@ -99,7 +99,7 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Re
 // ctx 为入站请求 r.Context()：流式透传时客户端取消 → watchCancel 捕获 ctx.Done() 立即
 // Close 上游 resp.Body → scanner.Scan() 退出；随后在循环外补发一帧 data: [DONE]\n\n,
 // 给 OpenAI 客户端 SDK 明确的流结束语义(避免客户端卡等上游末帧)。
-func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w http.ResponseWriter, resp *http.Response, isStreaming bool) (int, int) {
+func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w http.ResponseWriter, resp *http.Response, isStreaming bool, firstByteRec *stats.FirstByteRecorder) (int, int) {
 	// 复制上游响应头(保留 Content-Type 等给客户端)，再写状态码。
 	for k, values := range resp.Header {
 		for _, v := range values {
@@ -131,6 +131,11 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 		}
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(bodyBytes)
+		// 非流式 OpenAI 透传:WriteHeader+写出即首字时刻,触发 TTFT 打点(幂等 sync.Once)。
+		// 此前缺失该打点 → FirstByteMs 兜底=DurationMs,前端「响应时间」被误读为「请求耗时」。
+		if firstByteRec != nil {
+			firstByteRec.MarkFirstByte()
+		}
 		return inUsage, outUsage
 	}
 
@@ -144,6 +149,13 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 	if ctx != nil {
 		stop := watchCancel(ctx, resp.Body)
 		defer stop()
+	}
+	firstByteMarked := false
+	markFirstByte := func() {
+		if !firstByteMarked && firstByteRec != nil {
+			firstByteMarked = true
+			firstByteRec.MarkFirstByte() // 首帧即记录上游首字延迟(幂等 sync.Once)
+		}
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	// 单帧可能较大(尤其带工具调用/长内容)，放宽单行上限避免截断丢 usage。
@@ -162,6 +174,7 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 			}
 			continue
 		}
+		markFirstByte() // 首个非空 SSE 帧即上游首字时刻,触发 TTFT 打点(幂等)
 		_, _ = w.Write([]byte(line + "\n"))
 		if flusher != nil {
 			flusher.Flush()
@@ -269,6 +282,9 @@ func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, res
 	w.WriteHeader(http.StatusOK)
 	payload, _ := json.Marshal(anthResp)
 	_, _ = w.Write(payload)
+	// 非流式 Anthropic:WriteHeader+写出即首字时刻,触发 TTFT 打点(幂等 sync.Once)。
+	// 此前缺失该打点 → FirstByteMs 兜底=DurationMs,前端「响应时间」被误读为「请求耗时」。
+	logCtx.FirstByteRec.MarkFirstByte()
 
 	// 配额/统计回调(复用 statsTracker)
 	h.recordNvidiaUsage(userSession, model, anthResp.Usage.InputTokens, anthResp.Usage.OutputTokens, poolAccount, logCtx)

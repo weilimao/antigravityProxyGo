@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
+
+	"antigravity-proxy/internal/stats"
 )
 
 // router_entry.go: 通用按模型路由入口 /route/* 的实现。
@@ -133,8 +136,39 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 	//   - Anthropic 格式组 + 入站 OpenAI Chat → 请求 OpenAI→Anthropic + 响应 Anthropic→OpenAI 回译;
 	//   - 多选 formats 组 → 按入站协议选上游端点(若入站协议在组 Formats 内则直发原生端点,否则转译为 Formats 内的优先协议)。
 	// passthroughForward 内部按 (provider, targetGroupID) 选号与决策端点。
+	// start: 入站请求接入时刻, 作为「请求日志」DurationMs 的端到端耗时基准(与 NVIDIA/gemini/claude
+	// 直连链路口径一致), 经下方装配 logCtx → recordOtherUsage 透传到落点4。
+	start := time.Now()
 	pf := &passthroughForward{h: h, accountMgr: h.accountMgr}
 	res := pf.run(w, r, provider, targetGroupID, upstreamModel, inModel, bodyBytes, isStreaming, isChat, isResponses, isMessages, userSession)
+
+	// 装配 Other 号池请求日志/统计上下文(在 pf.run 返回后, 此时 res.usedAccPtr 已就绪)。
+	// 供三个回写路径 passthroughWriteSuccess / replyOpenAIToAnthropic / replyAnthropicToOpenAI
+	// 的 recordOtherUsage 使用。Host 优先取上游账号 BaseURL 裸 host, 其次入站 r.Host。
+	res.usedModel = upstreamModel
+	res.sess = userSession
+	res.logCtx = passthroughLogCtx{
+		Method:     r.Method,
+		Host:       r.Host,
+		Path:       r.URL.Path,
+		StartTs:    start,
+		StatusCode: 200, // 成功路径恒 200, 由各回写函数在非 200 时跳过统计
+		// FirstByteRec 记录「请求接入 → 上游首字节回写」的 TTFT(首字响应延迟),
+		// 与 DurationMs(端到端总耗时) 语义独立。与 NVIDIA 链路 (nvidia_response.go:46)
+		// 对齐: 由下方各回写路径在首帧写出时 MarkFirstByte() 打点; 未打点时
+		// recordOtherUsage 兜底以 DurationMs 填充, 避免恒 0。
+		FirstByteRec: stats.NewFirstByteRecorder(start),
+	}
+	if res.usedAccPtr != nil {
+		res.logCtx.Host = passthroughHostFromBaseURL(res.usedAccPtr.BaseURL)
+		res.logCtx.Account = res.usedAccPtr.Email
+	}
+	if userSession != nil {
+		res.logCtx.SessionID = ocrSessionDisplay(userSession)
+		if res.logCtx.Account == "" {
+			res.logCtx.Account = userSession.UserID
+		}
+	}
 
 	// 响应回译决策:入站协议 vs 上游 upstremFormat 不一致时转译,一致时纯透传。
 	// inboundFmt 由入站路径推断;upstreamFormat 由 passthroughForward 按组 Formats 决策后落入 res.upstreamFormat。
@@ -171,12 +205,12 @@ func (h *APICompatHandler) passthroughReplyTranslated(w http.ResponseWriter, r *
 
 	// 入站 Anthropic + 上游 OpenAI → OpenAI→Anthropic 回译(复用 NVIDIA 链路成果)。
 	if inboundFmt == "anthropic" && upFmt == "openai" {
-		h.replyOpenAIToAnthropic(w, r, res.resp, isStreaming, model)
+		h.replyOpenAIToAnthropic(w, r, res, isStreaming, model)
 		return
 	}
 	// 入站 OpenAI/Responses + 上游 Anthropic → Anthropic→OpenAI 回译。
 	if inboundFmt == "openai" && upFmt == "anthropic" {
-		h.replyAnthropicToOpenAI(w, r, res.resp, isStreaming, model)
+		h.replyAnthropicToOpenAI(w, r, res, isStreaming, model)
 		return
 	}
 	// 其它组合(含一致的)走纯透传。
@@ -185,7 +219,9 @@ func (h *APICompatHandler) passthroughReplyTranslated(w http.ResponseWriter, r *
 
 // replyOpenAIToAnthropic 把上游 OpenAI Chat 响应回译为 Anthropic Messages 响应回写客户端。
 // 复用 OpenAIChatToAnthropic(非流式)与 OpenAIChatSSEToAnthropicSSE(流式),逻辑与 NVIDIA 链路一致。
-func (h *APICompatHandler) replyOpenAIToAnthropic(w http.ResponseWriter, r *http.Request, resp *http.Response, isStreaming bool, model string) {
+// 回写同时捕获 usage 并经 recordOtherUsage 落库(请求日志/模型统计/趋势/中继与账号维度)。
+func (h *APICompatHandler) replyOpenAIToAnthropic(w http.ResponseWriter, r *http.Request, res *forwardResult, isStreaming bool, model string) {
+	resp := res.resp
 	if resp.StatusCode != http.StatusOK {
 		// 上游非 200:错误体原样透传(含错误 JSON),客户端按其协议解析。
 		for k, vs := range resp.Header {
@@ -208,11 +244,14 @@ func (h *APICompatHandler) replyOpenAIToAnthropic(w http.ResponseWriter, r *http
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		bw := bufio.NewWriter(w)
-		_, _, _ = OpenAIChatSSEToAnthropicSSE(r.Context(), resp.Body, resp.Body, bw, model, flusher)
+		// 首字节回写即 TTFT 打点(幂等 sync.Once), 与 NVIDIA 链路口径一致。
+		res.logCtx.FirstByteRec.MarkFirstByte()
+		in, out, _ := OpenAIChatSSEToAnthropicSSE(r.Context(), resp.Body, resp.Body, bw, model, flusher)
 		_ = bw.Flush()
 		if flusher != nil {
 			flusher.Flush()
 		}
+		h.recordOtherUsage(res.sess, model, in, out, 0, res.usedAccPtr, res.logCtx)
 		return
 	}
 	bodyBytes, err := io.ReadAll(resp.Body)
@@ -230,11 +269,16 @@ func (h *APICompatHandler) replyOpenAIToAnthropic(w http.ResponseWriter, r *http
 	payload, _ := json.Marshal(anthResp)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(payload)
+	// 非流式:写出即首字时刻,触发 TTFT 打点(幂等 sync.Once)。
+	res.logCtx.FirstByteRec.MarkFirstByte()
+	h.recordOtherUsage(res.sess, model, chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens, chatResp.Usage.CachedTokens(), res.usedAccPtr, res.logCtx)
 }
 
 // replyAnthropicToOpenAI 把上游 Anthropic Messages 响应回译为 OpenAI Chat 响应回写客户端。
 // 非流式用 AnthropicResponseToOpenAIChat;流式用 AnthropicSSEToOpenAIChatSSE。
-func (h *APICompatHandler) replyAnthropicToOpenAI(w http.ResponseWriter, r *http.Request, resp *http.Response, isStreaming bool, model string) {
+// 回写同时捕获 usage 并经 recordOtherUsage 落库(请求日志/模型统计/趋势/中继与账号维度)。
+func (h *APICompatHandler) replyAnthropicToOpenAI(w http.ResponseWriter, r *http.Request, res *forwardResult, isStreaming bool, model string) {
+	resp := res.resp
 	if resp.StatusCode != http.StatusOK {
 		for k, vs := range resp.Header {
 			if isPassthroughHopHeader(k) {
@@ -254,10 +298,13 @@ func (h *APICompatHandler) replyAnthropicToOpenAI(w http.ResponseWriter, r *http
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-		_, _, _ = AnthropicSSEToOpenAIChatSSE(resp.Body, w, model)
+		// 首字节回写即 TTFT 打点(幂等 sync.Once), 与 NVIDIA 链路口径一致。
+		res.logCtx.FirstByteRec.MarkFirstByte()
+		in, out, _ := AnthropicSSEToOpenAIChatSSE(resp.Body, w, model)
 		if flusher != nil {
 			flusher.Flush()
 		}
+		h.recordOtherUsage(res.sess, model, in, out, 0, res.usedAccPtr, res.logCtx)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -276,6 +323,9 @@ func (h *APICompatHandler) replyAnthropicToOpenAI(w http.ResponseWriter, r *http
 	chatResp.Model = model
 	payload, _ := json.Marshal(chatResp)
 	_, _ = w.Write(payload)
+	// 非流式:写出即首字时刻,触发 TTFT 打点(幂等 sync.Once)。
+	res.logCtx.FirstByteRec.MarkFirstByte()
+	h.recordOtherUsage(res.sess, model, anthResp.Usage.InputTokens, anthResp.Usage.OutputTokens, 0, res.usedAccPtr, res.logCtx)
 }
 
 func isGoogleProvider(p string) bool {

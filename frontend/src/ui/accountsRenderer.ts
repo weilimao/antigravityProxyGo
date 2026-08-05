@@ -1,7 +1,7 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
-import { ensureNvidiaCooldownTimer } from './accountsController';
+import { ensureNvidiaCooldownTimer, openEditNvidiaAccount, openEditOtherAccount, renderOtherGroupTabs } from './accountsController';
 
 // DOM Elements cache
 let accountsList: HTMLElement | null;
@@ -516,6 +516,11 @@ export function renderAccounts(accounts: any[]) {
         const accountChannel = acc.provider;
         if (accountChannel !== state.currentViewTab) return false;
 
+        // Other 号池二级组名过滤:仅 active 组展示(全部组 'ALL' 不过滤)。
+        if (state.currentViewTab === 'other' && state.otherGroupFilter && state.otherGroupFilter !== 'ALL') {
+            if ((acc.groupId || '') !== state.otherGroupFilter) return false;
+        }
+
         // Search query filter
         if (state.accountSearchQuery) {
             const q = state.accountSearchQuery.toLowerCase().trim();
@@ -678,43 +683,43 @@ export function renderAccounts(accounts: any[]) {
             info.className = 'acc-info-header flex flex-col flex-1 min-w-0 mr-2';
 
             const providerBadge = acc.provider === 'antigravity'
-                ? '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 ml-2 mt-0.5 self-center">Antigravity</span>'
+                ? '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Antigravity</span>'
                 : (acc.provider === 'gemini-cli'
-                    ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Gemini CLI</span>'
-                    : (acc.provider === 'nvidia' ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 dark:text-amber-400 text-[9px] font-bold border border-amber-500/20 ml-2 mt-0.5 self-center">NVIDIA</span>'
-                    : (acc.provider === 'other' ? '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center">Other</span>' : '')));
+                    ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Gemini CLI</span>'
+                    : (acc.provider === 'nvidia' ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 dark:text-amber-400 text-[9px] font-bold border border-amber-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">NVIDIA</span>'
+                    : (acc.provider === 'other' ? '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Other</span>' : '')));
             let otherExtraBadges = '';
             if (acc.provider === 'other') {
                 const groupName = acc.groupName || acc.groupId || '';
                 if (groupName) {
-                    otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-purple-500/5 text-purple-500/90 dark:text-purple-300/90 text-[9px] font-bold border border-purple-500/10 ml-1 mt-0.5 self-center" title="组: ${escapeHtml(groupName)}">${escapeHtml(groupName)}</span>`;
+                    otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-purple-500/5 text-purple-500/90 dark:text-purple-300/90 text-[9px] font-bold border border-purple-500/10 ml-1 mt-0.5 self-center flex-shrink-0 whitespace-nowrap" title="组: ${escapeHtml(groupName)}">${escapeHtml(groupName)}</span>`;
                 }
                 if (Array.isArray(acc.formats) && acc.formats.length > 0) {
                     const fmtLabels = acc.formats.map((f: string) => f === 'anthropic' ? 'A' : (f === 'openai' ? 'O' : f.charAt(0).toUpperCase())).join('/');
                     const fmtFull = acc.formats.join(', ');
-                    otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-1 mt-0.5 self-center" title="协议: ${escapeHtml(fmtFull)}">${fmtLabels}</span>`;
+                    otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-1 mt-0.5 self-center flex-shrink-0 whitespace-nowrap" title="协议: ${escapeHtml(fmtFull)}">${fmtLabels}</span>`;
                 }
             }
 
             const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.provider !== 'nvidia' && acc.provider !== 'other' && acc.projectId)
-                ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center">Project</span>'
+                ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Project</span>'
                 : '';
 
             let tierBadge = '';
             if (acc.tier) {
                 const tierStr = acc.tier.toUpperCase();
                 if (tierStr === 'PRO') {
-                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 dark:text-rose-400 text-[9px] font-bold border border-rose-500/20 ml-2 mt-0.5 self-center">Pro</span>';
+                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 dark:text-rose-400 text-[9px] font-bold border border-rose-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Pro</span>';
                 } else if (tierStr === 'ULTRA') {
-                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center font-extrabold tracking-wide">Ultra</span>';
+                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center font-extrabold tracking-wide flex-shrink-0 whitespace-nowrap">Ultra</span>';
                 } else if (tierStr === 'ENTERPRISE') {
-                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[9px] font-bold border border-blue-500/20 ml-2 mt-0.5 self-center">Enterprise</span>';
+                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[9px] font-bold border border-blue-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Enterprise</span>';
                 } else if (tierStr === 'STANDARD') {
-                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[9px] font-bold border border-sky-500/20 ml-2 mt-0.5 self-center">Standard</span>';
+                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[9px] font-bold border border-sky-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Standard</span>';
                 } else if (tierStr === 'FREE') {
-                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Free</span>';
+                    tierBadge = '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Free</span>';
                 } else {
-                    tierBadge = `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">${acc.tier}</span>`;
+                    tierBadge = `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">${acc.tier}</span>`;
                 }
             }
 
@@ -725,7 +730,7 @@ export function renderAccounts(accounts: any[]) {
             }
 
             info.innerHTML = `
-                <div class="flex items-center">
+                <div class="flex items-center flex-wrap">
                     <span class="text-[13px] font-bold text-on-surface dark:text-white truncate" title="${acc.email}">${acc.email}</span>
                     ${providerBadge}${otherExtraBadges}
                     ${projectBadge}
@@ -928,12 +933,28 @@ export function renderAccounts(accounts: any[]) {
                     }
                 }
             };
-            
+
+            // 编辑按钮:仅 API Key 型号池(NVIDIA / Other)提供,复用各自添加账号模态框做预填编辑。
+            const btnEdit = document.createElement('button');
+            btnEdit.className = 'text-[11px] font-medium text-primary hover:text-primary/80 hover:bg-primary/5 dark:hover:bg-primary/10 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10';
+            btnEdit.innerHTML = `<span class="material-symbols-outlined text-[14px]">edit</span> ${dict.btnEdit || '编辑'}`;
+            btnEdit.title = dict.editAccountTitle || '编辑该账号参数';
+            btnEdit.onclick = () => {
+                if (acc.provider === 'nvidia') {
+                    openEditNvidiaAccount(acc);
+                } else if (acc.provider === 'other') {
+                    openEditOtherAccount(acc);
+                }
+            };
+
             const rightGroup = document.createElement('div');
             rightGroup.className = 'flex items-center gap-1';
+            if (acc.provider === 'nvidia' || acc.provider === 'other') {
+                rightGroup.appendChild(btnEdit);
+            }
             rightGroup.appendChild(btnDownload);
             rightGroup.appendChild(btnDelete);
-            
+
             footer.appendChild(toggleWrapper);
             footer.appendChild(rightGroup);
             card.appendChild(footer);
@@ -944,43 +965,43 @@ export function renderAccounts(accounts: any[]) {
             const infoHeader = card.querySelector('.acc-info-header') as HTMLElement;
             if (infoHeader) {
                 const providerBadge = acc.provider === 'antigravity'
-                    ? '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 ml-2 mt-0.5 self-center">Antigravity</span>'
+                    ? '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Antigravity</span>'
                     : (acc.provider === 'gemini-cli'
-                        ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Gemini CLI</span>'
-                        : (acc.provider === 'nvidia' ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 dark:text-amber-400 text-[9px] font-bold border border-amber-500/20 ml-2 mt-0.5 self-center">NVIDIA</span>'
-                        : (acc.provider === 'other' ? '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center">Other</span>' : '')));
+                        ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Gemini CLI</span>'
+                        : (acc.provider === 'nvidia' ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 dark:text-amber-400 text-[9px] font-bold border border-amber-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">NVIDIA</span>'
+                        : (acc.provider === 'other' ? '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Other</span>' : '')));
                 let otherExtraBadges = '';
                 if (acc.provider === 'other') {
                     const groupName = acc.groupName || acc.groupId || '';
                     if (groupName) {
-                        otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-purple-500/5 text-purple-500/90 dark:text-purple-300/90 text-[9px] font-bold border border-purple-500/10 ml-1 mt-0.5 self-center" title="组: ${escapeHtml(groupName)}">${escapeHtml(groupName)}</span>`;
+                        otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-purple-500/5 text-purple-500/90 dark:text-purple-300/90 text-[9px] font-bold border border-purple-500/10 ml-1 mt-0.5 self-center flex-shrink-0 whitespace-nowrap" title="组: ${escapeHtml(groupName)}">${escapeHtml(groupName)}</span>`;
                     }
                     if (Array.isArray(acc.formats) && acc.formats.length > 0) {
                         const fmtLabels = acc.formats.map((f: string) => f === 'anthropic' ? 'A' : (f === 'openai' ? 'O' : f.charAt(0).toUpperCase())).join('/');
                         const fmtFull = acc.formats.join(', ');
-                        otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-1 mt-0.5 self-center" title="协议: ${escapeHtml(fmtFull)}">${fmtLabels}</span>`;
+                        otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-1 mt-0.5 self-center flex-shrink-0 whitespace-nowrap" title="协议: ${escapeHtml(fmtFull)}">${fmtLabels}</span>`;
                     }
                 }
 
                 const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.provider !== 'nvidia' && acc.provider !== 'other' && acc.projectId)
-                    ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center">Project</span>'
+                    ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Project</span>'
                     : '';
 
                 let tierBadge = '';
                 if (acc.tier) {
                     const tierStr = acc.tier.toUpperCase();
                     if (tierStr === 'PRO') {
-                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 dark:text-rose-400 text-[9px] font-bold border border-rose-500/20 ml-2 mt-0.5 self-center">Pro</span>';
+                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 dark:text-rose-400 text-[9px] font-bold border border-rose-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Pro</span>';
                     } else if (tierStr === 'ULTRA') {
-                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center font-extrabold tracking-wide">Ultra</span>';
+                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center font-extrabold tracking-wide flex-shrink-0 whitespace-nowrap">Ultra</span>';
                     } else if (tierStr === 'ENTERPRISE') {
-                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[9px] font-bold border border-blue-500/20 ml-2 mt-0.5 self-center">Enterprise</span>';
+                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[9px] font-bold border border-blue-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Enterprise</span>';
                     } else if (tierStr === 'STANDARD') {
-                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[9px] font-bold border border-sky-500/20 ml-2 mt-0.5 self-center">Standard</span>';
+                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[9px] font-bold border border-sky-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Standard</span>';
                     } else if (tierStr === 'FREE') {
-                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Free</span>';
+                        tierBadge = '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Free</span>';
                     } else {
-                        tierBadge = `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">${acc.tier}</span>`;
+                        tierBadge = `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">${acc.tier}</span>`;
                     }
                 }
 
@@ -991,7 +1012,7 @@ export function renderAccounts(accounts: any[]) {
                 }
 
                 infoHeader.innerHTML = `
-                    <div class="flex items-center">
+                    <div class="flex items-center flex-wrap">
                         <span class="text-[13px] font-bold text-on-surface dark:text-white truncate" title="${acc.email}">${acc.email}</span>
                         ${providerBadge}${otherExtraBadges}
                         ${projectBadge}
@@ -1129,8 +1150,8 @@ function renderPaginationUI(totalItems: number, startIndex: number, endIndex: nu
             const btn = document.createElement('button');
             const isActive = i === state.accountCurrentPage;
             btn.className = `w-6 h-6 rounded flex items-center justify-center text-[11px] font-medium transition-colors cursor-pointer ${
-                isActive 
-                    ? 'bg-primary text-white font-bold shadow-sm' 
+                isActive
+                    ? 'bg-primary text-white font-bold shadow-sm'
                     : 'text-outline hover:bg-slate-100 dark:hover:bg-white/10'
             }`;
             btn.textContent = i.toString();
@@ -1141,6 +1162,10 @@ function renderPaginationUI(totalItems: number, startIndex: number, endIndex: nu
             numbersContainer.appendChild(btn);
         }
     }
+
+    // 每次重绘账号列表后同步刷新 Other 二级组名子 Tab(动态按钮文本需随语言/数据重算)。
+    // 语言切换(setLanguage)只调 renderAccounts,不单独调 renderOtherGroupTabs,故在此兜底。
+    renderOtherGroupTabs();
 }
 
 function getFamilyLifetimeTokens(stats: any, isGemini: boolean): number {

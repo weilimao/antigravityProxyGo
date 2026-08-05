@@ -95,6 +95,8 @@
             </div>
         </div>
     </div>
+<!-- Other 号池二级组名子 Tab(仅 Other 通道显示,由 accountsController.renderOtherGroupTabs 渲染) -->
+<div id="otherGroupTabs" class="hidden flex flex-wrap items-center gap-1 bg-slate-100 dark:bg-white/5 p-1 rounded-lg text-[12px]"></div>
 <!-- 账号列表卡片 -->
 <div class="glass-card rounded-xl flex flex-col flex-1 min-h-[300px]">
         <div class="p-3 border-b border-outline-variant/30 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50 dark:bg-white/5 rounded-t-xl" id="accountsToolbar">
@@ -117,6 +119,14 @@
                     <option value="standard">Standard</option>
                     <option value="free">Free</option>
                 </select>
+                <!-- Other 号池组内负载均衡方式(仅 Other 通道且有选中组时显示,由 accountsController.renderOtherLBMode 控制) -->
+                <div id="otherLBModeContainer" class="hidden items-center gap-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded-lg px-2 py-1 flex-shrink-0">
+                    <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="otherLBModeSelectPlaceholder">组内负载均衡</span>
+                    <select id="otherLBModeSelect" class="bg-transparent text-[12px] font-medium text-on-surface dark:text-white focus:outline-none cursor-pointer">
+                        <option value="round-robin" data-i18n="lbRoundRobin">轮询</option>
+                        <option value="sticky" data-i18n="lbSticky">粘性</option>
+                    </select>
+                </div>
                 <!-- 布局切换按钮组 -->
                 <div class="flex items-center bg-slate-100 dark:bg-white/5 p-0.5 rounded-lg border border-outline-variant/10 ml-1 flex-shrink-0">
                     <button id="btnLayoutGrid" class="p-1 rounded-md cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm flex items-center justify-center" title="网格布局" data-i18n-title="layoutGridTitle" type="button">

@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/stats"
 )
 
 // passthrough_forwarder.go: 通用 OpenAI 兼容透传转发器。
@@ -36,8 +38,16 @@ type forwardResult struct {
 	statusCode  int            // 失败时最后一次上游/兜底状态码
 	body        []byte         // 失败时的错误体
 	err         error          // 失败原因
-	attempts    int            // 实际尝试次数
-	usedAccount string         // 成功时命中的账号 Email(供日志)
+	attempts    int              // 实际尝试次数
+	usedAccount string           // 成功时命中的账号 Email(供日志)
+	usedAccPtr  *account.Account // 成功时命中的账号指针(供 recordOtherUsage 落点2 账号维度统计)
+	// usedModel 是成功请求的上游模型展示名(供模型统计/成本计算, 与 NVIDIA 去前缀口径一致)。
+	usedModel string
+	// sess 是成功请求的会话上下文(供 recordOtherUsage 落点1/2 的中继与账号维度统计)。
+	sess *RelaySession
+	// logCtx 是 Other 号池请求日志/统计上下文,由 handleRoutedForward 在 pf.run 返回后
+	// (此时 usedAccPtr/userSession 已就绪)装配注入,供各回写路径的 recordOtherUsage 使用。
+	logCtx passthroughLogCtx
 	// upstreamFormat 标记上游响应的协议形态:"openai"(OpenAI Chat JSON/SSE) / "anthropic"(Anthropic Messages JSON/SSE)。
 	// 留空视作 "openai"(向后兼容既有调用方)。passthroughReply 据此与入站协议对比决定是否做响应回译:
 	//   - upstream==inbound:原样透传;
@@ -181,8 +191,14 @@ func (pf *passthroughForward) run(
 			break
 		}
 
-		// 轮询选号(取活跃集第一个 → 与 handleNvidia 单账号模式语义一致的轻量选法)。
-		acc := active[0]
+		// 轮询选号:Other 号池按组 LB 模式选号(sticky/round-robin);其余号池维持轻量取首个。
+		var acc *account.Account
+		if poolChannel == "other" && targetGroupID != "" {
+			lbMode := pf.accountMgr.GetOtherLBMode(targetGroupID)
+			acc = pf.pickOtherAccount(pf.h, lbMode, targetGroupID, userSession, active)
+		} else {
+			acc = active[0]
+		}
 		if isPassthroughAccountUnavailable(acc) {
 			skipped[acc.ID] = true
 			continue
@@ -293,6 +309,7 @@ func (pf *passthroughForward) run(
 			// 200 (含 SSE/JSON)。回写由调用方处理,此处只落 activeResp。
 			activeResp = resp
 			res.usedAccount = acc.Email
+			res.usedAccPtr = acc
 			ok = true
 			break
 		}
@@ -361,6 +378,25 @@ func (pf *passthroughForward) buildUpstreamBody(bodyBytes []byte, upstreamModel 
 		return nil, fmt.Errorf("openai->anthropic transform failed: %w", err)
 	}
 	return json.Marshal(anthReq)
+}
+
+// pickOtherAccount 是 Other 号池组内选号统一入口, 按组配置的 LB 模式选号。
+// 与 pickNvidiaAccount 语义对齐, 但 sessionKey 用组前缀隔离:
+//   - sticky 模式: 走 sessionRouter.GetOrAssignAccount, 用 "other:{groupID}:{sessionKey}"
+//     作为粘性键, 使同一会话稳定绑定到同一账号, 且不同上游组互不串扰(避免跨组共享
+//     sessionRouter 时把会话错绑到别的组账号)。
+//   - round-robin 模式: 取活跃集第一个(维持既有轻量取法, 与 handleNvidia 单账号语义一致)。
+//
+// sessionRouter / userSession 缺失时回退 round-robin(取首个), 保证单测与未注入场景兼容。
+func (pf *passthroughForward) pickOtherAccount(h *APICompatHandler, lbMode, groupID string, userSession *RelaySession, accounts []*account.Account) *account.Account {
+	if len(accounts) == 0 {
+		return nil
+	}
+	if lbMode == "sticky" && h != nil && h.sessionRouter != nil && userSession != nil && userSession.UserID != "" {
+		stickyKey := "other:" + groupID + ":" + userSession.UserID
+		return h.sessionRouter.GetOrAssignAccount(stickyKey, accounts, h.logFn)
+	}
+	return accounts[0]
 }
 
 // containsFormat 判定组 Formats 切片是否包含某协议(大小写不敏感)。
@@ -454,10 +490,14 @@ func (h *APICompatHandler) passthroughReply(w http.ResponseWriter, ctx context.C
 	writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "route forward exhausted: " + errStr(res.err)})
 }
 
-// passthroughWriteSuccess 是透传/回译的成功响应回写,由 passthroughReply 调用。
-// 当前实现保持纯透传语义(与旧行为一致);响应回译由 handleRoutedForward 在需要时
-// 直接调用 writePassthroughTranslatedReply 处理(见 router_entry.go 后置分支)。
+// passthroughWriteSuccess 是纯透传的成功响应回写(upstream==inbound, 无协议回译)。
+// 透传同时嗅探 usage(仿 proxyNvidiaOpenAIPassthrough), 成功路径(200)经 recordOtherUsage
+// 落库(请求日志/模型统计/趋势/中继与账号维度)。非流式先读全量 body 解析 usage 再原样写出;
+// 流式逐行读 SSE 帧、逐帧原样透传, 顺带解析每个 chunk 的 usage 字段(OpenAI 末帧 usage 为权威值)。
 func (h *APICompatHandler) passthroughWriteSuccess(w http.ResponseWriter, res *forwardResult, isStreaming bool) {
+	if res == nil || res.resp == nil {
+		return
+	}
 	// 透传上游头(剔除 hop-by-hop 与鉴权),保持裸透传语义。
 	for k, vs := range res.resp.Header {
 		if isPassthroughHopHeader(k) {
@@ -478,14 +518,108 @@ func (h *APICompatHandler) passthroughWriteSuccess(w http.ResponseWriter, res *f
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 	}
-	w.WriteHeader(res.resp.StatusCode)
+
+	inUsage, outUsage, cachedUsage := h.proxyPassthroughOpenAI(w, res.resp, isStreaming, res.logCtx.FirstByteRec)
+	// 成功路径(200)且 usage 非空时记录到五落点;非 200 / usage 为空 → recordOtherUsage 早退。
+	if res.resp.StatusCode == http.StatusOK {
+		h.recordOtherUsage(res.sess, res.usedModel, inUsage, outUsage, cachedUsage, res.usedAccPtr, res.logCtx)
+	}
+}
+
+// proxyPassthroughOpenAI 透传上游 OpenAI Chat 响应到客户端, 同时嗅探 (inputTokens, outputTokens, cachedTokens)。
+// 对偶 proxyNvidiaOpenAIPassthrough, 但入参是 forwardResult 拆出的 resp 与 isStreaming, 供
+// passthroughWriteSuccess 复用。非流式全量读 body 解析 usage 后原样写出; 流式逐行透传 + 末帧
+// usage 权威。上游非 200 直接透传错误体, usage 返回 0。
+func (h *APICompatHandler) proxyPassthroughOpenAI(w http.ResponseWriter, resp *http.Response, isStreaming bool, firstByteRec *stats.FirstByteRecorder) (int, int, int) {
+	if resp == nil {
+		return 0, 0, 0
+	}
+	// 上游非 200: 直接透传错误体, 不嗅探 usage。
+	if resp.StatusCode != http.StatusOK {
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		return 0, 0, 0
+	}
+	if !isStreaming {
+		// 非流式: 全量读 body, 解析 usage, 原样透传。
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":"read upstream passthrough body failed"}`))
+			return 0, 0, 0
+		}
+		var chatResp OpenAIChatResponse
+		inUsage, outUsage, cachedUsage := 0, 0, 0
+		if json.Unmarshal(bodyBytes, &chatResp) == nil {
+			inUsage = chatResp.Usage.PromptTokens
+			outUsage = chatResp.Usage.CompletionTokens
+			cachedUsage = chatResp.Usage.CachedTokens()
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(bodyBytes)
+		// 非流式透传:WriteHeader+写出即首字时刻,触发 TTFT 打点(幂等 sync.Once)。
+		if firstByteRec != nil {
+			firstByteRec.MarkFirstByte()
+		}
+		return inUsage, outUsage, cachedUsage
+	}
+
+	// 流式: 逐行嗅探 SSE, 逐行原样透传, 末帧 usage 为权威。
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
-	if _, err := io.Copy(w, res.resp.Body); err != nil && !isClientGone(err) {
-		h.log("⚠️ [路由转发] 回写上游响应体中断: %v", err)
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	var inUsage, outUsage, cachedUsage int
+	doneSent := false
+	firstByteMarked := false
+	markFirstByte := func() {
+		if firstByteMarked || firstByteRec == nil {
+			return
+		}
+		firstByteMarked = true
+		// 幂等(FirstByteRecorder.sync.Once),首帧即记录上游真实首字延迟。
+		firstByteRec.MarkFirstByte()
 	}
-	if flusher != nil {
-		flusher.Flush()
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			_, _ = w.Write([]byte("\n"))
+			if flusher != nil {
+				flusher.Flush()
+			}
+			continue
+		}
+		markFirstByte()
+		_, _ = w.Write([]byte(line + "\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			doneSent = true
+			continue
+		}
+		var chunk OpenAIChatStreamChunk
+		if json.Unmarshal([]byte(data), &chunk) != nil {
+			continue
+		}
+		if chunk.Usage != nil {
+			inUsage = chunk.Usage.PromptTokens
+			outUsage = chunk.Usage.CompletionTokens
+			cachedUsage = chunk.Usage.CachedTokens()
+		}
 	}
+	if !doneSent {
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	return inUsage, outUsage, cachedUsage
 }
 
 // isPassthroughHopHeader 判定是否为透传时应剔除的头(含鉴权,避免泄露 key)。

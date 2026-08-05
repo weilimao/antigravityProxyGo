@@ -74,6 +74,13 @@ type flushWriter struct {
 	// 用途:past-WriteHeader 的首字节到达时由 flushWriter 触发回调,保证 WriteHeader(200)
 	// 先于任何响应体字节落盘。nil 时跳过。触发后置空避免重复调用。
 	firstByteHook func()
+	// firstUpstreamByteHook 在接受到上游响应的首个字节时一次性触发(TTFT 打点)。
+	// 与 firstByteHook 的语义差异:mark 的是「上游首字时刻」,而非「客户端首字节时刻」。
+	// 混合模式(deferred 延迟缓冲)下客户端首字可能在整条流 ready 后回放才落盘,已被
+	// tee 用 flushDeferred 触发 firstByteHook 提前打了客户端点;而本 hook 在 openAIChatSSE
+	// →AnthropicSSE 转译主循环把第一帧写入 sink 时触发,反映上游真实首字延迟,与客户端
+	// 缓冲/回放逻辑解耦。nil 时跳过。触发后置空避免重复调用。
+	firstUpstreamByteHook func()
 	// deferred 延迟缓冲:混合模式延迟 WriteHeader 场景下,在"实质内容首字"到达前,
 	// 框架帧(message_start + thinking 块 content_block_start)先进 deferred 暂存,不落盘不 flusher、
 	// 也不触发 WriteHeader。首个实质内容(thinking_delta 或回放正文首帧)到达时调 flushDeferred 触发
@@ -99,6 +106,11 @@ func newFlushWriter(reqID string, w *bufio.Writer, flusher ...http.Flusher) *flu
 func (f *flushWriter) writeEvent(event, data string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.firstUpstreamByteHook != nil {
+		hook := f.firstUpstreamByteHook
+		f.firstUpstreamByteHook = nil // 一次性触发,避免重复打点
+		hook()
+	}
 	if f.deferredActive {
 		writeSSEFrame(&f.deferred, event, data)
 		return
@@ -118,6 +130,11 @@ func (f *flushWriter) writeEvent(event, data string) {
 func (f *flushWriter) writeRaw(s string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.firstUpstreamByteHook != nil {
+		hook := f.firstUpstreamByteHook
+		f.firstUpstreamByteHook = nil // 一次性触发,避免重复打点
+		hook()
+	}
 	if f.deferredActive {
 		f.deferred.WriteString(s)
 		return

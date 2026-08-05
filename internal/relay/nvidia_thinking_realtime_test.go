@@ -15,6 +15,13 @@ import (
 //	断流重试轮             → 切纯 replay(replayOnly),思考不再外发,只回放正文
 //
 // 解决"思考块等整条 ready 才出"的首字节延迟痛点,同时保留服务端 5×5s 不换号断流重试能力。
+//
+//	message_start          → 双写 live(replay 头不重发)
+//	思考段(thinking 块整段)→ 双写 live(逐字实时显示)
+//	正文/工具段 + 尾帧     → 只 replay(整条 ready 后 replayBodyInto 跳过思考头回放)
+//	断流重试轮             → 切纯 replay(replayOnly),思考不再外发,只回放正文
+//
+// 解决"思考块等整条 ready 才出"的首字节延迟痛点,同时保留服务端 5×5s 不换号断流重试能力。
 
 // teeTestHarness 构造一个 live(接 flushBuffer,可断言 live 实时输出) + replay(蓄流),
 // 并复用 runAnthropicSSE 路径的转译主循环,把上游 OpenAI Chat SSE 喂进 tee。
@@ -569,5 +576,45 @@ func TestThinkingRealtimeTruncatedThenReplay_ClosesOpenThinking(t *testing.T) {
 	}
 	if !stopIdxSeen {
 		t.Fatalf("补闭合后应存在 index 0 的 content_block_stop,out=%v", eventNames(out))
+	}
+}
+
+// TestTeeSink_UpstreamFirstByteHook_FiresBeforeDeferredFlush 锁定 TTFT 修复语义:
+// firstUpstreamByteHook 必须在上游首帧写入 sink 时立即触发(独立于客户端 deferred 缓冲),
+// 而非等到 flushDeferred 把 deferred 落盘(客户端首字节)才触发 —— 这正是「上游首字延迟」与
+// 「客户端首字节时间」解耦的关键。混合模式整条 ready 后回放时,客户端首字可能远晚于上游首字,
+// 若复用 firstByteHook,TTFT 会被误记成请求耗时(前端 0 差值 bug 的根因之一)。
+func TestTeeSink_UpstreamFirstByteHook_FiresBeforeDeferredFlush(t *testing.T) {
+	live := &flushBuffer{}
+	bw := bufio.NewWriter(live)
+	liveFW := newFlushWriter("test", bw)
+	replay := newReplayWriter()
+	tee := newTeeSink(replay, liveFW)
+
+	// 模拟 writeNvidiaAnthropicStream:deferredActive+pull 阶段框架帧先进 deferred。
+	liveFW.deferredActive = true
+
+	upstreamHits := 0
+	clientHits := 0
+	liveFW.firstUpstreamByteHook = func() { upstreamHits++ }
+	liveFW.firstByteHook = func() { clientHits++ }
+
+	// 喂入上游首个字节(message_start 框架帧,经 deferred 暂存不落盘)。
+	tee.writeEvent("message_start", `{"type":"message_start"}`)
+	if upstreamHits != 1 {
+		t.Fatalf("上游首字 hook 应在首帧写入 sink 时触发一次(deferred 缓冲前),实际=%d", upstreamHits)
+	}
+	if clientHits != 0 {
+		t.Fatalf("客户端首字 hook 不应在 deferred 缓冲阶段触发,实际=%d", clientHits)
+	}
+	// 再写一帧:hook 一次性,不应重复触发。
+	tee.writeEvent("content_block_start", `{"type":"content_block_start","index":0}`)
+	if upstreamHits != 1 {
+		t.Fatalf("上游首字 hook 应一次性触发,实际=%d", upstreamHits)
+	}
+	// flushDeferred 落盘(客户端首字节)才触发客户端 hook。
+	liveFW.flushDeferred()
+	if clientHits != 1 {
+		t.Fatalf("flushDeferred 后客户端首字 hook 应触发一次,实际=%d", clientHits)
 	}
 }

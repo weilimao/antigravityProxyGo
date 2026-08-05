@@ -12,11 +12,18 @@
   >
     <div class="flex flex-col gap-1.5">
       <label class="text-[12px] font-medium text-on-surface dark:text-white" data-i18n="otherFieldGroupId">组 ID (英文标识)</label>
+      <div class="flex items-center gap-2">
       <input type="text" id="inputOtherGroupId"
         placeholder="deepseek / openai / myrelay"
         data-i18n-placeholder="otherFieldGroupIdPlaceholder"
-        class="px-3 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all font-mono" />
-      <div class="text-[10px] text-outline mt-0.5">英文字母/数字/下划线,作为组唯一标识与模型前缀第二段(如 other/deepseek/...);不能与内置号池重名</div>
+        class="flex-1 min-w-0 px-3 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all font-mono" />
+      <select id="selectOtherGroup"
+        data-i18n-title="otherGroupSelectTitle"
+        class="hidden w-40 shrink-0 px-2 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all cursor-pointer">
+        <option value="" data-i18n="otherGroupSelectPlaceholder">选择已有组...</option>
+      </select>
+    </div>
+    <div class="text-[10px] text-outline mt-0.5">英文字母/数字/下划线,作为组唯一标识与模型前缀第二段(如 other/deepseek/...);不能与内置号池重名</div>
     </div>
 
     <div class="flex flex-col gap-1.5">

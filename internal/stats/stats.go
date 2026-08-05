@@ -371,6 +371,14 @@ func (t *Tracker) GetTotalRequests() int {
 	return t.stats.TotalRequests
 }
 
+// GetTotalCachedTokens 轻量级读取全局累计缓存命中 token(TotalCachedTokens), 供单测断言
+// TrackRequestForModel 的 cached 透传口径(缓存命中率分子)真实写入而非恒 0。
+func (t *Tracker) GetTotalCachedTokens() int {
+	t.RLock()
+	defer t.RUnlock()
+	return t.stats.TotalCachedTokens
+}
+
 // GetRequestLogCount 轻量级读取内存请求日志条数, 供外部(含单测)校验落点5
 // (AddRequestLogForFamily)是否把日志写入了内存 requests 快照。读锁内返回长度, 不回切片别名。
 func (t *Tracker) GetRequestLogCount() int {
@@ -389,6 +397,18 @@ func (t *Tracker) GetRecentRequestFirstByteMs() int64 {
 		return -1
 	}
 	return t.requests[len(t.requests)-1].FirstByteMs
+}
+
+// GetRecentRequestCacheStatus 轻量级读取最近一条内存请求日志的 CacheStatus, 供单测端到端
+// 断言缓存命中链路(record*Usage 的 cached>0 → CacheStatus="HIT")真实闭环而非恒 "NONE"。
+// 无日志时返回 ""。读锁内取值, 不回切片别名。
+func (t *Tracker) GetRecentRequestCacheStatus() string {
+	t.RLock()
+	defer t.RUnlock()
+	if len(t.requests) == 0 {
+		return ""
+	}
+	return t.requests[len(t.requests)-1].CacheStatus
 }
 
 // GetNvidiaTrends 轻量级读取 NVIDIA 号池专用趋势桶的深拷贝, 供 app.go 远程中继分支

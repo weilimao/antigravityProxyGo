@@ -70,6 +70,10 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 
 	headerWritten := false
 	headerMu := &sync.Mutex{}
+	// 首字时刻:200 头已推给客户端,即首字时刻,触发 TTFT 打点(幂等 sync.Once)。
+	// 注意:此处打的是「客户端首字节」点(混合模式整条 ready 后回放,首字可能晚于上游首字)。
+	// 上游真实首字延迟由 firstUpstreamByteHook 在 openAIChatSSE→AnthropicSSE 转译主循环
+	// 写入首帧时触发(见下方),反映上游 TTFT,与客户端缓冲/回放解耦。
 	firstLiveByteHook := func() {
 		headerMu.Lock()
 		defer headerMu.Unlock()
@@ -81,10 +85,13 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 			flusher.Flush() // 立即把响应头推给客户端,让其尽早进入 SSE 等待状态
 		}
 		headerWritten = true
-		// 200 头已推给客户端,即首字时刻:触发 TTFT 打点(幂等 sync.Once)。
-		logCtx.FirstByteRec.MarkFirstByte()
 	}
 	liveFW.firstByteHook = firstLiveByteHook
+	// 上游首字 TTFT 打点:转译主循环把上游首个字节写入 sink 时触发(独立于客户端缓冲/回放)。
+	// 幂等(FirstByteRecorder.sync.Once),首帧即记录上游真实首字延迟。
+	liveFW.firstUpstreamByteHook = func() {
+		logCtx.FirstByteRec.MarkFirstByte()
+	}
 	liveFW.deferredActive = true // pull 阶段框架帧先进 deferred,等首条实质内容 flush
 
 	replay, state, in, out, finalErr := h.pullAnthropicStreamWithRetry(r, resp, poolAccount, targetURL, upstreamBody, model, liveFW)
