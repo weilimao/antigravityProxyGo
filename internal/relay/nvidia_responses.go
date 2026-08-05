@@ -277,6 +277,8 @@ func (h *APICompatHandler) writeNvidiaResponsesNormal(w http.ResponseWriter, res
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(jsonString(rr)))
+	// 非流式 Responses:WriteHeader+写出即首字时刻,触发 TTFT 打点(幂等 sync.Once)。
+	logCtx.FirstByteRec.MarkFirstByte()
 
 	// 配额/统计回调，与 Chat 透传链路口径一致
 	h.recordNvidiaUsage(userSession, model, rr.Usage.InputTokens, rr.Usage.OutputTokens, poolAccount, logCtx)
@@ -302,6 +304,8 @@ func (h *APICompatHandler) writeNvidiaResponsesStream(w http.ResponseWriter, r *
 	if ok {
 		flusher.Flush()
 	}
+	// 流式 Responses 头已推给客户端:触发 TTFT 打点(幂等 sync.Once, 首帧即记录)。
+	logCtx.FirstByteRec.MarkFirstByte()
 
 	reqID := fmt.Sprintf("nv_resp_%d", time.Now().UnixNano())
 	fw := newFlushWriter(reqID, bufio.NewWriter(w), flusher)

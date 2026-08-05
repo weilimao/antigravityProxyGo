@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"io"
@@ -87,7 +88,7 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 	}
 
 	// 解析规则表 → 目标 Provider 与上游模型。
-	provider, upstreamModel, matched := h.resolveRoutedTarget(inModel)
+	provider, targetGroupID, upstreamModel, matched := h.resolveRoutedTarget(inModel)
 	if !matched {
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error": "no route rule matched for model: " + inModel,
@@ -95,7 +96,7 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	h.log("🔀 [路由转发] model %s → provider %s (upstream %s) | stream=%v | user %s", inModel, provider, upstreamModel, isStreaming, userSession.UserKey)
+	h.log("🔀 [路由转发] model %s → provider %s (group %s) (upstream %s) | stream=%v | user %s", inModel, provider, targetGroupID, upstreamModel, isStreaming, userSession.UserKey)
 
 	// 命中 nvidia 号池 → 复用既有 handleNvidia 重特化链路(Anthropic↔OpenAI 回译、流内压缩、思考注入)。
 	// handleNvidia 自行从 r 读取 body,故把已读的 bodyBytes 恢复回 r.Body 供其二次读取。
@@ -124,13 +125,157 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// 非 nvidia/google 族(如第三方 OpenAI 兼容 API DeepSeek/Moonshot/Qwen) → 通用透传转发器。Anthropic 入站先转 OpenAI Chat(裸透传不做回译,保持响应原样)。
-	// 入站 /route/v1/messages 的响应是 OpenAI 形态,客户端若按 Anthropic 解析会不兼容 —— 这是本转发器
-	// 的已知取舍:Anthropic 客户端请继续走 /nvidia/v1/messages(有回译) 或上游原生 Anthropic 端点;
-	// /route/* 面向「已是 OpenAI 兼容」的客户端。若将来需要,在此加 Anthropic→OpenAI 请求 + OpenAI→Anthropic 响应回译即可。
+	// 非 nvidia/google 族(如第三方 OpenAI 兼容 API DeepSeek/Moonshot/Qwen,或 Other 号池自定义组) → 通用透传转发器。
+	// Other 号池(provider=="other")按组内 Formats 与入站协议决定转译方向:
+	//   - OpenAI 格式组 + 入站 OpenAI Chat → 纯透传;
+	//   - OpenAI 格式组 + 入站 Anthropic Messages → 请求 AnthropicToOpenAIChat + 响应 OpenAI→Anthropic 回译;
+	//   - Anthropic 格式组 + 入站 Anthropic Messages → 纯透传 Anthropic 协议(POST {BaseURL}/v1/messages);
+	//   - Anthropic 格式组 + 入站 OpenAI Chat → 请求 OpenAI→Anthropic + 响应 Anthropic→OpenAI 回译;
+	//   - 多选 formats 组 → 按入站协议选上游端点(若入站协议在组 Formats 内则直发原生端点,否则转译为 Formats 内的优先协议)。
+	// passthroughForward 内部按 (provider, targetGroupID) 选号与决策端点。
 	pf := &passthroughForward{h: h, accountMgr: h.accountMgr}
-	res := pf.run(w, r, provider, upstreamModel, inModel, bodyBytes, isStreaming, userSession)
+	res := pf.run(w, r, provider, targetGroupID, upstreamModel, inModel, bodyBytes, isStreaming, isChat, isResponses, isMessages, userSession)
+
+	// 响应回译决策:入站协议 vs 上游 upstremFormat 不一致时转译,一致时纯透传。
+	// inboundFmt 由入站路径推断;upstreamFormat 由 passthroughForward 按组 Formats 决策后落入 res.upstreamFormat。
+	inboundFmt := ""
+	if isMessages {
+		inboundFmt = "anthropic"
+	} else if isChat || isResponses {
+		inboundFmt = "openai"
+	}
+	upFmt := res.upstreamFormat
+	if upFmt == "" {
+		upFmt = "openai"
+	}
+	// 非 other 号池或 deepseek/qwen 等 openai 兼容上游:res.upstreamFormat 留空视作 openai,与入站 openai/chat 一致 → 纯透传。
+	if inboundFmt == upFmt || (provider != "other" && upFmt == "openai") {
+		h.passthroughReply(w, r.Context(), res, isStreaming)
+		return
+	}
+	// 响应回译(upstream != inbound):入站 Anthropic + 上游 OpenAI → OpenAI→Anthropic 回译(NVIDIA 复用成果);
+	// 入站 OpenAI/Responses + 上游 Anthropic → Anthropic→OpenAI 回译(passthrough_anthropic.go 成果)。
+	h.passthroughReplyTranslated(w, r, res, isStreaming, inboundFmt, upFmt, upstreamModel)
+}
+
+// passthroughReplyTranslated 在上游协议与入站协议不一致时做响应回译后回写客户端。
+// 复用 NVIDIA 链路的 OpenAI→Anthropic 回译成果(OpenAIChatToAnthropic / OpenAIChatSSEToAnthropicSSE)
+// 与本文件族的 Anthropic→OpenAI 回译成果(AnthropicResponseToOpenAIChat / anthropicSSEToOpenAIChatSSEInto)。
+func (h *APICompatHandler) passthroughReplyTranslated(w http.ResponseWriter, r *http.Request, res *forwardResult, isStreaming bool, inboundFmt, upFmt, model string) {
+	if res == nil || res.resp == nil {
+		// 回退到普通兜底回复(失败路径已在 passthroughReply 处理)。
+		h.passthroughReply(w, r.Context(), res, isStreaming)
+		return
+	}
+	defer res.resp.Body.Close()
+
+	// 入站 Anthropic + 上游 OpenAI → OpenAI→Anthropic 回译(复用 NVIDIA 链路成果)。
+	if inboundFmt == "anthropic" && upFmt == "openai" {
+		h.replyOpenAIToAnthropic(w, r, res.resp, isStreaming, model)
+		return
+	}
+	// 入站 OpenAI/Responses + 上游 Anthropic → Anthropic→OpenAI 回译。
+	if inboundFmt == "openai" && upFmt == "anthropic" {
+		h.replyAnthropicToOpenAI(w, r, res.resp, isStreaming, model)
+		return
+	}
+	// 其它组合(含一致的)走纯透传。
 	h.passthroughReply(w, r.Context(), res, isStreaming)
+}
+
+// replyOpenAIToAnthropic 把上游 OpenAI Chat 响应回译为 Anthropic Messages 响应回写客户端。
+// 复用 OpenAIChatToAnthropic(非流式)与 OpenAIChatSSEToAnthropicSSE(流式),逻辑与 NVIDIA 链路一致。
+func (h *APICompatHandler) replyOpenAIToAnthropic(w http.ResponseWriter, r *http.Request, resp *http.Response, isStreaming bool, model string) {
+	if resp.StatusCode != http.StatusOK {
+		// 上游非 200:错误体原样透传(含错误 JSON),客户端按其协议解析。
+		for k, vs := range resp.Header {
+			if isPassthroughHopHeader(k) {
+				continue
+			}
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if isStreaming {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		bw := bufio.NewWriter(w)
+		_, _, _ = OpenAIChatSSEToAnthropicSSE(r.Context(), resp.Body, resp.Body, bw, model, flusher)
+		_ = bw.Flush()
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "read upstream body failed: " + err.Error()})
+		return
+	}
+	var chatResp OpenAIChatResponse
+	if err := json.Unmarshal(bodyBytes, &chatResp); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "invalid openai response json: " + err.Error()})
+		return
+	}
+	anthResp := OpenAIChatToAnthropic(&chatResp)
+	anthResp.Model = model
+	payload, _ := json.Marshal(anthResp)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(payload)
+}
+
+// replyAnthropicToOpenAI 把上游 Anthropic Messages 响应回译为 OpenAI Chat 响应回写客户端。
+// 非流式用 AnthropicResponseToOpenAIChat;流式用 AnthropicSSEToOpenAIChatSSE。
+func (h *APICompatHandler) replyAnthropicToOpenAI(w http.ResponseWriter, r *http.Request, resp *http.Response, isStreaming bool, model string) {
+	if resp.StatusCode != http.StatusOK {
+		for k, vs := range resp.Header {
+			if isPassthroughHopHeader(k) {
+				continue
+			}
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+	if isStreaming {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		_, _, _ = AnthropicSSEToOpenAIChatSSE(resp.Body, w, model)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		_, _ = w.Write([]byte(`{"error":"read upstream body failed"}`))
+		return
+	}
+	var anthResp AnthropicResponse
+	if err := json.Unmarshal(bodyBytes, &anthResp); err != nil {
+		_, _ = w.Write([]byte(`{"error":"invalid anthropic response json"}`))
+		return
+	}
+	chatResp := AnthropicResponseToOpenAIChat(&anthResp)
+	chatResp.Model = model
+	payload, _ := json.Marshal(chatResp)
+	_, _ = w.Write(payload)
 }
 
 func isGoogleProvider(p string) bool {

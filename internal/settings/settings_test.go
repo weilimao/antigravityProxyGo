@@ -317,6 +317,65 @@ func TestBypassOverridePrefixes(t *testing.T) {
 	}
 }
 
+// TestBypassOverridePrefixes_NullAndMissingFallback 锁定 loadConfig 兜底行为:
+// 当 config.json 中 bypassOverridePrefixes 字段缺失(旧版本升级)或被显式写成 null
+// 时,加载后应回落到默认 ["tab"],避免 Tab 补全模型被全局覆写改向推理上游触发 400。
+// 显式 [] (空数组) 不受兜底干预,仍表达"全部覆写"的用户意图。
+func TestBypassOverridePrefixes_NullAndMissingFallback(t *testing.T) {
+	cases := []struct {
+		name    string
+		jsonStr string
+		want    []string
+	}{
+		{
+			name:    "字段缺失 (旧版本配置)",
+			jsonStr: `{"customModelOverrideEnabled": true}`,
+			want:    []string{"tab"},
+		},
+		{
+			name:    "字段显式 null",
+			jsonStr: `{"customModelOverrideEnabled": true, "bypassOverridePrefixes": null}`,
+			want:    []string{"tab"},
+		},
+		{
+			name:    "字段显式空数组 (用户主动全部覆写,不兜底)",
+			jsonStr: `{"customModelOverrideEnabled": true, "bypassOverridePrefixes": []}`,
+			want:    []string{},
+		},
+		{
+			name:    "字段含自定义前缀 (正常透传用户配置)",
+			jsonStr: `{"customModelOverrideEnabled": true, "bypassOverridePrefixes": ["tab", "claude-"]}`,
+			want:    []string{"tab", "claude-"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tempDir, err := os.MkdirTemp("", "antigravity-bypass-null-test")
+			if err != nil {
+				t.Fatalf("Failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tempDir)
+
+			configPath := filepath.Join(tempDir, configFileName)
+			if err := os.WriteFile(configPath, []byte(c.jsonStr), 0o644); err != nil {
+				t.Fatalf("Failed to write config: %v", err)
+			}
+
+			mgr := NewManager()
+			mgr.Init(tempDir)
+			got := mgr.GetBypassOverridePrefixes()
+			if len(got) != len(c.want) {
+				t.Fatalf("Got %v, want %v", got, c.want)
+			}
+			for i, p := range c.want {
+				if got[i] != p {
+					t.Errorf("Got[%d]=%q, want %q", i, got[i], p)
+				}
+			}
+		})
+	}
+}
+
 func TestEnableThinkingMode_AutoPersistToDisk(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "settings_test_persist_*")
 	if err != nil {

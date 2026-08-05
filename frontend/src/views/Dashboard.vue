@@ -423,15 +423,16 @@
 <thead>
 <tr class="border-b border-outline-variant/50 bg-slate-50/50 dark:bg-white/5">
 <th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[9%]" data-i18n="colTime">请求时间</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[19%]" data-i18n="colMethodHost">请求方式 &amp; 域名</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[15%]" data-i18n="colPath">API 接口</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[9%]" data-i18n="colSession">会话 ID</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[18%]" data-i18n="colMethodHost">请求方式 &amp; 域名</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[14%]" data-i18n="colPath">API 接口</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[8%]" data-i18n="colSession">会话 ID</th>
 <th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[10%]" data-i18n="colModel">所用模型</th>
 <th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[11%]" data-i18n="tokenConsumption">Token 消耗</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[7%]" data-i18n="colPrice">价格</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[6%]" data-i18n="colDuration">耗时</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[6%]" data-i18n="colPrice">价格</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[6%]" data-i18n="colResponseTime">响应时间</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[5%]" data-i18n="colDuration">耗时</th>
 <th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[5%]" data-i18n="colCacheTitle">缓存</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[5%]" data-i18n="colCacheStatus">状态</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[4%]" data-i18n="colCacheStatus">状态</th>
 <th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[4%]" data-i18n="colActions">操作</th>
 </tr>
 </thead>

@@ -231,10 +231,10 @@ func postJson(endpointUrl string, body interface{}, headers map[string]string) (
 }
 
 type AllowedTier struct {
-	ID                                    string `json:"id"`
-	DisplayName                           string `json:"displayName"`
-	IsDefault                             bool   `json:"isDefault"`
-	UserDefinedCloudaicompanionProject    bool   `json:"userDefinedCloudaicompanionProject"`
+	ID                                 string `json:"id"`
+	DisplayName                        string `json:"displayName"`
+	IsDefault                          bool   `json:"isDefault"`
+	UserDefinedCloudaicompanionProject bool   `json:"userDefinedCloudaicompanionProject"`
 }
 
 type LoadCodeAssistResponse struct {
@@ -645,7 +645,7 @@ func fetchNvidiaQuota(acc *account.Account) (*account.QuotaResult, error) {
 
 	// 兼容 {"data":[...]} 与 {"models":[...]} 两种模型清单结构，去重计数。
 	var parsed struct {
-		Data   []struct {
+		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
 		Models []struct {
@@ -701,6 +701,15 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 	if acc.Provider == "project" {
 		return &account.QuotaResult{
 			Tier:    "Project Pay-As-You-Go",
+			Buckets: []account.QuotaBucket{},
+		}, nil
+	}
+	// Other 号池(自定义多上游组):配额语义不适用,返回空桶空 Tier。
+	// Other 组为通用 OpenAI/Anthropic 兼容转发,无统一配额端点,且每组的上游计费模型各异,
+	// 前端配额面板对该类账号一律显示"暂无配额",不与 GCP/NVIDIA 链路混用。
+	if acc.Provider == "other" {
+		return &account.QuotaResult{
+			Tier:    "Other 自定义上游",
 			Buckets: []account.QuotaBucket{},
 		}, nil
 	}

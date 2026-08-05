@@ -3,6 +3,7 @@ package relay
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/settings"
+	"antigravity-proxy/internal/stats"
 )
 
 // nvidiaLogCtx 携带一次 NVIDIA 请求落地为「请求日志」+「全局综合统计」所需的最小上下文。
@@ -26,13 +28,14 @@ import (
 // 经 ocrSessionDisplay 取 userSession.SessionKey(auth:acc:<16hex>,与 antigravity 号池链路同款口径)
 // 优先,空则回退 Token,再空回退 UserID; DurationMs 由 handleNvidia 入口起算的 startTs 算得端到端耗时。
 type nvidiaLogCtx struct {
-	Method     string
-	Host       string
-	Path       string
-	SessionID  string
-	Account    string
-	StatusCode int
-	StartTs    time.Time
+	Method       string
+	Host         string
+	Path         string
+	SessionID    string
+	Account      string
+	StatusCode   int
+	StartTs      time.Time
+	FirstByteRec *stats.FirstByteRecorder
 }
 
 // nvidiaHostFromBaseURL 从上游账号 BaseURL(如 https://integrate.api.nvidia.com/v1)
@@ -251,6 +254,18 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 	var lastErrCode int
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// 取消守卫(对齐 handler_retry_loop.go:24-30):客户端主动取消时 r.Context() 即被撤销,
+		// 必须在此立即终止换号循环。否则后续每个号的上游请求因绑定 r.Context()(见下方
+		// http.NewRequestWithContext(r.Context(), ...))会在 Do() 阶段瞬间返回 context.Canceled,
+		// 连续砍掉整个号池(maxAttempts 上限 5)、并把可用号误拉黑 60s 冷却 → 紧接着的真实请求
+		// 可能撞 nvidia_pool_empty。这是 "context canceled 刷屏 + 号池被误冷冻" 的根因。
+		select {
+		case <-r.Context().Done():
+			h.log("⏹️ [NVIDIA 中继] 客户端已取消连接(会话 %s),终止换号重试。", ocrSessionDisplay(userSession))
+			return
+		default:
+		}
+
 		var activeAvailable []*account.Account
 		for _, a := range available {
 			if !skippedAccounts[a.ID] {
@@ -421,6 +436,15 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 
 			resp, errDo := httpClient.Do(req)
 			if errDo != nil {
+				// 客户端主动取消特判:r.Context() 被撤销时,上游 Do() 瞬间返回 context.Canceled
+				// (请求未真正发往上游)。此时该号本身健康,绝不能拉黑 60s 冷却,也不能继续换号
+				// (换下一个号仍会被同一已取消的 context 砍掉,把整个号池挨个"砍头"刷屏)。
+				// 直接整体退出,不写响应(客户端已断开,写了也是对空管道写)。
+				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
+					h.log("⏹️ [NVIDIA 中继] 账号 %s 上游请求被客户端取消(ctx err=%v),终止换号重试(不冷冻该号)。", poolAccount.Email, errDo)
+					lastErr = errDo
+					return
+				}
 				h.log("⚠️ [NVIDIA 中继] 账号 %s 访问上游失败: %v", poolAccount.Email, errDo)
 				skippedAccounts[poolAccount.ID] = true
 				lastErr = errDo

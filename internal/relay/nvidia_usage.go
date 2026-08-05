@@ -122,6 +122,7 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 		if durationMs <= 0 {
 			durationMs = 1
 		}
+		firstByteMs := logCtx.FirstByteRec.FirstByteMs(durationMs)
 		reqLog := &stats.RequestLog{
 			ID:           fmt.Sprintf("nvlog-%d-%d", atomic.AddUint64(&nvidiaReqLogSeq, 1), time.Now().UnixNano()),
 			Timestamp:    time.Now().Format("01/02 15:04:05"),
@@ -137,6 +138,7 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 			Account:      logCtx.Account,
 			SessionID:    logCtx.SessionID,
 			DurationMs:   durationMs,
+			FirstByteMs:  firstByteMs,
 			Family:       "nvidia",
 		}
 		h.globalStatsTracker.AddRequestLogForFamily(reqLog)

@@ -16,6 +16,10 @@ func inferOwnedBy(modelID string) string {
 	if m == "" {
 		return "openai"
 	}
+	// Other 号池三段前缀 other/{groupId}/{model}:按前缀归 "other",供 /v1/models 展示归类。
+	if strings.HasPrefix(m, "other/") {
+		return "other"
+	}
 	switch {
 	case strings.HasPrefix(m, "gemini"),
 		strings.HasPrefix(m, "text-embedding-0"),

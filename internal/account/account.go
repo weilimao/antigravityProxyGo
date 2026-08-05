@@ -37,6 +37,15 @@ type Account struct {
 	ModelOpus        string           `json:"modelOpus,omitempty"`
 	ModelHaiku       string           `json:"modelHaiku,omitempty"`
 	ModelFable       string           `json:"modelFable,omitempty"`
+	// GroupID 是 Other 号池内的组标识(如 "openai"/"deepseek"),与 Provider="other" 配合使用。
+	// 非 Other 号池账号该字段空。同 GroupID 下可挂多条账号(BaseURL 相同、多 Key)做组内轮换。
+	GroupID string `json:"groupId,omitempty"`
+	// GroupName 是 Other 号池组的显示名(如 "OpenAI 上游组"),前端 Tab/卡片用它辨认组。
+	GroupName string `json:"groupName,omitempty"`
+	// Formats 是该 Other 上游组原生支持的协议集合,子集 ["openai","anthropic"]。
+	// 中继转发层据此决定上游端点(/v1/chat/completions 或 /v1/messages)与协议转译方向。
+	// 非 Other 号池账号该字段空。
+	Formats []string `json:"formats,omitempty"`
 }
 
 // GetAccessToken safely reads the access token under read lock.
@@ -99,12 +108,17 @@ type Manager struct {
 	geminiCliPoolMode bool
 	nvidiaPoolMode    bool
 	nvidiaLBMode      string
-	activeChannel     string
-	currentIndex      int
-	errorCounts       map[string]int // accountId -> error count
-	refreshLocks      sync.Map       // accountId -> *sync.Mutex (Double-Checked Locking)
-	cooldownTicker    *time.Ticker
-	cooldownStop      chan struct{}
+	// otherPoolMode 是 Other 号池(自定义多上游组)的负载均衡总开关,与 poolMode/projectPoolMode/nvidiaPoolMode 同构互斥。
+	otherPoolMode bool
+	// otherLBModes 按 GroupID 维度保存各组独立的 LB 算法(round-robin/sticky),与 nvidiaLBMode(单池单值)不同,
+	// 因 Other 号池内可有多个独立上游组,每组应有自己的轮询策略。
+	otherLBModes       map[string]string
+	activeChannel      string
+	currentIndex       int
+	errorCounts        map[string]int // accountId -> error count
+	refreshLocks       sync.Map       // accountId -> *sync.Mutex (Double-Checked Locking)
+	cooldownTicker     *time.Ticker
+	cooldownStop       chan struct{}
 	tokenRefreshTicker *time.Ticker
 	tokenRefreshStop   chan struct{}
 

@@ -27,6 +27,9 @@
                 <button class="px-3 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 whitespace-nowrap" id="btnChannelNvidia" type="button">
                     <span data-i18n="nvidiaPool">NVIDIA 号池</span>
                 </button>
+                <button class="px-3 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 whitespace-nowrap" id="btnChannelOther" type="button">
+                    <span data-i18n="otherPool">Other 号池</span>
+                </button>
             </div>
         </div>
         <!-- 右侧：负载均衡开关与操作按钮组 -->
@@ -79,6 +82,13 @@
                         <div>
                             <div class="font-bold" data-i18n="nvidiaItemTitle">NVIDIA (API Key)</div>
                             <div class="text-[10px] text-outline" data-i18n="nvidiaItemDesc">填写上游端点与 API Key 接入</div>
+                        </div>
+                    </button>
+                    <button class="w-full text-left px-4 py-2 text-[13px] text-on-surface dark:text-white hover:bg-slate-50 dark:hover:bg-white/5 transition-colors flex items-center gap-2 border-t border-outline-variant/10 mt-1 pt-3" id="btnAddOtherAccount">
+                        <span class="material-symbols-outlined text-purple-500 text-[16px]">hub</span>
+                        <div>
+                            <div class="font-bold" data-i18n="otherItemTitle">Other 自定义上游</div>
+                            <div class="text-[10px] text-outline" data-i18n="otherItemDesc">自定义多上游组,多选 OpenAI/Anthropic 格式</div>
                         </div>
                     </button>
                 </div>

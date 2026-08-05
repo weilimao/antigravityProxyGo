@@ -66,33 +66,17 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 	case "accounts:get":
 		accs := a.accountMgr.GetAccounts()
 		a.AddLog(fmt.Sprintf("🔄 [账号同步] 收到前端获取请求，当前后端已加载账号数: %d", len(accs)))
-		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":          accs,
-			"poolMode":          a.accountMgr.GetPoolMode(),
-			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
-			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
-			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
-			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
-			"activeChannel":     a.accountMgr.GetActiveChannel(),
-		})
+		a.emitAccountsRes()
 
-	case "accounts:remove", "nvidia:remove":
+	case "accounts:remove", "nvidia:remove", "other:remove":
 		id := getStringArg(0)
 		if id != "" {
 			a.accountMgr.RemoveAccount(id)
 			a.AddLog(fmt.Sprintf("🗑️ [账号移除] 已成功移除账号 id=%s", id))
-			wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-				"accounts":          a.accountMgr.GetAccounts(),
-				"poolMode":          a.accountMgr.GetPoolMode(),
-				"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
-				"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
-				"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
-				"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
-				"activeChannel":     a.accountMgr.GetActiveChannel(),
-			})
+			a.emitAccountsRes()
 		}
 
-	case "accounts:toggle-enabled", "nvidia:toggle-enabled":
+	case "accounts:toggle-enabled", "nvidia:toggle-enabled", "other:toggle-enabled":
 		id := getStringArg(0)
 		enabled := getBoolArg(1)
 		a.accountMgr.UpdateAccountEnabled(id, enabled)
@@ -104,15 +88,7 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			}
 			a.AddLog(fmt.Sprintf("🔄 Account %s is now %s in the pool.", acc.Email, statusStr))
 		}
-		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":          a.accountMgr.GetAccounts(),
-			"poolMode":          a.accountMgr.GetPoolMode(),
-			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
-			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
-			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
-			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
-			"activeChannel":     a.accountMgr.GetActiveChannel(),
-		})
+		a.emitAccountsRes()
 
 	case "accounts:toggle-overages":
 		a.accountMgr.UpdateAccountOverages(getStringArg(0), getBoolArg(1))
@@ -217,19 +193,21 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			a.AddLog("🔄 NVIDIA Pool Load Balancing disabled. Using a single active NVIDIA account.")
 		}
 
+	case "pool:toggle-other":
+		// Other 号池(自定义多上游组)负载均衡总开关,与 nvidia 同构互斥。
+		// 组内具体 LB 算法按 GroupID 维度配置(见 other:set-lb-mode)。
+		a.accountMgr.SetOtherPoolMode(getBoolArg(0))
+		if getBoolArg(0) {
+			a.AddLog("🔄 Other Pool Load Balancing enabled. Distributing requests across Other group accounts.")
+		} else {
+			a.AddLog("🔄 Other Pool Load Balancing disabled. Using a single active account per group.")
+		}
+
 	case "nvidia:set-lb-mode":
 		mode := getStringArg(0)
 		a.accountMgr.SetNvidiaLBMode(mode)
 		a.AddLog("🔄 NVIDIA Load Balancing Algorithm switched to: " + a.accountMgr.GetNvidiaLBMode())
-		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":          a.accountMgr.GetAccounts(),
-			"poolMode":          a.accountMgr.GetPoolMode(),
-			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
-			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
-			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
-			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
-			"activeChannel":     a.accountMgr.GetActiveChannel(),
-		})
+		a.emitAccountsRes()
 
 	/* case "pool:toggle-gemini-cli":
 	a.accountMgr.SetGeminiCliPoolMode(getBoolArg(0))
@@ -241,15 +219,7 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 
 	case "channel:switch":
 		a.accountMgr.SetActiveChannel(getStringArg(0))
-		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":          a.accountMgr.GetAccounts(),
-			"poolMode":          a.accountMgr.GetPoolMode(),
-			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
-			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
-			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
-			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
-			"activeChannel":     a.accountMgr.GetActiveChannel(),
-		})
+		a.emitAccountsRes()
 		a.AddLog("🔄 Switched active routing channel to: " + getStringArg(0))
 
 	case "toggle":
@@ -855,15 +825,15 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		var content []byte
 		if strings.HasSuffix(filePath, ".csv") {
 			var csv strings.Builder
-			csv.WriteString("\uFEFF时间,模式,账号/用户,请求方式,域名,路径,模型,输入Token,输出Token,缓存Token,总成本,耗时(ms),状态码,会话ID\n")
+			csv.WriteString("\uFEFF时间,模式,账号/用户,请求方式,域名,路径,模型,输入Token,输出Token,缓存Token,总成本,响应时间(ms),耗时(ms),状态码,会话ID\n")
 			for _, log := range logs {
 				formattedTime := log.Timestamp
 				if t, err := time.Parse(time.RFC3339, log.Timestamp); err == nil {
 					formattedTime = t.Local().Format("2006-01-02 15:04:05")
 				}
-				csv.WriteString(fmt.Sprintf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,%d,%d,%f,%d,%d,\"%s\"\n",
+				csv.WriteString(fmt.Sprintf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,%d,%d,%f,%d,%d,%d,\"%s\"\n",
 					formattedTime, log.Mode, log.UserID, log.Method, log.Host, log.Path, log.ModelName,
-					log.InTokens, log.OutTokens, log.CachedTokens, log.Cost, log.DurationMs, log.StatusCode, log.SessionID))
+					log.InTokens, log.OutTokens, log.CachedTokens, log.Cost, log.FirstByteMs, log.DurationMs, log.StatusCode, log.SessionID))
 			}
 			content = []byte(csv.String())
 		} else {

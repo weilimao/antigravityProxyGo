@@ -59,6 +59,7 @@ type RelaySample struct {
 	Path         string
 	SessionID    string
 	DurationMs   int64
+	FirstByteMs  int64
 	StatusCode   int
 }
 
@@ -220,6 +221,7 @@ func (s *StatsTracker) RecordUsage(sample RelaySample) {
 			OutputCost:   outputCost,
 			CachedCost:   cachedCost,
 			DurationMs:   sample.DurationMs,
+			FirstByteMs:  sample.FirstByteMs,
 			StatusCode:   sample.StatusCode,
 			Method:       sample.Method,
 			Host:         sample.Host,

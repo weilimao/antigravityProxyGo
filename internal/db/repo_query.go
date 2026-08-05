@@ -87,11 +87,11 @@ func QueryRecentRequests(userID, mode string, limit int) []*RequestLog {
 	}
 
 	query := `
-		SELECT 
-			id, server_log_id, req_id, timestamp, mode, user_id, model_name, 
-			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, status_code,
-			method, host, path, session_id
-		FROM request_logs 
+		SELECT
+			id, server_log_id, req_id, timestamp, mode, user_id, model_name,
+			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, first_byte_ms, status_code,
+			method, host, path, session_id, family
+		FROM request_logs
 		WHERE user_id = ? AND mode = ?
 		ORDER BY timestamp DESC, id DESC
 		LIMIT ?
@@ -108,8 +108,8 @@ func QueryRecentRequests(userID, mode string, limit int) []*RequestLog {
 		var l RequestLog
 		if err := rows.Scan(
 			&l.ID, &l.ServerLogID, &l.ReqID, &l.Timestamp, &l.Mode, &l.UserID, &l.ModelName,
-			&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost, &l.DurationMs, &l.StatusCode,
-			&l.Method, &l.Host, &l.Path, &l.SessionID,
+			&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost, &l.DurationMs, &l.FirstByteMs, &l.StatusCode,
+			&l.Method, &l.Host, &l.Path, &l.SessionID, &l.Family,
 		); err == nil {
 			logs = append(logs, &l)
 		}
@@ -128,8 +128,8 @@ func QueryAllRequestLogs() ([]*RequestLog, error) {
 	query := `
 		SELECT
 			id, server_log_id, req_id, timestamp, mode, user_id, model_name,
-			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, status_code,
-			method, host, path, session_id
+			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, first_byte_ms, status_code,
+			method, host, path, session_id, family
 		FROM request_logs
 		ORDER BY timestamp DESC, id DESC
 	`
@@ -145,8 +145,8 @@ func QueryAllRequestLogs() ([]*RequestLog, error) {
 		var l RequestLog
 		if err := rows.Scan(
 			&l.ID, &l.ServerLogID, &l.ReqID, &l.Timestamp, &l.Mode, &l.UserID, &l.ModelName,
-			&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost, &l.DurationMs, &l.StatusCode,
-			&l.Method, &l.Host, &l.Path, &l.SessionID,
+			&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost, &l.DurationMs, &l.FirstByteMs, &l.StatusCode,
+			&l.Method, &l.Host, &l.Path, &l.SessionID, &l.Family,
 		); err == nil {
 			logs = append(logs, &l)
 		}

@@ -224,7 +224,8 @@ func (s *OCRService) downgradeOneOpenAIImageBlock(merged *strings.Builder, src *
 		appendOpenAIPlaceholder(merged)
 		return 0, nil, 0, 0, 0
 	}
-	cachedText, hit := s.OcrImageCacheOnlyLookup(userSession, b64, userPromptCtx)
+	// 窗外:仅查缓存,绝不真打上游。缓存键按 image-only(不含 promptCtx),窗外复用与当前提问解耦。
+	cachedText, hit := s.OcrImageCacheOnlyLookup(userSession, b64)
 	if hit && strings.TrimSpace(cachedText) != "" {
 		if *ocrModel == "" {
 			*ocrModel = s.getOcrModel()

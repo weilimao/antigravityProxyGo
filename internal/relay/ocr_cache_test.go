@@ -14,6 +14,7 @@ package relay
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -301,15 +302,54 @@ func TestOCR_LRU_Eviction(t *testing.T) {
 	}
 }
 
-func TestOCR_CacheKeyIsolatesByUserPromptText(t *testing.T) {
-	k1 := ocrCacheKey("user-a", "gemini-2.5-flash", "IMGDATA", "问报错在第几行")
-	k2 := ocrCacheKey("user-a", "gemini-2.5-flash", "IMGDATA", "问这个按钮功能")
+func TestOCR_CacheKeyIgnoresUserPromptText(t *testing.T) {
+	// 缓存键契约:image-only(三维:ownerKey|ocrModel|sha256(b64)[:16]),不含 promptCtx。
+	// 同会话同图无论传什么 promptCtx(或不传),键必须完全相同。这是"继续"/resume/标点微调
+	// 等无实质意图的文本变化不触发重 OCR 的根本保证。
+	// 注:ocrCacheKey 签名已剥离 promptCtx 参数,故这里用 3-arg 形式断言"键公式不含第四维":
+	// 历史上曾以变参纳入 promptCtx,现彻底删除,从签名层就杜绝了 promptCtx 进键。
+	k1 := ocrCacheKey("user-a", "gemini-2.5-flash", "IMGDATA")
+	k2 := ocrCacheKey("user-a", "gemini-2.5-flash", "IMGDATA")
 	k3 := ocrCacheKey("user-a", "gemini-2.5-flash", "IMGDATA")
 
-	if k1 == k2 {
-		t.Errorf("cache key should isolate by user prompt text, got identical %q", k1)
+	if k1 != k2 {
+		t.Errorf("cache key for same image must be identical, got %q vs %q", k1, k2)
 	}
-	if k1 == k3 {
-		t.Errorf("cache key should isolate prompt vs no-prompt, got identical %q", k1)
+	if k1 != k3 {
+		t.Errorf("cache key for same image must be identical, got %q vs %q", k1, k3)
+	}
+}
+
+// TestOCR_OcrUpstreamStillReceivesPromptCtx 锁定"缓存键与上游 call 解耦"契约:
+// 缓存键不含 promptCtx(同图同会话跨提问命中),但 miss 真打 gemini 上游时,
+// 请求体的 ocrPrompt 仍必须包含当前 promptCtx 文本(保留靶向 OCR 分析方向)。
+// 复刻 ocrImageUncached 的 ocrPrompt 拼装逻辑做断言,确保未来重构不丢 context。
+func TestOCR_OcrUpstreamStillReceivesPromptCtx(t *testing.T) {
+	var hits atomic.Int64
+	ocr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), "报错栈最上面那行") {
+			t.Errorf("ocr upstream prompt should contain promptCtx text, body=%s", string(body))
+		}
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"OK"}]}}]}`))
+	}))
+	defer ocr.Close()
+
+	origAddr := localProxyAddr
+	localProxyAddr = strings.TrimPrefix(ocr.URL, "http://")
+	t.Cleanup(func() { localProxyAddr = origAddr })
+
+	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
+	h.ocr.cache = newOcrLRUCache(0, 0, 0)
+	sess := &RelaySession{UserID: "u1", UserKey: "k1"}
+
+	// 第 1 次:miss 真打上游,ocrPrompt 必须含 promptCtx("报错栈最上面那行")。
+	if _, err, _ := h.ocr.OcrImage(sess, fakeNvidiaImageB64, "image/png", "报错栈最上面那行"); err != nil {
+		t.Fatalf("first call err: %v", err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("miss should hit upstream once, got %d", hits.Load())
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/stats"
 )
 
 // writeNvidiaResponse 把上游 OpenAI Chat 响应回译成入站协议并写回客户端。
@@ -42,6 +43,7 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Re
 	logCtx.Path = r.URL.Path
 	logCtx.StartTs = startTs
 	logCtx.StatusCode = resp.StatusCode
+	logCtx.FirstByteRec = stats.NewFirstByteRecorder(startTs)
 	logCtx.Host = "nvidia"
 	if r.Host != "" {
 		logCtx.Host = r.Host

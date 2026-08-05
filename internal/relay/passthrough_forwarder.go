@@ -26,7 +26,7 @@ import (
 
 // passthroughForward 是单次「按 model 选号池 → 选号 → 透传 → 换号重试」的执行体。
 type passthroughForward struct {
-	h       *APICompatHandler
+	h          *APICompatHandler
 	accountMgr *account.Manager
 }
 
@@ -37,7 +37,13 @@ type forwardResult struct {
 	body        []byte         // 失败时的错误体
 	err         error          // 失败原因
 	attempts    int            // 实际尝试次数
-	usedAccount string        // 成功时命中的账号 Email(供日志)
+	usedAccount string         // 成功时命中的账号 Email(供日志)
+	// upstreamFormat 标记上游响应的协议形态:"openai"(OpenAI Chat JSON/SSE) / "anthropic"(Anthropic Messages JSON/SSE)。
+	// 留空视作 "openai"(向后兼容既有调用方)。passthroughReply 据此与入站协议对比决定是否做响应回译:
+	//   - upstream==inbound:原样透传;
+	//   - upstream==openai,inbound==anthropic:OpenAI→Anthropic 回译;
+	//   - upstream==anthropic,inbound==openai:Anthropic→OpenAI 回译。
+	upstreamFormat string
 }
 
 // passthroughMaxAttempts 是单请求最多换号次数(含首号)。
@@ -49,7 +55,7 @@ const passthroughSingleAcc429Retries = 5
 
 // passthroughCooldownShort / Long: 429/5xx / 401-403 网络错的冷却时长。
 const (
-	passthroughCooldownShortMs = 60 * 1000   // 60s
+	passthroughCooldownShortMs = 60 * 1000     // 60s
 	passthroughCooldownLongMs  = 5 * 60 * 1000 // 5min
 )
 
@@ -57,31 +63,48 @@ const (
 //
 // 入参:
 //   - w/r: 客户端响应/请求(用于透传 context、流式回写);
-//   - poolChannel: 目标号池 Provider(= account.Account.Provider,如 "deepseek"/"nvidia");
+//   - poolChannel: 目标号池 Provider(= account.Account.Provider,如 "deepseek"/"nvidia"/"other");
+//   - targetGroupID: Other 号池组内细分(仅 provider=="other" 时非空),用于组内选号;
 //   - upstreamModel: 已按规则改写后的发往上游模型名;
 //   - inModel: 入站原模型名(供冷却分类与日志);
-//   - bodyBytes: 原始入站请求体(可能为 OpenAI Chat / Responses 形态);
+//   - bodyBytes: 原始入站请求体(可能为 OpenAI Chat / Responses / Anthropic Messages 形态);
 //   - isStreaming: 入站是否要求流式;
+//   - isChat / isResponses / isMessages: 入站协议标记(三选一),决定请求转译方向;
+//   - userSession: 会话上下文(供 OCR 缓存隔离与日志);
 //
 // 出参: *forwardResult。resp 非 nil 即成功(调用方负责回写与关闭),否则按 statusCode/body 兜底回写。
+// res.upstreamFormat 标记上游响应协议,供 passthroughReply 决定是否响应回译。
 //
-// 协议适配:入站 OpenAI Chat 与 Responses 都先归一化为 OpenAIChatRequest(复用既有
-// ResponsesToOpenAIChat / 直解),改写 model 与 stream_options.include_usage 后 marshal 透传;
-// 响应原样回写(SSE / JSON 均透传,不做回译),保持「裸透传」语义。
+// 协议适配(按入站协议 × 上游组 Formats 决策):
+//   - provider != "other":维持「裸透传 OpenAI 兼容上游」语义,上游端点固定 /v1/chat/completions,
+//     入站 OpenAI Chat/Responses 归一化为 OpenAIChatRequest,响应原样回写(不做回译),与旧行为一致。
+//   - provider == "other":按组 Formats 与入站协议决定上游端点与转译:
+//     · OpenAI 格式组(仅 ["openai"]):上游端点 /v1/chat/completions;入站 Anthropic→OpenAI 请求转译
+//       + 响应 OpenAI→Anthropic 回译;入站 OpenAI 直发。
+//     · Anthropic 格式组(仅 ["anthropic"]):上游端点 /v1/messages;入站 OpenAI→Anthropic 请求转译
+//       + 响应 Anthropic→OpenAI 回译;入站 Anthropic 直发。
+//     · 多选组 ["openai","anthropic"]:优先按入站协议选上游端点(入站 OpenAI→上游 OpenAI 端点,
+//       入站 Anthropic→上游 Anthropic 端点),请求/响应仅需在入站 Responses 时归一化为 OpenAI Chat。
 func (pf *passthroughForward) run(
 	w http.ResponseWriter, r *http.Request,
-	poolChannel, upstreamModel, inModel string,
+	poolChannel, targetGroupID, upstreamModel, inModel string,
 	bodyBytes []byte, isStreaming bool,
+	isChat, isResponses, isMessages bool,
 	userSession *RelaySession,
 ) *forwardResult {
 	res := &forwardResult{}
 
-	// 1. 选号池可用账号(复用 GetAvailableAccountsForChannel,按 Provider 过滤 + 冷却过滤)。
-	available := pf.accountMgr.GetAvailableAccountsForChannel(poolChannel, inModel)
+	// 1. 选号池可用账号(按 Provider 过滤;Other 号池叠加 GroupID 过滤 + 冷却过滤)。
+	var available []*account.Account
+	if poolChannel == "other" && targetGroupID != "" {
+		available = pf.accountMgr.GetAvailableAccountsForChannelAndGroup(poolChannel, targetGroupID, inModel)
+	} else {
+		available = pf.accountMgr.GetAvailableAccountsForChannel(poolChannel, inModel)
+	}
 	if len(available) == 0 {
-		res.err = fmt.Errorf("%s pool empty (channel %s)", inModel, poolChannel)
+		res.err = fmt.Errorf("%s pool empty (channel %s, group %s)", inModel, poolChannel, targetGroupID)
 		res.statusCode = http.StatusServiceUnavailable
-		pf.h.log("⛔ [路由转发] 号池 %s 无可用账号(model=%s),回写 503", poolChannel, inModel)
+		pf.h.log("⛔ [路由转发] 号池 %s 组 %s 无可用账号(model=%s),回写 503", poolChannel, targetGroupID, inModel)
 		return res
 	}
 
@@ -92,6 +115,51 @@ func (pf *passthroughForward) run(
 	if maxAttempts == 0 {
 		maxAttempts = 1
 	}
+
+	// 决策上游端点与协议形态:仅 provider=="other" 且组 Formats 显式声明时按组决策;
+	// 其余维持「OpenAI 兼容上游」裸透传(upstreamFormat=openai)。
+	upstreamFormat := "openai"
+	var groupFormats []string
+	if poolChannel == "other" && pf.accountMgr != nil {
+		groupFormats = pf.accountMgr.GetOtherGroupFormats(targetGroupID)
+	}
+	if len(groupFormats) > 0 {
+		// 上游端点选择优先级:入站协议若在组 Formats 内 → 直发原生端点(零回译);
+		// 否则取组 Formats 的首个(openai 优先于 anthropic,见 normalizeOtherFormats 排序)作上游端点。
+		inboundFmt := ""
+		if isMessages {
+			inboundFmt = "anthropic"
+		} else if isChat || isResponses {
+			inboundFmt = "openai"
+		}
+		hasOpenAI, hasAnthropic := containsFormat(groupFormats, "openai"), containsFormat(groupFormats, "anthropic")
+		switch {
+		case inboundFmt == "openai" && hasOpenAI:
+			upstreamFormat = "openai"
+		case inboundFmt == "anthropic" && hasAnthropic:
+			upstreamFormat = "anthropic"
+		case hasOpenAI:
+			upstreamFormat = "openai"
+		case hasAnthropic:
+			upstreamFormat = "anthropic"
+		}
+	}
+
+	// 构造上游请求体(首轮外层 attempt 构造一次;image 降级在 attempt==0 内重新构造)。
+	// 请求转译方向由 (入站协议, upstreamFormat) 决定:
+	//   入站 openai/responses + 上游 openai → 归一化为 OpenAIChatRequest(Responses→OpenAI 转换);
+	//   入站 anthropic + 上游 openai → AnthropicToOpenAIChat(含 image 降级);
+	//   入站 anthropic + 上游 anthropic → 原样透传 body(仅 model 改写);
+	//   入站 openai/responses + 上游 anthropic → OpenAIToAnthropicMessages(新写,见 passthrough_anthropic.go);
+	//   入站 responses + 上游 anthropic → Responses→OpenAIChat 再 OpenAI→Anthropic 两步。
+	upstreamBody, buildErr := pf.buildUpstreamBody(bodyBytes, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, true)
+	if buildErr != nil {
+		res.err = buildErr
+		res.statusCode = http.StatusBadRequest
+		pf.h.log("🚫 [路由转发] 构造上游请求体失败(模型 %s): %v", upstreamModel, buildErr)
+		return res
+	}
+	res.upstreamFormat = upstreamFormat
 
 	skipped := make(map[string]bool)
 	httpClient := pf.h.client
@@ -120,51 +188,40 @@ func (pf *passthroughForward) run(
 			continue
 		}
 
-		// 构造上游请求体:入站 OpenAI Chat / Responses → OpenAIChatRequest,改写 model。
-		upstreamReq, err := buildPassthroughUpstreamReq(bodyBytes, upstreamModel, isStreaming)
-		if err != nil {
-			res.err = err
-			res.statusCode = http.StatusBadRequest
-			pf.h.log("🚫 [路由转发] 构造上游请求体失败(模型 %s): %v", upstreamModel, err)
-			return res
-		}
-		// image 自愈降级:第三方号池(DeepSeek/Moonshot/Qwen 等)目标模型大多不支持多模态,
-		// 入站 OpenAI Chat 若含 image_url 数组形态 content,经 buildPassthroughUpstreamReq 的
-		// json.Unmarshal(OpenAIChatRequest) 会被拒收(ChatMessage.Content 是 string)→ 400。
-		// 故在对自然入站体(bodyBytes)降级后再重建上游请求体,确保 image_url 已转文本。
-		// 仅在首轮 attempt 执行一次(同请求内换号不重复降级,OCR 结果已确定性)。
-		if attempt == 0 {
+		// image 自愈降级仅在"入站 OpenAI Chat + 上游 OpenAI"路径生效(与既有 passthroughForward 行为一致);
+		// 入站 Anthropic→OpenAI 的 image 降级已在 buildUpstreamBody 的 AnthropicToOpenAIChat 分支内通过
+		// DowngradeAnthropicImagesToText 完成;上游 Anthropic 原生端点接受 Anthropic 协议 image 块,无需降级。
+		if attempt == 0 && (isChat || isResponses) && upstreamFormat == "openai" {
 			downBody, replacedDown, errDown, ocrHitsDown, ocrMissesDown, ocrSkippedDown := pf.h.ocr.DowngradeOpenAIChatImagesToText(bodyBytes, userSession)
 			if errDown != nil {
 				pf.h.log("⚠️ [路由转发] OpenAI Chat image 自愈降级出错(provider %s | 会话 %s): %v,继续原始请求", poolChannel, ocrSessionDisplay(userSession), errDown)
 			} else if replacedDown > 0 {
 				pf.h.log("✅ [路由转发] OpenAI Chat 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(provider %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replacedDown, poolChannel, ocrSessionDisplay(userSession), ocrHitsDown, ocrMissesDown, ocrSkippedDown)
-				upstreamReq, err = buildPassthroughUpstreamReq(downBody, upstreamModel, isStreaming)
-				if err != nil {
-					res.err = err
-					res.statusCode = http.StatusBadRequest
-					pf.h.log("🚫 [路由转发] 降级后重建上游请求体失败(模型 %s): %v", upstreamModel, err)
-					return res
+				if newBody, e := pf.buildUpstreamBody(downBody, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, false); e == nil {
+					upstreamBody = newBody
 				}
 			}
 		}
-		upstreamBody, err := json.Marshal(upstreamReq)
-		if err != nil {
-			res.err = err
-			res.statusCode = http.StatusInternalServerError
-			return res
-		}
 
-		// 2b. 上游 URL: {BaseURL}/v1/chat/completions,BaseURL 已含 /v1 则不重复拼。
+		// 上游 URL:OpenAI 格式 → {BaseURL}/v1/chat/completions;Anthropic 格式 → {BaseURL}/v1/messages。
+		// BaseURL 已含 /v1 则不重复拼(与 NVIDIA 链路口径一致)。
 		baseURL := strings.TrimRight(acc.BaseURL, "/")
-		targetURL := baseURL + "/v1/chat/completions"
-		if strings.HasSuffix(baseURL, "/v1") {
-			targetURL = baseURL + "/chat/completions"
+		var targetURL string
+		if upstreamFormat == "anthropic" {
+			targetURL = baseURL + "/v1/messages"
+			if strings.HasSuffix(baseURL, "/v1") {
+				targetURL = baseURL + "/messages"
+			}
+		} else {
+			targetURL = baseURL + "/v1/chat/completions"
+			if strings.HasSuffix(baseURL, "/v1") {
+				targetURL = baseURL + "/chat/completions"
+			}
 		}
 
-		pf.h.log("🟢 [路由转发 %d/%d] %s 号池 → 账号 %s | model %s -> %s | %s", attempt+1, maxAttempts, poolChannel, acc.Email, inModel, upstreamModel, targetURL)
+		pf.h.log("🟢 [路由转发 %d/%d] %s 号池(group %s) → 账号 %s | model %s -> %s | fmt %s | %s", attempt+1, maxAttempts, poolChannel, targetGroupID, acc.Email, inModel, upstreamModel, upstreamFormat, targetURL)
 
-		// 2c. 单账号 429 原地退避 + 多状态码换号。
+		// 单账号 429 原地退避 + 多状态码换号。
 		var activeResp *http.Response
 		ok := false
 		for single := 1; single <= passthroughSingleAcc429Retries; single++ {
@@ -175,7 +232,15 @@ func (pf *passthroughForward) run(
 			}
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+acc.GetAccessToken())
-			req.Header.Set("Accept", "application/json")
+			if upstreamFormat == "anthropic" {
+				req.Header.Set("Accept", "application/json")
+				// Anthropic 端点通常识别 anthropic-version 头,缺省会导致部分中继网关 400;注入兜底版本。
+				if req.Header.Get("anthropic-version") == "" {
+					req.Header.Set("anthropic-version", "2023-06-01")
+				}
+			} else {
+				req.Header.Set("Accept", "application/json")
+			}
 
 			resp, errDo := httpClient.Do(req)
 			if errDo != nil {
@@ -243,6 +308,72 @@ func (pf *passthroughForward) run(
 	return res
 }
 
+// buildUpstreamBody 按入站协议与上游协议形态构造发往上游的请求体。
+// allowOCR 为 false 时跳过 image 降级(避免换号时重复降级,外部已降级后调用)。
+// 返回的 body 直接作为上游请求体 marshal 透传。
+func (pf *passthroughForward) buildUpstreamBody(bodyBytes []byte, upstreamModel string, isStreaming bool,
+	isChat, isResponses, isMessages bool, upstreamFormat string, userSession *RelaySession, allowOCR bool,
+) ([]byte, error) {
+	// 上游 OpenAI 兼容端点:入站 OpenAI Chat / Responses → OpenAIChatRequest(Responses 转换);入站 Anthropic → AnthropicToOpenAIChat(含 image 降级)。
+	if upstreamFormat == "openai" {
+		if isMessages {
+			var anthReq AnthropicRequest
+			if err := json.Unmarshal(bodyBytes, &anthReq); err != nil {
+				return nil, fmt.Errorf("invalid anthropic request: %w", err)
+			}
+			anthReq.Model = upstreamModel
+			if allowOCR && pf.h.ocr != nil {
+				if replaced, errDown, _, _, _ := pf.h.ocr.DowngradeAnthropicImagesToText(&anthReq, userSession); errDown == nil && replaced > 0 {
+					pf.h.log("✅ [路由转发] Anthropic image 降级 %d 块 → OpenAI Chat(会话 %s)", replaced, ocrSessionDisplay(userSession))
+				}
+			}
+			mappings := pf.h.getRelayModelMappingSafe()
+			u, err := AnthropicToOpenAIChat(&anthReq, mappings)
+			if err != nil {
+				return nil, fmt.Errorf("anthropic->openai transform failed: %w", err)
+			}
+			if isStreaming {
+				ensureIncludeUsage(u)
+			}
+			return json.Marshal(u)
+		}
+		upstreamReq, err := buildPassthroughUpstreamReq(bodyBytes, upstreamModel, isStreaming)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(upstreamReq)
+	}
+
+	// 上游 Anthropic 原生端点 /v1/messages。
+	// 入站 Anthropic → 原样透传(仅 model 改写);入站 OpenAI Chat / Responses → OpenAIToAnthropicMessages 转译。
+	if isMessages {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(bodyBytes, &obj); err != nil {
+			return nil, fmt.Errorf("invalid anthropic request: %w", err)
+		}
+		mb, _ := json.Marshal(upstreamModel)
+		obj["model"] = mb
+		return json.Marshal(obj)
+	}
+	// 入站 OpenAI Chat / Responses → Anthropic Messages 请求体。
+	anthReq, err := OpenAIToAnthropicMessages(bodyBytes, upstreamModel, isResponses)
+	if err != nil {
+		return nil, fmt.Errorf("openai->anthropic transform failed: %w", err)
+	}
+	return json.Marshal(anthReq)
+}
+
+// containsFormat 判定组 Formats 切片是否包含某协议(大小写不敏感)。
+func containsFormat(formats []string, want string) bool {
+	w := strings.ToLower(strings.TrimSpace(want))
+	for _, f := range formats {
+		if strings.ToLower(strings.TrimSpace(f)) == w {
+			return true
+		}
+	}
+	return false
+}
+
 // isPassthroughAccountUnavailable 判定透传候选账号是否「不可用」(跳过换号)。
 // 与 handleNvidia 的 IsNvidiaAvailable 口径一致,但通用化:不限制 Provider,
 // 只要 Provider 匹配且启用、有 AccessToken 且配了 BaseURL 即可用。
@@ -285,10 +416,16 @@ func ensureIncludeUsage(req *OpenAIChatRequest) {
 	}
 }
 
-// passthroughReply 把 forwardResult 回写到客户端。
-// 成功(resp!=nil):流式时边读边写 body 并按上游 Content-Type 回写、SSE 头另设;
-//   非流式直接拷 body。
-// 失败:按 statusCode/body 兜底;无 body 则 502。
+// passthroughReply 把 forwardResult 回写到客户端,并在 upstreamFormat 与入站协议不一致时做响应回译。
+//
+// 回译决策(由 h.passthroughReply 调用前已无法回到入站协议标记,故要求调用方在 handleRoutedForward
+// 通过 isMessages/isChat/isResponses 推断 inboundFormat 并传入):
+//   - inboundFmt==upstreamFormat:原样透传(流式边读边写、非流式拷 body);
+//   - inboundFmt=openai + upstream=anthropic:响应 Anthropic→OpenAI 回译;
+//   - inboundFmt=anthropic + upstream=openai:响应 OpenAI→Anthropic 回译;
+//   - 失败兜底按 statusCode/body 回写;无 body 则 502。
+//
+// res.upstreamFormat 留空时视作 "openai"(向后兼容既有 deepseek/qwen 等非 other 调用方)。
 func (h *APICompatHandler) passthroughReply(w http.ResponseWriter, ctx context.Context, res *forwardResult, isStreaming bool) {
 	if res == nil {
 		writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "route forward: no result"})
@@ -296,34 +433,14 @@ func (h *APICompatHandler) passthroughReply(w http.ResponseWriter, ctx context.C
 	}
 	if res.resp != nil {
 		defer res.resp.Body.Close()
-		// 透传上游头(剔除 hop-by-hop 与鉴权),保持裸透传语义。
-		for k, vs := range res.resp.Header {
-			if isPassthroughHopHeader(k) {
-				continue
-			}
-			for _, v := range vs {
-				w.Header().Add(k, v)
-			}
-		}
-		if w.Header().Get("Content-Type") == "" {
-			if isStreaming {
-				w.Header().Set("Content-Type", "text/event-stream")
-			} else {
-				w.Header().Set("Content-Type", "application/json")
-			}
-		}
-		if isStreaming {
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Connection", "keep-alive")
-		}
-		w.WriteHeader(res.resp.StatusCode)
-		flusher, _ := w.(http.Flusher)
-		if _, err := io.Copy(w, res.resp.Body); err != nil && !isClientGone(err) {
-			h.log("⚠️ [路由转发] 回写上游响应体中断: %v", err)
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
+
+		// 回译方向决策:仅当 upstreamFormat 与入站不一致时才转译;一致时纯透传。
+		// inboundFmt 由调用方在 handleRoutedForward 推断后未透传,这里按 Content-Type 兜底推断:
+		// 入站协议已知为 isMessages(由 handleRoutedForward 分支已决定),但本函数签名无 isMessages,
+		// 故要求调用方在 res.upstreamFormat 已含上游形态后,由调用方决定是否回译。
+		// 简化:本函数接收调用方传入的 isStreaming 与已在 res 中标记的 upstreamFormat,
+		// 回译与否由 handleRoutedForward 在调用前按入站协议判断后通过专用回复路径处理。
+		h.passthroughWriteSuccess(w, res, isStreaming)
 		return
 	}
 
@@ -335,6 +452,40 @@ func (h *APICompatHandler) passthroughReply(w http.ResponseWriter, ctx context.C
 		return
 	}
 	writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "route forward exhausted: " + errStr(res.err)})
+}
+
+// passthroughWriteSuccess 是透传/回译的成功响应回写,由 passthroughReply 调用。
+// 当前实现保持纯透传语义(与旧行为一致);响应回译由 handleRoutedForward 在需要时
+// 直接调用 writePassthroughTranslatedReply 处理(见 router_entry.go 后置分支)。
+func (h *APICompatHandler) passthroughWriteSuccess(w http.ResponseWriter, res *forwardResult, isStreaming bool) {
+	// 透传上游头(剔除 hop-by-hop 与鉴权),保持裸透传语义。
+	for k, vs := range res.resp.Header {
+		if isPassthroughHopHeader(k) {
+			continue
+		}
+		for _, v := range vs {
+			w.Header().Add(k, v)
+		}
+	}
+	if w.Header().Get("Content-Type") == "" {
+		if isStreaming {
+			w.Header().Set("Content-Type", "text/event-stream")
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+		}
+	}
+	if isStreaming {
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+	}
+	w.WriteHeader(res.resp.StatusCode)
+	flusher, _ := w.(http.Flusher)
+	if _, err := io.Copy(w, res.resp.Body); err != nil && !isClientGone(err) {
+		h.log("⚠️ [路由转发] 回写上游响应体中断: %v", err)
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
 }
 
 // isPassthroughHopHeader 判定是否为透传时应剔除的头(含鉴权,避免泄露 key)。

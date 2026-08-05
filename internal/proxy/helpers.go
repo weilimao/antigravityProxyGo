@@ -166,6 +166,7 @@ func (h *ProxyHandler) logRequestToTracker(
 	sessionKey string,
 	startTime time.Time,
 	targetHost string,
+	firstByteRec *stats.FirstByteRecorder,
 ) {
 	if *logged {
 		return
@@ -245,6 +246,7 @@ func (h *ProxyHandler) logRequestToTracker(
 		RequestHeaders: headersMap,
 		SessionID:      logSession,
 		DurationMs:     time.Since(startTime).Milliseconds(),
+		FirstByteMs:    firstByteRec.FirstByteMs(time.Since(startTime).Milliseconds()),
 	})
 }
 

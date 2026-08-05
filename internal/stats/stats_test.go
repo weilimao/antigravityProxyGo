@@ -48,6 +48,61 @@ func TestAddRequestLogInMemoryOnly(t *testing.T) {
 	}
 }
 
+// TestRequestLogLite_FirstByteProjection 验证 RequestLog.FirstByteMs 经 toRequestLogLite
+// 端到端投影到 RequestLogLite.FirstByteMs, 供仪表盘热路径读出。
+// 这条不变式是「响应时间」列不再恒为「-」的最后一公里保证:后端打点 → 内存结构 → IPC 投影。
+func TestRequestLogLite_FirstByteProjection(t *testing.T) {
+	start := time.Now().Add(-50 * time.Millisecond)
+	rec := NewFirstByteRecorder(start)
+	rec.MarkFirstByte()
+
+	pm := pricing.NewManager()
+	tracker := NewTracker(pm)
+	tracker.persistPath = "" // Prevent file serialization during testing
+
+	durationMs := int64(80)
+	log := &RequestLog{
+		ID:          "test_req_ttft",
+		Timestamp:   time.Now().Format("01/02 15:04:05"),
+		Method:      "POST",
+		Host:        "integrate.api.nvidia.com",
+		Path:        "/nvidia/v1/chat/completions/generateContent",
+		Model:       "z-ai/glm-5.2",
+		Account:     "nv-pool",
+		InTokens:    100,
+		OutTokens:   50,
+		StatusCode:  200,
+		DurationMs:  durationMs,
+		FirstByteMs: rec.FirstByteMs(durationMs),
+		Family:      "nvidia",
+	}
+
+	tracker.AddRequestLogInMemoryOnly(log)
+
+	tracker.RLock()
+	defer tracker.RUnlock()
+
+	if len(tracker.requests) != 1 {
+		t.Fatalf("expected 1 request in memory, got %d", len(tracker.requests))
+	}
+	saved := tracker.requests[0]
+	if saved.FirstByteMs <= 0 {
+		t.Fatalf("expected FirstByteMs > 0 after MarkFirstByte, got %d", saved.FirstByteMs)
+	}
+	if saved.FirstByteMs > durationMs {
+		t.Fatalf("expected FirstByteMs ≤ durationMs(%d), got %d", durationMs, saved.FirstByteMs)
+	}
+
+	// 投影到 Lite 后字段仍应保持。
+	lite := toRequestLogLite(saved)
+	if lite.FirstByteMs != saved.FirstByteMs {
+		t.Fatalf("toRequestLogLite lost FirstByteMs: lite=%d saved=%d", lite.FirstByteMs, saved.FirstByteMs)
+	}
+
+	// 未打点(default) 兜底为 durationMs: 复用既有 TestAddRequestLogInMemoryOnly 的日志(FirstByteMs=0)
+	// 不在此处重复构造, 仅断言「打点后非 0」这一关键链路。
+}
+
 // TestTrackNvidiaRequest_IndependentBucket 验证 NVIDIA 专用趋势桶与综合全局桶物理隔离:
 //  - TrackNvidiaRequest 仅累加 nvidiaTrends, 不进 trends, 也不动全局 stats;
 //  - 同时走一次 TrackRequest 验证综合桶独立累加, 两个桶各自计数、互不污染。

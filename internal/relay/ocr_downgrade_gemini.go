@@ -28,7 +28,8 @@ import (
 //
 // 行为与原 compat_dispatch.go:244-306 内联逻辑逐行等价:
 //   - 仅当 !strings.Contains(strings.ToLower(targetModelToQuery), "gemini") 时降级;
-//   - userPromptCtx 取同消息内所有 Text 部分拼接(不跨消息,与原实现一致);
+//   - userPromptCtx 取同消息内所有 Text 部分拼接(不跨消息,与原实现一致),
+//     仅用于 miss 真打 gemini 上游时的靶向 ocrPrompt,不参与 OcrImage 缓存键(image-only);
 //   - OCR 失败/空文本时仅记 continue, InlineData 保留(原实现即如此,上游可能拒图但降级不强制覆盖)。
 func (s *OCRService) DowngradeGeminiImagesToText(geminiReq *GeminiRequest, userSession *RelaySession, targetModelToQuery string) (downgradedCount, ocrHits, ocrMisses int, lastErr error) {
 	if s == nil || geminiReq == nil {

@@ -40,14 +40,19 @@ func TestRecordNvidiaUsage_FiresLandings4And5_WhenTrackerInjected(t *testing.T) 
 	// 注入,recordNvidiaUsage 经 ocrSessionDisplay 取它填 logCtx.SessionID → 请求日志会话 ID 列。
 	userSession := &RelaySession{Token: "tok-1", UserID: "u-1", SessionKey: "auth:acc:abc123def4567890"}
 	start := time.Now()
+	rec := stats.NewFirstByteRecorder(start)
+	// 等待 > 1ms 再打点,避免 start 与 MarkFirstByte 同毫秒导致 Milliseconds() 截断为 0。
+	time.Sleep(5 * time.Millisecond)
+	rec.MarkFirstByte()
 	logCtx := nvidiaLogCtx{
-		Method:     "POST",
-		Host:       "integrate.api.nvidia.com",
-		Path:       "/nvidia/v1/chat/completions",
-		SessionID:  "auth:acc:abc123def4567890",
-		Account:    "u-1",
-		StatusCode: 200,
-		StartTs:    start,
+		Method:       "POST",
+		Host:         "integrate.api.nvidia.com",
+		Path:         "/nvidia/v1/chat/completions",
+		SessionID:    "auth:acc:abc123def4567890",
+		Account:      "u-1",
+		StatusCode:   200,
+		StartTs:      start,
+		FirstByteRec: rec,
 	}
 	handler.recordNvidiaUsage(userSession, "nvidia/z-ai/glm-5.2", 100, 50, nil, logCtx)
 
@@ -56,6 +61,14 @@ func TestRecordNvidiaUsage_FiresLandings4And5_WhenTrackerInjected(t *testing.T) 
 	}
 	if got := gt.GetRequestLogCount(); got != beforeLogs+1 {
 		t.Errorf("落点5 not fired: request log count = %d, want %d (delta +1)", got, beforeLogs+1)
+	}
+
+	// 端到端断言:打点后落点5 的请求日志 FirstByteMs 应 > 0 且 ≤ durationMs,
+	// 验证 FirstByteRecorder → nvidiaLogCtx.FirstByteRec → stats.RequestLog.FirstByteMs
+	// 这条 TTFT 链路在 NVIDIA 号池入口真实闭环(不再恒为 0)。
+	lastFirstByte := gt.GetRecentRequestFirstByteMs()
+	if lastFirstByte <= 0 {
+		t.Errorf("expected last request FirstByteMs > 0 after MarkFirstByte, got %d", lastFirstByte)
 	}
 }
 

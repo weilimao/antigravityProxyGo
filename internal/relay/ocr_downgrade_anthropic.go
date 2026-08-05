@@ -166,8 +166,9 @@ func (s *OCRService) DowngradeAnthropicImagesToText(req *AnthropicRequest, userS
 			}
 			// 窗外历史图:只查缓存复用,绝不重新打上游。命中→复用历史 OCR 文本(replaced+1);
 			// 未命中→占位文本兜底,跳过(ocrSkipped+1),省下昂贵的号池 OCR 配额。
+			// 缓存键按 image-only(不含 promptCtx),故窗外复用与当前提问解耦,只按图片身份命中。
 			if !inWindow {
-				cachedText, hit := s.OcrImageCacheOnlyLookup(userSession, b64Data, userPromptCtx)
+				cachedText, hit := s.OcrImageCacheOnlyLookup(userSession, b64Data)
 				if hit && strings.TrimSpace(cachedText) != "" {
 					if ocrModel == "" {
 						ocrModel = s.getOcrModel()

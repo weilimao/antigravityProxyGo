@@ -67,6 +67,15 @@ let btnChannelAntigravity: HTMLButtonElement | null;
 let btnChannelProject: HTMLButtonElement | null;
 let btnChannelGeminiCli: HTMLButtonElement | null;
 let btnChannelNvidia: HTMLButtonElement | null;
+let btnChannelOther: HTMLButtonElement | null;
+let btnAddOtherAccount: HTMLButtonElement | null;
+let otherAccountModal: HTMLDivElement | null;
+let otherAccountModalContainer: HTMLDivElement | null;
+let btnOtherModalSave: HTMLButtonElement | null;
+let btnOtherModalCancel: HTMLButtonElement | null;
+let btnOtherModalClose: HTMLButtonElement | null;
+let btnOtherFetchModels: HTMLButtonElement | null;
+let otherModalError: HTMLDivElement | null;
 let nvidiaPoolModeContainer: HTMLDivElement | null;
 let nvidiaPoolModeToggle: HTMLInputElement | null;
 let nvidiaLBModeContainer: HTMLDivElement | null;
@@ -234,6 +243,7 @@ export function updateViewTabUI() {
             btnChannelProject.className = inactiveClass;
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
             if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
+            if (btnChannelOther) btnChannelOther.className = inactiveClass;
 
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (nvidiaPoolModeContainer) nvidiaPoolModeContainer.classList.add('hidden');
@@ -256,6 +266,7 @@ export function updateViewTabUI() {
             btnChannelAntigravity.className = inactiveClass;
             btnChannelProject.className = inactiveClass;
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
+            if (btnChannelOther) btnChannelOther.className = inactiveClass;
 
             // NVIDIA 用独立算法选择框
             if (poolModeContainer) poolModeContainer.classList.add('hidden');
@@ -264,11 +275,23 @@ export function updateViewTabUI() {
             if (nvidiaLBModeSelect && state.lastBackendData) {
                 nvidiaLBModeSelect.value = state.lastBackendData.nvidiaLBMode || 'round-robin';
             }
+        } else if (state.currentViewTab === 'other') {
+            if (btnChannelOther) btnChannelOther.className = activeClass;
+            btnChannelAntigravity.className = inactiveClass;
+            btnChannelProject.className = inactiveClass;
+            if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
+            if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
+
+            // Other 号池:暂无独立负载均衡控件(组内轮换由后端 LBMode 控制),隐藏两个 toggle 容器。
+            if (poolModeContainer) poolModeContainer.classList.add('hidden');
+            if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
+            if (btnNvidiaPreferredModels) btnNvidiaPreferredModels.classList.add('hidden');
         } else {
             btnChannelProject.className = activeClass;
             btnChannelAntigravity.className = inactiveClass;
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
             if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
+            if (btnChannelOther) btnChannelOther.className = inactiveClass;
 
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
@@ -290,6 +313,7 @@ export function updateViewTabUI() {
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
         if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
         if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
+        if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
         if (btnNvidiaPreferredModels) btnNvidiaPreferredModels.classList.add('hidden');
     /* } else if (state.currentViewTab === 'gemini-cli') {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
@@ -300,11 +324,20 @@ export function updateViewTabUI() {
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
         if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
         if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.remove('hidden');
+        if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
+    } else if (state.currentViewTab === 'other') {
+        if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
+        if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
+        if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
+        if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
+        if (btnAddOtherAccount) btnAddOtherAccount.classList.remove('hidden');
+        if (btnNvidiaPreferredModels) btnNvidiaPreferredModels.classList.add('hidden');
     } else {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
         if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
         if (btnProjectLogin) btnProjectLogin.classList.remove('hidden');
         if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
+        if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
         if (btnNvidiaPreferredModels) btnNvidiaPreferredModels.classList.add('hidden');
     }
 }
@@ -532,11 +565,20 @@ export function initAccountsEvents() {
     btnChannelProject = document.getElementById('btnChannelProject') as HTMLButtonElement | null;
     btnChannelGeminiCli = document.getElementById('btnChannelGeminiCli') as HTMLButtonElement | null;
     btnChannelNvidia = document.getElementById('btnChannelNvidia') as HTMLButtonElement | null;
+    btnChannelOther = document.getElementById('btnChannelOther') as HTMLButtonElement | null;
     nvidiaPoolModeContainer = document.getElementById('nvidiaPoolModeContainer') as HTMLDivElement | null;
     nvidiaPoolModeToggle = document.getElementById('nvidiaPoolModeToggle') as HTMLInputElement | null;
     nvidiaLBModeContainer = document.getElementById('nvidiaLBModeContainer') as HTMLDivElement | null;
     nvidiaLBModeSelect = document.getElementById('nvidiaLBModeSelect') as HTMLSelectElement | null;
     btnAddNvidiaAccount = document.getElementById('btnAddNvidiaAccount') as HTMLButtonElement | null;
+    btnAddOtherAccount = document.getElementById('btnAddOtherAccount') as HTMLButtonElement | null;
+    otherAccountModal = document.getElementById('otherAccountModal') as HTMLDivElement | null;
+    otherAccountModalContainer = document.getElementById('otherAccountModalContainer') as HTMLDivElement | null;
+    btnOtherModalSave = document.getElementById('btnOtherModalSave') as HTMLButtonElement | null;
+    btnOtherModalCancel = document.getElementById('btnOtherModalCancel') as HTMLButtonElement | null;
+    btnOtherModalClose = document.getElementById('btnOtherModalClose') as HTMLButtonElement | null;
+    btnOtherFetchModels = document.getElementById('btnOtherFetchModels') as HTMLButtonElement | null;
+    otherModalError = document.getElementById('otherModalError') as HTMLDivElement | null;
     nvidiaAccountModal = document.getElementById('nvidiaAccountModal') as HTMLDivElement | null;
     nvidiaAccountModalContainer = document.getElementById('nvidiaAccountModalContainer') as HTMLDivElement | null;
     btnNvidiaModalSave = document.getElementById('btnNvidiaModalSave') as HTMLButtonElement | null;
@@ -761,6 +803,39 @@ export function initAccountsEvents() {
             updateBatchActionBarUI();
         });
     }
+
+    // Other 通道切换 Tab
+    if (btnChannelOther) {
+        btnChannelOther.addEventListener('click', () => {
+            state.selectedAccountIds = [];
+            state.currentViewTab = 'other';
+            updateViewTabUI();
+            if (state.currentAccountsList) {
+                renderAccounts(state.currentAccountsList);
+            }
+            updateAggregateQuotaUI();
+            updateBatchActionBarUI();
+        });
+    }
+
+    // Other 添加账号下拉项 → 打开 Other 账号模态
+    if (btnAddOtherAccount) {
+        btnAddOtherAccount.addEventListener('click', () => {
+            if (addAccountDropdown) addAccountDropdown.classList.add('hidden');
+            openOtherAccountModal();
+        });
+    }
+
+    // Other 账号模态:关闭/取消/保存/获取模型
+    if (btnOtherModalClose) btnOtherModalClose.addEventListener('click', closeOtherAccountModal);
+    if (btnOtherModalCancel) btnOtherModalCancel.addEventListener('click', closeOtherAccountModal);
+    if (otherAccountModal) {
+        otherAccountModal.addEventListener('click', (e: MouseEvent) => {
+            if (e.target === otherAccountModal) closeOtherAccountModal();
+        });
+    }
+    if (btnOtherModalSave) btnOtherModalSave.addEventListener('click', submitOtherAccount);
+    if (btnOtherFetchModels) btnOtherFetchModels.addEventListener('click', fetchOtherModels);
 
     // NVIDIA 添加账号下拉项 → 打开 NVIDIA 账号模态
     if (btnAddNvidiaAccount) {
@@ -1905,6 +1980,211 @@ function populateNvidiaModelSelects(models: string[]) {
 }
 
 // ===== NVIDIA 全局专属模型清单 Modal 逻辑 =====
+
+// ==================== Other 号池 Modal 控制逻辑 ====================
+// openOtherAccountModal:打开 Other 账号录入模态并清空表单。
+function openOtherAccountModal() {
+    if (!otherAccountModal || !otherAccountModalContainer) return;
+
+    const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
+    const inputGroupName = document.getElementById('inputOtherGroupName') as HTMLInputElement | null;
+    const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
+    const inputApiKey = document.getElementById('inputOtherApiKey') as HTMLInputElement | null;
+    const inputLabel = document.getElementById('inputOtherLabel') as HTMLInputElement | null;
+    const inputModelDefault = document.getElementById('inputOtherModelDefault') as HTMLInputElement | null;
+    const selectModelDefault = document.getElementById('selectOtherModelDefault') as HTMLSelectElement | null;
+    const chkFmtOpenai = document.getElementById('chkOtherFmtOpenai') as HTMLInputElement | null;
+    const chkFmtAnthropic = document.getElementById('chkOtherFmtAnthropic') as HTMLInputElement | null;
+
+    if (inputGroupId) inputGroupId.value = '';
+    if (inputGroupName) inputGroupName.value = '';
+    if (inputBaseUrl) inputBaseUrl.value = '';
+    if (inputApiKey) inputApiKey.value = '';
+    if (inputLabel) inputLabel.value = '';
+    if (inputModelDefault) inputModelDefault.value = '';
+    if (selectModelDefault) {
+        selectModelDefault.classList.add('hidden');
+        selectModelDefault.innerHTML = '<option value="">选择模型...</option>';
+    }
+    // 默认勾选 OpenAI 格式,与新建态初始 checked 一致。
+    if (chkFmtOpenai) chkFmtOpenai.checked = true;
+    if (chkFmtAnthropic) chkFmtAnthropic.checked = false;
+
+    if (otherModalError) {
+        otherModalError.classList.add('hidden');
+        otherModalError.textContent = '';
+    }
+
+    otherAccountModal.classList.remove('opacity-0', 'pointer-events-none');
+    otherAccountModalContainer.classList.remove('scale-95');
+    otherAccountModalContainer.classList.add('scale-100');
+}
+
+function closeOtherAccountModal() {
+    if (!otherAccountModal || !otherAccountModalContainer) return;
+    otherAccountModalContainer.classList.remove('scale-100');
+    otherAccountModalContainer.classList.add('scale-95');
+    otherAccountModal.classList.add('opacity-0', 'pointer-events-none');
+}
+
+// submitOtherAccount:校验后调 other:add(JSON 对象入参),成功关闭模态并同步账号列表。
+async function submitOtherAccount() {
+    const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
+    const inputGroupName = document.getElementById('inputOtherGroupName') as HTMLInputElement | null;
+    const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
+    const inputApiKey = document.getElementById('inputOtherApiKey') as HTMLInputElement | null;
+    const inputLabel = document.getElementById('inputOtherLabel') as HTMLInputElement | null;
+    const inputModelDefault = document.getElementById('inputOtherModelDefault') as HTMLInputElement | null;
+    const chkFmtOpenai = document.getElementById('chkOtherFmtOpenai') as HTMLInputElement | null;
+    const chkFmtAnthropic = document.getElementById('chkOtherFmtAnthropic') as HTMLInputElement | null;
+
+    if (!inputGroupId || !inputBaseUrl || !inputApiKey) return;
+
+    const groupId = inputGroupId.value.trim();
+    const baseUrl = inputBaseUrl.value.trim();
+    const apiKey = inputApiKey.value.trim();
+
+    if (!groupId) {
+        if (otherModalError) {
+            otherModalError.textContent = '请填写组 ID';
+            otherModalError.classList.remove('hidden');
+        }
+        return;
+    }
+    if (!apiKey) {
+        if (otherModalError) {
+            otherModalError.textContent = '请输入 API Key';
+            otherModalError.classList.remove('hidden');
+        }
+        return;
+    }
+
+    const formats: string[] = [];
+    if (chkFmtOpenai && chkFmtOpenai.checked) formats.push('openai');
+    if (chkFmtAnthropic && chkFmtAnthropic.checked) formats.push('anthropic');
+    if (formats.length === 0) {
+        if (otherModalError) {
+            otherModalError.textContent = '至少勾选一种协议格式';
+            otherModalError.classList.remove('hidden');
+        }
+        return;
+    }
+
+    try {
+        if (btnOtherModalSave) {
+            btnOtherModalSave.disabled = true;
+            btnOtherModalSave.textContent = '正在添加...';
+        }
+
+        // 采用单对象 JSON 入参形态(后端 parseOtherInputFromArgs 优先按 JSON 解析)。
+        const res = await ipcRenderer.invoke('other:add', JSON.stringify({
+            groupId,
+            groupName: inputGroupName?.value.trim() || '',
+            baseUrl,
+            apiKey,
+            formats,
+            label: inputLabel?.value.trim() || '',
+            defaultModel: inputModelDefault?.value.trim() || ''
+        }));
+
+        if (res && res.success) {
+            closeOtherAccountModal();
+            // accounts-res 由后端 emitAccountsRes 主动广播,前端 global listener 会自动 renderAccounts,
+            // 此处不再手动 invoke('accounts:get') 以免与广播竞态重复刷新。
+        } else {
+            if (otherModalError) {
+                otherModalError.textContent = res?.error || '添加失败';
+                otherModalError.classList.remove('hidden');
+            }
+        }
+    } catch (err: any) {
+        if (otherModalError) {
+            otherModalError.textContent = err.message || '系统错误';
+            otherModalError.classList.remove('hidden');
+        }
+    } finally {
+        if (btnOtherModalSave) {
+            btnOtherModalSave.disabled = false;
+            btnOtherModalSave.textContent = '添加账号';
+        }
+    }
+}
+
+// fetchOtherModels:调其他组拉模型(透传当前录入框内的 groupId/baseUrl/apiKey 以支持未入库预拉),
+// 填入默认模型下拉供选择。
+async function fetchOtherModels() {
+    const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
+    const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
+    const inputApiKey = document.getElementById('inputOtherApiKey') as HTMLInputElement | null;
+    const selectModelDefault = document.getElementById('selectOtherModelDefault') as HTMLSelectElement | null;
+    if (!btnOtherFetchModels) return;
+
+    const groupId = inputGroupId ? inputGroupId.value.trim() : '';
+    const baseUrl = inputBaseUrl ? inputBaseUrl.value.trim() : '';
+    const apiKey = inputApiKey ? inputApiKey.value.trim() : '';
+
+    if (otherModalError) {
+        otherModalError.classList.add('hidden');
+        otherModalError.textContent = '';
+    }
+
+    if (!groupId && !baseUrl) {
+        if (otherModalError) {
+            otherModalError.textContent = '请先填写组 ID 或 Base URL';
+            otherModalError.classList.remove('hidden');
+        }
+        return;
+    }
+
+    const origHTML = btnOtherFetchModels.innerHTML;
+    btnOtherFetchModels.disabled = true;
+    btnOtherFetchModels.innerHTML = `<span class="material-symbols-outlined text-[14px] animate-spin">refresh</span><span>获取中...</span>`;
+
+    try {
+        // 透传 baseUrl/apiKey,便于未入库时按当前表单预拉;后端会优先用透传值,否则查号池该组首个账号。
+        const res = await ipcRenderer.invoke('other:fetch-models', JSON.stringify({ groupId, baseUrl, apiKey }));
+        if (res && res.success && Array.isArray(res.models)) {
+            if (selectModelDefault) {
+                selectModelDefault.innerHTML = '<option value="">选择模型...</option>';
+                res.models.forEach((m: string) => {
+                    const opt = document.createElement('option');
+                    opt.value = m;
+                    opt.textContent = m;
+                    selectModelDefault.appendChild(opt);
+                });
+                selectModelDefault.classList.remove('hidden');
+                selectModelDefault.onchange = () => {
+                    if (selectModelDefault.value) {
+                        const inputModelDefault = document.getElementById('inputOtherModelDefault') as HTMLInputElement | null;
+                        if (inputModelDefault) inputModelDefault.value = selectModelDefault.value;
+                    }
+                };
+            }
+        } else {
+            // Anthropic-only 上游无 /v1/models 端点会返回 allowManualInput,提示用户手填。
+            if (res && res.allowManualInput) {
+                if (otherModalError) {
+                    otherModalError.textContent = res?.error || '上游暂不支持模型列表,请手动填写模型名';
+                    otherModalError.classList.remove('hidden');
+                }
+                if (selectModelDefault) selectModelDefault.classList.add('hidden');
+            } else if (otherModalError) {
+                otherModalError.textContent = res?.error || '获取模型列表失败';
+                otherModalError.classList.remove('hidden');
+            }
+        }
+    } catch (err: any) {
+        if (otherModalError) {
+            otherModalError.textContent = err.message || '网络或接口请求出错';
+            otherModalError.classList.remove('hidden');
+        }
+    } finally {
+        if (btnOtherFetchModels) {
+            btnOtherFetchModels.disabled = false;
+            btnOtherFetchModels.innerHTML = origHTML;
+        }
+    }
+}
 
 // 实时把模块级缓存的"已保存计数"刷到入口徽标 + Modal 顶部计数
 function updateNvidiaPreferredBadge(count: number): void {

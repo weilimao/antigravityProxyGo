@@ -230,7 +230,7 @@ func (a *App) startup(ctx context.Context) {
 		a.settingsMgr.GetMaxRetryDelay,
 		func() int64 { return int64(a.settingsMgr.GetMaxRequestBodyMB()) * 1024 * 1024 },
 		a.settingsMgr.GetRequestTimeout,
-		func(allocatedAccount, userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string) {
+		func(allocatedAccount, userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs, firstByteMs int64, statusCode int, reqID string) {
 			if a.relayStatsMgr != nil {
 				rate := a.statsTracker.GetPricingMgr().GetPricingForModel(modelName)
 				nonCachedIn := inTokens - cachedTokens
@@ -244,41 +244,43 @@ func (a *App) startup(ctx context.Context) {
 
 				dbItem := &db.RequestLog{
 					ReqID:        reqID,
-					Timestamp:    time.Now().Format(time.RFC3339),
-					Mode:         "remote_relay",
-					UserID:       userID,
-					ModelName:    modelName,
-					InTokens:     inTokens,
-					OutTokens:    outTokens,
+					Timestamp:   time.Now().Format(time.RFC3339),
+					Mode:        "remote_relay",
+					UserID:      userID,
+					ModelName:   modelName,
+					InTokens:    inTokens,
+					OutTokens:   outTokens,
 					CachedTokens: cachedTokens,
-					Cost:         totalCost,
-					InputCost:    inputCost,
-					OutputCost:   outputCost,
-					CachedCost:   cachedCost,
-					DurationMs:   durationMs,
-					StatusCode:   statusCode,
-					Method:       method,
-					Host:         host,
-					Path:         path,
-					SessionID:    sessionID,
+					Cost:        totalCost,
+					InputCost:   inputCost,
+					OutputCost:  outputCost,
+					CachedCost:  cachedCost,
+					DurationMs:  durationMs,
+					FirstByteMs: firstByteMs,
+					StatusCode:  statusCode,
+					Method:      method,
+					Host:        host,
+					Path:        path,
+					SessionID:   sessionID,
 				}
 				_ = db.InsertRequestLog(dbItem)
 
 				a.statsTracker.AddRequestLogInMemoryOnly(&stats.RequestLog{
-					ID:           reqID,
-					Timestamp:    time.Now().Format("01/02 15:04:05"),
-					Method:       method,
-					Host:         host,
-					Path:         path,
-					Model:        modelName,
-					Account:      allocatedAccount,
-					InTokens:     inTokens,
-					OutTokens:    outTokens,
+					ID:          reqID,
+					Timestamp:   time.Now().Format("01/02 15:04:05"),
+					Method:      method,
+					Host:        host,
+					Path:        path,
+					Model:       modelName,
+					Account:     allocatedAccount,
+					InTokens:    inTokens,
+					OutTokens:   outTokens,
 					CachedTokens: cachedTokens,
-					Cost:         totalCost,
-					StatusCode:   statusCode,
-					SessionID:    sessionID,
-					DurationMs:   durationMs,
+					Cost:        totalCost,
+					StatusCode:  statusCode,
+					SessionID:   sessionID,
+					DurationMs:  durationMs,
+					FirstByteMs: firstByteMs,
 				})
 
 				a.relayStatsMgr.RecordUsage(relay.RelaySample{
@@ -294,6 +296,7 @@ func (a *App) startup(ctx context.Context) {
 					Path:         path,
 					SessionID:    sessionID,
 					DurationMs:   durationMs,
+					FirstByteMs:  firstByteMs,
 					StatusCode:   statusCode,
 				})
 			}

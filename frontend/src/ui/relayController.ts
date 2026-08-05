@@ -225,6 +225,30 @@ export function initRelayEvents() {
         isCustom?: boolean;
     }
 
+    // isGoogleProviderKind 判定 provider 是否属于 Google 族号池(走 /v1/chat/completions 等裸名直连链路)。
+    // 口径与后端 internal/relay/router_entry.go 的 isGoogleProvider 一致:
+    //   google / gcp / antigravity / gemini-cli / 空(兜底视为 Google 族) → true。
+    // 非族:nvidia / deepseek / qwen / moonshot / 自定义 provider → false,这类号池的 ClientModel
+    //   需带 "{provider}/" 前缀以经 /route/* 精准路由(见 resolveRoutedTarget)。
+    function isGoogleProviderKind(p: string): boolean {
+        const c = (p || '').trim().toLowerCase();
+        return c === 'google' || c === 'gcp' || c === 'antigravity' || c === 'gemini-cli' || c === '';
+    }
+
+    // makeMappingEntry 构造一条模型映射对象,字段口径与后端 settings.ModelMappingEntry 对齐。
+    // injectChatTemplateKwargs 仅对 NVIDIA 号池有意义(默认 true;由 _relayAddModelMapping / 表格勾选控制),
+    // 其余号池该字段不参与透传,保持 undefined 即可。
+    function makeMappingEntry(clientModel: string, targetModel: string, provider: string, expose: boolean): any {
+        return {
+            clientModel,
+            targetModel,
+            targetProvider: provider,
+            expose,
+            ownedBy: '',
+            injectChatTemplateKwargs: true
+        };
+    }
+
     let allMappings: any[] = [];
     let poolTabs: PoolTabInfo[] = [];
     let activeTabId: string = 'google';
@@ -246,10 +270,11 @@ export function initRelayEvents() {
             const list = await ipcRenderer.invoke('relay:get-model-mapping');
             allMappings = list || [];
 
-            // 3. 构建默认 Tab 列表 (默认只预设前三个)
+            // 3. 构建默认 Tab 列表 (默认预设四个,含 Other)
             poolTabs = [
                 { id: 'google', name: 'Gemini (Google)', targetProvider: 'google' },
                 { id: 'nvidia', name: 'NVIDIA 号池', targetProvider: 'nvidia' },
+                { id: 'other', name: 'Other 号池', targetProvider: 'other' },
                 { id: 'gcp', name: '谷歌云 API', targetProvider: 'gcp' }
             ];
 
@@ -396,6 +421,7 @@ export function initRelayEvents() {
         if (m.ownedBy) return m.ownedBy;
         // 隐式根据 clientModel/targetModel 归类
         const modelName = (m.clientModel || m.targetModel || '').toLowerCase();
+        if (modelName.startsWith('other/')) return 'other';
         if (modelName.startsWith('nvidia/') || modelName.endsWith('-nemotron')) return 'nvidia';
         if (modelName.startsWith('deepseek')) return 'deepseek';
         if (modelName.startsWith('qwen')) return 'qwen';
@@ -435,6 +461,59 @@ export function initRelayEvents() {
                     lblCount.textContent = `✅ 已获取 ${res.models.length} 个模型`;
                     lblCount.classList.remove('hidden');
                 }
+                // 拉取成功后,自动为当前 Tab 批量补全映射条目,免去逐条手动添加 + 保存再补前缀的两步操作。
+                // 补全语义:
+                //   - 非 Google 族号池(NVIDIA/DeepSeek/自定义):每个新模型生成「单条带前缀」
+                //     ClientModel = `{provider}/{model}`,TargetModel = `{model}`,TargetProvider = {provider}。
+                //     客户端用带前缀名请求 /route/* 精准路由。
+                //   - Google 族号池(google/gcp/antigravity/空):每个新模型生成「双条目」
+                //     ① 裸名条目 ClientModel = TargetModel = `{model}`(走 /v1/chat/completions 等裸名直连);
+                //     ② 带前缀条目 ClientModel = `{provider}/{model}`,TargetModel = `{model}`(走 /route 精准路由)。
+                //     双条目并存:既保持裸名直连链路零回归,又让 /route/v1/models 能列出带前缀名精准路由。
+                // 「新模型」判定:已有映射里 ClientModel 等于裸名 {model} 或带前缀 {provider}/{model} 的都算已存在,跳过。
+                const provider = (currentTab.targetProvider || currentTab.id || '').trim();
+                const existingClientSet = new Set<string>();
+                for (const m of allMappings) {
+                    const cm = (m.clientModel || '').trim();
+                    if (cm) existingClientSet.add(cm.toLowerCase());
+                }
+                const existingTargetSet = new Set<string>();
+                for (const m of allMappings) {
+                    const tm = (m.targetModel || '').trim();
+                    if (tm) existingTargetSet.add(tm.toLowerCase());
+                }
+                const newEntries: any[] = [];
+                for (const modelRaw of res.models) {
+                    const model = (modelRaw || '').trim();
+                    if (!model) continue;
+                    if (existingTargetSet.has(model.toLowerCase())) continue; // 同 Tab 已有该上游模型,跳过
+                    const isGoogle = isGoogleProviderKind(provider);
+                    if (isGoogle) {
+                        // ① 裸名条目(供 /v1/* 裸名直连)。
+                        newEntries.push(makeMappingEntry(model, model, provider, true));
+                        // ② 带前缀条目(供 /route 精准路由)。
+                        const prefixed = `${provider}/${model}`;
+                        if (!existingClientSet.has(prefixed.toLowerCase())) {
+                            newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+                        }
+                    } else {
+                        // 非 Google 族:仅带前缀单条。
+                        const prefixed = `${provider}/${model}`;
+                        if (!existingClientSet.has(prefixed.toLowerCase())) {
+                            newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+                            existingClientSet.add(prefixed.toLowerCase());
+                        }
+                    }
+                    existingTargetSet.add(model.toLowerCase());
+                }
+                if (newEntries.length > 0) {
+                    // 对该 Tab 新增的映射,归类 ownedBy 用 TabId(与 getMappingTab/save 逻辑一致)。
+                    const tabId = currentTab.id;
+                    for (const ne of newEntries) {
+                        ne.ownedBy = tabId;
+                        allMappings.push(ne);
+                    }
+                }
                 renderCurrentTabTable();
             } else {
                 if (lblCount) {
@@ -456,6 +535,172 @@ export function initRelayEvents() {
         }
     };
 
+    // getOtherGroups:从后端 accounts-res 广播的 lastBackendData 读取 Other 号池组列表,
+    // 兼容直接调 other:list-groups 的回退。返回 [{groupId, groupName, formats}]。
+    async function getOtherGroups(): Promise<Array<{ groupId: string; groupName: string; formats: string[] }>> {
+        try {
+            const backendData = state.lastBackendData;
+            if (backendData && Array.isArray(backendData.otherGroups) && backendData.otherGroups.length > 0) {
+                return backendData.otherGroups.map((g: any) => ({
+                    groupId: String(g.groupId || g.groupID || g.id || ''),
+                    groupName: String(g.groupName || g.groupId || ''),
+                    formats: Array.isArray(g.formats) ? g.formats : []
+                })).filter((g: any) => g.groupId);
+            }
+        } catch (e) { /* ignore */ }
+        try {
+            const res = await ipcRenderer.invoke('other:list-groups');
+            if (res && res.success && Array.isArray(res.groups)) {
+                return res.groups.map((g: any) => ({
+                    groupId: String(g.groupId || g.groupID || g.id || ''),
+                    groupName: String(g.groupName || g.groupId || ''),
+                    formats: Array.isArray(g.formats) ? g.formats : []
+                })).filter((g: any) => g.groupId);
+            }
+        } catch (e) { /* ignore */ }
+        return [];
+    }
+
+    // renderOtherGroupFetchButtons:Other Tab 专用的「按组获取模型」按钮组渲染。
+    // 每个已在号池配置的组渲染一个独立「获取 [组名] 模型」按钮,点击调 other:fetch-models(groupId),
+    // 拉到的模型自动补全为 other/{groupId}/{model} 三段前缀 ClientModel 映射条目。
+    function renderOtherGroupFetchButtons(container: HTMLElement | null) {
+        if (!container) return;
+        container.innerHTML = '';
+        getOtherGroups().then(groups => {
+            if (groups.length === 0) {
+                container.innerHTML = `<span class="text-[11px] text-outline italic">Other 号池暂无组,请先在账号池添加 Other 账号创建组</span>`;
+                container.classList.remove('hidden');
+                container.classList.add('flex');
+                return;
+            }
+            groups.forEach(g => {
+                const btn = document.createElement('button');
+                btn.className = 'flex items-center gap-1 px-2.5 py-1 text-[12px] font-medium bg-purple-500/10 text-purple-600 dark:text-purple-300 hover:bg-purple-500/20 rounded-lg transition-colors cursor-pointer border border-purple-500/20';
+                const fmtTag = g.formats && g.formats.length
+                    ? ` (${g.formats.map(f => f === 'anthropic' ? 'A' : 'O').join('/')})`
+                    : '';
+                btn.innerHTML = `<span class="material-symbols-outlined text-[15px]">sync</span><span>获取 ${escapeHtmlLocal(g.groupName || g.groupId)}${fmtTag}</span>`;
+                btn.addEventListener('click', () => fetchOtherGroupModels(g.groupId, g.groupName || g.groupId, btn));
+                container.appendChild(btn);
+            });
+            container.classList.remove('hidden');
+            container.classList.add('flex');
+        });
+    }
+
+    // fetchOtherGroupModels:调 other:fetch-models 拉指定组的上游模型,自动补全三段前缀映射条目。
+    async function fetchOtherGroupModels(groupId: string, groupName: string, btn: HTMLButtonElement) {
+        const lblCount = document.getElementById('lblFetchedModelsCount');
+        const origHTML = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = `<span class="material-symbols-outlined text-[15px] animate-spin">sync</span><span>获取中...</span>`;
+
+        try {
+            const res = await ipcRenderer.invoke('other:fetch-models', groupId);
+            if (res && res.success && Array.isArray(res.models)) {
+                channelModelsCache[`other/${groupId}`] = res.models;
+                updateDatalist(res.models);
+                if (lblCount) {
+                    lblCount.textContent = `✅ [${groupName}] 已获取 ${res.models.length} 个模型`;
+                    lblCount.classList.remove('hidden');
+                }
+                // 自动补全:Other 组每个新模型生成三段前缀 other/{groupId}/{model} 单条映射。
+                const provider = 'other';
+                const tabId = 'other';
+                const existingClientSet = new Set<string>();
+                for (const m of allMappings) {
+                    const cm = (m.clientModel || '').trim();
+                    if (cm) existingClientSet.add(cm.toLowerCase());
+                }
+                const existingTargetSet = new Set<string>();
+                for (const m of allMappings) {
+                    const tm = (m.targetModel || '').trim();
+                    if (tm) existingTargetSet.add(tm.toLowerCase());
+                }
+                const newEntries: any[] = [];
+                for (const modelRaw of res.models) {
+                    const model = (modelRaw || '').trim();
+                    if (!model) continue;
+                    if (existingTargetSet.has(model.toLowerCase())) continue; // 同组已有该上游模型,跳过
+                    const prefixed = `${provider}/${groupId}/${model}`;
+                    if (!existingClientSet.has(prefixed.toLowerCase())) {
+                        const entry = makeMappingEntry(prefixed, model, provider, true);
+                        entry.ownedBy = tabId;
+                        entry.targetGroupId = groupId; // 三段前缀携带组 ID,供后端按组选号
+                        newEntries.push(entry);
+                        existingClientSet.add(prefixed.toLowerCase());
+                    }
+                    existingTargetSet.add(model.toLowerCase());
+                }
+                if (newEntries.length > 0) {
+                    for (const ne of newEntries) allMappings.push(ne);
+                }
+                renderCurrentTabTable();
+            } else if (res && res.allowManualInput) {
+                // Anthropic-only 上游无 /v1/models 端点 → 提示手动填写,不补全条目。
+                if (lblCount) {
+                    lblCount.textContent = `⚠️ [${groupName}] 上游暂不支持模型列表,请手动填写(前缀 other/${groupId}/)`;
+                    lblCount.classList.remove('hidden');
+                }
+            } else {
+                if (lblCount) {
+                    lblCount.textContent = `❌ [${groupName}] 获取失败: ${res?.error || '网络超时'}`;
+                    lblCount.classList.remove('hidden');
+                }
+            }
+        } catch (e: any) {
+            console.error('[RelayController] Fetch other group models error:', e);
+            if (lblCount) {
+                lblCount.textContent = `❌ [${groupName}] 获取出错`;
+                lblCount.classList.remove('hidden');
+            }
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = origHTML;
+        }
+    }
+
+    // escapeHtmlLocal:本模块内联的轻量 HTML 转义,避免依赖外部工具函数。
+    function escapeHtmlLocal(s: string): string {
+        return String(s)
+            .replace(/&/g, '&')
+            .replace(/</g, '<')
+            .replace(/>/g, '>')
+            .replace(/"/g, '"')
+            .replace(/'/g, '&#39;');
+    }
+
+    // ensureOtherEntryGroupId:Other Tab 下保证某映射行携带 targetGroupId。
+    // 1) 行已有 targetGroupId → 直接返回;2) 无则向后端拉 Other 组列表,单组自动绑定、多组弹窗让用户选;
+    // 3) 无任何组 → 提示并返回空串(调用方据此保留裸名,等用户先去账号池建组)。
+    // 返回的 groupId 同时写回 entry.targetGroupId(entry 为 allMappings 元素引用,落盘一致)。
+    async function ensureOtherEntryGroupId(entry: any): Promise<string> {
+        if (!entry) return '';
+        const existing = (entry.targetGroupId || '').trim();
+        if (existing) return existing;
+        const groups = await getOtherGroups();
+        if (!groups.length) {
+            alert('Other 号池暂无组,请先在「账号池」添加 Other 账号创建组后再手动填写模型。');
+            return '';
+        }
+        if (groups.length === 1) {
+            entry.targetGroupId = groups[0].groupId;
+            return groups[0].groupId;
+        }
+        const list = groups.map((g, i) => `${i + 1}. ${g.groupName || g.groupId} (ID: ${g.groupId})`).join('\n');
+        const pick = prompt(`该映射未绑定 Other 组,请选择目标组(输入序号):\n${list}`, '1');
+        if (!pick) return '';
+        const n = parseInt(pick, 10);
+        if (isNaN(n) || n < 1 || n > groups.length) {
+            alert('序号无效,已取消自动填充 Client Model。请重新输入目标模型以再次触发组选择。');
+            return '';
+        }
+        const g = groups[n - 1];
+        entry.targetGroupId = g.groupId;
+        return g.groupId;
+    }
+
     function renderCurrentTabTable() {
         const tbody = document.getElementById('modelMappingTableBody');
         if (!tbody) return;
@@ -466,6 +711,7 @@ export function initRelayEvents() {
         const fetchedModels = channelModelsCache[currentTab.targetProvider || currentTab.id] || [];
 
         const isNvidiaTab = (currentTab.targetProvider === 'nvidia' || currentTab.id === 'nvidia');
+        const isOtherTab = (currentTab.targetProvider === 'other' || currentTab.id === 'other');
         const thInjectKwargs = document.getElementById('thInjectKwargs');
         if (thInjectKwargs) {
             if (isNvidiaTab) {
@@ -473,6 +719,19 @@ export function initRelayEvents() {
             } else {
                 thInjectKwargs.classList.add('hidden');
             }
+        }
+
+        // Other 号池:切到 Other Tab 时隐藏全局「获取号池模型」按钮,改为按组渲染多个获取按钮;
+        // 非 Other Tab 时恢复全局按钮、清空组按钮容器。
+        const btnFetchChannelModels = document.getElementById('btnFetchChannelModels');
+        const otherFetchContainer = document.getElementById('otherGroupFetchContainer');
+        if (otherFetchContainer) otherFetchContainer.innerHTML = '';
+        if (isOtherTab) {
+            if (btnFetchChannelModels) btnFetchChannelModels.classList.add('hidden');
+            renderOtherGroupFetchButtons(otherFetchContainer);
+        } else {
+            if (btnFetchChannelModels) btnFetchChannelModels.classList.remove('hidden');
+            if (otherFetchContainer) otherFetchContainer.classList.add('hidden');
         }
 
         if (fetchedModels.length > 0) {
@@ -533,17 +792,31 @@ export function initRelayEvents() {
         });
 
         tbody.querySelectorAll('.target-model-input').forEach(input => {
-            const handleTargetModelChange = (e: Event) => {
+            const handleTargetModelChange = async (e: Event) => {
                 const target = e.target as HTMLInputElement;
                 const idx = parseInt(target.getAttribute('data-index') || '0');
                 const val = target.value.trim();
                 currentTabMappings[idx].targetModel = val;
 
-                // 若 Client Model 为空，自动联动把选中的模型名同步填入 Client Model
+                // 若 Client Model 为空，自动联动填入 Client Model。
+                // 非 Google 族号池(NVIDIA/DeepSeek/自定义)需带 "{provider}/" 前缀以经 /route/* 精准路由,
+                // 故填 `nvidia/deepseek-ai/deepseek-v4-pro` 而非裸名;Google 族裸名直连,不加前缀。
                 const clientInput = tbody.querySelector(`.client-model-input[data-index="${idx}"]`) as HTMLInputElement | null;
                 if (clientInput && (!clientInput.value || !clientInput.value.trim())) {
-                    currentTabMappings[idx].clientModel = val;
-                    clientInput.value = val;
+                    const currentTab = poolTabs.find(t => t.id === activeTabId) || poolTabs[0];
+                    const provider = currentTab?.targetProvider || '';
+                    if (provider === 'other') {
+                        // Other 号池:三段前缀 other/{groupId}/{model}。groupId 来自映射行的 targetGroupId,
+                        // 缺失则弹窗选组并写回;选组失败(无组/取消)保留裸名,等用户先去账号池建组。
+                        const gid = await ensureOtherEntryGroupId(currentTabMappings[idx]);
+                        const autoClient = gid ? `other/${gid}/${val}` : val;
+                        currentTabMappings[idx].clientModel = autoClient;
+                        clientInput.value = autoClient;
+                    } else {
+                        const autoClient = !isGoogleProviderKind(provider) ? `${provider}/${val}` : val;
+                        currentTabMappings[idx].clientModel = autoClient;
+                        clientInput.value = autoClient;
+                    }
                 }
             };
 
@@ -552,7 +825,7 @@ export function initRelayEvents() {
         });
 
         tbody.querySelectorAll('.target-model-quick-select').forEach(sel => {
-            sel.addEventListener('change', (e) => {
+            sel.addEventListener('change', async (e) => {
                 const target = e.target as HTMLSelectElement;
                 const idx = parseInt(target.getAttribute('data-index') || '0');
                 const val = target.value;
@@ -562,11 +835,22 @@ export function initRelayEvents() {
                     const targetInput = tbody.querySelector(`.target-model-input[data-index="${idx}"]`) as HTMLInputElement | null;
                     if (targetInput) targetInput.value = val;
 
-                    // 2. 若 Client Model 为空，自动联动把选中的模型名同步填入 Client Model 文本框
+                    // 2. 若 Client Model 为空，自动联动填入 Client Model(非 Google 族带 provider/ 前缀)。
                     const clientInput = tbody.querySelector(`.client-model-input[data-index="${idx}"]`) as HTMLInputElement | null;
                     if (clientInput && (!clientInput.value || !clientInput.value.trim())) {
-                        currentTabMappings[idx].clientModel = val;
-                        clientInput.value = val;
+                        const currentTab = poolTabs.find(t => t.id === activeTabId) || poolTabs[0];
+                        const provider = currentTab?.targetProvider || '';
+                        if (provider === 'other') {
+                            // Other 号池:三段前缀 other/{groupId}/{model},groupId 同上从行内或弹窗取。
+                            const gid = await ensureOtherEntryGroupId(currentTabMappings[idx]);
+                            const autoClient = gid ? `other/${gid}/${val}` : val;
+                            currentTabMappings[idx].clientModel = autoClient;
+                            clientInput.value = autoClient;
+                        } else {
+                            const autoClient = !isGoogleProviderKind(provider) ? `${provider}/${val}` : val;
+                            currentTabMappings[idx].clientModel = autoClient;
+                            clientInput.value = autoClient;
+                        }
                     }
                 }
             });
@@ -664,8 +948,41 @@ export function initRelayEvents() {
         // 过滤空映射
         const filteredMappings = allMappings.filter(m => m.clientModel && m.clientModel.trim() !== '' && m.targetModel && m.targetModel.trim() !== '');
 
+        // 非 Google 族号池的 ClientModel 自动补 "{provider}/" 前缀(仅经 /route/* 精准路由时生效)。
+        // 触发条件:provider 非 Google 族(走 /route) && 当前未带该前缀 && ClientModel==TargetModel
+        //   (纯路由用途;若用户已显式改名 ClientModel!=TargetModel 表示自定义别名,尊重不动)。
+        // 写回 allMappings 内存态并 re-render,让表格即时呈现带前缀的 ClientModel(与落盘一致)。
+        // 幂等性:补前缀后 cm!=tm,下次保存 cm===tm 判定不成立,不会叠加 `nvidia/nvidia/xxx`。
+        // 注意:Google 族号池由 _relayFetchChannelModels 拉取时双条目生成(裸名 + 带前缀)并存,
+        //   此处不再为 Google 族补前缀,避免破坏裸名直连条目。
+        // Other 号池单独走三段前缀 other/{groupId}/{model},不走通用二段逻辑,避免误拼 other/{model}。
+        const mappingsToSave: any[] = [];
+        for (const m of filteredMappings) {
+            const provider = (m.targetProvider || '').trim();
+            const cm = (m.clientModel || '').trim();
+            const tm = (m.targetModel || '').trim();
+            if (provider === 'other') {
+                // Other:只有 cm===tm(裸名)且已携带 groupId 时才补三段前缀;
+                // 无 groupId 时保留裸名(用户尚未选组,后端不会路由,留待用户回去选组),绝不拼成 other/{model} 两段。
+                if (cm === tm) {
+                    const gid = (m.targetGroupId || '').trim();
+                    if (gid) {
+                        m.clientModel = `other/${gid}/${cm}`;
+                    }
+                }
+                mappingsToSave.push(m);
+            } else if (!isGoogleProviderKind(provider) && cm === tm && !cm.toLowerCase().startsWith(`${provider.toLowerCase()}/`)) {
+                const prefixed = `${provider}/${cm}`;
+                m.clientModel = prefixed;
+                mappingsToSave.push(m);
+            } else {
+                mappingsToSave.push(m);
+            }
+        }
+        renderCurrentTabTable();
+
         try {
-            const res = await ipcRenderer.invoke('relay:set-model-mapping', filteredMappings);
+            const res = await ipcRenderer.invoke('relay:set-model-mapping', mappingsToSave);
             if (res && res.success) {
                 btnSaveModelMapping.innerHTML = `<span class="material-symbols-outlined text-[16px]">done</span><span>${dict.relaySaveSuccess || '保存成功'}</span>`;
                 setTimeout(() => {

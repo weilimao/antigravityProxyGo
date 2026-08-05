@@ -169,7 +169,7 @@ func (sc *serveContext) classifyResponse(attemptIndex int, ro *routeOutcome, fo 
 				}
 
 				sc.h.relayStatsCallback(sc.allocatedAccount, sc.relayUserID, sc.relayAPIKeyID, sc.currentModel, sc.inTokens, sc.outTokens, sc.cachedTokens,
-					sc.r.Method, sc.r.Host, sc.r.URL.Path, sc.sessionKey, time.Since(sc.startTime).Milliseconds(), status, reqID)
+					sc.r.Method, sc.r.Host, sc.r.URL.Path, sc.sessionKey, time.Since(sc.startTime).Milliseconds(), sc.firstByteRec.FirstByteMs(time.Since(sc.startTime).Milliseconds()), status, reqID)
 			}
 			var accMeta *stats.AccountMeta
 			if ro.poolAccount != nil {

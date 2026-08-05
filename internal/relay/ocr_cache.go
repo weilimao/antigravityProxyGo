@@ -41,7 +41,7 @@ type ocrCacheEntry struct {
 }
 
 // ocrLRUCache 是 OCR 结果的进程内 + SQLite 磁盘持久化缓存。
-// 键: UserKey|ocrModel|sha256(b64)[:16],按用户与 OCR 模型双重隔离。
+// 键: ownerKey|ocrModel|sha256(b64)[:16],按用户/会话与 OCR 模型双重隔离,不含提问文本。
 type ocrLRUCache struct {
 	mu     sync.Mutex
 	lru    *lru.Cache[string, ocrCacheEntry]
@@ -71,25 +71,25 @@ func newOcrLRUCache(capacity int, ttlOk, ttlBad time.Duration) *ocrLRUCache {
 	return &ocrLRUCache{lru: c, ttlOk: ttlOk, ttlBad: ttlBad}
 }
 
-// ocrCacheKey 返回 UserKey + ocrModel + userPromptText(可选) 多维隔离的缓存键。
+// ocrCacheKey 返回 ownerKey + ocrModel + 图指纹 三维隔离的缓存键。
 // b64Data 可能数 MB,不直接做键,先算 sha256 取前 16 字节再 hex(定长 32 字符)。
 // ocrModel 纳入键:切换 OCR 模型后不命中旧模型结果,自动重新 OCR 新模型,
 // 保证前端改模型立刻生效、不触达旧缓存(否则配置形同虚设)。
-// userPromptText(可选):用户附带的提问文本哈希隔离,不同提问命中针对该提问的靶向 OCR 结果。
-func ocrCacheKey(userKey, ocrModel, b64Data string, userPromptText ...string) string {
+//
+// 不含 promptCtx(用户提问文本):同一张图在同一会话+同一 OCR 模型下只 OCR 一次,
+// 用户提问文本变化(含"继续"/resume/标点微调等无实质意图的变化)不触发重 OCR,省配额、省 ~3s 延迟。
+// OCR 的"靶向分析"由 ocrImageUncached 在真打 gemini 上游时用 promptCtx 组 ocrPrompt 承担,
+// 与缓存键解耦——缓存按图片身份命中,OCR 按当前提问靶向分析,二者各司其职。
+// 历史背景:曾把 promptCtx 哈希作为第四维键以"不同提问命中不同靶向 OCR 结果",但 Claude Code
+// 无状态客户端每轮重发历史时,微小文本变化(如 resume 标记)会让同图反复 miss 重打 gemini,
+// 消耗 antigravity 号池配额且体感延迟。现剥离回三维,靶向性由完整上下文中的上游 LLM 弥补。
+func ocrCacheKey(userKey, ocrModel, b64Data string) string {
 	m := strings.TrimSpace(ocrModel)
 	if m == "" {
 		m = defaultOcrModel
 	}
 	sum := sha256.Sum256([]byte(b64Data))
-	key := userKey + "|" + m + "|" + hex.EncodeToString(sum[:])[:16]
-	if len(userPromptText) > 0 {
-		if p := strings.TrimSpace(userPromptText[0]); p != "" {
-			pSum := sha256.Sum256([]byte(p))
-			key += "|" + hex.EncodeToString(pSum[:])[:8]
-		}
-	}
-	return key
+	return userKey + "|" + m + "|" + hex.EncodeToString(sum[:])[:16]
 }
 
 // get 命中且未过期返回 entry 与 true;若内存 miss 则回退查询 SQLite 持久化表并回填内存。

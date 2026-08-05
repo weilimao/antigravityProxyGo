@@ -76,10 +76,11 @@ func matchModelPattern(pattern, model string) bool {
 }
 
 // resolveRoutedTarget 按当前 settings 规则表解析入站 model 的目标号池 Provider 与目标上游模型。
-// 返回 (targetProvider, targetModel, matched)。
+// 返回 (targetProvider, targetGroupID, targetModel, matched)。
 //   - 命中规则:返回规则的 TargetProvider / TargetModel(TargetModel 为空则原样透传入站 model);
-//   - 未命中:返回 ("", "", false),由调用方决定是否兜底。
-func (h *APICompatHandler) resolveRoutedTarget(model string) (targetProvider, targetModel string, matched bool) {
+//     targetGroupID 仅在 ModelMappingEntry 显式配置时返回(Other 号池组内细分),否则空串。
+//   - 未命中:返回 ("", "", "", false),由调用方决定是否兜底。
+func (h *APICompatHandler) resolveRoutedTarget(model string) (targetProvider, targetGroupID, targetModel string, matched bool) {
 	if h.settingsMgr != nil {
 		mappings := h.settingsMgr.GetRelayModelMapping()
 		for _, m := range mappings {
@@ -88,7 +89,7 @@ func (h *APICompatHandler) resolveRoutedTarget(model string) (targetProvider, ta
 				if tm == "" {
 					tm = model
 				}
-				return strings.TrimSpace(m.TargetProvider), tm, true
+				return strings.TrimSpace(m.TargetProvider), strings.TrimSpace(m.TargetGroupID), tm, true
 			}
 		}
 	}
@@ -102,11 +103,11 @@ func (h *APICompatHandler) resolveRoutedTarget(model string) (targetProvider, ta
 	}
 	rule := routeMatch(rules, model)
 	if rule == nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	tm := strings.TrimSpace(rule.TargetModel)
 	if tm == "" {
 		tm = model
 	}
-	return rule.TargetProvider, tm, true
+	return rule.TargetProvider, "", tm, true
 }

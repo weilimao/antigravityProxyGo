@@ -34,7 +34,7 @@ type ProxyHandler struct {
 	getMaxRetryDelay       func() int
 	getMaxRequestBodyBytes func() int64
 	getRequestTimeout      func() int
-	relayStatsCallback     func(allocatedAccount, userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string)
+	relayStatsCallback     func(allocatedAccount, userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs, firstByteMs int64, statusCode int, reqID string)
 	relayQuotaCheck        func(userID, apiKeyID, modelName string) error
 	client                 *http.Client
 	SettingsMgr            settings.ManagerInterface
@@ -61,7 +61,7 @@ func NewProxyHandler(
 	getMaxRetryDelay func() int,
 	getMaxRequestBodyBytes func() int64,
 	getRequestTimeout func() int,
-	relayStatsCallback func(allocatedAccount, userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs int64, statusCode int, reqID string),
+	relayStatsCallback func(allocatedAccount, userID, apiKeyID, modelName string, inTokens, outTokens, cachedTokens int, method, host, path, sessionID string, durationMs, firstByteMs int64, statusCode int, reqID string),
 	relayQuotaCheck func(userID, apiKeyID, modelName string) error,
 ) *ProxyHandler {
 	return &ProxyHandler{
@@ -553,6 +553,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w:             w,
 		r:             r,
 		startTime:     startTime,
+		firstByteRec:  stats.NewFirstByteRecorder(startTime),
 		relayUserID:   relayUserID,
 		relayAPIKeyID: relayAPIKeyID,
 		targetHost:    targetHost,

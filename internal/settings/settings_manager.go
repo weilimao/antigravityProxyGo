@@ -149,6 +149,15 @@ func (m *Manager) loadConfig() {
 		if _, exists := rawMap["customThinkingSupports"]; !exists {
 			parsed.CustomThinkingSupports = false
 		}
+		// bypassOverridePrefixes 字段缺失(旧版本配置升级)或被显式写成 null 时,
+		// 同样回落到默认 ["tab"] —— Tab 补全模型(tab_flash_lite_preview 等)走代码
+		// 补全通道,被全局覆写改向推理上游会触发 400 INVALID_ARGUMENT(见 handler.go
+		// 全局覆写日志),故默认放行。注意:显式 [] (空数组) 仍尊重用户"全部覆写"意图。
+		if _, exists := rawMap["bypassOverridePrefixes"]; !exists {
+			parsed.BypassOverridePrefixes = []string{"tab"}
+		} else if parsed.BypassOverridePrefixes == nil {
+			parsed.BypassOverridePrefixes = []string{"tab"}
+		}
 		if !parsed.EnableThinkingMode {
 			parsed.EnableThinkingMode = true
 			needSave = true

@@ -32,6 +32,9 @@ func (m *Manager) GetModelCategoryByProvider(provider, modelName string) string 
 	if p == "nvidia" {
 		return "nvidia"
 	}
+	if p == "other" {
+		return "other"
+	}
 	return m.GetModelCategory(modelName)
 }
 
@@ -44,6 +47,7 @@ func (m *Manager) SetPoolMode(enabled bool) {
 		m.projectPoolMode = false
 		m.nvidiaPoolMode = false
 		m.geminiCliPoolMode = false
+		m.otherPoolMode = false
 		m.activeChannel = "antigravity"
 	}
 	m.Unlock()
@@ -63,6 +67,7 @@ func (m *Manager) SetProjectPoolMode(enabled bool) {
 		m.poolMode = false
 		m.nvidiaPoolMode = false
 		m.geminiCliPoolMode = false
+		m.otherPoolMode = false
 		m.activeChannel = "project"
 	}
 	m.Unlock()
@@ -92,13 +97,15 @@ func (m *Manager) IsPoolModeForActiveChannel() bool {
 		return m.projectPoolMode
 	case "nvidia":
 		return m.nvidiaPoolMode
+	case "other":
+		return m.otherPoolMode
 	}
 	return false
 }
 
 func (m *Manager) SetActiveChannel(channel string) {
 	m.Lock()
-	if channel == "antigravity" || channel == "project" || channel == "nvidia" {
+	if channel == "antigravity" || channel == "project" || channel == "nvidia" || channel == "other" {
 		if channel == "project" && m.poolMode {
 			m.Unlock()
 			return
@@ -280,6 +287,13 @@ func (m *Manager) SetAccountCooldownForChannel(id string, cooldownUntil int64, c
 // ============ 可用账号过滤(只读) ============
 
 func (m *Manager) GetAvailableAccountsForChannel(channel string, modelName string) []*Account {
+	return m.GetAvailableAccountsForChannelAndGroup(channel, "", modelName)
+}
+
+// GetAvailableAccountsForChannelAndGroup 是 GetAvailableAccountsForChannel 的组维度扩展:
+// 在 Provider 过滤基础上叠加 GroupID 过滤(Other 号池按组选号)。groupID 为空时退化为原行为,
+// 保持对既有 NVIDIA/Google 族调用方零影响。冷却与可用性口径与 GetAvailableAccountsForChannel 完全一致。
+func (m *Manager) GetAvailableAccountsForChannelAndGroup(channel, groupID string, modelName string) []*Account {
 	m.RLock()
 	defer m.RUnlock()
 
@@ -287,13 +301,18 @@ func (m *Manager) GetAvailableAccountsForChannel(channel string, modelName strin
 		return nil
 	}
 
-	category := m.GetModelCategory(modelName)
+	category := m.GetModelCategoryByProvider(channel, modelName)
 	now := time.Now().UnixNano() / int64(time.Millisecond)
+	gid := strings.ToLower(strings.TrimSpace(groupID))
 
 	var list []*Account
 	for _, a := range m.accounts {
 		accountChannel := a.Provider
 		if accountChannel != channel || !a.Enabled {
+			continue
+		}
+		// Other 号池按 GroupID 细分:groupID 非空时仅选该组账号。groupID 为空时不过滤(向后兼容)。
+		if gid != "" && strings.TrimSpace(a.GroupID) != gid {
 			continue
 		}
 		if a.AccessToken == "" && a.RefreshToken == "" {
@@ -516,7 +535,31 @@ func (m *Manager) SetNvidiaPoolMode(enabled bool) {
 		m.poolMode = false
 		m.projectPoolMode = false
 		m.geminiCliPoolMode = false
+		m.otherPoolMode = false
 		m.activeChannel = "nvidia"
+	}
+	m.Unlock()
+	_ = m.SaveAccounts(false)
+}
+
+// GetOtherPoolMode / SetOtherPoolMode 是 Other 号池的负载均衡总开关,与 NVIDIA 同构互斥。
+// Other 号池内可有多个独立上游组,但总开关只有一个:开启后所有 Other 组账号统一参与轮询,
+// 关闭则仅用每组首个可用账号(单账号模式)。组内具体 LB 算法见 otherLBModes(按 GroupID 维度)。
+func (m *Manager) GetOtherPoolMode() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.otherPoolMode
+}
+
+func (m *Manager) SetOtherPoolMode(enabled bool) {
+	m.Lock()
+	m.otherPoolMode = enabled
+	if enabled {
+		m.poolMode = false
+		m.projectPoolMode = false
+		m.nvidiaPoolMode = false
+		m.geminiCliPoolMode = false
+		m.activeChannel = "other"
 	}
 	m.Unlock()
 	_ = m.SaveAccounts(false)

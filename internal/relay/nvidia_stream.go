@@ -81,6 +81,8 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 			flusher.Flush() // 立即把响应头推给客户端,让其尽早进入 SSE 等待状态
 		}
 		headerWritten = true
+		// 200 头已推给客户端,即首字时刻:触发 TTFT 打点(幂等 sync.Once)。
+		logCtx.FirstByteRec.MarkFirstByte()
 	}
 	liveFW.firstByteHook = firstLiveByteHook
 	liveFW.deferredActive = true // pull 阶段框架帧先进 deferred,等首条实质内容 flush

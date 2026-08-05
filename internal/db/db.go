@@ -85,6 +85,7 @@ func runMigrations(db *sql.DB, dataDir string) error {
 			output_cost REAL NOT NULL DEFAULT 0.0,
 			cached_cost REAL NOT NULL DEFAULT 0.0,
 			duration_ms INTEGER NOT NULL DEFAULT 0,
+			first_byte_ms INTEGER NOT NULL DEFAULT 0,
 			status_code INTEGER NOT NULL DEFAULT 200,
 			method TEXT NOT NULL DEFAULT '',
 			host TEXT NOT NULL DEFAULT '',
@@ -169,6 +170,11 @@ func runMigrations(db *sql.DB, dataDir string) error {
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN session_id TEXT NOT NULL DEFAULT '';`)
 	// family: 协议族标记(""=gemini/claude 直连, "nvidia"=NVIDIA 号池链路), 供按族聚合/过滤。
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN family TEXT NOT NULL DEFAULT '';`)
+	// first_byte_ms: 首字耗时(TTFT, 毫秒), 供 NVIDIA 等链路经 stats.FirstByteRecorder 采集后
+	// 落入 RequestLog.FirstByteMs → 仪表盘读出。置于 family 之后, 与 repo_stats / repo_query 的
+	// SELECT/INSERT 列序一致; 幂等 ALTER 兼容既有库(列已存在时 SQLite 返回 "duplicate column" 错误,
+	// 忽略即可)。旧数据默认 0, 等价于"未采集"。
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN first_byte_ms INTEGER NOT NULL DEFAULT 0;`)
 
 	// --- Versioned Migrations ---
 	migrationVersion := getMigrationVersion(db)

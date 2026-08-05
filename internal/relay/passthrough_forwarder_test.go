@@ -62,17 +62,18 @@ func TestResolveRoutedTarget_CustomRules(t *testing.T) {
 	}
 
 	// 精确规则优先,带 TargetModel 改写。
-	prov, tm, matched := h.resolveRoutedTarget("deepseek-chat")
+	// resolveRoutedTarget 返回 4 值:(targetProvider, targetGroupID, targetModel, matched)。
+	prov, _, tm, matched := h.resolveRoutedTarget("deepseek-chat")
 	if !matched || prov != "deepseek-official" || tm != "deepseek-chat" {
 		t.Errorf("exact rule mismatch: prov=%q tm=%q matched=%v", prov, tm, matched)
 	}
 	// 前缀规则命中,TargetModel 空则原样透传。
-	prov, tm, matched = h.resolveRoutedTarget("deepseek-reasoner")
+	prov, _, tm, matched = h.resolveRoutedTarget("deepseek-reasoner")
 	if !matched || prov != "deepseek" || tm != "deepseek-reasoner" {
 		t.Errorf("prefix rule mismatch: prov=%q tm=%q matched=%v", prov, tm, matched)
 	}
 	// 无规则命中 → matched=false。
-	prov, tm, matched = h.resolveRoutedTarget("gpt-4o")
+	prov, _, tm, matched = h.resolveRoutedTarget("gpt-4o")
 	if matched {
 		t.Errorf("expected no match for gpt-4o, got prov=%q tm=%q", prov, tm)
 	}

@@ -773,9 +773,11 @@ func TestOCR_DowngradeWindow_OutOfRangeMiss_Placeholder(t *testing.T) {
 // (缓存命中写入),随后被推出窗口外,再降级时应复用历史 OCR 文本而非重打上游,且计入 ocrHits。
 // 断言:两轮总触达上游 1 次(仅首轮);第二轮 replaced==1 且块含 OCR 文本;第二轮 ocrHits==1。
 //
-// 关键前提:Claude Code 客户端无状态,每轮逐字重发完整历史——老消息的伴随文本在两轮间字节级
-// 一致,故 promptCtx 维度稳定,缓存键不变,窗外能命中。若人为改动老消息文本(promptCtx 变),
-// 则属"换了提问靶向"场景,按设计应 miss 走占位,不在本契约覆盖范围。
+// 关键前提:Claude Code 客户端无状态,每轮逐字重发完整历史。缓存键现已剥离 promptCtx
+// (image-only 三维:ownerKey|ocrModel|sha256(b64)[:16]),窗外命中不再依赖老消息伴随文本
+// 逐字一致——即便两轮文本不同,只要同图同会话同 OCR 模型即命中复用,省 antigravity 号池配额。
+// OCR 的"靶向分析"由 ocrImageUncached 在 miss 真打 gemini 时用 promptCtx 组 ocrPrompt 承担,
+// 与缓存键解耦。
 func TestOCR_DowngradeWindow_OutOfRangeHit_Reused(t *testing.T) {
 	var ocrHits atomic.Int64
 	ocr := ocrFlashCountingServerV3(t, "历史图 OCR 复用文本 XY", &ocrHits)
@@ -788,10 +790,11 @@ func TestOCR_DowngradeWindow_OutOfRangeHit_Reused(t *testing.T) {
 	h.ocr.cache = newOcrLRUCache(0, 0, 0)
 	sess := &RelaySession{UserID: "u-win2", UserKey: "k1"}
 
-	// 老消息的伴随文本:两轮完全一致(模拟 Claude Code 逐字重发历史),保证 promptCtx 维度稳定。
+	// 老消息的伴随文本:两轮一致(此处保留"逐字重发"模拟,但缓存键已不含 promptCtx,
+	// 故即便两轮文本不同也会命中——该不变量由 TestOCR_PromptCtxChangeDoesNotReOCR 单独锁定)。
 	const oldMsgText = "看这张很早之前的报错图"
 
-	// 第 1 轮:仅 1 条消息含图 → 在窗口内 → miss 真打上游一次,缓存写入(promptCtx=oldMsgText)。
+	// 第 1 轮:仅 1 条消息含图 → 在窗口内 → miss 真打上游一次,缓存写入(键 image-only,不含 promptCtx)。
 	req1 := &AnthropicRequest{Messages: []AnthropicMessage{{
 		Role: "user",
 		Content: []AnthropicContent{
@@ -837,6 +840,68 @@ func TestOCR_DowngradeWindow_OutOfRangeHit_Reused(t *testing.T) {
 	got := req2.Messages[0].Content[0]
 	if got.Type != "text" || !strings.Contains(got.Text, "历史图 OCR 复用文本 XY") {
 		t.Errorf("turn2 out-of-window hit should reuse OCR text, got %+v", got)
+	}
+}
+
+// TestOCR_PromptCtxChangeDoesNotReOCR 锁定"缓存键与 promptCtx 解耦"端到端契约:
+// 第 1 轮在窗口内 miss 真打 gemini 上游一次并写缓存(键 image-only 三维,不含 promptCtx);
+// 第 2 轮同一张图仍在窗口内,但提问文本完全改写("继续"等无实质意图变化的更极端形态),
+// 缓存仍应按图片身份命中 → 不重打 gemini 上游,OcrImage 走 cachedHit=true 分支。
+// 断言:两轮总触达上游仅 1 次;第 2 轮 ocrMisses==0、ocrHits==1;块文本复用首轮 OCR 结果。
+// 对应生产场景:用户发图 → 立刻取消上游(OCR 已完成入库)→ 点"继续"重发历史 → 不再重新 OCR。
+func TestOCR_PromptCtxChangeDoesNotReOCR(t *testing.T) {
+	var ocrHits atomic.Int64
+	ocr := ocrFlashCountingServerV3(t, "首次 OCR 靶向结果", &ocrHits)
+	defer ocr.Close()
+	origAddr := localProxyAddr
+	localProxyAddr = strings.TrimPrefix(ocr.URL, "http://")
+	t.Cleanup(func() { localProxyAddr = origAddr })
+
+	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
+	h.ocr.cache = newOcrLRUCache(0, 0, 0)
+	sess := &RelaySession{UserID: "u-pctx", UserKey: "k1"}
+
+	// 第 1 轮:1 条消息含图 + 提问文本 A → 窗内 miss 真打上游一次,缓存写入(键不含 promptCtx)。
+	req1 := &AnthropicRequest{Messages: []AnthropicMessage{{
+		Role: "user",
+		Content: []AnthropicContent{
+			{Type: "image", Source: &AnthropicImageSource{Type: "base64", MediaType: "image/png", Data: fakeNvidiaImageB64}},
+			{Type: "text", Text: "这张图里报错在第几行"},
+		},
+	}}}
+	r1, _, ocrHits1, ocrMisses1, _ := h.ocr.DowngradeAnthropicImagesToText(req1, sess)
+	if r1 != 1 || ocrHits.Load() != 1 {
+		t.Fatalf("turn1 want replaced=1 upstreamHits=1, got replaced=%d hits=%d", r1, ocrHits.Load())
+	}
+	if ocrMisses1 != 1 || ocrHits1 != 0 {
+		t.Fatalf("turn1 want ocrMisses=1 ocrHits=0, got misses=%d hits=%d", ocrMisses1, ocrHits1)
+	}
+
+	// 第 2 轮:同图同会话,提问文本完全改写("继续"等无实质意图变化的极端形态)。
+	// 缓存键 image-only(不含 promptCtx)→ 命中首轮缓存 → 不重打 gemini 上游。
+	req2 := &AnthropicRequest{Messages: []AnthropicMessage{{
+		Role: "user",
+		Content: []AnthropicContent{
+			{Type: "image", Source: &AnthropicImageSource{Type: "base64", MediaType: "image/png", Data: fakeNvidiaImageB64}},
+			{Type: "text", Text: "继续吧,顺便这张图按钮含义是什么"},
+		},
+	}}}
+	r2, _, ocrHits2, ocrMisses2, _ := h.ocr.DowngradeAnthropicImagesToText(req2, sess)
+	if r2 != 1 {
+		t.Fatalf("turn2 cache hit should reuse text (replaced=1), got %d", r2)
+	}
+	if ocrMisses2 != 0 {
+		t.Errorf("turn2 cache hit should have ocrMisses=0, got %d", ocrMisses2)
+	}
+	if ocrHits2 != 1 {
+		t.Errorf("turn2 cache hit should have ocrHits=1, got %d", ocrHits2)
+	}
+	if ocrHits.Load() != 1 {
+		t.Fatalf("turn2 must NOT hit OCR upstream (cache reuse despite promptCtx change), got %d", ocrHits.Load())
+	}
+	got := req2.Messages[0].Content[0]
+	if got.Type != "text" || !strings.Contains(got.Text, "首次 OCR 靶向结果") {
+		t.Errorf("turn2 should reuse first-turn OCR text, got %+v", got)
 	}
 }
 

@@ -70,6 +70,7 @@ let modalStatus: HTMLElement | null = null;
 let modalCost: HTMLElement | null = null;
 let modalAccount: HTMLElement | null = null;
 let modalAccountWrapper: HTMLElement | null = null;
+let modalFirstByte: HTMLElement | null = null;
 let modalDuration: HTMLElement | null = null;
 let modalJsonArea: HTMLElement | null = null;
 let modalHeaderArea: HTMLElement | null = null;
@@ -242,6 +243,7 @@ interface LogsRowSlot {
     inTokens: HTMLSpanElement;
     outTokens: HTMLSpanElement;
     cost: HTMLTableCellElement;
+    responseTime: HTMLTableCellElement;
     duration: HTMLTableCellElement;
     hitRate: HTMLTableCellElement;
     cacheBadge: HTMLSpanElement;
@@ -304,6 +306,7 @@ function buildLogsRowSlot(): LogsRowSlot {
     tokensCell.appendChild(tokensDiv);
 
     const cost = makeTd('p-3 text-right font-data-mono text-emerald-600 dark:text-emerald-400 font-bold');
+    const responseTime = makeTd('p-3 text-right font-data-mono');
     const duration = makeTd('p-3 text-right font-data-mono');
     const hitRate = makeTd('p-3 text-center font-data-mono');
 
@@ -325,12 +328,13 @@ function buildLogsRowSlot(): LogsRowSlot {
     tr.appendChild(modelCell);
     tr.appendChild(tokensCell);
     tr.appendChild(cost);
+    tr.appendChild(responseTime);
     tr.appendChild(duration);
     tr.appendChild(hitRate);
     tr.appendChild(statusCell);
     tr.appendChild(btnCell);
 
-    return { tr, timestamp, method, host, methodHostCell, path, sessionId, modelName, account, modelCell, nvidiaBadge, inTokens, outTokens, cost, duration, hitRate, cacheBadge, httpCode, viewBtn };
+    return { tr, timestamp, method, host, methodHostCell, path, sessionId, modelName, account, modelCell, nvidiaBadge, inTokens, outTokens, cost, responseTime, duration, hitRate, cacheBadge, httpCode, viewBtn };
 }
 
 function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
@@ -371,6 +375,7 @@ function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
     slot.outTokens.textContent = `${dict.output || '输出'}: ${log.outTokens.toLocaleString()}`;
 
     slot.cost.textContent = `$${(log.cost || 0).toFixed(6)}`;
+    slot.responseTime.textContent = formatDuration(log.firstByteMs);
     slot.duration.textContent = formatDuration(log.durationMs);
 
     const hitRateVal = log.inTokens > 0 ? (log.cachedTokens / log.inTokens * 100).toFixed(1) : '0.0';
@@ -433,7 +438,7 @@ export function renderLogsTable() {
         // Empty state: drop the row pool and show a single placeholder row.
         // (Only on filter transitions / no data, so churn here is acceptable.)
         logsRowSlots.length = 0;
-        logsTableBody.innerHTML = `<tr><td colspan="11" class="p-8 text-center text-outline dark:text-outline-variant italic">${dict.noLogs || '暂无日志'}</td></tr>`;
+        logsTableBody.innerHTML = `<tr><td colspan="12" class="p-8 text-center text-outline dark:text-outline-variant italic">${dict.noLogs || '暂无日志'}</td></tr>`;
         if (valShowingText) {
             valShowingText.textContent = state.currentLanguage === 'zh' ? `共 0 条记录` : `Showing 0 entries`;
         }
@@ -1559,6 +1564,7 @@ export function showModal(log: any) {
         modalCost = document.getElementById('modalCost');
         modalAccount = document.getElementById('modalAccount');
         modalAccountWrapper = document.getElementById('modalAccountWrapper');
+        modalFirstByte = document.getElementById('modalFirstByte');
         modalDuration = document.getElementById('modalDuration');
         modalJsonArea = document.getElementById('modalJsonArea');
         modalHeaderArea = document.getElementById('modalHeaderArea');
@@ -1571,6 +1577,7 @@ export function showModal(log: any) {
     if (modalSession) modalSession.textContent = log.sessionId || '-';
     if (modalModel) modalModel.textContent = log.model || '-';
     if (modalPath) modalPath.textContent = `${log.method || 'POST'} ${log.host || ''}${log.path || ''}`;
+    if (modalFirstByte) modalFirstByte.textContent = formatDuration(log.firstByteMs);
     if (modalDuration) modalDuration.textContent = formatDuration(log.durationMs);
     if (modalCost) modalCost.textContent = `$${(log.cost || 0).toFixed(6)}`;
 

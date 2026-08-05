@@ -96,11 +96,13 @@ func (s *OCRService) logf(format string, args ...interface{}) {
 //   - 第三方号池(Passthrough / Route,DowngradeOpenAIChatImagesToText)
 //
 // 缓存策略(cache + singleflight):
-//   - 键 = UserKey|ocrModel|sha256(b64)[:16] + 可选 promptCtx 维度,按用户、OCR 模型、用户提问三维隔离;
+//   - 键 = ownerKey|ocrModel|sha256(b64)[:16],按会话、OCR 模型二维隔离,**不含提问文本**;
 //   - 命中即返回历史 OCR 文本,跳过 gemini 调用与 ~3s 延迟;
 //   - miss 时 singleflight 合并同图并发为 1 次真上游调用,防缓存击穿;
 //   - OCR 失败也缓存(短 TTL),熔断窗口内不再重打挂的 OCR 服务;
 //   - 切换 ocrModel 后键变化,自动重新 OCR 新模型(配置改了立刻生效)。
+//   - 提问文本(promptCtx)不参与缓存键:同图同会话跨提问复用,省配额;OCR 的"靶向分析"
+//     由 ocrImageUncached 真打 gemini 时用 promptCtx 组 ocrPrompt 承担,与缓存键解耦。
 // nil cache 降级为零缓存(纯走上游),保持旧行为兼容。
 //
 // 返回的 cachedHit 标识本次结果是否来自缓存命中(true=命中即返,未触达上游;
@@ -132,8 +134,9 @@ func (s *OCRService) OcrImage(userSession *RelaySession, b64Data string, mimeTyp
 	ownerKey := ocrOwnerKey(userSession)
 
 	// 命中缓存直接返回,跳过 gemini 调用与 ~3s 延迟(含失败条目短 TTL 熔断)。
+	// 缓存键按 image-only(三维):不含 promptCtx,同图同会话跨提问命中,省配额。
 	if s.cache != nil {
-		key := ocrCacheKey(ownerKey, ocrModel, b64Data, promptCtx)
+		key := ocrCacheKey(ownerKey, ocrModel, b64Data)
 		if e, ok := s.cache.get(key); ok {
 			s.counters.hits.Add(1)
 			return e.text, e.err, true
@@ -142,8 +145,10 @@ func (s *OCRService) OcrImage(userSession *RelaySession, b64Data string, mimeTyp
 	}
 
 	// singleflight:同步相邻并发对同图(同模型)的请求,首调用真打上游,其余阻塞等待结果共享。
-	callKey := ocrCacheKey(ownerKey, ocrModel, b64Data, promptCtx)
+	// callKey 与缓存键同(image-only):同图并发合并为 1 次 OCR,首调用者的 promptCtx 驱动本次上游 prompt。
+	callKey := ocrCacheKey(ownerKey, ocrModel, b64Data)
 	v, callErr, _ := s.inflight.Do(callKey, func() (interface{}, error) {
+		// promptCtx 仍透传给上游调用,保留靶向 OCR 分析方向(缓存键不消费,上游 call 消费)。
 		text, err := s.ocrImageUncached(userSession, b64Data, mimeType, ocrModel, promptCtx)
 		ok := err == nil && strings.TrimSpace(text) != ""
 		if s.cache != nil {
@@ -166,9 +171,9 @@ func (s *OCRService) OcrImage(userSession *RelaySession, b64Data string, mimeTyp
 // 绝不触达 singleflight / gemini 上游,供"最近 N 条消息窗口"之外的图片块复用:
 //   - 命中(图在窗口内 OCR 过且仍驻留 LRU / SQLite)→ 复用历史文本,不烧 antigravity 配额;
 //   - 未命中 → 调用方写 imageNotExtractablePlaceholder 占位文本,绝不重新 OCR。
-// 与 OcrImage 共享 ownerKey(会话级)+ ocrModel + 图指纹 + promptCtx 多维键,
-// 故窗口内 OCR 入缓存的图,被推出窗口后仍可被本方法命中复用。
-func (s *OCRService) OcrImageCacheOnlyLookup(userSession *RelaySession, b64Data string, userPromptText ...string) (string, bool) {
+// 与 OcrImage 共享 ownerKey(会话级)+ ocrModel + 图指纹三维键,**不含 promptCtx**:
+// 窗外图复用历史 OCR 文本时同样按图片身份命中,与当前提问解耦。
+func (s *OCRService) OcrImageCacheOnlyLookup(userSession *RelaySession, b64Data string) (string, bool) {
 	if s == nil || userSession == nil || s.cache == nil {
 		return "", false
 	}
@@ -176,11 +181,7 @@ func (s *OCRService) OcrImageCacheOnlyLookup(userSession *RelaySession, b64Data 
 		return "", false
 	}
 	ocrModel := s.getOcrModel()
-	promptCtx := ""
-	if len(userPromptText) > 0 {
-		promptCtx = strings.TrimSpace(userPromptText[0])
-	}
-	key := ocrCacheKey(ocrOwnerKey(userSession), ocrModel, b64Data, promptCtx)
+	key := ocrCacheKey(ocrOwnerKey(userSession), ocrModel, b64Data)
 	if e, ok := s.cache.get(key); ok && e.ok && strings.TrimSpace(e.text) != "" {
 		// 仅复用成功条目;失败短 TTL 条目不在此复用(让调用方走占位,语义更清晰)。
 		s.counters.hits.Add(1)

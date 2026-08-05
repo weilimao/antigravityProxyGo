@@ -35,6 +35,12 @@ type ModelMappingEntry struct {
 	// TargetProvider 是该模型映射自由绑定的目标路由账号池 Channel ID(如 "nvidia", "deepseek", "google", "gcp" 等)。
 	// 若配置了 TargetProvider, /route/* 路由入口会直接分发至此号池。
 	TargetProvider string `json:"targetProvider,omitempty"`
+	// TargetGroupID 是 Other 号池组内细分标识(如 "openai"/"deepseek")。仅当 TargetProvider=="other" 时生效,
+	// 配合 TargetProvider="other" 把入站 model 路由到 Other 号池的某个具体上游组。非 other 号池留空。
+	TargetGroupID string `json:"targetGroupId,omitempty"`
+	// TargetFormat 是该映射期望上游使用的原生协议("openai"/"anthropic"),仅 Other 号池组需要显式指定,
+	// 供中继转发层决定上游端点与转译方向。留空时由组 Formats 决定(见 account.GetOtherGroupFormats)。
+	TargetFormat string `json:"targetFormat,omitempty"`
 }
 
 // ShouldInjectChatTemplateKwargs 返回该映射项是否允许注入 chat_template_kwargs。
@@ -60,48 +66,48 @@ type ModelRouteRule struct {
 }
 
 type Config struct {
-	DataDirectory   string `json:"dataDirectory"`
-	EnableSystemLog bool   `json:"enableSystemLog"`
-	IsInterceptMode bool   `json:"isInterceptMode"`
-	AutoStart       bool   `json:"autoStart"`
-	SilentStart     bool   `json:"silentStart"`
-	MaxRetries      int    `json:"maxRetries"`
-	MaxRetryDelay   int    `json:"maxRetryDelay"`
-	RelayEnabled    bool   `json:"relayEnabled"`
-	RelayPort       string `json:"relayPort"`
-	RemoteHost      string `json:"remoteHost"`
-	RemotePort      string `json:"remotePort"`
-	RemotePath      string `json:"remotePath"`
-	RemoteKey       string `json:"remoteKey"`
-	RemotePassword       string   `json:"remotePassword"`
-	RemoteEnabled        bool     `json:"remoteEnabled"`
-	RelaySSRFBlock       bool     `json:"relaySSRFBlock"`
-	RelayPortBlock       bool     `json:"relayPortBlock"`
-	RelayDomainFilter    bool     `json:"relayDomainFilter"`
-	RelayDomainWhitelist []string `json:"relayDomainWhitelist"`
+	DataDirectory        string              `json:"dataDirectory"`
+	EnableSystemLog      bool                `json:"enableSystemLog"`
+	IsInterceptMode      bool                `json:"isInterceptMode"`
+	AutoStart            bool                `json:"autoStart"`
+	SilentStart          bool                `json:"silentStart"`
+	MaxRetries           int                 `json:"maxRetries"`
+	MaxRetryDelay        int                 `json:"maxRetryDelay"`
+	RelayEnabled         bool                `json:"relayEnabled"`
+	RelayPort            string              `json:"relayPort"`
+	RemoteHost           string              `json:"remoteHost"`
+	RemotePort           string              `json:"remotePort"`
+	RemotePath           string              `json:"remotePath"`
+	RemoteKey            string              `json:"remoteKey"`
+	RemotePassword       string              `json:"remotePassword"`
+	RemoteEnabled        bool                `json:"remoteEnabled"`
+	RelaySSRFBlock       bool                `json:"relaySSRFBlock"`
+	RelayPortBlock       bool                `json:"relayPortBlock"`
+	RelayDomainFilter    bool                `json:"relayDomainFilter"`
+	RelayDomainWhitelist []string            `json:"relayDomainWhitelist"`
 	RelayModelMapping    []ModelMappingEntry `json:"relayModelMapping"`
 	DeletedModelMappings []string            `json:"deletedModelMappings"`
 	// RelayModelRoutes 是「按模型路由到号池」的规则表,供 /route/* 专属入口按入站 model
 	// 分发到对应 Provider 号池。空表则 /route/* 退化为「交给 nvidia 号池兜底」(向后兼容)。
-	RelayModelRoutes []ModelRouteRule `json:"relayModelRoutes,omitempty"`
-	EnablePacketCapture  bool   `json:"enablePacketCapture"`
-	FallbackProxyPorts   string `json:"fallbackProxyPorts"`
-	CustomSocks5Address  string `json:"customSocks5Address"`
-	CustomSocks5Enabled  bool   `json:"customSocks5Enabled"`
-	CustomSocks5Username string `json:"customSocks5Username"`
-	CustomSocks5Password string `json:"customSocks5Password"`
+	RelayModelRoutes     []ModelRouteRule `json:"relayModelRoutes,omitempty"`
+	EnablePacketCapture  bool             `json:"enablePacketCapture"`
+	FallbackProxyPorts   string           `json:"fallbackProxyPorts"`
+	CustomSocks5Address  string           `json:"customSocks5Address"`
+	CustomSocks5Enabled  bool             `json:"customSocks5Enabled"`
+	CustomSocks5Username string           `json:"customSocks5Username"`
+	CustomSocks5Password string           `json:"customSocks5Password"`
 	// FallbackProxy* 是"NVIDIA 上游蓄流重试耗尽后的兜底出站代理",独立于上方 CustomSocks5(专属全局代理)。
 	// 两者语义界限:CustomSocks5 开启后覆盖一切出站链(系统 IE 代理 + 本地端口探测全绕过);
 	// FallbackProxy 仅在 NVIDIA 链路、直连 5s×5 重试全部耗尽后,切此代理再试 1 轮(单次请求级,不记忆状态)。
 	// 字段为单 URL 区分协议:填 "socks5://host:port" 或 "http://host:port",http/socks5 二选一由 URL scheme 区分,
 	// Username/Password 仅 socks5 或需要鉴权的 http 代理才用。
-	FallbackProxyAddress  string `json:"fallbackProxyAddress"`
-	FallbackProxyEnabled  bool   `json:"fallbackProxyEnabled"`
-	FallbackProxyUsername string `json:"fallbackProxyUsername"`
-	FallbackProxyPassword string `json:"fallbackProxyPassword"`
-	Language             string `json:"language"`
-	MaxRequestBodyMB     int    `json:"maxRequestBodyMB"`
-	RequestTimeout       int    `json:"requestTimeout"`
+	FallbackProxyAddress    string `json:"fallbackProxyAddress"`
+	FallbackProxyEnabled    bool   `json:"fallbackProxyEnabled"`
+	FallbackProxyUsername   string `json:"fallbackProxyUsername"`
+	FallbackProxyPassword   string `json:"fallbackProxyPassword"`
+	Language                string `json:"language"`
+	MaxRequestBodyMB        int    `json:"maxRequestBodyMB"`
+	RequestTimeout          int    `json:"requestTimeout"`
 	EnableCustomCompression bool   `json:"enableCustomCompression"`
 	MaxTokensThreshold      int    `json:"maxTokensThreshold"`
 	CompressionStrategy     string `json:"compressionStrategy"`
@@ -113,10 +119,10 @@ type Config struct {
 	// 空字符串走默认(见 GetOcrModel),不阻断主请求。
 	OcrModel string `json:"ocrModel"`
 	// NVIDIA 号池 ResourceExhausted 时的服务端就地压缩参数（公共 chatcompress 引擎）。
-	NvidiaCompressEnabled        bool `json:"nvidiaCompressEnabled"`
-	NvidiaCompressThresholdTokens int  `json:"nvidiaCompressThresholdTokens"`
-	NvidiaCompressKeepToolResults int  `json:"nvidiaCompressKeepToolResults"`
-	PromptPrefix            string `json:"promptPrefix"`
+	NvidiaCompressEnabled         bool   `json:"nvidiaCompressEnabled"`
+	NvidiaCompressThresholdTokens int    `json:"nvidiaCompressThresholdTokens"`
+	NvidiaCompressKeepToolResults int    `json:"nvidiaCompressKeepToolResults"`
+	PromptPrefix                  string `json:"promptPrefix"`
 	CustomModelOverrideEnabled    bool   `json:"customModelOverrideEnabled"`
 	CustomModelOverrideID         string `json:"customModelOverrideID"`
 	// BypassOverridePrefixes 是全局模型覆写的"按前缀绕过"名单:客户端原始模型名
@@ -124,16 +130,16 @@ type Config struct {
 	// 原样透传。默认 ["tab"] —— Tab 补全模型(tab_flash_lite_preview 等)本属代码补全通道,
 	// 走推理上游会触发 400 INVALID_ARGUMENT,故默认放行。
 	// 与思考链覆写的 isTabModel(handler_attempt_routing.go:171) 同源思路,但更通用可配。
-	BypassOverridePrefixes []string `json:"bypassOverridePrefixes"`
-	CustomThinkingOverrideEnabled bool   `json:"customThinkingOverrideEnabled"`
-	CustomThinkingSupports        bool   `json:"customThinkingSupports"`
-	CustomThinkingBudget          int    `json:"customThinkingBudget"`
-	CustomThinkingMinBudget       int    `json:"customThinkingMinBudget"`
-	CustomMaxOutputTokens         int    `json:"customMaxOutputTokens"`
-	ReasoningAsText               bool   `json:"reasoningAsText"`
-	EnableThinkingMode            bool   `json:"enableThinkingMode"`
-	EnableDebuggerMode            bool   `json:"enableDebuggerMode"`
-	DebuggerLogPath               string `json:"debuggerLogPath"`
+	BypassOverridePrefixes        []string `json:"bypassOverridePrefixes"`
+	CustomThinkingOverrideEnabled bool     `json:"customThinkingOverrideEnabled"`
+	CustomThinkingSupports        bool     `json:"customThinkingSupports"`
+	CustomThinkingBudget          int      `json:"customThinkingBudget"`
+	CustomThinkingMinBudget       int      `json:"customThinkingMinBudget"`
+	CustomMaxOutputTokens         int      `json:"customMaxOutputTokens"`
+	ReasoningAsText               bool     `json:"reasoningAsText"`
+	EnableThinkingMode            bool     `json:"enableThinkingMode"`
+	EnableDebuggerMode            bool     `json:"enableDebuggerMode"`
+	DebuggerLogPath               string   `json:"debuggerLogPath"`
 	// NvidiaPreferredModels 是全局级"NVIDIA 专属模型清单",所有 NVIDIA 账号共用。
 	// 配置后,前端"获取模型"直接返回该清单(不请求远端);为空时才请求远端 /v1/models。
 	NvidiaPreferredModels []string `json:"nvidiaPreferredModels"`
@@ -217,16 +223,16 @@ type SessionOptimizationConfig struct {
 	SummaryModel            string `json:"summaryModel"`
 	KeepRecentTurns         int    `json:"keepRecentTurns"`
 	// NVIDIA 号池服务端就地压缩参数（公共 chatcompress 引擎）。
-	NvidiaCompressEnabled        bool `json:"nvidiaCompressEnabled"`
+	NvidiaCompressEnabled         bool `json:"nvidiaCompressEnabled"`
 	NvidiaCompressThresholdTokens int  `json:"nvidiaCompressThresholdTokens"`
 	NvidiaCompressKeepToolResults int  `json:"nvidiaCompressKeepToolResults"`
 }
 
 // ChatCompressDefaults 集中暴露 chatcompress 引擎的默认值,供 relay 包 settings 缺字段时兜底。
 const (
-	ChatCompressDefaultEnabled    = true
-	ChatCompressDefaultThreshold  = 80000
-	ChatCompressDefaultKeepN      = 4
+	ChatCompressDefaultEnabled   = true
+	ChatCompressDefaultThreshold = 80000
+	ChatCompressDefaultKeepN     = 4
 )
 
 type ManagerInterface interface {

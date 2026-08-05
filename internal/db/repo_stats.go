@@ -24,6 +24,7 @@ type RequestLog struct {
 	OutputCost   float64 `json:"output_cost"`
 	CachedCost   float64 `json:"cached_cost"`
 	DurationMs   int64   `json:"duration_ms"`
+	FirstByteMs  int64   `json:"first_byte_ms"`
 	StatusCode   int     `json:"status_code"`
 	Method       string  `json:"method"`
 	Host         string  `json:"host"`
@@ -43,14 +44,14 @@ func InsertRequestLog(log *RequestLog) error {
 	query := `
 		INSERT INTO request_logs (
 			server_log_id, req_id, timestamp, mode, user_id, model_name,
-			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, status_code,
+			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, first_byte_ms, status_code,
 			method, host, path, session_id, family
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	res, err := GlobalDB.Exec(query,
 		log.ServerLogID, log.ReqID, log.Timestamp, log.Mode, log.UserID, log.ModelName,
-		log.InTokens, log.OutTokens, log.CachedTokens, log.Cost, log.InputCost, log.OutputCost, log.CachedCost, log.DurationMs, log.StatusCode,
+		log.InTokens, log.OutTokens, log.CachedTokens, log.Cost, log.InputCost, log.OutputCost, log.CachedCost, log.DurationMs, log.FirstByteMs, log.StatusCode,
 		log.Method, log.Host, log.Path, log.SessionID, log.Family,
 	)
 	if err != nil {
@@ -85,7 +86,7 @@ func GetRequestLogsSince(userID, mode string, lastID int64, limit int) ([]*Reque
 	query := `
 		SELECT
 			id, server_log_id, req_id, timestamp, mode, user_id, model_name,
-			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, status_code,
+			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, first_byte_ms, status_code,
 			method, host, path, session_id, family
 		FROM request_logs
 		WHERE user_id = ? AND mode = ? AND id > ?
@@ -104,7 +105,7 @@ func GetRequestLogsSince(userID, mode string, lastID int64, limit int) ([]*Reque
 		var l RequestLog
 		if err := rows.Scan(
 			&l.ID, &l.ServerLogID, &l.ReqID, &l.Timestamp, &l.Mode, &l.UserID, &l.ModelName,
-			&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost, &l.DurationMs, &l.StatusCode,
+			&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost, &l.DurationMs, &l.FirstByteMs, &l.StatusCode,
 			&l.Method, &l.Host, &l.Path, &l.SessionID, &l.Family,
 		); err != nil {
 			return nil, err

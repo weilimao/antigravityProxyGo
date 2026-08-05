@@ -169,6 +169,9 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 						clientDisconnected = true
 						break
 					}
+					// 真实业务首帧写回成功：触发 TTFT 打点(幂等 sync.Once, 首字节即记录,
+					// 心跳帧不经过本分支故不污染)。与 helpers.go 落日志侧 FirstByteMs 对齐。
+					sc.firstByteRec.MarkFirstByte()
 					// 仅在未超出 1MB 上限时追踪 sentBytes，避免流式传输内存无限增长
 					const maxSentBytesTrack = 1 * 1024 * 1024 // 1MB
 					if len(sentBytes) < maxSentBytesTrack {
@@ -235,6 +238,8 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 			// 重试循环见 err 非 sentinel -> 直连兜底或 429,逐行等价原行为。
 			return forwardOutcome{status: resp.StatusCode, headers: nil, body: nil, streamed: false, err: errRead, finalized: true}
 		}
+		// 非流式:读完即写回,整体落盘时刻即为首字时刻(无流式 SSE 分帧语义),触发 TTFT 打点。
+		sc.firstByteRec.MarkFirstByte()
 	}
 	// 流式成功正常 EOF 或非流式读取完成:不 finalized,交 classify 继续(对应原 L1218 落条到 L1234)。
 	return forwardOutcome{

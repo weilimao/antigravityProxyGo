@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/stats"
 	"net/http"
 	"time"
 )
@@ -54,6 +55,7 @@ type serveContext struct {
 
 	// setup 阶段写入,各阶段只读(setup 后不再变)
 	startTime     time.Time
+	firstByteRec  *stats.FirstByteRecorder
 	relayUserID   string
 	relayAPIKeyID string
 	targetHost    string // 原始 host —— 路由只改 routeOutcome.targetHost,不改这个
@@ -103,6 +105,7 @@ func (sc *serveContext) logRequestToTracker(statusCode int, errDetail string) {
 		sc.sessionKey,
 		sc.startTime,
 		sc.targetHost,
+		sc.firstByteRec,
 	)
 }
 

@@ -19,7 +19,7 @@ func TestMatchModelPattern(t *testing.T) {
 		{"nvidia/*", "nvidia/llama-3.1-nemotron-70b", true},
 		{"nvidia/*", "deepseek-chat", false},
 		{"deepseek-chat", "deepseek-chat", true},
-		{"DeepSeek-Chat", "deepseek-chat", true},   // 大小写不敏感精确
+		{"DeepSeek-Chat", "deepseek-chat", true}, // 大小写不敏感精确
 		{"deepseek-chat", "deepseek-chat-v2", false},
 		{"regexp:^ds-.*", "ds-reasoner", true},
 		{"regexp:^ds-.*", "deepseek-chat", false},
@@ -75,15 +75,16 @@ func TestResolveRoutedTarget_TargetModelPassthrough(t *testing.T) {
 	// settingsMgr 为 nil → resolveRoutedTarget 走默认规则表(GetDefaultModelRoutes)。
 	// 默认规则: nvidia/* -> nvidia; * -> nvidia。无 deepseek 规则 → 全部命中 nvidia。
 	// 这里只验证「命中即返回规则表指定 provider、TargetModel 空则原样透传」的契约。
+	// resolveRoutedTarget 返回 4 值:(targetProvider, targetGroupID, targetModel, matched)。
 
 	// nvidia/* 命中:TargetModel 为空 → 透传入站 model。
-	provider, tm, matched := h.resolveRoutedTarget("nvidia/llama-3.1-nemotron-70b")
+	provider, _, tm, matched := h.resolveRoutedTarget("nvidia/llama-3.1-nemotron-70b")
 	if !matched || provider != "nvidia" || tm != "nvidia/llama-3.1-nemotron-70b" {
 		t.Errorf("nvidia/* passthrough mismatch: provider=%q tm=%q matched=%v", provider, tm, matched)
 	}
 
 	// 兜底 "*" 命中。
-	provider, tm, matched = h.resolveRoutedTarget("gpt-4o")
+	provider, _, tm, matched = h.resolveRoutedTarget("gpt-4o")
 	if !matched || provider != "nvidia" || tm != "gpt-4o" {
 		t.Errorf("fallback mismatch: provider=%q tm=%q matched=%v", provider, tm, matched)
 	}
@@ -116,7 +117,7 @@ func TestResolveRoutedTarget_WithModelMappingTargetProvider(t *testing.T) {
 		},
 	}
 
-	provider, tm, matched := h.resolveRoutedTarget("my-custom-ds")
+	provider, _, tm, matched := h.resolveRoutedTarget("my-custom-ds")
 	if !matched || provider != "deepseek" || tm != "deepseek-chat" {
 		t.Fatalf("expected deepseek / deepseek-chat for my-custom-ds, got provider=%q tm=%q matched=%v", provider, tm, matched)
 	}

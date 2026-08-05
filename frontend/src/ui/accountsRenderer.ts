@@ -249,6 +249,16 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
         renderNvidiaAccountQuota(containerEl, acc, isZH, dict);
         return;
     }
+    // Other 号池:配额语义不适用(自定义多上游组),显示无额度限制提示,不画假进度条。
+    if (acc && acc.provider === 'other') {
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-purple-500/10 dark:bg-purple-500/5 border border-purple-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse"></span>
+                <span class="text-[10px] font-medium text-purple-600 dark:text-purple-300">Other 自定义上游 (组内多账号轮换)，无统一配额</span>
+            </div>
+        `;
+        return;
+    }
     if (acc && acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli') {
         containerEl.innerHTML = `
             <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
@@ -392,6 +402,16 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
 
     // 当前账号对象，提前取用以判断 NVIDIA 冷却短路（与下方 accForProbe 同源）。
     const accForProbe0 = state.currentAccountsList?.find(a => a.id === accountId);
+    if (accForProbe0 && accForProbe0.provider === 'other') {
+        // Other 号池:无配额端点,直接走无统一配额气泡渲染,不发 quota:fetch 探活。
+        const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
+        if (activeContainer) renderQuotaBars(activeContainer, [], accForProbe0.cooldowns || cooldowns);
+        if (refreshBtn) {
+            const icon = refreshBtn.querySelector('.material-symbols-outlined') || refreshBtn;
+            if (icon) icon.classList.remove('animate-spin');
+        }
+        return;
+    }
     if (accForProbe0 && accForProbe0.provider === 'nvidia') {
         const now = Date.now();
         const cdNv = accForProbe0.cooldowns && typeof accForProbe0.cooldowns.nvidia === 'number'
@@ -609,10 +629,12 @@ export function renderAccounts(accounts: any[]) {
         }
         isCooling = coolingCategories.length > 0;
 
-        // NVIDIA 只有一个冷却族 'nvidia'，单族冷却即应判为整体冷静，使头部徽标走琥珀分支。
-        // 其他 provider 维持原双族聚合判定不变。
+        // NVIDIA / Other 号池各自只有一个冷却族('nvidia'/'other'),单族冷却即应判为整体冷静,
+        // 使头部徽标走琥珀分支。GCP/Antigravity 维持原双族聚合判定不变。
         const isNvidiaAcc = acc.provider === 'nvidia';
-        const isOverallCooling = isCooling && (isNvidiaAcc
+        const isOtherAcc = acc.provider === 'other';
+        const singleCategoryCooling = isNvidiaAcc || isOtherAcc;
+        const isOverallCooling = isCooling && (singleCategoryCooling
             ? coolingCategories.length >= 1
             : (coolingCategories.includes('all') || (coolingCategories.length === 2)));
 
@@ -659,9 +681,22 @@ export function renderAccounts(accounts: any[]) {
                 ? '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 ml-2 mt-0.5 self-center">Antigravity</span>'
                 : (acc.provider === 'gemini-cli'
                     ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Gemini CLI</span>'
-                    : (acc.provider === 'nvidia' ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 dark:text-amber-400 text-[9px] font-bold border border-amber-500/20 ml-2 mt-0.5 self-center">NVIDIA</span>' : ''));
+                    : (acc.provider === 'nvidia' ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 dark:text-amber-400 text-[9px] font-bold border border-amber-500/20 ml-2 mt-0.5 self-center">NVIDIA</span>'
+                    : (acc.provider === 'other' ? '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center">Other</span>' : '')));
+            let otherExtraBadges = '';
+            if (acc.provider === 'other') {
+                const groupName = acc.groupName || acc.groupId || '';
+                if (groupName) {
+                    otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-purple-500/5 text-purple-500/90 dark:text-purple-300/90 text-[9px] font-bold border border-purple-500/10 ml-1 mt-0.5 self-center" title="组: ${escapeHtml(groupName)}">${escapeHtml(groupName)}</span>`;
+                }
+                if (Array.isArray(acc.formats) && acc.formats.length > 0) {
+                    const fmtLabels = acc.formats.map((f: string) => f === 'anthropic' ? 'A' : (f === 'openai' ? 'O' : f.charAt(0).toUpperCase())).join('/');
+                    const fmtFull = acc.formats.join(', ');
+                    otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-1 mt-0.5 self-center" title="协议: ${escapeHtml(fmtFull)}">${fmtLabels}</span>`;
+                }
+            }
 
-            const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.provider !== 'nvidia' && acc.projectId)
+            const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.provider !== 'nvidia' && acc.provider !== 'other' && acc.projectId)
                 ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center">Project</span>'
                 : '';
 
@@ -692,7 +727,7 @@ export function renderAccounts(accounts: any[]) {
             info.innerHTML = `
                 <div class="flex items-center">
                     <span class="text-[13px] font-bold text-on-surface dark:text-white truncate" title="${acc.email}">${acc.email}</span>
-                    ${providerBadge}
+                    ${providerBadge}${otherExtraBadges}
                     ${projectBadge}
                     ${tierBadge}
                 </div>
@@ -840,6 +875,8 @@ export function renderAccounts(accounts: any[]) {
                 const enabled = e.target.checked;
                 if (acc.provider === 'nvidia') {
                     ipcRenderer.send('nvidia:toggle-enabled', acc.id, enabled);
+                } else if (acc.provider === 'other') {
+                    ipcRenderer.send('other:toggle-enabled', acc.id, enabled);
                 } else {
                     ipcRenderer.send('accounts:toggle-enabled', acc.id, enabled);
                 }
@@ -884,6 +921,8 @@ export function renderAccounts(accounts: any[]) {
                 if (await $confirm((dict.removeAccountConfirm || '确定要移除账号 {email} 吗？').replace('{email}', acc.email))) {
                     if (acc.provider === 'nvidia') {
                         ipcRenderer.send('nvidia:remove', acc.id);
+                    } else if (acc.provider === 'other') {
+                        ipcRenderer.send('other:remove', acc.id);
                     } else {
                         ipcRenderer.send('accounts:remove', acc.id);
                     }
@@ -908,9 +947,22 @@ export function renderAccounts(accounts: any[]) {
                     ? '<span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold border border-primary/20 ml-2 mt-0.5 self-center">Antigravity</span>'
                     : (acc.provider === 'gemini-cli'
                         ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center">Gemini CLI</span>'
-                        : '');
+                        : (acc.provider === 'nvidia' ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 dark:text-amber-400 text-[9px] font-bold border border-amber-500/20 ml-2 mt-0.5 self-center">NVIDIA</span>'
+                        : (acc.provider === 'other' ? '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center">Other</span>' : '')));
+                let otherExtraBadges = '';
+                if (acc.provider === 'other') {
+                    const groupName = acc.groupName || acc.groupId || '';
+                    if (groupName) {
+                        otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-purple-500/5 text-purple-500/90 dark:text-purple-300/90 text-[9px] font-bold border border-purple-500/10 ml-1 mt-0.5 self-center" title="组: ${escapeHtml(groupName)}">${escapeHtml(groupName)}</span>`;
+                    }
+                    if (Array.isArray(acc.formats) && acc.formats.length > 0) {
+                        const fmtLabels = acc.formats.map((f: string) => f === 'anthropic' ? 'A' : (f === 'openai' ? 'O' : f.charAt(0).toUpperCase())).join('/');
+                        const fmtFull = acc.formats.join(', ');
+                        otherExtraBadges += `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-1 mt-0.5 self-center" title="协议: ${escapeHtml(fmtFull)}">${fmtLabels}</span>`;
+                    }
+                }
 
-                const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.projectId)
+                const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.provider !== 'nvidia' && acc.provider !== 'other' && acc.projectId)
                     ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center">Project</span>'
                     : '';
 
@@ -941,7 +993,7 @@ export function renderAccounts(accounts: any[]) {
                 infoHeader.innerHTML = `
                     <div class="flex items-center">
                         <span class="text-[13px] font-bold text-on-surface dark:text-white truncate" title="${acc.email}">${acc.email}</span>
-                        ${providerBadge}
+                        ${providerBadge}${otherExtraBadges}
                         ${projectBadge}
                         ${tierBadge}
                     </div>
@@ -1137,8 +1189,8 @@ export function updateAggregateQuotaUI() {
         return;
     }
     
-    // 第二优先级：如果没有开远程，且（没开负载均衡，或当前账户列表为空，或处于项目通道/Nvidia通道），则隐藏面板
-    if (!isRemote && (!isPool || !state.currentAccountsList || state.currentAccountsList.length === 0 || state.currentActiveChannel === 'project' || state.currentActiveChannel === 'nvidia')) {
+    // 第二优先级：如果没有开远程，且（没开负载均衡，或当前账户列表为空，或处于 project/nvidia/other 等无统一配额的通道），则隐藏面板
+    if (!isRemote && (!isPool || !state.currentAccountsList || state.currentAccountsList.length === 0 || state.currentActiveChannel === 'project' || state.currentActiveChannel === 'nvidia' || state.currentActiveChannel === 'other')) {
         panel.classList.add('hidden');
         panel.classList.remove('flex');
         return;

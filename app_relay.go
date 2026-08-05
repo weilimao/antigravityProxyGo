@@ -332,7 +332,7 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 			return marshalResponse([]interface{}{})
 		}
 		return marshalResponse(a.relayPackageMgr.GetPackages())
-		
+
 	case "relay:save-package":
 		if a.relayPackageMgr == nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": "not initialized"})
@@ -354,7 +354,7 @@ func (a *App) handleRelayIPC(channel string, args []interface{}) (string, bool, 
 			}
 		}
 		return marshalResponse(map[string]interface{}{"success": true})
-		
+
 	case "relay:delete-package":
 		if a.relayPackageMgr == nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": "not initialized"})
@@ -961,8 +961,9 @@ func (a *App) fetchChannelAvailableModels(channel string) ([]string, error) {
 		return nil, fmt.Errorf("号池 [%s] 下暂无已启用的有效账号，请先在【账号池】中添加该号池账号", channel)
 	}
 
-	// 1. 如果是 OpenAI 兼容第三方号池 (NVIDIA, DeepSeek, Qwen, Anthropic 等)
-	if ch == "nvidia" || ch == "deepseek" || ch == "qwen" || ch == "anthropic" || ch == "moonshot" || activeAcc.Provider == "nvidia" {
+	// 1. 如果是 OpenAI 兼容第三方号池 (NVIDIA, DeepSeek, Qwen, Anthropic, Moonshot, Other 自定义组等)
+	// Other 号池的 Anthropic 格式组也统一打上游 /v1/models;上游不支持时返回错误,前端手填兜底(无预置清单)。
+	if ch == "nvidia" || ch == "deepseek" || ch == "qwen" || ch == "anthropic" || ch == "moonshot" || ch == "other" || activeAcc.Provider == "nvidia" {
 		baseURL := activeAcc.BaseURL
 		apiKey := activeAcc.GetAccessToken()
 		if baseURL == "" && ch == "nvidia" {

@@ -23,21 +23,21 @@ type ModelStats struct {
 }
 
 type GlobalStats struct {
-	TotalRequests     int                    `json:"totalRequests"`
-	TotalInputTokens  int                    `json:"totalInputTokens"`
-	TotalOutputTokens int                    `json:"totalOutputTokens"`
-	TotalCachedTokens int                     `json:"totalCachedTokens"`
+	TotalRequests     int `json:"totalRequests"`
+	TotalInputTokens  int `json:"totalInputTokens"`
+	TotalOutputTokens int `json:"totalOutputTokens"`
+	TotalCachedTokens int `json:"totalCachedTokens"`
 	// TotalCacheEligibleInputTokens 是“缓存命中率”分母专用累加器: 仅在 TrackRequest
 	// (gemini/claude 直连链路, 上游响应携带真实 cachedTokens) 时累加 inputTokens,
 	// 刻意不含 TrackRequestForModel 走的 NVIDIA 号池链路——NVIDIA 上游(OpenAI Chat 协议)
 	// 无 cache 概念, cachedTokens 恒为 0, 若其 input 计入分母会永久稀释命中率。
 	// TotalInputTokens(口径不变, 含 NVIDIA) 仍用于总 Token / 成本 / 模型表 / 综合趋势,
 	// 二者各司其职: 前者是命中率分母, 后者是“含 NVIDIA 的全部输入”分母。
-	TotalCacheEligibleInputTokens int          `json:"totalCacheEligibleInputTokens"`
-	TotalCost         float64                `json:"totalCost"`
-	TotalRetries      int                    `json:"totalRetries"`
-	TotalErrors       int                    `json:"totalErrors"`
-	Models            map[string]*ModelStats `json:"models"`
+	TotalCacheEligibleInputTokens int                    `json:"totalCacheEligibleInputTokens"`
+	TotalCost                     float64                `json:"totalCost"`
+	TotalRetries                  int                    `json:"totalRetries"`
+	TotalErrors                   int                    `json:"totalErrors"`
+	Models                        map[string]*ModelStats `json:"models"`
 }
 
 type HourlyTrend struct {
@@ -70,11 +70,12 @@ type RequestLog struct {
 	RequestHeaders interface{} `json:"requestHeaders"`
 	SessionID      string      `json:"sessionId"`
 	DurationMs     int64       `json:"durationMs"`
+	FirstByteMs    int64       `json:"firstByteMs"`
 	// Family 标记本次请求所属的协议族,用于与「NVIDIA 号池」等专属链路做逻辑隔离。
 	// gemini/claude 直连链路默认 ""(空),NVIDIA 号池链路记 "nvidia"。
 	// 前端可据此为 NVIDIA 行渲染专属 badge/筛选,既可合并入主列表又便于按族区分,
 	// 不污染 NVIDIA 专用趋势桶(nvidiaTrends)与综合趋势桶(trends)的物理隔离语义。
-	Family         string      `json:"family"`
+	Family string `json:"family"`
 }
 
 // RequestLogLite is the scalar-only projection of RequestLog sent on the
@@ -100,9 +101,12 @@ type RequestLogLite struct {
 	Account      string  `json:"account"`
 	SessionID    string  `json:"sessionId"`
 	DurationMs   int64   `json:"durationMs"`
+	// FirstByteMs 为首字响应延迟(TTFT, 毫秒), 随轻量投影下行到 IPC 热路径,
+	// 供前端展示首字延迟指标。未触发 MarkFirstByte() 时由 durationMs 兜底, 详见 ttft.go。
+	FirstByteMs int64 `json:"firstByteMs"`
 	// Family 与 RequestLog.Family 同义, 轻量投影随之下行到 IPC 热路径,
 	// 供前端按族渲染 badge/筛选, 不携带 requestBody/requestHeaders(按需经 GetRequestDetails 拉取)。
-	Family       string  `json:"family"`
+	Family string `json:"family"`
 }
 
 func toRequestLogLite(r *RequestLog) RequestLogLite {
@@ -122,30 +126,31 @@ func toRequestLogLite(r *RequestLog) RequestLogLite {
 		Account:      r.Account,
 		SessionID:    r.SessionID,
 		DurationMs:   r.DurationMs,
+		FirstByteMs:  r.FirstByteMs,
 		Family:       r.Family,
 	}
 }
 
 type StatsData struct {
-	Stats         GlobalStats    `json:"stats"`
-	Trends        []*HourlyTrend `json:"trends"`
-	NvidiaTrends  []*HourlyTrend `json:"nvidiaTrends,omitempty"`
-	Requests      []*RequestLog  `json:"requests"`
+	Stats        GlobalStats    `json:"stats"`
+	Trends       []*HourlyTrend `json:"trends"`
+	NvidiaTrends []*HourlyTrend `json:"nvidiaTrends,omitempty"`
+	Requests     []*RequestLog  `json:"requests"`
 }
 
 type Tracker struct {
 	sync.RWMutex
-	persistPath    string
-	stats          GlobalStats
-	trends         []*HourlyTrend
+	persistPath string
+	stats       GlobalStats
+	trends      []*HourlyTrend
 	// nvidiaTrends 是英伟达号池专用趋势桶, 与 trends (综合/全局桶) 完全隔离:
 	// 由 TrackNvidiaRequest 累加, 不进 trends, 反之亦然。前端「使用趋势」的
 	// 「NVIDIA」Tab 消费此序列, 「综合趋势」Tab 仍消费 trends, 两者互不污染。
-	nvidiaTrends   []*HourlyTrend
-	requests       []*RequestLog
-	saveTimeout    *time.Timer
+	nvidiaTrends    []*HourlyTrend
+	requests        []*RequestLog
+	saveTimeout     *time.Timer
 	saveTimeoutLock sync.Mutex
-	pricingMgr     *pricing.Manager
+	pricingMgr      *pricing.Manager
 	onPayloadUpdate func()
 }
 
@@ -372,6 +377,18 @@ func (t *Tracker) GetRequestLogCount() int {
 	t.RLock()
 	defer t.RUnlock()
 	return len(t.requests)
+}
+
+// GetRecentRequestFirstByteMs 轻量级读取最近一条内存请求日志的 FirstByteMs, 供单测端到端
+// 断言 TTFT 打点链路(FirstByteRecorder → RequestLog.FirstByteMs)真实闭环而非恒 0。
+// 无日志时返回 -1。读锁内取值, 不回切片别名。
+func (t *Tracker) GetRecentRequestFirstByteMs() int64 {
+	t.RLock()
+	defer t.RUnlock()
+	if len(t.requests) == 0 {
+		return -1
+	}
+	return t.requests[len(t.requests)-1].FirstByteMs
 }
 
 // GetNvidiaTrends 轻量级读取 NVIDIA 号池专用趋势桶的深拷贝, 供 app.go 远程中继分支
@@ -623,15 +640,15 @@ func (t *Tracker) GetPayload(usagePayload interface{}) map[string]interface{} {
 	}
 
 	statsCopy := GlobalStats{
-		TotalRequests:                t.stats.TotalRequests,
-		TotalInputTokens:             t.stats.TotalInputTokens,
-		TotalOutputTokens:            t.stats.TotalOutputTokens,
-		TotalCachedTokens:            t.stats.TotalCachedTokens,
+		TotalRequests:                 t.stats.TotalRequests,
+		TotalInputTokens:              t.stats.TotalInputTokens,
+		TotalOutputTokens:             t.stats.TotalOutputTokens,
+		TotalCachedTokens:             t.stats.TotalCachedTokens,
 		TotalCacheEligibleInputTokens: t.stats.TotalCacheEligibleInputTokens,
-		TotalCost:                    t.stats.TotalCost,
-		TotalRetries:                 t.stats.TotalRetries,
-		TotalErrors:                  t.stats.TotalErrors,
-		Models:                       modelsCopy,
+		TotalCost:                     t.stats.TotalCost,
+		TotalRetries:                  t.stats.TotalRetries,
+		TotalErrors:                   t.stats.TotalErrors,
+		Models:                        modelsCopy,
 	}
 
 	trendsCopy := make([]*HourlyTrend, len(t.trends))
@@ -699,15 +716,15 @@ func (t *Tracker) GetPayloadSimplified(usagePayload interface{}) map[string]inte
 	}
 
 	statsCopy := GlobalStats{
-		TotalRequests:                t.stats.TotalRequests,
-		TotalInputTokens:             t.stats.TotalInputTokens,
-		TotalOutputTokens:            t.stats.TotalOutputTokens,
-		TotalCachedTokens:            t.stats.TotalCachedTokens,
+		TotalRequests:                 t.stats.TotalRequests,
+		TotalInputTokens:              t.stats.TotalInputTokens,
+		TotalOutputTokens:             t.stats.TotalOutputTokens,
+		TotalCachedTokens:             t.stats.TotalCachedTokens,
 		TotalCacheEligibleInputTokens: t.stats.TotalCacheEligibleInputTokens,
-		TotalCost:                    t.stats.TotalCost,
-		TotalRetries:                 t.stats.TotalRetries,
-		TotalErrors:                  t.stats.TotalErrors,
-		Models:                       modelsCopy,
+		TotalCost:                     t.stats.TotalCost,
+		TotalRetries:                  t.stats.TotalRetries,
+		TotalErrors:                   t.stats.TotalErrors,
+		Models:                        modelsCopy,
 	}
 
 	requestsCopy := make([]RequestLogLite, len(t.requests))
@@ -773,15 +790,15 @@ func (t *Tracker) SaveToDisk() {
 	// Deep-copy all mutable slices while holding the read lock so that
 	// json.Marshal (which uses reflection) never races with concurrent writes.
 	statsCopy := GlobalStats{
-		TotalRequests:                t.stats.TotalRequests,
-		TotalInputTokens:             t.stats.TotalInputTokens,
-		TotalOutputTokens:            t.stats.TotalOutputTokens,
-		TotalCachedTokens:            t.stats.TotalCachedTokens,
+		TotalRequests:                 t.stats.TotalRequests,
+		TotalInputTokens:              t.stats.TotalInputTokens,
+		TotalOutputTokens:             t.stats.TotalOutputTokens,
+		TotalCachedTokens:             t.stats.TotalCachedTokens,
 		TotalCacheEligibleInputTokens: t.stats.TotalCacheEligibleInputTokens,
-		TotalCost:                    t.stats.TotalCost,
-		TotalRetries:                 t.stats.TotalRetries,
-		TotalErrors:                  t.stats.TotalErrors,
-		Models:                       make(map[string]*ModelStats, len(t.stats.Models)),
+		TotalCost:                     t.stats.TotalCost,
+		TotalRetries:                  t.stats.TotalRetries,
+		TotalErrors:                   t.stats.TotalErrors,
+		Models:                        make(map[string]*ModelStats, len(t.stats.Models)),
 	}
 	for k, v := range t.stats.Models {
 		ms := *v // value copy, not pointer

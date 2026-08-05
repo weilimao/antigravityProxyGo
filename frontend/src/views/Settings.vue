@@ -800,6 +800,8 @@
                     <span>获取号池模型</span>
                 </button>
                 <span id="lblFetchedModelsCount" class="text-[11px] text-primary font-medium hidden"></span>
+                <!-- Other 号池多组获取按钮容器:切到 Other Tab 时由 relayController 动态渲染按组按钮,默认隐藏 -->
+                <div id="otherGroupFetchContainer" class="hidden flex flex-wrap items-center gap-2 ml-1"></div>
             </div>
             <div class="flex items-center gap-2">
                 <button id="btnDeleteCurrentTab" class="text-red-500 hover:text-red-700 text-[12px] font-medium flex items-center gap-1 transition-colors cursor-pointer hidden" onclick="window._relayDeleteCurrentTab()">

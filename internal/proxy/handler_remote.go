@@ -73,6 +73,7 @@ func (h *ProxyHandler) ResetRemoteClient() {
 // forwardThroughRemote 处理客户端模式下的 HTTP 请求路由，将请求在 TLS 层上中继至远端服务器并执行流式转发与抓包
 func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Request, bodyBytes []byte, targetHost, targetPath string, rr RemoteRelayInterface) {
 	startTime := time.Now()
+	firstByteRec := stats.NewFirstByteRecorder(startTime)
 	relayAPIKeyID, _ := r.Context().Value(RelayAPIKeyCtxKey).(string)
 	if relayAPIKeyID == "" {
 		relayAPIKeyID = r.Header.Get("X-Relay-Api-Key-Id")
@@ -152,6 +153,8 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 				h.logFn(fmt.Sprintf("⚠️ Failed to write response to client: %v", errWrite))
 				break
 			}
+			// 远程中继首块字节写回客户端成功:触发 TTFT 打点(幂等 sync.Once)。
+			firstByteRec.MarkFirstByte()
 			if isFlusher {
 				flusher.Flush()
 			}
@@ -251,6 +254,7 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			OutputCost:   outputCost,
 			CachedCost:   cachedCost,
 			DurationMs:   time.Since(startTime).Milliseconds(),
+			FirstByteMs:  firstByteRec.FirstByteMs(time.Since(startTime).Milliseconds()),
 			StatusCode:   resp.StatusCode,
 			Method:       logMethod,
 			Host:         targetHost,
@@ -291,6 +295,7 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			RequestHeaders: headersMap,
 			SessionID:      sessionID,
 			DurationMs:     time.Since(startTime).Milliseconds(),
+			FirstByteMs:    firstByteRec.FirstByteMs(time.Since(startTime).Milliseconds()),
 		})
 
 		// Record usage locally so the client UI can reflect the remote quota consumption
@@ -306,7 +311,7 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 		relayUserID, _ := r.Context().Value(RelayUserCtxKey).(string)
 		if relayUserID != "" && h.relayStatsCallback != nil {
 			h.relayStatsCallback("远程中继", relayUserID, relayAPIKeyID, currentModel, inTokens, outTokens, cachedTokens,
-				r.Method, targetHost, targetPath, "remote_session", time.Since(startTime).Milliseconds(), resp.StatusCode, reqID)
+				r.Method, targetHost, targetPath, "remote_session", time.Since(startTime).Milliseconds(), firstByteRec.FirstByteMs(time.Since(startTime).Milliseconds()), resp.StatusCode, reqID)
 		}
 	}
 }

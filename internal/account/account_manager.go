@@ -620,8 +620,9 @@ func (m *Manager) GetAllChannels() []string {
 		"google":      true,
 		"gcp":         true,
 		"nvidia":      true,
+		"other":       true,
 	}
-	out := []string{"antigravity", "google", "gcp", "nvidia"}
+	out := []string{"antigravity", "google", "gcp", "nvidia", "other"}
 
 	for _, acc := range m.accounts {
 		if acc != nil && acc.Provider != "" {
@@ -634,4 +635,3 @@ func (m *Manager) GetAllChannels() []string {
 	}
 	return out
 }
-
