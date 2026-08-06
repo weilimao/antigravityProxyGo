@@ -10,7 +10,12 @@
   >
     <div class="space-y-3">
       <input class="w-full px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none" data-i18n-placeholder="relayUserKeyPlaceholder" id="relayUserKeyInput" placeholder="用户 Key" type="text" />
-      <input class="w-full px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none" data-i18n-placeholder="relayUserPasswordPlaceholder" id="relayUserPasswordInput" placeholder="密码" type="password" />
+      <PasswordInput
+        inputId="relayUserPasswordInput"
+        placeholder="密码"
+        dataI18nPlaceholder="relayUserPasswordPlaceholder"
+        inputClass="w-full px-3 py-2 pr-10 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none"
+      />
       <input class="w-full px-3 py-2 text-[13px] rounded-lg border border-outline-variant/30 bg-white dark:bg-[#1a1f30] text-on-surface dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none" data-i18n-placeholder="relayUserRemarkPlaceholder" id="relayUserRemarkInput" placeholder="备注 (可选)" type="text" />
     </div>
 
@@ -23,5 +28,6 @@
 
 <script setup lang="ts">
 import BaseModal from './BaseModal.vue';
+import PasswordInput from './PasswordInput.vue';
 </script>
 

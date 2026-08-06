@@ -56,7 +56,7 @@ func (h *teeTestHarness) runFeedReplayOnly(upstream string) (finishEmitted, stre
 
 // runIntoSink 把上游字节经转译主循环喂进指定 sink,返回完整性三态(input/output 丢弃)。
 func runIntoSink(sink sseEventSink, upstream string) (finishEmitted, streamTerminated bool, err error) {
-	_, _, finishEmitted, streamTerminated, err = openAIChatSSEToAnthropicSSEInto(context.Background(), strings.NewReader(upstream), nil, sink, "msg_test", "z-ai/glm-5.2")
+	_, _, _, finishEmitted, streamTerminated, err = openAIChatSSEToAnthropicSSEInto(context.Background(), strings.NewReader(upstream), nil, sink, "msg_test", "z-ai/glm-5.2", 0)
 	return
 }
 
@@ -577,6 +577,201 @@ func TestThinkingRealtimeTruncatedThenReplay_ClosesOpenThinking(t *testing.T) {
 	if !stopIdxSeen {
 		t.Fatalf("补闭合后应存在 index 0 的 content_block_stop,out=%v", eventNames(out))
 	}
+}
+
+// TestReplayFollowingInto_RetryAfterFirstRoundThinkingLive_SkipsThinkingHeader 锁定
+// nvidia_stream.go 重试/兜底成功快照 thinkingLive=resume.liveThinkingPushed(修复点)的核心语义:
+// 首轮思考已实时推 live(tee.liveThinkingPushed=true、thinking 块已闭合→thinkingOpen=false),
+// 之后上游断流,重试轮经 resumeSink 成功后,调用方用
+//   liveStreamState{liveIdxMap: resume.indexMap, liveMaxIdx: resume.liveMaxUsedIdx, thinkingLive: resume.liveThinkingPushed=true}
+// 调 replayFollowingInto,必须跳过重试轮 replay 里的"思考头"(message_start + 整段 thinking)不发,
+// 只补 message_delta/message_stop 尾帧。绝不把 index 0 的思考块再 content_block_start 一次——重发会让
+// thinking_delta 落在已 stop 的(index, thinking)块上,违反"index 单调不复用"+"思考先于正文"的配对一致性,
+// 触发客户端 SDK "Mismatched content block type content_block_delta thinking"(即用户截图里"有时候"报错的间歇性根因)。
+//
+// 早期快照误写常量 thinkingLive:false 时(已修复),replayFollowingInto 走"thinking 未 live"分支原样回放
+// 重试轮思考头,与首轮已 live 闭合的 index 0 思考块重复开启——本测试即锁定该回归不再发生。
+func TestReplayFollowingInto_RetryAfterFirstRoundThinkingLive_SkipsThinkingHeader(t *testing.T) {
+	h := newTeeTestHarness()
+
+	// 1) 首轮(tee):思考 + 正文全程逐块实时下发 live,模拟"首轮思考已推 live"。
+	firstUpstream := writeUpstream(
+		reasoningChunkLine("first round thinking."),
+		textChunkLine("first round body."),
+		finishChunkLine("stop"),
+	)
+	if _, _, err := h.runFeed(firstUpstream); err != nil {
+		t.Fatalf("first feed failed: %v", err)
+	}
+	if !h.tee.liveThinkingPushed {
+		t.Fatalf("首轮思考已实时推 live,tee.liveThinkingPushed 应为 true(修复语义的前提)")
+	}
+	// 首轮正常结束:thinking 块、正文块均被 closeAll 闭合(liveThinkingOpen=false)。
+	if h.tee.liveThinkingOpen {
+		t.Fatalf("首轮正常结束 liveThinkingOpen 应为 false(thinking 块已闭合)")
+	}
+	firstLive := h.flushLive()
+	firstEvents := parseSSEEvents(firstLive)
+	firstThinkStart := 0
+	for _, ev := range firstEvents {
+		if ev.event == "content_block_start" {
+			cb, _ := dataMap(t, ev)["content_block"].(map[string]interface{})
+			if cb != nil && cb["type"] == "thinking" {
+				firstThinkStart++
+			}
+		}
+	}
+	if firstThinkStart != 1 {
+		t.Fatalf("首轮 live thinking 块 start 应==1,实际=%d", firstThinkStart)
+	}
+
+	// 2) 断流重试:首轮思考块已闭合(thinkingOpen=false)、正文块已闭合(bodyOpenIdx=-1)、
+	//    liveMaxUsedIdx=1(thinking 占 0、首轮正文占 1);thinkingPushed 透传首轮 tee.liveThinkingPushed=true。
+	//    与 writeNvidiaAnthropicStream 构造 resumeSink 的参数同构(nvidia_stream.go:320)。
+	resume := newResumeSink(h.liveFW, h.replay, false, -1, 1, h.tee.liveThinkingPushed)
+	h.tee.replay.reset() // 蓄流缓冲复用:重试轮重蓄整条上游内容
+	resume.reset()
+
+	// 重试轮上游:完整思考 + 重启正文(客户端将见"草稿段 + 重启段"相邻两段)。
+	retryUpstream := writeUpstream(
+		reasoningChunkLine("retry round thinking must be skipped by replay."),
+		textChunkLine("retry round body reboot."),
+		finishChunkLine("stop"),
+	)
+	if _, _, err := runIntoSink(resume, retryUpstream); err != nil {
+		t.Fatalf("retry feed into resume failed: %v", err)
+	}
+	// 成功轮:提交重启段正文(重映射 index=2)一次性落 live + 回填持久态。
+	resume.commitPending()
+
+	// 3) 成功快照:与 nvidia_stream.go:352-356 重试成功快照同构。关键修复点:
+	//    thinkingLive 必须=resume.liveThinkingPushed(true),replayFollowingInto 据此跳过重试轮思考头。
+	state := &liveStreamState{
+		liveIdxMap:   resume.indexMap,
+		liveMaxIdx:   resume.liveMaxUsedIdx,
+		thinkingLive: resume.liveThinkingPushed,
+	}
+	h.replay.replayFollowingInto(h.liveFW, state)
+	h.liveFW.flush()
+	finalOut := parseSSEEvents(h.live.String())
+
+	// 4) 核心断言一:thinking 块 start 全程恰好 1 个(只来自首轮 live;重试轮思考头被跳过)。
+	//    若 thinkingLive 误写 false,replayFollowingInto 会原样回放重试轮 thinking_start(index 0 重复开启)。
+	thinkStart := 0
+	var startIdx []int
+	for _, ev := range finalOut {
+		if ev.event == "content_block_start" {
+			m := dataMap(t, ev)
+			if v, ok := m["index"].(float64); ok {
+				startIdx = append(startIdx, int(v))
+			}
+			cb, _ := m["content_block"].(map[string]interface{})
+			if cb != nil && cb["type"] == "thinking" {
+				thinkStart++
+			}
+		}
+	}
+	if thinkStart != 1 {
+		t.Fatalf("thinking 块 start 应恰好 1 个(首轮 live 提供唯一一个;重试轮思考头被 replayFollowingInto 跳过),实际=%d 事件=%v",
+			thinkStart, eventNames(finalOut))
+	}
+
+	// 5) 核心断言二:message_start 恰好 1 个(首轮发,replayFollowingInto 跳过重试轮 message_start)。
+	msCount := 0
+	for _, ev := range finalOut {
+		if ev.event == "message_start" {
+			msCount++
+		}
+	}
+	if msCount != 1 {
+		t.Fatalf("message_start 应恰好 1 个,实际=%d 事件=%v", msCount, eventNames(finalOut))
+	}
+
+	// 6) 核心断言三:thinking_delta 累积文本只含首轮思考,重试轮思考文本必须被整体跳过未落 live。
+	var thinkText string
+	for _, ev := range finalOut {
+		if ev.event != "content_block_delta" {
+			continue
+		}
+		delta, _ := dataMap(t, ev)["delta"].(map[string]interface{})
+		if delta == nil || delta["type"] != "thinking_delta" {
+			continue
+		}
+		if s, ok := delta["thinking"].(string); ok {
+			thinkText += s
+		}
+	}
+	if contains(thinkText, "retry round thinking must be skipped") {
+		t.Fatalf("重试轮思考文本不应落最终 live(thinking 头被 replayFollowingInto 跳过),实际 thinkText=%q", thinkText)
+	}
+	if !contains(thinkText, "first round thinking") {
+		t.Fatalf("首轮思考文本应保留在最终 live,实际 thinkText=%q", thinkText)
+	}
+
+	// 7) 核心断言四:index 单调递增不复用,无重复:首轮 thinking(0) + 首轮正文(1) + 重启段正文(2)。
+	if hasDup(startIdx) {
+		t.Fatalf("content_block_start index 不应重复(thinking 重复开启会触发 Mismatched),startIdx=%v", startIdx)
+	}
+	// 期望起始 index 序列 [0,1,2]:thinking 0 → 首轮正文 1 → 重启段正文 2。
+	wantIdx := []int{0, 1, 2}
+	if len(startIdx) != len(wantIdx) {
+		t.Fatalf("content_block_start 数量期望 %v 个,实际 %d 个 startIdx=%v", wantIdx, len(startIdx), startIdx)
+	}
+	for i, idx := range startIdx {
+		if idx != wantIdx[i] {
+			t.Fatalf("第 %d 个 content_block_start index 期望 %d 实际 %d(序列 %v)", i, wantIdx[i], idx, startIdx)
+		}
+	}
+
+	// 8) 核心断言五:thinking 段严格先于正文。
+	//    找首个 text 块 start 与 thinking 块 stop,要求 text start 在 thinking stop 之后。
+	thinkStopPos, textStartPos := -1, -1
+	for i, ev := range finalOut {
+		if ev.event == "content_block_stop" {
+			if v, ok := dataMap(t, ev)["index"].(float64); ok && int(v) == 0 {
+				thinkStopPos = i
+			}
+		}
+		if ev.event == "content_block_start" {
+			cb, _ := dataMap(t, ev)["content_block"].(map[string]interface{})
+			if cb != nil && cb["type"] == "text" {
+				if textStartPos == -1 {
+					textStartPos = i
+				}
+			}
+		}
+	}
+	if thinkStopPos == -1 || textStartPos == -1 {
+		t.Fatalf("未定位到 thinking 块 stop 或 text 块 start,事件=%v", eventNames(finalOut))
+	}
+	if textStartPos < thinkStopPos {
+		t.Fatalf("思考段必须严格先于正文:text 块 start(pos=%d) 应在 thinking 块 stop(pos=%d) 之后", textStartPos, thinkStopPos)
+	}
+
+	// 9) 完整闭合:尾帧齐(仅由 replayFollowingInto 补发一次),正文 text_delta 到位。
+	requireEvent(t, finalOut, "message_delta")
+	requireEvent(t, finalOut, "message_stop")
+	requireDeltaType(t, finalOut, "text_delta")
+	// 重启段正文同样落 live:含首轮正文 + 重启段正文两段 text_delta。
+	textDeltaCount := 0
+	var textAcc string
+	for _, ev := range finalOut {
+		if ev.event != "content_block_delta" {
+			continue
+		}
+		delta, _ := dataMap(t, ev)["delta"].(map[string]interface{})
+		if delta == nil || delta["type"] != "text_delta" {
+			continue
+		}
+		textDeltaCount++
+		if s, ok := delta["text"].(string); ok {
+			textAcc += s
+		}
+	}
+	if !contains(textAcc, "first round body") || !contains(textAcc, "retry round body reboot") {
+		t.Fatalf("最终 live 应含首轮正文与重启段正文两段,实际 textAcc=%q", textAcc)
+	}
+	_ = textDeltaCount
 }
 
 // TestTeeSink_UpstreamFirstByteHook_FiresBeforeDeferredFlush 锁定 TTFT 修复语义:

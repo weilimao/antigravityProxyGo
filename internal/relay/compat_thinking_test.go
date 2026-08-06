@@ -37,7 +37,15 @@ func geminiThoughtSSE(text string, thought bool) string {
 
 // runGeminiAnthropicStream 用给定的 Gemini 上游 SSE 喂入 handleStreamResponse(anthropic),
 // 返回转译后的 SSE 文本(flushCounter 内嵌 *httptest.ResponseRecorder 同时实现 http.Flusher)。
+// inboundInputTokens 透传给 handleStreamResponse 的 message_start.usage.input_tokens 估值,默认 0
+// (进 handleStreamResponse 后会保底为 1);非负即保底,与生产口径一致。
 func runGeminiAnthropicStream(t *testing.T, upstream string) string {
+	return runGeminiAnthropicStreamWithInput(t, upstream, 0)
+}
+
+// runGeminiAnthropicStreamWithInput 同 runGeminiAnthropicStream 但可指定首帧 input_tokens 估值,
+// 供「message_start.usage.input_tokens 非零估值」断言用例使用。
+func runGeminiAnthropicStreamWithInput(t *testing.T, upstream string, inboundInputTokens int) string {
 	t.Helper()
 	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
 	fc := &flushCounter{ResponseRecorder: httptest.NewRecorder()}
@@ -49,6 +57,7 @@ func runGeminiAnthropicStream(t *testing.T, upstream string) string {
 		"gemini-2.5-flash",
 		"gemini-2.5-flash",
 		"anthropic",
+		inboundInputTokens,
 		time.Unix(1700000000, 0),
 		"/v1internal:streamGenerateContent",
 		"req-test",
@@ -238,16 +247,18 @@ func extractMessageStartJSON(t *testing.T, sse string) string {
 
 // TestGeminiAnthropicStream_UsageCompliance 锁定 Gemini 直连路径 message_start / message_delta
 // 的 usage 负载严格对齐 Anthropic 官方流式规范:
-//  1. message_start.usage.output_tokens 起始占位必须为 1(input_tokens 此阶段为 0);
+//  1. message_start.usage.output_tokens 起始占位必须为 1;input_tokens 为入站估算值(handleStreamResponse
+//     保底 1,让 Claude Code spinner 流首即显示 ↑,替代旧 0 占位);
 //  2. message_delta.usage 必须双填累计值 input_tokens + output_tokens(对应上游 PromptTokenCount/CandidatesTokenCount);
 //  3. stop_reason 在 message_delta.delta 内、message_stop 形态正确(协议结构不受 usage 改动影响)。
 func TestGeminiAnthropicStream_UsageCompliance(t *testing.T) {
 	// 正文帧 + 末帧只带 usageMetadata 的累计帧(模拟真实 Gemini 上游收尾形态)。
 	upstream := geminiThoughtSSE("final answer", false) +
 		geminiUsageSSE(100, 42)
-	got := runGeminiAnthropicStream(t, upstream)
+	// 首帧 input_tokens 传估算值 50,验证透传与保底(≥1)生效;末帧 message_delta 仍用上游真实累计值覆盖。
+	got := runGeminiAnthropicStreamWithInput(t, upstream, 50)
 
-	// 1) message_start.usage: output_tokens 起始为 1,input_tokens 为 0
+	// 1) message_start.usage: output_tokens 起始为 1,input_tokens 为透传估值(保底 1)
 	startJSON := extractMessageStartJSON(t, got)
 	var startParsed struct {
 		Type    string `json:"type"`
@@ -268,8 +279,9 @@ func TestGeminiAnthropicStream_UsageCompliance(t *testing.T) {
 		t.Errorf("message_start.usage.output_tokens 期望 1(官方惯例起始占位), 实际=%d",
 			startParsed.Message.Usage.OutputTokens)
 	}
-	if startParsed.Message.Usage.InputTokens != 0 {
-		t.Errorf("message_start.usage.input_tokens 期望 0(起始无累计), 实际=%d",
+	// input_tokens 应为透传估值 50(≥1 保底生效),替代旧 0 占位 —— 这是 spinner 进行中能显示 ↑ 的根因修复。
+	if startParsed.Message.Usage.InputTokens != 50 {
+		t.Errorf("message_start.usage.input_tokens 期望 50(入站估算透传), 实际=%d",
 			startParsed.Message.Usage.InputTokens)
 	}
 
@@ -670,6 +682,7 @@ func runGeminiResponsesStream(t *testing.T, upstream string) string {
 		"gemini-2.5-flash",
 		"gemini-2.5-flash",
 		"responses",
+		0,
 		time.Unix(1700000000, 0),
 		"/v1internal:streamGenerateContent",
 		"req-test-resp",

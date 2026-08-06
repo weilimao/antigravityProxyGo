@@ -226,6 +226,38 @@ func (m *Manager) SetRelayModelMapping(val []ModelMappingEntry) error {
 	}, val)
 }
 
+// LookupModelMultimodalFlag 按入站 ClientModel 名在 RelayModelMapping 中查映射项的 Multimodal 声明位。
+// 返回 (declared *bool, found bool)——用 *bool 表达三态,与 OCR 降级闸的"配置优先"语义对齐:
+//   - found=false:未命中任何映射项(或模型名/表为空)。调用方走启发式兜底。
+//   - found=true, declared=nil:命中映射项但用户未显式声明 Multimodal(默认项即此态)。
+//     调用方走启发式兜底(保持旧行为,避免升级后突然把图直送给原本配好的非多模态上游)。
+//   - found=true, declared=&true:用户显式声明多模态,跳过 OCR 降级,图块原样透传。
+//   - found=true, declared=&false:用户显式声明非多模态,即使名字命中启发式白名单仍强制降级。
+//
+// 匹配顺序与 MapClientModelToGemini 一致:精确 → 大小写不敏感(经 GetRelayModelMapping 落盘的项原样,
+// 不做归一化,故大小写不敏感是查名字时的兼容兜底)。空配置无删除记录时 GetRelayModelMapping
+// 返回默认映射,故对默认 gemini-*/gpt-* 等也能命中(默认项未显式设 Multimodal → 同样走 nil 兜底)。
+func LookupModelMultimodalFlag(mappings []ModelMappingEntry, clientModel string) (declared *bool, found bool) {
+	name := strings.TrimSpace(clientModel)
+	if name == "" || len(mappings) == 0 {
+		return nil, false
+	}
+	// 精确匹配。
+	for _, e := range mappings {
+		if e.ClientModel == name {
+			return e.Multimodal, true
+		}
+	}
+	// 大小写不敏感。
+	lower := strings.ToLower(name)
+	for _, e := range mappings {
+		if strings.ToLower(e.ClientModel) == lower {
+			return e.Multimodal, true
+		}
+	}
+	return nil, false
+}
+
 // ============ 抓包/重试(含 clamp,泛型 + clamp 回调) ============
 
 func (m *Manager) GetEnablePacketCapture() bool {
@@ -522,4 +554,3 @@ func (m *Manager) SetEnableThinkingMode(val bool) error {
 
 // Debugger / OCR / SessionOptimization / NVIDIA 等含特化逻辑的访问器
 // 已迁移至 settings_extras.go 与 settings_nvidia.go(需 filepath/strings 等额外 import)。
-

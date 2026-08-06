@@ -41,9 +41,9 @@ type AnthropicContent struct {
 // type=base64 时 Data 承载纯 base64(本地直取 OCR);type=url 时 Url 承载网络图片地址,
 // 由 OCRService.fetchImageAsBase64 在 SSRF 防护下下载转 base64 后再 OCR(P2)。
 type AnthropicImageSource struct {
-	Type      string `json:"type"`         // "base64" | "url"
-	MediaType string `json:"media_type"`   // "image/png" 等
-	Data      string `json:"data"`        // base64 数据(base64 类型时非空)
+	Type      string `json:"type"`          // "base64" | "url"
+	MediaType string `json:"media_type"`    // "image/png" 等
+	Data      string `json:"data"`          // base64 数据(base64 类型时非空)
 	Url       string `json:"url,omitempty"` // url 类型时的网络图片地址(http/https)
 }
 
@@ -196,9 +196,27 @@ func (r *AnthropicRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// AnthropicResponseUsage 对齐 Anthropic Messages 响应 usage 字段。
+// InputTokens/OutputTokens 为必填;CacheReadInputTokens/CacheCreationInputTokens 为
+// 上游可选项(开启 Prompt Caching 时返回),json 字段名严格对齐官方(input_tokens /
+// output_tokens / cache_read_input_tokens / cache_creation_input_tokens)。
+// 缺失时 Go 零值 0,反序列化不报错 —— CachedTokens() 亦对 0 安全返回 0。
 type AnthropicResponseUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+}
+
+// CachedTokens 返回 Anthropic 响应 usage 中的缓存命中 token 数(cache_read_input_tokens)。
+// 与 OpenAIChatUsage.CachedTokens() 语义对齐,供 replyAnthropicToOpenAI 等回译链路
+// 把上游 Anthropic 缓存命中映射到 OpenAI Chat 协议侧的 cachedTokens 口径。
+// 缺失/为 0 时返回 0,不报错。
+func (u AnthropicResponseUsage) CachedTokens() int {
+	if u.CacheReadInputTokens > 0 {
+		return u.CacheReadInputTokens
+	}
+	return 0
 }
 
 type AnthropicResponse struct {

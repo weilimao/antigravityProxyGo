@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"antigravity-proxy/internal/account"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"antigravity-proxy/internal/account"
 )
 
 // compat_dispatch.go: OpenAI Chat / Anthropic Messages 入口 handler + dispatchToGemini 分发 + removeAccountFromList。
@@ -179,9 +179,10 @@ func (h *APICompatHandler) handleOpenAIChat(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	h.dispatchToGemini(w, r, userSession, openReq.Model, geminiModel, geminiReq, openReq.Stream, apiFormat)
+	// OpenAI Chat/Responses 入站不回译为 Anthropic 流(上游为 Gemini,响应仅 openai/responses 形态),
+	// message_start 不出现,故 inboundInputTokens 传 0(无消费方读取)。
+	h.dispatchToGemini(w, r, userSession, openReq.Model, geminiModel, geminiReq, openReq.Stream, apiFormat, 0)
 }
-
 
 func (h *APICompatHandler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request, userSession *RelaySession) {
 	var anthReq AnthropicRequest
@@ -202,9 +203,13 @@ func (h *APICompatHandler) handleAnthropicMessages(w http.ResponseWriter, r *htt
 
 	h.log("Anthropic Request mapped. ClientModel: %s -> GeminiModel: %s | User: %s", anthReq.Model, geminiModel, userSession.UserKey)
 
-	h.dispatchToGemini(w, r, userSession, anthReq.Model, geminiModel, geminiReq, anthReq.Stream, "anthropic")
-}
+	// 入站 input_tokens 估算:仅 anthropic 流式路径用此值填 message_start.usage.input_tokens,
+	// 让客户端(Claude Code spinner)流首即显示 ↑(否则流首 0 使 spinner 只有 ↓ 无 ↑)。
+	// 此处已解析出 AnthropicRequest,直接复用 estimateInputTokens;真实累计值仍由末帧 message_delta 覆盖。
+	inboundInputTokens := estimateInputTokens(&anthReq)
 
+	h.dispatchToGemini(w, r, userSession, anthReq.Model, geminiModel, geminiReq, anthReq.Stream, "anthropic", inboundInputTokens)
+}
 
 func (h *APICompatHandler) dispatchToGemini(
 	w http.ResponseWriter,
@@ -215,6 +220,7 @@ func (h *APICompatHandler) dispatchToGemini(
 	geminiReq *GeminiRequest,
 	stream bool,
 	apiFormat string,
+	inboundInputTokens int,
 ) {
 	startTime := time.Now()
 
@@ -257,7 +263,12 @@ func (h *APICompatHandler) dispatchToGemini(
 		}
 	}
 
-	if hasImage && !strings.Contains(strings.ToLower(targetModelToQuery), "gemini") {
+	// OCR 自递归守卫:若本请求来自 OCR 引擎跨号池出站(携带 X-Antigravity-OCR-Self: 1),
+	// 其 image 块是给所选 Gemini 族多模态模型看的,跳过"非多模态→OCR 降级"的自愈逻辑。
+	// 多模态判定由 h.ocr.modelSupportsImage 统一承载(配置优先 Multimodal 声明位 → 启发式模型名前缀
+	// 白名单),替代原 `strings.Contains(..., "gemini")` 粗粒度判据:既覆盖 gemini 全系,也放行
+	// qwen-vl / gpt-4o / glm-4v 等其它原生多模态上游,同时尊重用户在映射表显式声明的 false 否决。
+	if hasImage && !h.ocr.modelSupportsImage(targetModelToQuery) && r.Header.Get("X-Antigravity-OCR-Self") != "1" {
 		ocrModel := h.ocr.getOcrModel()
 		h.log("⚠️ [Relay Compat] 检测到目标模型 %s 不支持多模态，但请求包含图片。正在自动通过本地 Gemini(%s)执行 OCR 和图片描述...", targetModelToQuery, ocrModel)
 		downgraded, ocrHits, ocrMisses, ocrErrDown := h.ocr.DowngradeGeminiImagesToText(geminiReq, userSession, targetModelToQuery)
@@ -354,13 +365,12 @@ func (h *APICompatHandler) dispatchToGemini(
 
 	// 4. 流式传输（SSE）处理
 	if stream {
-		h.handleStreamResponse(r.Context(), w, resp.Body, userSession, clientModel, geminiModel, apiFormat, startTime, r.URL.Path, reqID)
+		h.handleStreamResponse(r.Context(), w, resp.Body, userSession, clientModel, geminiModel, apiFormat, inboundInputTokens, startTime, r.URL.Path, reqID)
 	} else {
 		// 5. 非流式传输处理
 		h.handleNormalResponse(w, resp.Body, userSession, geminiModel, apiFormat, startTime, r.URL.Path, reqID)
 	}
 }
-
 
 func removeAccountFromList(list []*account.Account, accountID string) []*account.Account {
 	var result []*account.Account
@@ -371,5 +381,3 @@ func removeAccountFromList(list []*account.Account, accountID string) []*account
 	}
 	return result
 }
-
-

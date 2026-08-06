@@ -933,7 +933,8 @@ export function refreshSettingsUI() {
 }
 
 // OCR 图片分析模型下拉独立填充:读后端 settings:get-ocr-model(空串兜底 gemini-2.5-flash)
-// -> 单次 relay:get-model-mapping 拉取中继模型映射 -> 合并多模态 Gemini 系兜底数组 -> 填充 + 绑定 change 即时保存。
+// -> 单次 relay:get-model-mapping 拉取中继模型映射 -> 仅取 Expose=true 的带前缀模型作为候选
+// -> 若当前已存值不在候选(如历史 gemini 值),追加为自定义项 -> 填充 + 绑定 change 即时保存。
 // 独立于会话压缩开关,无论压缩是否启用都保证 OCR 下拉可见、可选、可保存。
 function refreshOcrModelSelect(selOcrModel: HTMLSelectElement): void {
 	let ocrModelVal = 'gemini-2.5-flash';
@@ -947,11 +948,14 @@ function refreshOcrModelSelect(selOcrModel: HTMLSelectElement): void {
 	}
 	const finalOcrModelVal = ocrModelVal;
 
-	const ocrDefaults = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-pro'];
-
+	// 候选仅取模型映射中显式开启 Expose 的带前缀 ClientModel(如 nvidia/gpt-4o、other/openai/gpt-4o)。
+	// 不再硬编码 gemini-* 兜底数组 —— 跨号池后由用户按需选择多模态模型,取 URL 前缀路由到对应号池。
 	ipcRenderer.invoke('relay:get-model-mapping').then((mappings: any) => {
-		const modelNames = (mappings || []).map((m: any) => m.clientModel).filter(Boolean);
-		const ocrAll = Array.from(new Set([...modelNames, ...ocrDefaults]));
+		const modelNames = (mappings || [])
+			.filter((m: any) => m && m.expose === true && m.clientModel)
+			.map((m: any) => m.clientModel);
+		// 当前已存值(如历史 gemini 值、或未勾选 Expose 的模型)不在候选时追加为自定义项,保证下拉不回空、旧值可继续选中/保存。
+		const ocrAll = Array.from(new Set([...modelNames, ...(finalOcrModelVal ? [finalOcrModelVal] : [])]));
 		selOcrModel.innerHTML = '';
 		ocrAll.forEach(m => {
 			const opt = document.createElement('option');
@@ -963,8 +967,10 @@ function refreshOcrModelSelect(selOcrModel: HTMLSelectElement): void {
 			selOcrModel.appendChild(opt);
 		});
 	}).catch(() => {
+		// 拉取映射失败:仅保留当前已存值(或默认),保证下拉可用。
 		selOcrModel.innerHTML = '';
-		ocrDefaults.forEach(m => {
+		const fallback = [finalOcrModelVal || 'gemini-2.5-flash'];
+		fallback.forEach(m => {
 			const opt = document.createElement('option');
 			opt.value = m;
 			opt.textContent = m;

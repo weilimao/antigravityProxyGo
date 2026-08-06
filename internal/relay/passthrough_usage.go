@@ -104,15 +104,19 @@ func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model str
 	if h.globalStatsTracker != nil {
 		h.globalStatsTracker.TrackRequestForModel(model, input, output, cached)
 
-		durationMs := time.Since(logCtx.StartTs).Milliseconds()
+		// DurationMs 采用「第一帧→流结束」的流式耗时口径(StreamDurationMs, 不含 TTFT,
+		// 与前端「响应时间」列语义分离); TTFT(FirstByteMs) 仍为请求→首帧的端到端截断。
+		end := time.Now()
+		endToEndMs := end.Sub(logCtx.StartTs).Milliseconds()
+		durationMs := logCtx.FirstByteRec.StreamDurationMs(end)
 		if durationMs <= 0 {
 			durationMs = 1
 		}
 		var firstByteMs int64
 		if logCtx.FirstByteRec != nil {
-			firstByteMs = logCtx.FirstByteRec.FirstByteMs(durationMs)
+			firstByteMs = logCtx.FirstByteRec.FirstByteMs(endToEndMs)
 		} else {
-			firstByteMs = durationMs
+			firstByteMs = endToEndMs
 		}
 		cacheStatus := "NONE"
 		if cached > 0 {

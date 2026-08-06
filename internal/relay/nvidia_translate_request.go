@@ -28,6 +28,19 @@ import (
 //   Anthropic-Beta 头里的 redact-thinking-* 不再参与本决策(该头在 claude-cli 2.1.220 开/关两态均常驻,
 //   与思考 on/off 无关;官方未文档化该头,关思考的正路是 body thinking.type=disabled 或省略 thinking 字段)。
 func AnthropicToOpenAIChat(req *AnthropicRequest, mappings ...[]settings.ModelMappingEntry) (*OpenAIChatRequest, error) {
+	// 默认不保留 image 块(字符串 content)。多模态上游由调用方显式走 AnthropicToOpenAIChatPreservingImages。
+	return anthropicToOpenAIChat(req, false, mappings...)
+}
+
+// AnthropicToOpenAIChatPreservingImages 构造 Anthropic→OpenAI 转换,并在 preserveImages=true 时
+// 把 image 块转译为 OpenAI Chat Vision 数组形态 content(image_url 块),使多模态上游真正收图。
+// 由降级闸判定上游多模态的调用方(nvidia.go / passthrough_forwarder.go)显式传入 true;
+// false 时与 AnthropicToOpenAIChat 完全等价(旧行为,字符串 content,image 块走 text 兜底)。
+func AnthropicToOpenAIChatPreservingImages(req *AnthropicRequest, preserveImages bool, mappings ...[]settings.ModelMappingEntry) (*OpenAIChatRequest, error) {
+	return anthropicToOpenAIChat(req, preserveImages, mappings...)
+}
+
+func anthropicToOpenAIChat(req *AnthropicRequest, preserveImages bool, mappings ...[]settings.ModelMappingEntry) (*OpenAIChatRequest, error) {
 	if req == nil {
 		return nil, fmt.Errorf("nvidia: nil anthropic request")
 	}
@@ -53,10 +66,10 @@ func AnthropicToOpenAIChat(req *AnthropicRequest, mappings ...[]settings.ModelMa
 		case "assistant":
 			out.Messages = append(out.Messages, anthropicAssistantToChat(msg))
 		case "user":
-			out.Messages = append(out.Messages, anthropicUserToChat(msg)...)
+			out.Messages = append(out.Messages, anthropicUserToChat(msg, preserveImages)...)
 		default:
 			// 其它角色按 user 处理
-			out.Messages = append(out.Messages, anthropicUserToChat(msg)...)
+			out.Messages = append(out.Messages, anthropicUserToChat(msg, preserveImages)...)
 		}
 	}
 
@@ -450,10 +463,19 @@ func anthropicAssistantToChat(msg AnthropicMessage) ChatMessage {
 // anthropicUserToChat 把 Anthropic user 消息转成 OpenAI messages。
 // user content 中若包含 tool_result 块，需要单独拆成 role=tool 的消息（OpenAI 规定 tool 结果只能单独成条）。
 // 其余 text 块合并进一条 user 消息。
-func anthropicUserToChat(msg AnthropicMessage) []ChatMessage {
+//
+// preserveImages=true 时(多模态上游,调用方已确认):
+//   - image 块转译为 OpenAI Chat Vision 数组形态 content 的 image_url 块(data: URL);
+//   - 该条 user 消息的 text 与之合并为一条 ContentParts 数组消息(非字符串 content);
+//   - 使多模态上游真正收到图片,而非走旧默认分支(b.Text 恒空 → 图片被静默丢弃)。
+// preserveImages=false 时行为与旧版完全一致:text 合并为字符串 content,image 块走 text 兜底(丢弃)。
+func anthropicUserToChat(msg AnthropicMessage, preserveImages bool) []ChatMessage {
 	var toolResults []ChatMessage
 	var sb strings.Builder
+	var textParts []ChatMessageTextPart
+	var imageParts []ChatMessageImageURLPart
 	hasText := false
+	hasImage := false
 	for _, b := range msg.Content {
 		switch b.Type {
 		case "tool_result":
@@ -465,17 +487,59 @@ func anthropicUserToChat(msg AnthropicMessage) []ChatMessage {
 				ToolName:   b.Name,
 			})
 		case "text":
-			sb.WriteString(b.Text)
+			if preserveImages && len(imageParts) > 0 {
+				// 数组形态对齐收集:此条 text 追加为 text part,与 image 块同批。
+				textParts = append(textParts, ChatMessageTextPart{Type: "text", Text: b.Text})
+			} else {
+				if sb.Len() > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(b.Text)
+			}
 			hasText = true
+		case "image":
+			if preserveImages {
+				imageParts = append(imageParts, ChatMessageImageURLPart{
+					Type: "image_url",
+					ImageURL: ChatMessageImageURLPartObject{
+						URL: imageBlockToDataURL(b),
+					},
+				})
+				hasImage = true
+			} else {
+				// 非多模态保真:旧默认行为,image 块 b.Text 恒空,静默丢弃走 text 兜底。
+				if sb.Len() > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(b.Text)
+				hasText = true
+			}
 		default:
-			// 其它类型(如 image)暂按 text 提取，避免丢字段
+			// 其它类型(think 残留等)按 text 提取，避免丢字段
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
 			sb.WriteString(b.Text)
 			hasText = true
 		}
 	}
 	// 先放 tool 结果，再放普通文本；顺序与 OpenAI 期待一致
 	res := toolResults
-	if hasText {
+	if hasImage {
+		// 数组形态:把已收集的 text part 与 image part 合并为一条 ContentParts 消息。
+		parts := make([]ChatMessageContentPart, 0, len(textParts)+len(imageParts))
+		for i := range textParts {
+			parts = append(parts, textParts[i])
+		}
+		for i := range imageParts {
+			parts = append(parts, imageParts[i])
+		}
+		res = append(res, ChatMessage{
+			Role:         "user",
+			Content:      sb.String(), // 兜底:部分消费点仍用字符串 content
+			ContentParts: parts,
+		})
+	} else if hasText {
 		res = append(res, ChatMessage{Role: "user", Content: sb.String()})
 	}
 	if len(res) == 0 {
@@ -483,6 +547,20 @@ func anthropicUserToChat(msg AnthropicMessage) []ChatMessage {
 		res = append(res, ChatMessage{Role: "user", Content: ""})
 	}
 	return res
+}
+
+// imageBlockToDataURL 把 Anthropic image content block 转成 OpenAI Chat Vision 认的 data: URL。
+// Anthropic image 块: {type:"image", source:{type:"base64", media_type:"image/png", data:"<b64>"}}。
+// OpenAI 要求 image_url.url 为 "data:<media_type>;base64,<data>"。
+func imageBlockToDataURL(b AnthropicContent) string {
+	if b.Source == nil {
+		return ""
+	}
+	mediaType := b.Source.MediaType
+	if strings.TrimSpace(mediaType) == "" {
+		mediaType = "image/png"
+	}
+	return "data:" + mediaType + ";base64," + b.Source.Data
 }
 
 // flattenToolResultContent 把 Anthropic tool_result 的 content(string 或 []block)拍平成纯字符串。

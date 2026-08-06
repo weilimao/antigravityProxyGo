@@ -713,10 +713,15 @@ type resumeSink struct {
 	//   - liveThinkingOpen:live 上 index 0 thinking 块是否仍开未闭合(首轮断流时由 tee 拷入;
 	//     实际首轮 translator closeAll 多已闭合它故常为 false,保留作补闭合兜底)。
 	//   - liveBodyOpenIdx:live 上残留未闭合正文块 index(-1 表无);同上多已被 closeAll 闭合故常 -1。
-	// 这三个字段在 pending-轮内不被直接改写,而由 pend* 镜像字段在提交时回填(见下)。
-	liveMaxUsedIdx   int
-	liveThinkingOpen bool
-	liveBodyOpenIdx  int
+	//   - liveThinkingPushed:客户端 live 上是否"曾有过"思考块被实时推过(首轮 tee.liveThinkingPushed 透传,
+	//     Once true 永不复位,跨重试轮/跨周期保留)。重试/续传成功时回填进 liveStreamState.thinkingLive,
+	//     供 replayFollowingInto 判定是否跳过成功轮 replay 里的思考头:首轮思考草稿已 live 则跳过(重发会
+	//     违反"index 单调不复用"+"思考先于正文",触发客户端 SDK "Mismatched content block type ... thinking")。
+	// 这四个字段在 pending-轮内不被直接改写,而由 pend* 镜像字段在提交时回填(见下)。
+	liveMaxUsedIdx     int
+	liveThinkingOpen   bool
+	liveBodyOpenIdx    int
+	liveThinkingPushed bool
 
 	// 本轮运行期态(reset 每轮清零):
 	closedDangling   bool        // 惰性补闭合标志:首个正文 start/tool_use 前补一次;reset 复位
@@ -732,14 +737,19 @@ type resumeSink struct {
 	pendThinkingOpen bool // 本轮提交后 liveThinkingOpen 的目标值
 }
 
-func newResumeSink(live *flushWriter, replay *replayWriter, thinkingOpen bool, bodyOpenIdx, maxUsedIdx int) *resumeSink {
+// newResumeSink 构造重试轮 sink。thinkingOpen/bodyOpenIdx/maxUsedIdx 为首轮断流时 tee 的 live 残留态
+// (惰性补闭合与新块 index 分配起点);thinkingPushed 为首轮 tee.liveThinkingPushed(客户端 live 是否曾推过
+// 思考块,Once true 永不复位),重试/续传成功时透传进 liveStreamState.thinkingLive 供 replayFollowingInto
+// 决定是否跳过成功轮 replay 思考头。跨重试轮复用时 reset 保留 thinkingPushed 不复位。
+func newResumeSink(live *flushWriter, replay *replayWriter, thinkingOpen bool, bodyOpenIdx, maxUsedIdx int, thinkingPushed bool) *resumeSink {
 	return &resumeSink{
-		live:             live,
-		replay:           replay,
-		liveMaxUsedIdx:   maxUsedIdx,
-		liveThinkingOpen: thinkingOpen,
-		liveBodyOpenIdx:  bodyOpenIdx,
-		indexMap:         map[int]int{},
+		live:               live,
+		replay:             replay,
+		liveMaxUsedIdx:     maxUsedIdx,
+		liveThinkingOpen:   thinkingOpen,
+		liveBodyOpenIdx:    bodyOpenIdx,
+		liveThinkingPushed: thinkingPushed,
+		indexMap:           map[int]int{},
 	}
 }
 

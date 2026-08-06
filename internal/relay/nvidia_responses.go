@@ -197,7 +197,7 @@ func openAIChoiceToResponsesItems(m ChatMessage, respID string) []ResponsesOutpu
 	if IsReasoningAsText() && strings.TrimSpace(rrText) != "" {
 		// 打字机模式:思考原文拼接到正文 text 头部(注意保留思考前导空白用作分隔),
 		// 作为单个 output_text message 条目输出,与正文共用同一 item,避免 Codex 折叠 reasoning。
-		m.Content = rrText + m.Content
+		m.Content = rrText + m.Text()
 		rrText = ""
 	}
 	if strings.TrimSpace(rrText) != "" {
@@ -218,7 +218,7 @@ func openAIChoiceToResponsesItems(m ChatMessage, respID string) []ResponsesOutpu
 	if len(items) > 0 {
 		textOutIdx = 1 // reasoning 已占 index 0
 	}
-	if strings.TrimSpace(m.Content) != "" || len(m.ToolCalls) == 0 {
+	if strings.TrimSpace(m.Text()) != "" || len(m.ToolCalls) == 0 {
 		items = append(items, ResponsesOutputItem{
 			Type:   "message",
 			ID:     fmt.Sprintf("msg_%s_%d", respID, textOutIdx),
@@ -226,7 +226,7 @@ func openAIChoiceToResponsesItems(m ChatMessage, respID string) []ResponsesOutpu
 			Status: "completed",
 			Content: []ResponsesContentPart{{
 				Type: "output_text",
-				Text: m.Content,
+				Text: m.Text(),
 			}},
 		})
 	}

@@ -61,8 +61,9 @@ func openAIChoiceMessageToAnthropic(m ChatMessage) ([]AnthropicContent, []Anthro
 	if reasoning != "" {
 		texts = append(texts, AnthropicContent{Type: "thinking", Thinking: reasoning, Signature: ""})
 	}
-	if strings.TrimSpace(m.Content) != "" {
-		texts = append(texts, AnthropicContent{Type: "text", Text: m.Content})
+	// 文本块:用 Text() 统一取正文(数组形态 ContentParts 时拼接 text 块,不做 image 块回译闭环)。
+	if strings.TrimSpace(m.Text()) != "" {
+		texts = append(texts, AnthropicContent{Type: "text", Text: m.Text()})
 	}
 	var tools []AnthropicContent
 	for i, tc := range m.ToolCalls {

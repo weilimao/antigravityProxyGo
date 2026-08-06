@@ -298,7 +298,7 @@ func TestAnthropicSSEToOpenAIChatSSE_ThinkingStream(t *testing.T) {
 	}
 	reader := bytes.NewReader([]byte(strings.Join(events, "\n")))
 	var out bytes.Buffer
-	_, _, err := AnthropicSSEToOpenAIChatSSE(reader, &out, "claude")
+	_, _, _, err := AnthropicSSEToOpenAIChatSSE(reader, &out, "claude")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}

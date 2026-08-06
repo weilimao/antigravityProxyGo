@@ -41,6 +41,23 @@ type ModelMappingEntry struct {
 	// TargetFormat 是该映射期望上游使用的原生协议("openai"/"anthropic"),仅 Other 号池组需要显式指定,
 	// 供中继转发层决定上游端点与转译方向。留空时由组 Formats 决定(见 account.GetOtherGroupFormats)。
 	TargetFormat string `json:"targetFormat,omitempty"`
+	// Multimodal 显式声明该映射对应的上游模型是否支持多模态(原生视觉/图片理解),供 OCR 自愈降级闸
+	// (relay.OCRService.modelSupportsImage)决定是否跳过 image→文本降级:
+	//   - nil(缺省):交由启发式按模型名前缀判定(gemini/gpt-4o/qwen-vl 等判 true,其余 false),
+	//     保持旧行为兼容,避免升级后突然把图直送给原本配好的非多模态上游触发 400;
+	//   - 显式 true:强制视为多模态,跳过 OCR 降级,图块原样透传给上游(用户已确知上游支持视觉);
+	//   - 显式 false:强制视为非多模态,即使名字命中启发式白名单也仍走 OCR 降级(否决冷门误判)。
+	// 指针类型与 InjectChatTemplateKwargs 同款,nil 视作"未配置",非 nil 视作"已声明"。
+	Multimodal *bool `json:"multimodal,omitempty"`
+}
+
+// IsMultimodal 返回该映射项是否声明为多模态模型。
+// 缺省/未配置(nil)时返回 false(交由 relay 层启发式兜底判定),与 OCR 降级闸的"配置优先"语义一致。
+func (m ModelMappingEntry) IsMultimodal() bool {
+	if m.Multimodal == nil {
+		return false
+	}
+	return *m.Multimodal
 }
 
 // ShouldInjectChatTemplateKwargs 返回该映射项是否允许注入 chat_template_kwargs。

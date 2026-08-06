@@ -50,8 +50,8 @@ func validateNvidiaFields(in NvidiaAccountInput, requireKey bool) error {
 		in.BaseURL = DefaultNvidiaBaseURL
 	}
 	u, err := url.Parse(in.BaseURL)
-	if err != nil || u.Scheme != "https" || u.Host == "" {
-		return errors.New("base_url 必须是合法的 https 地址")
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return errors.New("base_url 必须是合法的 http/https 地址")
 	}
 	if requireKey && strings.TrimSpace(in.APIKey) == "" {
 		return errors.New("api_key 不能为空")

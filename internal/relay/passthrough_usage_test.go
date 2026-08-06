@@ -143,3 +143,29 @@ func TestPassthroughHostFromBaseURL(t *testing.T) {
 		t.Error("passthroughHostFromBaseURL fallback should return non-empty for malformed input")
 	}
 }
+
+// TestRecordOtherUsage_CachedZeroFallsBackToNone 验证 cached==0 时 CacheStatus="NONE"
+// (前端 badge 渲染「直通 (NONE)」的口径), 与 cached>0 走 HIT 互补, 锁定开/关边界。
+// 这是缓存命中率修复后 "缺值不报错" 的回归保护: 上游未命中缓存时仍正常落库, 命中率 0。
+func TestRecordOtherUsage_CachedZeroFallsBackToNone(t *testing.T) {
+	handler, _, _, _ := newNvidiaTestHandler(t, nil)
+	gt := makeInjectedGlobalTracker(t)
+	handler.SetGlobalStatsTracker(gt)
+
+	userSession := &RelaySession{Token: "tok-other-none", UserID: "u-other-none", SessionKey: "auth:acc:othernonzero000001"}
+	logCtx := passthroughLogCtx{
+		Method:     "POST",
+		Host:       "token-plan.cn-beijing.maas.aliyuncs.com",
+		Path:       "/route/v1/messages",
+		SessionID:  "auth:acc:othernonzero000001",
+		Account:    "u-other-none",
+		StatusCode: 200,
+		StartTs:    time.Now(),
+	}
+	// cached=0 未命中缓存(上游无 cache_read/prompt_cache_hit 字段)
+	handler.recordOtherUsage(userSession, "deepseek-v4-flash-0731", 53263, 108, 0, nil, logCtx)
+
+	if got := gt.GetRecentRequestCacheStatus(); got != "NONE" {
+		t.Errorf("cached==0 期望 CacheStatus=NONE, 实际=%q", got)
+	}
+}

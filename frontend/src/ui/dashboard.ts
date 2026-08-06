@@ -770,12 +770,6 @@ export function initDashboardEvents() {
 
     if (modalCloseBtn) modalCloseBtn.addEventListener('click', hideModal);
     if (modalCloseBtnSecondary) modalCloseBtnSecondary.addEventListener('click', hideModal);
-    if (detailsModal) {
-        detailsModal.addEventListener('click', (e) => {
-            if (e.target === detailsModal) hideModal();
-        });
-    }
-
     if (modalCopyHeadersBtn) {
         modalCopyHeadersBtn.addEventListener('click', () => {
             const textToCopy = modalHeaderArea?.textContent || '';

@@ -118,11 +118,15 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 		// (NVIDIA 上游 OpenAI Chat 协议无 cache, 前端紫色 NONE badge 自动渲染); DurationMs 由
 		// handleNvidia 入口 startTs 算得端到端耗时, 极快返回时下限保底 1ms 避免 0ms 误读。
 		// ID 经原子序列 nvidiaReqLogSeq 去碰撞, 与 relay 维度落点1 的 ReqID 命名空间分离(便于对照排查)。
-		durationMs := time.Since(logCtx.StartTs).Milliseconds()
+		// DurationMs 采用「第一帧→流结束」的流式耗时口径(StreamDurationMs, 不含 TTFT,
+		// 前端「耗时」列与「响应时间」列语义分离); TTFT(FirstByteMs) 仍为请求→首帧的端到端截断。
+		end := time.Now()
+		endToEndMs := end.Sub(logCtx.StartTs).Milliseconds()
+		durationMs := logCtx.FirstByteRec.StreamDurationMs(end)
 		if durationMs <= 0 {
 			durationMs = 1
 		}
-		firstByteMs := logCtx.FirstByteRec.FirstByteMs(durationMs)
+		firstByteMs := logCtx.FirstByteRec.FirstByteMs(endToEndMs)
 		reqLog := &stats.RequestLog{
 			ID:           fmt.Sprintf("nvlog-%d-%d", atomic.AddUint64(&nvidiaReqLogSeq, 1), time.Now().UnixNano()),
 			Timestamp:    time.Now().Format("01/02 15:04:05"),

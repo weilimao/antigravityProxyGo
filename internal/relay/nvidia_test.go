@@ -214,7 +214,7 @@ func TestWriteNvidiaAnthropicStream_FlusherInvoked(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", strings.NewReader(""))
 	// 蓄流回放架构下 writeNvidiaAnthropicStream 需 targetURL/upstreamBody 供断流重拉;
 	// 本用例上游流完整(含 finish_reason+usage+[DONE]),首轮即 ready,不会真的重试,故传占位值即可。
-	handler.writeNvidiaAnthropicStream(fc, req, mockResp, "z-ai/glm-5.2", &RelaySession{UserID: "u-flush"}, nil, "https://integrate.api.nvidia.com/v1/chat/completions", []byte("{}"), nvidiaLogCtx{})
+	handler.writeNvidiaAnthropicStream(fc, req, mockResp, "z-ai/glm-5.2", &RelaySession{UserID: "u-flush"}, nil, "https://integrate.api.nvidia.com/v1/chat/completions", []byte("{}"), 0, nvidiaLogCtx{})
 
 	// 1) X-Accel-Buffering: no
 	if fc.Header().Get("X-Accel-Buffering") != "no" {
@@ -889,7 +889,7 @@ func TestOpenAIChatSSEToAnthropicSSE_AnthropicUsageCompliance(t *testing.T) {
 	reader := strings.NewReader(sseInput)
 	var buf bytes.Buffer
 	bw := bufio.NewWriter(&buf)
-	in, out, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "z-ai/glm-5.2")
+	in, out, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "z-ai/glm-5.2", 0, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -960,6 +960,75 @@ func TestOpenAIChatSSEToAnthropicSSE_AnthropicUsageCompliance(t *testing.T) {
 	}
 }
 
+// TestOpenAIChatSSEToAnthropicSSE_CachedPassthrough 锁定治本修复:上游 OpenAI Chat SSE
+// 末帧 usage 携带 prompt_cache_hit_tokens(DeepSeek/阿里云口径)时,回译函数把它取回为 cached
+// 返回值,供 replyOpenAIToAnthropic 流式链路透传给 recordOtherUsage 驱动缓存命中率。
+// 同时验证 prompt_tokens_details.cached_tokens 的 OpenAI 标准口径亦能被识别(CachedTokens() 取较大者)。
+func TestOpenAIChatSSEToAnthropicSSE_CachedPassthrough(t *testing.T) {
+	// DeepSeek 风格:末帧 usage 顶层 prompt_cache_hit_tokens
+	sseInput := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":53263,\"completion_tokens\":108,\"total_tokens\":53371,\"prompt_cache_hit_tokens\":40000}}\n\n" +
+		"data: [DONE]\n\n"
+
+	reader := strings.NewReader(sseInput)
+	var buf bytes.Buffer
+	bw := bufio.NewWriter(&buf)
+	in, out, cached, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "deepseek-v4-flash-0731", 0, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bw.Flush()
+	if in != 53263 || out != 108 {
+		t.Errorf("input/output: want 53263/108, got %d/%d", in, out)
+	}
+	if cached != 40000 {
+		t.Errorf("cached (prompt_cache_hit_tokens 口径): want 40000, got %d", cached)
+	}
+}
+
+// TestOpenAIChatSSEToAnthropicSSE_CachedViaDetails 锁定 OpenAI 标准口径:
+// usage.prompt_tokens_details.cached_tokens 亦能被读取为 cached。
+func TestOpenAIChatSSEToAnthropicSSE_CachedViaDetails(t *testing.T) {
+	sseInput := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":50,\"total_tokens\":1050,\"prompt_tokens_details\":{\"cached_tokens\":600}}}\n\n" +
+		"data: [DONE]\n\n"
+
+	reader := strings.NewReader(sseInput)
+	var buf bytes.Buffer
+	bw := bufio.NewWriter(&buf)
+	_, _, cached, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model", 0, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bw.Flush()
+	if cached != 600 {
+		t.Errorf("cached (prompt_tokens_details.cached_tokens 口径): want 600, got %d", cached)
+	}
+}
+
+// TestOpenAIChatSSEToAnthropicSSE_NoCacheFieldNoError 锁定缺值兜底:上游 usage 不含任何
+// 缓存字段时,cached 返回 0 且不报错(缺失即未命中,与 NVIDIA 上游无 cache 的既有行为兼容)。
+func TestOpenAIChatSSEToAnthropicSSE_NoCacheFieldNoError(t *testing.T) {
+	sseInput := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"y\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110}}\n\n" +
+		"data: [DONE]\n\n"
+
+	reader := strings.NewReader(sseInput)
+	var buf bytes.Buffer
+	bw := bufio.NewWriter(&buf)
+	_, _, cached, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model", 0, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bw.Flush()
+	if cached != 0 {
+		t.Errorf("cached when no cache field: want 0, got %d", cached)
+	}
+}
+
 func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
 	t.Run("whitespace_content_preserved", func(t *testing.T) {
 		// 模拟上游吐出带有换行符和空格的 delta 块
@@ -970,7 +1039,7 @@ func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
 		reader := strings.NewReader(sseInput)
 		var buf bytes.Buffer
 		bw := bufio.NewWriter(&buf)
-		_, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model")
+		_, _, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model", 0, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -993,7 +1062,7 @@ func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
 		reader := strings.NewReader(sseInput)
 		var buf bytes.Buffer
 		bw := bufio.NewWriter(&buf)
-		_, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model")
+		_, _, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model", 0, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1022,7 +1091,7 @@ func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
 		reader := strings.NewReader(sseInput)
 		var buf bytes.Buffer
 		bw := bufio.NewWriter(&buf)
-		_, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model")
+		_, _, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model", 0, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1042,7 +1111,7 @@ func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
 		reader := strings.NewReader(sseInput)
 		var buf bytes.Buffer
 		bw := bufio.NewWriter(&buf)
-		_, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model")
+		_, _, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), reader, nil, bw, "test-model", 0, nil)
 		if err == nil {
 			t.Fatalf("expected error when upstream SSE contains error frame, got nil")
 		}
@@ -1818,9 +1887,196 @@ func TestPullAnthropicStream_ClientCancelAbortsRetry(t *testing.T) {
 	if got := atomic.LoadInt32(calls); got >= 5 {
 		t.Errorf("client cancel should stop further retries, but %d upstream calls occurred", got)
 	}
-	// 客户端取消后不应返回 200 成功流(本轮未完整),状态码非 200 即视为重试被正确终止。
-	if rr != nil && rr.Code == http.StatusOK {
-		t.Errorf("client-cancelled stream should not surface as 200 success, got %d", rr.Code)
+	// 客户端取消后不应冒充一条已完成的 200 SSE 成功流。
+	// httptest.ResponseRecorder 未 WriteHeader 时 Code 默认 200,故不能再用 Code==200 判定"成功流";
+	// 真正的判据是"不含成功流的闭合尾帧 message_stop"(它只在整条 ready 后由调用方补发)。
+	if rr != nil && strings.Contains(rr.Body.String(), "event: message_stop") {
+		t.Errorf("client-cancelled stream should not surface as a completed 200 SSE (no message_stop), got body=%s", rr.Body.String())
+	}
+	// ★修复后语义:客户端取消必须被识别为"非上游耗尽",因此 NOT 回写 503 overloaded_error。
+	// 旧实现:ctx 取消走统一回写路径,rr.Code 会被 WriteHeader(503) 设成 503;
+	// 修复后:ctx 取消分支直接 return 不回写,rr.Code 保留 recorder 默认 200 且 body 为空。
+	if rr != nil && rr.Code == http.StatusServiceUnavailable {
+		t.Errorf("client-cancelled stream should NOT reply 503 overloaded_error (ctx cancel is not upstream exhaustion), got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if rr != nil && strings.Contains(rr.Body.String(), `"type":"overloaded_error"`) {
+		t.Errorf("client-cancelled stream should NOT emit overloaded_error payload, got body=%s", rr.Body.String())
+	}
+}
+
+// TestPullAnthropicStream_ClientCancelInBackoff_MidAttemptAbort 锁定"客户端在重试退避期间取消"的分流语义:
+// 首次上游断流 → 落入 attempt 0 的 5s 退避 select → 期间取消 ctx → 命中 <-ctx.Done() 早退分支。
+// 旧实现该早退也走统一的"3 周期全失败回写 overloaded_error"路径,误导日志 + 误回 503。
+// 修复后:finalErr 带 errNvidiaClientCancelled 哨兵 → 调用方 not 回写 503、记信息性日志。
+func TestPullAnthropicStream_ClientCancelInBackoff_MidAttemptAbort(t *testing.T) {
+	upstream, calls := flakyNvidiaUpstream(t, 30) // 持续断流,确保不会意外成功
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-cancel-bo", "cancelbo@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+	// 退避设较大值(800ms),取消前确保退避 select 正在 block 等待,验证 <-ctx.Done() 命中。
+	// 在退避 select 挂起 30ms 后取消,远早于 800ms 退避完成,逼出 select ctx 分支。
+	handler.nvidiaStreamRetryWait = 800 * time.Millisecond
+	handler.nvidiaStreamCycleWait = 800 * time.Millisecond
+
+	anthReq := &AnthropicRequest{
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body)).WithContext(ctx)
+
+	done := make(chan struct{})
+	var rr *httptest.ResponseRecorder
+	go func() {
+		rec := httptest.NewRecorder()
+		rr = rec
+		handler.handleNvidia(rec, req, &RelaySession{UserID: "u-cancel-bo", UserKey: "k-cancel-bo"})
+		close(done)
+	}()
+	// 30ms:足以让首轮断流返回并进入 attempt 0 的退避 select(800ms),但远早于退避完成,精确命中 select 取消分支。
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client cancel during backoff did not abort retry within 3s (select did not honor ctx)")
+	}
+	// 取消发生在首轮退避期间,上游仅被击中 1 次(首轮断流)。
+	if got := atomic.LoadInt32(calls); got > 2 {
+		t.Errorf("client cancel during first backoff should leave upstream calls <= 2, got %d", got)
+	}
+	// 非"已完成成功流"(不应含 message_stop 闭合尾帧)+ 非 503(客户端取消不回写 overloaded_error)。
+	if rr != nil && strings.Contains(rr.Body.String(), "event: message_stop") {
+		t.Errorf("client-cancelled stream should not surface as a completed SSE (no message_stop), got body=%s", rr.Body.String())
+	}
+	if rr != nil && rr.Code == http.StatusServiceUnavailable {
+		t.Errorf("client cancel during backoff must NOT reply 503 overloaded_error, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestPullAnthropicStream_ClientCancelInInterCycleWait 锁定"客户端在周期间 10s 等待期间取消"的分流语义:
+// 第 1 周期 5 直连断尽 → 周期间 cycleWait select 挂起 → 期间取消 ctx → 命中 <-ctx.Done() 早退分支。
+// 该分支同样以 errNvidiaClientCancelled 哨兵回传,调用方据此不回写 503。
+func TestPullAnthropicStream_ClientCancelInInterCycleWait(t *testing.T) {
+	upstream, calls := flakyNvidiaUpstream(t, 30)
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-cancel-cw", "cancelcw@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond // 每次退避极短,5 次直连快速耗尽进周期间等待
+	handler.nvidiaStreamCycleWait = 800 * time.Millisecond // 周期间等待设大,取消前确实挂在此 select 上
+
+	anthReq := &AnthropicRequest{
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body)).WithContext(ctx)
+
+	// 用 calls 计数推断"已进入周期间等待":第 1 周期 5 直连断尽后 calls==5 且落到 cycleWait select。
+	// 轮询等 calls 到 5 后再取消,确保取消点在周期间等待(而非更早的 attempt 内退避)。
+	done := make(chan struct{})
+	var rr *httptest.ResponseRecorder
+	go func() {
+		rec := httptest.NewRecorder()
+		rr = rec
+		handler.handleNvidia(rec, req, &RelaySession{UserID: "u-cancel-cw", UserKey: "k-cancel-cw"})
+		close(done)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(calls) >= 5 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(calls); got < 5 {
+		t.Fatalf("precondition: expected >=5 upstream calls to enter inter-cycle wait, got %d", got)
+	}
+	// 进周期间等待后取消(800ms 远未到),精确命中周期间 select 取消分支。
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client cancel during inter-cycle wait did not abort retry within 3s")
+	}
+	// 取消点在第 1 周期末尾 / 周期间等待,上游击中 5 次(含 attempt 0 的 firstResp)。
+	if got := atomic.LoadInt32(calls); got > 6 {
+		t.Errorf("client cancel during inter-cycle wait should leave upstream calls ~5-6, got %d", got)
+	}
+	if rr != nil && strings.Contains(rr.Body.String(), "event: message_stop") {
+		t.Errorf("client-cancelled stream should not surface as a completed SSE (no message_stop), got body=%s", rr.Body.String())
+	}
+	if rr != nil && rr.Code == http.StatusServiceUnavailable {
+		t.Errorf("client cancel during inter-cycle wait must NOT reply 503 overloaded_error, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestPullAnthropicStream_ClientCancelInFallbackRound 锁定兜底轮期间客户端取消的分流语义:
+// 第 1 周期 5 直连断尽 → 切兜底代理并发请求 → 兜底轮拉取期间或之后取消 ctx →
+// pullAnthropicStreamOneRoundInto 返回带 errNvidiaClientCancelled 哨兵的错误 →
+// 调用方不再误包成 "fallback proxy round also failed",也不再回写 503 overloaded_error。
+//
+// 旧实现:兜底轮 ctx 取消返回的错误被无差别包成 "fallback proxy round also failed (cycle N/3)",
+// 既把客户端断开诬成"兜底失败",又最终回写 503。
+func TestPullAnthropicStream_ClientCancelInFallbackRound(t *testing.T) {
+	upstream, calls := flakyNvidiaUpstream(t, 30)
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-cancel-fb", "cancelfb@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	// 兜底指向上游自身:5 直连断尽后触发兜底轮,把请求再发一次给同一上游(继续断流)。
+	handler := newNvidiaTestHandlerWithFallback(t, []*account.Account{acc}, upstream.URL, true)
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond
+	handler.nvidiaStreamCycleWait = 5 * time.Millisecond
+
+	anthReq := &AnthropicRequest{
+		Model:    "claude-sonnet-4-5",
+		Stream:   true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body)).WithContext(ctx)
+
+	// 轮询等上游击中数 >= 6(5 直连 + 1 兜底请求)证明已进入兜底轮,再取消。
+	done := make(chan struct{})
+	var rr *httptest.ResponseRecorder
+	go func() {
+		rec := httptest.NewRecorder()
+		rr = rec
+		handler.handleNvidia(rec, req, &RelaySession{UserID: "u-cancel-fb", UserKey: "k-cancel-fb"})
+		close(done)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(calls) >= 6 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(calls); got < 6 {
+		t.Fatalf("precondition: expected >=6 upstream calls to enter fallback round, got %d", got)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client cancel during fallback round did not abort retry within 3s")
+	}
+	// 客户端取消绝不能被回写成 503 overloaded_error(那是上游耗尽的语义,与客户端断开不同)。
+	if rr != nil && strings.Contains(rr.Body.String(), "event: message_stop") {
+		t.Errorf("client-cancelled stream should not surface as a completed SSE (no message_stop), got body=%s", rr.Body.String())
+	}
+	if rr != nil && rr.Code == http.StatusServiceUnavailable {
+		t.Errorf("client cancel during fallback round must NOT reply 503 overloaded_error, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if rr != nil && strings.Contains(rr.Body.String(), `"type":"overloaded_error"`) {
+		t.Errorf("client cancel during fallback round must NOT emit overloaded_error payload, got body=%s", rr.Body.String())
 	}
 }
 

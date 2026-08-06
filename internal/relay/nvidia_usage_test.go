@@ -1,9 +1,14 @@
 package relay
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/stats"
 )
@@ -137,5 +142,78 @@ func TestNvidiaHostFromBaseURL(t *testing.T) {
 	// 单独确认非法输入兜底仍非空且不 panic
 	if h := nvidiaHostFromBaseURL("://bad-url"); h == "" {
 		t.Error("nvidiaHostFromBaseURL fallback should return non-empty for malformed input")
+	}
+}
+
+// TestHandleNvidiaStream_TTFTReflectsFirstFrame 端到端实证 NVIDIA 号池流式 Anthropic 完整链路
+// (handleNvidia → 选号 → 上游 SSE → 回译 → recordNvidiaUsage 落请求日志)的 TTFT 打点。
+//
+// 背景:handleNvidia 在用 bufio.Peek(1024) 嗅探首帧是否含上游 error 时(见 nvidia.go:511),
+// 若上游首帧 <1024 字节(短回答/思考分隔等常见 LLM 输出形态),Peek 会阻塞等待足够的字节累积,
+// 导致 writeNvidiaAnthropicStream 的 TTFT 打点(firstUpstreamByteHook)被推迟到「上游累积吐够
+// 1024 字节」之后 → 落库 FirstByteMs 兜底≈DurationMs → 前端「响应时间==耗时」异常(截图现象)。
+//
+// 本用例用小首帧(<1024 字节)复现该 Bug:修复(把 TTFT 打点提前到上游响应头到达,即 writeNvidiaResponse
+// 入口,绕开 Peek(1024) 阻塞)后,FirstByteMs 应反映上游响应头到达时刻(≈firstDelay),且显著小于
+// DurationMs(请求结束时刻 = firstDelay + 尾帧间隔 gap)。修复前 Peek 阻塞把打点推迟到请求末尾,
+// FirstByteMs 兜底≈DurationMs,本用例 FAIL,精确复现截图「响应时间==耗时」异常。
+func TestHandleNvidiaStream_TTFTReflectsFirstFrame(t *testing.T) {
+	// 上游首字延迟:响应头到达前空等时长。
+	firstDelay := 400 * time.Millisecond
+	// 首帧之后到尾帧的额外间隔:让 DurationMs 明显大于 TTFT,便于区分「打点生效」与「打点失效兜底」。
+	gap := 300 * time.Millisecond
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Accel-Buffering", "no")
+		f := w.(http.Flusher)
+		// 先空等 firstDelay 再吐首帧(模拟上游慢首字——响应头也在此刻才到达)。
+		time.Sleep(firstDelay)
+		// 首帧小(<1024 字节),复现 Peek(1024) 阻塞场景。
+		_, _ = w.Write([]byte(`data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"}}]}` + "\n\n"))
+		f.Flush()
+		// 首帧后gap 再吐尾帧,使 DurationMs 明显大于 TTFT。
+		time.Sleep(gap)
+		_, _ = w.Write([]byte(`data: {"id":"1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}` + "\n\n"))
+		f.Flush()
+		_, _ = w.Write([]byte(`data: [DONE]` + "\n\n"))
+		f.Flush()
+	}))
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-ttft", "ttft@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+	gt := makeInjectedGlobalTracker(t)
+	handler.SetGlobalStatsTracker(gt)
+	beforeLogs := gt.GetRequestLogCount()
+
+	anthReq := &AnthropicRequest{
+		Model:    "z-ai/glm-5.2",
+		Stream:   true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", strings.NewReader(string(body)))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-ttft"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	// 请求日志应新增一条
+	if got := gt.GetRequestLogCount(); got != beforeLogs+1 {
+		t.Fatalf("request log count = %d, want %d (delta +1)", got, beforeLogs+1)
+	}
+	last := gt.GetRecentRequestFirstByteMs()
+	if last < 0 {
+		t.Fatalf("FirstByteMs = %d, 期望 ≥ 0", last)
+	}
+	// 决定性断言:TTFT 应反映上游响应头到达时刻(≈firstDelay),而非被推迟到请求末尾。
+	// 端到端总耗时 ≈ firstDelay+gap=700ms;若 TTFT 打点失效兜底为端到端(700ms),会 ≥ 阈值 580ms,
+	// 说明「响应时间==耗时」异常复现。修复后 TTFT≈400ms << 580ms,打点生效。
+	// (注:改造后 DurationMs 为「第一帧→流结束」的流式耗时,本场景下 TTFT=400ms 可 > 流式耗时=300ms,
+	// 属正常边界——首帧慢、生成快,故此处不直接把 TTFT 与 DurationMs 比较,而用 fixed 阈值判定打点失效。)
+	if int64(last) >= int64(firstDelay.Milliseconds())+int64(gap.Milliseconds())*6/10 {
+		t.Errorf("FirstByteMs = %dms, 期望 ≈ 上游首字延迟 %dms: TTFT 打点被 Peek(1024) 阻塞推迟,兜底成端到端耗时,前端「响应时间==耗时」异常复现", last, firstDelay.Milliseconds())
 	}
 }

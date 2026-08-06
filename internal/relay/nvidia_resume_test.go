@@ -30,7 +30,7 @@ func newResumeTestHarness(thinkingOpen bool, bodyOpenIdx, maxUsedIdx int) *resum
 	bw := bufio.NewWriter(live)
 	liveFW := newFlushWriter("test", bw)
 	replay := newReplayWriter()
-	resume := newResumeSink(liveFW, replay, thinkingOpen, bodyOpenIdx, maxUsedIdx)
+	resume := newResumeSink(liveFW, replay, thinkingOpen, bodyOpenIdx, maxUsedIdx, false)
 	resume.reset() // 初始化 pend* 镜像
 	return &resumeTestHarness{live: live, liveFW: liveFW, replay: replay, resume: resume}
 }

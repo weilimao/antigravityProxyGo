@@ -841,14 +841,6 @@ export function initAccountsEvents() {
     if (sessionBindingsModalClearAllBtn) {
         sessionBindingsModalClearAllBtn.addEventListener('click', clearAllSessionBindings);
     }
-    if (sessionBindingsModal) {
-        sessionBindingsModal.addEventListener('click', (e: MouseEvent) => {
-            if (e.target === sessionBindingsModal) {
-                hideSessionBindings();
-            }
-        });
-    }
-
     if (btnRefreshAllQuota) {
         btnRefreshAllQuota.addEventListener('click', refreshAllQuotas);
     }
@@ -1035,11 +1027,6 @@ export function initAccountsEvents() {
     // Other 账号模态:关闭/取消/保存/获取模型
     if (btnOtherModalClose) btnOtherModalClose.addEventListener('click', closeOtherAccountModal);
     if (btnOtherModalCancel) btnOtherModalCancel.addEventListener('click', closeOtherAccountModal);
-    if (otherAccountModal) {
-        otherAccountModal.addEventListener('click', (e: MouseEvent) => {
-            if (e.target === otherAccountModal) closeOtherAccountModal();
-        });
-    }
     if (btnOtherModalSave) btnOtherModalSave.addEventListener('click', submitOtherAccount);
     if (btnOtherFetchModels) btnOtherFetchModels.addEventListener('click', fetchOtherModels);
     if (groupSelectOther) groupSelectOther.addEventListener('change', onOtherGroupSelectChange);
@@ -1086,11 +1073,6 @@ export function initAccountsEvents() {
     // NVIDIA 账号模态：关闭/取消/保存
     if (btnNvidiaModalClose) btnNvidiaModalClose.addEventListener('click', closeNvidiaAccountModal);
     if (btnNvidiaModalCancel) btnNvidiaModalCancel.addEventListener('click', closeNvidiaAccountModal);
-    if (nvidiaAccountModal) {
-        nvidiaAccountModal.addEventListener('click', (e: MouseEvent) => {
-            if (e.target === nvidiaAccountModal) closeNvidiaAccountModal();
-        });
-    }
     if (btnNvidiaModalSave) btnNvidiaModalSave.addEventListener('click', submitNvidiaAccount);
     if (btnNvidiaFetchModels) btnNvidiaFetchModels.addEventListener('click', fetchNvidiaModels);
 
@@ -1106,11 +1088,6 @@ export function initAccountsEvents() {
     if (btnNvidiaPreferredModels) btnNvidiaPreferredModels.addEventListener('click', openNvidiaPreferredModelsModal);
     if (btnNvidiaPreferredModalClose) btnNvidiaPreferredModalClose.addEventListener('click', closeNvidiaPreferredModelsModal);
     if (btnNvidiaPreferredModalCancel) btnNvidiaPreferredModalCancel.addEventListener('click', closeNvidiaPreferredModelsModal);
-    if (nvidiaPreferredModal) {
-        nvidiaPreferredModal.addEventListener('click', (e: MouseEvent) => {
-            if (e.target === nvidiaPreferredModal) closeNvidiaPreferredModelsModal();
-        });
-    }
     if (btnNvidiaPreferredSrcLocal) btnNvidiaPreferredSrcLocal.addEventListener('click', () => switchNvidiaPreferredSource('local'));
     if (btnNvidiaPreferredSrcRemote) btnNvidiaPreferredSrcRemote.addEventListener('click', () => switchNvidiaPreferredSource('remote'));
     if (btnNvidiaPreferredFetch) btnNvidiaPreferredFetch.addEventListener('click', () => { void fetchAndRenderNvidiaPreferredModels(false, 'remote'); });
@@ -1228,16 +1205,6 @@ export function initAccountsEvents() {
     if (btnTriggerModalCancel) {
         btnTriggerModalCancel.addEventListener('click', hideTriggerTestModal);
     }
-    if (triggerTestModal) {
-        triggerTestModal.addEventListener('click', (e: MouseEvent) => {
-            if (btnStartTriggerTest && btnStartTriggerTest.disabled && triggerResultsContainer?.classList.contains('hidden')) {
-                return; // 测试执行中不允许背景关闭
-            }
-            if (e.target === triggerTestModal) {
-                hideTriggerTestModal();
-            }
-        });
-    }
     if (btnTriggerModalSelectAll) {
         btnTriggerModalSelectAll.addEventListener('click', () => {
             const checkboxes = document.querySelectorAll('.trigger-model-checkbox') as NodeListOf<HTMLInputElement>;
@@ -1316,7 +1283,10 @@ export function initAccountsGlobalEvents() {
 
         // 1. 注册账号数据更新频道监听
         ipcRenderer.on('accounts-res', (event: any, data: any) => {
-            state.lastBackendData = data;
+            // 合并而非整对象覆盖:后端某些广播源(如 OnAccountsUpdated 旧薄载荷)可能缺 otherGroups/
+            // otherPoolMode 等字段,展开 {...old, ...data} 在缺字段时保留上一次完整值,避免 Other
+            // 分组子 Tab 被冲成空数组而偶发隐藏。
+            state.lastBackendData = { ...(state.lastBackendData || {}), ...data };
             if (data && typeof data.activeChannel !== 'undefined') {
                 state.currentActiveChannel = data.activeChannel;
             }
@@ -1947,14 +1917,6 @@ function initAutoTriggerModalEvents() {
     if (btnAutoTriggerModalCloseSecondary) {
         btnAutoTriggerModalCloseSecondary.addEventListener('click', closeAutoTriggerModal);
     }
-    if (autoTriggerModal) {
-        autoTriggerModal.addEventListener('click', (e: MouseEvent) => {
-            if (e.target === autoTriggerModal) {
-                closeAutoTriggerModal();
-            }
-        });
-    }
-
     if (btnCreateNewTask) {
         btnCreateNewTask.addEventListener('click', () => {
             prepareTaskEditForm();

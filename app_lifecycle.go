@@ -88,13 +88,9 @@ func (a *App) startup(ctx context.Context) {
 
 	// Setup Callbacks
 	a.accountMgr.OnAccountsUpdated = func(accs []*account.Account) {
-		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":          a.accountMgr.GetAccounts(),
-			"poolMode":          a.accountMgr.GetPoolMode(),
-			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
-			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
-			"activeChannel":     a.accountMgr.GetActiveChannel(),
-		})
+		// 统一走 emitAccountsRes 广播完整载荷(含 otherGroups/nvidiaLBMode 等),
+		// 避免薄载荷覆盖把前端 otherGroups 冲成 undefined 导致 Other 分组子 Tab 偶发消失。
+		a.emitAccountsRes()
 	}
 
 	a.accountMgr.OnQuotaUpdated = func(accountId string, res *account.QuotaResult) {

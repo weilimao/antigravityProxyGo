@@ -623,3 +623,98 @@ func TestReasoningFollowedByMultipleTextChunksSingleBlock(t *testing.T) {
 		t.Fatalf("思考块(index 0)之后的文本块应使用 index 1,实际=%d", textBlockIndices[0])
 	}
 }
+
+// TestEmitThinkingDelta_PostTextReasoningDropped_NoMismatchedThinking 锁定 emitThinkingDelta 的 b.closed 守卫
+// (见 nvidia_translate_sse.go):上游"思考→正文→再思考"交错(部分 NIM/GLM 的 reasoning_content 与 content
+// 交叉下发)时,第一段思考经 closeThinkingIfOpen 按官方序列完整闭合(signature_delta→content_block_stop,
+// b.closed==true,仍占 index 0 位)。第二段思考到达 emitThinkingDelta 时,守卫必须整体丢弃该异常分片——
+// 若放行会向已 stop 的(index, thinking)块再追推 thinking_delta,违反 Anthropic content_block 的
+// (index, type) 配对一致性,触发客户端 SDK 报 "Mismatched content block type content_block_delta thinking"。
+// Anthropic 协议要求"思考严格先于正文、index 单调不复用",后置思考在协议上无法表达,丢弃是唯一合法解。
+// 此路径仅在非 IsReasoningAsText() 模式触发;伪装模式由主循环改走 emitTextDelta,不进本函数。
+func TestEmitThinkingDelta_PostTextReasoningDropped_NoMismatchedThinking(t *testing.T) {
+	// 显式关闭伪装模式:确保走 emitThinkingDelta 思考块路径(而非打字机 emitTextDelta)。
+	SetGlobalReasoningAsText(false)
+	defer SetGlobalReasoningAsText(false)
+
+	upstream := writeUpstream(
+		reasoningChunkLine("first think segment."),
+		textChunkLine("body after think."),
+		reasoningChunkLine("late think after body."),
+		finishChunkLine("stop"),
+	)
+	events := runAnthropicSSE(t, upstream)
+
+	// 追踪 index 0 思考块是否已闭合,以及每条 thinking_delta 相对它的位置。
+	sawStop0 := false
+	type thinkDeltaInfo struct {
+		text       string
+		afterStop0 bool // 是否出现在 index 0 的 content_block_stop 之后——true 即"落已闭合块",违规
+	}
+	var deltas []thinkDeltaInfo
+	for _, ev := range events {
+		if ev.event == "content_block_stop" {
+			if v, ok := dataMap(t, ev)["index"].(float64); ok && int(v) == 0 {
+				sawStop0 = true
+			}
+			continue
+		}
+		if ev.event != "content_block_delta" {
+			continue
+		}
+		dm := dataMap(t, ev)
+		delta, _ := dm["delta"].(map[string]interface{})
+		if delta == nil || delta["type"] != "thinking_delta" {
+			continue
+		}
+		txt, _ := delta["thinking"].(string)
+		deltas = append(deltas, thinkDeltaInfo{text: txt, afterStop0: sawStop0})
+	}
+
+	// 核心断言一:thinking 块(index 0)被 closeThinkingIfOpen 闭合后,任何 thinking_delta 不得再落其上。
+	for i, d := range deltas {
+		if d.afterStop0 {
+			t.Fatalf("第 %d 条 thinking_delta(%q)出现在 index 0 的 content_block_stop 之后——"+
+				"向已 stop 的思考块追推 delta,触发客户端 Mismatched content block type thinking,事件=%v",
+				i, d.text, eventNames(events))
+		}
+	}
+
+	// 核心断言二:正文之后的第二段思考("late think after body.")必须被 b.closed 守卫整体丢弃。
+	for _, d := range deltas {
+		if contains(d.text, "late think after body") {
+			t.Fatalf("正文之后的第二段思考应被 b.closed 守卫丢弃,实际出现在 thinking_delta: %q", d.text)
+		}
+	}
+
+	// thinking 块恰好 1 个 start、index 0 恰好 1 个 stop;thinking_delta 仅 1 条(来自第一段)。
+	thinkStart, thinkStop0 := 0, 0
+	for _, ev := range events {
+		if ev.event == "content_block_start" {
+			cb, _ := dataMap(t, ev)["content_block"].(map[string]interface{})
+			if cb != nil && cb["type"] == "thinking" {
+				thinkStart++
+			}
+		}
+		if ev.event == "content_block_stop" {
+			if v, ok := dataMap(t, ev)["index"].(float64); ok && int(v) == 0 {
+				thinkStop0++
+			}
+		}
+	}
+	if thinkStart != 1 {
+		t.Fatalf("thinking 块 start 应恰好 1 个(第二段思考被丢弃不另开块),实际=%d", thinkStart)
+	}
+	if thinkStop0 != 1 {
+		t.Fatalf("index 0 的 content_block_stop 应恰好 1 个,实际=%d", thinkStop0)
+	}
+	if len(deltas) != 1 || !contains(deltas[0].text, "first think segment") {
+		t.Fatalf("thinking_delta 应仅 1 条(第一段思考),实际=%+v", deltas)
+	}
+
+	// 完整闭合:框架尾帧齐 + 正文 text_delta 到位。
+	requireEvent(t, events, "message_start")
+	requireEvent(t, events, "message_delta")
+	requireEvent(t, events, "message_stop")
+	requireDeltaType(t, events, "text_delta")
+}

@@ -122,11 +122,11 @@ func TestOpenAIChatSSEToAnthropicSSE_ClientCancelEmitsTailFrames(t *testing.T) {
 	var out bytes.Buffer
 	bw := bufio.NewWriter(&out)
 	done := make(chan struct{})
-	var in, out2 int
+	var in, out2, cached int
 	var err error
 	go func() {
 		defer close(done)
-		in, out2, err = OpenAIChatSSEToAnthropicSSE(ctx, body, body, bw, "z-ai/glm-5.2", nil)
+		in, out2, cached, err = OpenAIChatSSEToAnthropicSSE(ctx, body, body, bw, "z-ai/glm-5.2", 0, nil)
 		bw.Flush()
 	}()
 
@@ -166,6 +166,7 @@ func TestOpenAIChatSSEToAnthropicSSE_ClientCancelEmitsTailFrames(t *testing.T) {
 	}
 	_ = in
 	_ = out2
+	_ = cached
 }
 
 // === ③ Responses 路径:ctx 取消即断 + 尾帧补发 ===
@@ -275,7 +276,7 @@ func TestOpenAIChatSSEToAnthropicSSE_NormalNoLeakTailFrame(t *testing.T) {
 
 	var out bytes.Buffer
 	bw := bufio.NewWriter(&out)
-	in, out2, err := OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(sse), nil, bw, "z-ai/glm-5.2", nil)
+	in, out2, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(sse), nil, bw, "z-ai/glm-5.2", 0, nil)
 	bw.Flush()
 	if err != nil {
 		t.Fatalf("normal path unexpected err: %v", err)

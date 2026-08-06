@@ -74,15 +74,6 @@ export function initRetryErrorLogsEvents() {
         retryErrorLogsModalCloseBtnSecondary.addEventListener('click', closeModal);
     }
 
-    // Backdrop click to close modal
-    if (retryErrorLogsModal) {
-        retryErrorLogsModal.addEventListener('click', (e) => {
-            if (e.target === retryErrorLogsModal) {
-                closeModal();
-            }
-        });
-    }
-
     // Dropdown filter change
     if (logTypeFilter) {
         logTypeFilter.addEventListener('change', () => {

@@ -35,7 +35,7 @@ func runAnthropicSSE(t *testing.T, upstream string) []sseEvent {
 	t.Helper()
 	var out bytes.Buffer
 	bw := bufio.NewWriter(&out)
-	OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstream), nil, bw, "z-ai/glm-5.2")
+	_, _, _, _ = OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstream), nil, bw, "z-ai/glm-5.2", 0, nil)
 	bw.Flush()
 	return parseSSEEvents(out.String())
 }
@@ -360,7 +360,7 @@ const upstreamErrorFirstFrame = `data: {"error":{"message":"ResourceExhausted: W
 func TestOpenAIChatSSEToAnthropicSSE_FirstFrameError_EmitsFullTail(t *testing.T) {
 	var out bytes.Buffer
 	bw := bufio.NewWriter(&out)
-	in, out2, sseErr := OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstreamErrorFirstFrame), nil, bw, "z-ai/glm-5.2")
+	in, out2, _, sseErr := OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstreamErrorFirstFrame), nil, bw, "z-ai/glm-5.2", 0, nil)
 	bw.Flush()
 
 	events := parseSSEEvents(out.String())
@@ -422,7 +422,7 @@ var upstreamErrorAfterContent = "data: " + mustJSONString(map[string]interface{}
 func TestOpenAIChatSSEToAnthropicSSE_MidStreamError_AfterContent_EmitsFullTail(t *testing.T) {
 	var out bytes.Buffer
 	bw := bufio.NewWriter(&out)
-	_, _, sseErr := OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstreamErrorAfterContent), nil, bw, "z-ai/glm-5.2")
+	_, _, _, sseErr := OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstreamErrorAfterContent), nil, bw, "z-ai/glm-5.2", 0, nil)
 	bw.Flush()
 
 	events := parseSSEEvents(out.String())
@@ -441,7 +441,7 @@ func TestOpenAIChatSSEToAnthropicSSE_ReasoningAsText(t *testing.T) {
 	upstreamReasoning := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking step 1\"}}]}\n\ndata: [DONE]\n\n"
 	var out bytes.Buffer
 	bw := bufio.NewWriter(&out)
-	_, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstreamReasoning), nil, bw, "z-ai/glm-5.2")
+	_, _, _, err := OpenAIChatSSEToAnthropicSSE(context.Background(), strings.NewReader(upstreamReasoning), nil, bw, "z-ai/glm-5.2", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

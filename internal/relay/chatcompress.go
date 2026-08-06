@@ -1,6 +1,9 @@
 package relay
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // chatcompress.go —— 公共上下文压缩算法（OpenAI Chat 兼容格式）
 //
@@ -62,7 +65,7 @@ func NewChatCompressor(threshold, keepN, maxRetry int) *ChatCompressor {
 func EstimateChatTokens(msgs []ChatMessage) int {
 	var sum int
 	for _, m := range msgs {
-		sum += roughTokens(m.Content)
+		sum += roughTokens(m.Text())
 		for _, tc := range m.ToolCalls {
 			sum += roughTokens(tc.Function.Name)
 			sum += roughTokens(tc.Function.Arguments)
@@ -197,7 +200,7 @@ func microCompress(msgs []ChatMessage, keepN int) ([]ChatMessage, bool) {
 	for i := 0; i < dropCount; i++ {
 		idx := toolIdx[i]
 		// 仅当内容确实还有值时才替换,避免重复替换造成"伪降级"
-		if out[idx].Content != "" && out[idx].Content != ChatCompressClearText {
+		if strings.TrimSpace(out[idx].Text()) != "" && out[idx].Content != ChatCompressClearText {
 			out[idx].Content = ChatCompressClearText
 		}
 	}

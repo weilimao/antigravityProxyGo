@@ -27,7 +27,9 @@ import (
 // r 为入站请求,供流式分支透传 r.Context() 到 watchCancel,实现客户端取消即断 + 尾帧补发。
 // writeNvidiaResponse 把上游响应按入站协议类型回写客户端。targetURL/upstreamBody 仅对 Anthropic 流式
 // 入站有意义(供蓄流回放链路原账号重建上游请求实现断流重试);其余链路忽略这两个参数,不参与重试。
-func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte, startTs time.Time) {
+// inboundInputTokens 为入站请求本地估算的输入 token 数(保底 1),仅 anthropic 流式分支透传给
+// writeNvidiaAnthropicStream → message_start.usage.input_tokens,让客户端流首即显示 ↑。
+func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte, inboundInputTokens int, startTs time.Time, firstByteRec *stats.FirstByteRecorder) {
 	defer resp.Body.Close()
 
 	// logCtx: 在分发出站协议前统一组装请求日志上下文, 共享给四个下行函数的 recordNvidiaUsage 调用点。
@@ -42,8 +44,11 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Re
 	logCtx.Method = r.Method
 	logCtx.Path = r.URL.Path
 	logCtx.StartTs = startTs
+	// 复用 handleNvidia 已完成打点(firstByteRec.MarkFirstByte 在 200 响应头到达、Peek 阻塞之前触发)
+	// 的共享 TTFT 打点器, 而非在此处新建——新建会丢已打点, 且此函数在流式分支被 Peek(1024) 阻塞后才
+	// 调用, 若在此创建并等 message_start 才打点, 小首帧场景 FirstByteMs 会兜底≈DurationMs。
+	logCtx.FirstByteRec = firstByteRec
 	logCtx.StatusCode = resp.StatusCode
-	logCtx.FirstByteRec = stats.NewFirstByteRecorder(startTs)
 	logCtx.Host = "nvidia"
 	if r.Host != "" {
 		logCtx.Host = r.Host
@@ -64,7 +69,7 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Re
 	case "anthropic":
 		// 入站是 Anthropic：需要把上游 OpenAI Chat 响应回译成 Anthropic Messages
 		if isStreaming {
-			h.writeNvidiaAnthropicStream(w, r, resp, model, userSession, poolAccount, targetURL, upstreamBody, logCtx)
+			h.writeNvidiaAnthropicStream(w, r, resp, model, userSession, poolAccount, targetURL, upstreamBody, inboundInputTokens, logCtx)
 			return
 		}
 		h.writeNvidiaAnthropicNormal(w, resp, model, userSession, poolAccount, logCtx)

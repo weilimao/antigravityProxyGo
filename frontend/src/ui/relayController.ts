@@ -616,16 +616,23 @@ export function initRelayEvents() {
                     const cm = (m.clientModel || '').trim();
                     if (cm) existingClientSet.add(cm.toLowerCase());
                 }
-                const existingTargetSet = new Set<string>();
+                // 按组作用域去重:仅收集「本组」(other/{groupId}/...) 已存在的上游模型名,
+                // 避免全局 targetModel 去重误伤跨组同名模型(不同组是不同上游,模型名可相同)。
+                const existingSameGroupTargetSet = new Set<string>();
                 for (const m of allMappings) {
-                    const tm = (m.targetModel || '').trim();
-                    if (tm) existingTargetSet.add(tm.toLowerCase());
+                    const cm = (m.clientModel || '').trim().toLowerCase();
+                    const tm = (m.targetModel || '').trim().toLowerCase();
+                    if (!tm) continue;
+                    if (cm.startsWith(`${provider}/${groupId}/`)) {
+                        existingSameGroupTargetSet.add(tm);
+                    }
                 }
                 const newEntries: any[] = [];
                 for (const modelRaw of res.models) {
                     const model = (modelRaw || '').trim();
                     if (!model) continue;
-                    if (existingTargetSet.has(model.toLowerCase())) continue; // 同组已有该上游模型,跳过
+                    // 仅当本组已存在该上游模型时才跳过;跨组同名模型不拦截。
+                    if (existingSameGroupTargetSet.has(model.toLowerCase())) continue;
                     const prefixed = `${provider}/${groupId}/${model}`;
                     if (!existingClientSet.has(prefixed.toLowerCase())) {
                         const entry = makeMappingEntry(prefixed, model, provider, true);
@@ -634,7 +641,7 @@ export function initRelayEvents() {
                         newEntries.push(entry);
                         existingClientSet.add(prefixed.toLowerCase());
                     }
-                    existingTargetSet.add(model.toLowerCase());
+                    existingSameGroupTargetSet.add(model.toLowerCase());
                 }
                 if (newEntries.length > 0) {
                     for (const ne of newEntries) allMappings.push(ne);
@@ -711,10 +718,14 @@ export function initRelayEvents() {
 
         const currentTabMappings = getTabMappings();
         const currentTab = poolTabs.find(t => t.id === activeTabId) || poolTabs[0];
-        const fetchedModels = channelModelsCache[currentTab.targetProvider || currentTab.id] || [];
 
         const isNvidiaTab = (currentTab.targetProvider === 'nvidia' || currentTab.id === 'nvidia');
         const isOtherTab = (currentTab.targetProvider === 'other' || currentTab.id === 'other');
+        // Other 组模型缓存键为 other/{groupId}(fetchOtherGroupModels 写入),
+        // 渲染下拉需按行所属组解析,不能只用全局 other 键(否则恒为空 → 显示「未拉取模型」)。
+        const fetchedModels = isOtherTab
+            ? []
+            : (channelModelsCache[currentTab.targetProvider || currentTab.id] || []);
         const thInjectKwargs = document.getElementById('thInjectKwargs');
         if (thInjectKwargs) {
             if (isNvidiaTab) {
@@ -744,6 +755,18 @@ export function initRelayEvents() {
         currentTabMappings.forEach((item, index) => {
             const tr = document.createElement('tr');
             tr.className = 'border-b border-outline-variant/15 hover:bg-slate-50 dark:hover:bg-white/5';
+            // Other Tab:按行所属组解析下拉模型(other/{groupId}/{model} 三段前缀取组缓存);
+            // 非 Other Tab:沿用全局号池缓存。
+            let rowModels = fetchedModels;
+            if (isOtherTab) {
+                const cm = (item.clientModel || '').trim();
+                const m = cm.match(/^other\/([^/]+)\//);
+                const gid = m ? m[1] : '';
+                rowModels = gid ? (channelModelsCache[`other/${gid}`] || []) : [];
+            }
+            if (rowModels.length > 0) {
+                updateDatalist(rowModels);
+            }
             tr.innerHTML = `
                 <td class="py-2 px-1">
                     <input type="text" class="w-full px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white client-model-input" value="${item.clientModel || ''}" data-index="${index}" placeholder="例如: gpt-4o" />
@@ -752,13 +775,16 @@ export function initRelayEvents() {
                     <div class="flex items-center gap-1.5">
                         <input type="text" class="w-full px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white target-model-input" value="${item.targetModel || ''}" data-index="${index}" list="channelModelsDatalist" placeholder="例如: gemini-1.5-pro" />
                         <select class="px-2 py-1 text-[11px] font-mono rounded border border-outline-variant/30 bg-slate-100 dark:bg-white/10 text-on-surface dark:text-white target-model-quick-select cursor-pointer w-32 flex-shrink-0" data-index="${index}">
-                            <option value="">${fetchedModels.length > 0 ? '选择模型...' : '未拉取模型'}</option>
-                            ${fetchedModels.map(m => `<option value="${m}" ${m === item.targetModel ? 'selected' : ''}>${m}</option>`).join('')}
+                            <option value="">${rowModels.length > 0 ? '选择模型...' : '未拉取模型'}</option>
+                            ${rowModels.map(m => `<option value="${m}" ${m === item.targetModel ? 'selected' : ''}>${m}</option>`).join('')}
                         </select>
                     </div>
                 </td>
                 <td class="py-2 text-center inject-kwargs-cell ${isNvidiaTab ? '' : 'hidden'}">
                     <input type="checkbox" class="text-primary focus:ring-primary rounded inject-kwargs-checkbox" ${item.injectChatTemplateKwargs !== false ? 'checked' : ''} data-index="${index}" title="是否向 NVIDIA 等上游注入 chat_template_kwargs (默认勾选)" />
+                </td>
+                <td class="py-2 text-center">
+                    <input type="checkbox" class="text-primary focus:ring-primary rounded multimodal-checkbox ${item.multimodal === false ? 'opacity-50' : ''}" ${item.multimodal === true ? 'checked' : ''} ${item.multimodal === false ? 'data-force-off' : ''} data-index="${index}" title="原生支持视觉(多模态)。勾选=跳过本地 OCR 降级、图块直送上游;取消并再次点击可强制非多模态" />
                 </td>
                 <td class="py-2 text-center">
                     <input type="checkbox" class="text-primary focus:ring-primary rounded expose-checkbox" ${item.expose ? 'checked' : ''} data-index="${index}" />
@@ -864,6 +890,39 @@ export function initRelayEvents() {
                 const target = e.target as HTMLInputElement;
                 const idx = parseInt(target.getAttribute('data-index') || '0');
                 currentTabMappings[idx].injectChatTemplateKwargs = target.checked;
+            });
+        });
+
+        // 多模态三态循环:auto(undefined) → 多模态(true) → 强制非多模态(false) → auto。
+        // 后端 settings.ModelMappingEntry.Multimodal 为 *bool 三态:
+        //   - undefined/nil:自动(默认,按模型名前缀启发式判定);
+        //   - true:显式多模态 → 跳过 OCR 降级、图块原样直送上游;
+        //   - false:显式非多模态 → 强制 OCR 降级(否决启发式误判,冷门 -vl 名也强制降)。
+        // 用点击事件覆盖原生 checkbox 切换,循环推进状态;原生 change 事件禁用以免双触发。
+        tbody.querySelectorAll('.multimodal-checkbox').forEach(chk => {
+            chk.addEventListener('click', (e) => {
+                e.preventDefault(); // 阻止原生 toggle(状态由 cycle 驱动)
+                const target = e.target as HTMLInputElement;
+                const idx = parseInt(target.getAttribute('data-index') || '0');
+                const cur = currentTabMappings[idx].multimodal;
+                let next: boolean | undefined;
+                if (cur === true) {
+                    next = false;
+                } else if (cur === false) {
+                    next = undefined; // 回到 auto
+                } else {
+                    next = true;
+                }
+                currentTabMappings[idx].multimodal = next;
+                // 回写 UI 三态:true→勾选;false→未勾选+data-force-off 标灰置灰;auto→未勾选(无标记)。
+                target.checked = next === true;
+                if (next === false) {
+                    target.setAttribute('data-force-off', '');
+                    target.classList.add('opacity-50');
+                } else {
+                    target.removeAttribute('data-force-off');
+                    target.classList.remove('opacity-50');
+                }
             });
         });
 

@@ -330,7 +330,7 @@ func TestAnthropicSSEToOpenAIChatSSE_TextStream(t *testing.T) {
 	}
 	reader := bytes.NewReader([]byte(strings.Join(events, "\n")))
 	var out bytes.Buffer
-	in, out2, err := AnthropicSSEToOpenAIChatSSE(reader, &out, "claude")
+	in, out2, _, err := AnthropicSSEToOpenAIChatSSE(reader, &out, "claude")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestAnthropicSSEToOpenAIChatSSE_ToolUseStream(t *testing.T) {
 	}
 	reader := bytes.NewReader([]byte(strings.Join(events, "\n")))
 	var out bytes.Buffer
-	_, _, err := AnthropicSSEToOpenAIChatSSE(reader, &out, "claude")
+	_, _, _, err := AnthropicSSEToOpenAIChatSSE(reader, &out, "claude")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestAnthropicSSEToOpenAIChatSSE_AbruptEndFallback(t *testing.T) {
 	}
 	reader := bytes.NewReader([]byte(strings.Join(events, "\n")))
 	var out bytes.Buffer
-	_, _, err := AnthropicSSEToOpenAIChatSSE(reader, &out, "claude")
+	_, _, _, err := AnthropicSSEToOpenAIChatSSE(reader, &out, "claude")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -443,5 +443,140 @@ func TestAnthropicSSEToOpenAIChatSSE_AbruptEndFallback(t *testing.T) {
 	lastFinish := findFinishChunk(t, chunks)
 	if lastFinish["finish_reason"] != "stop" {
 		t.Errorf("abrupt end finish: want stop, got %v", lastFinish["finish_reason"])
+	}
+}
+
+// ============ 缓存命中率 cached 透传(治本修复回归保护)============
+
+// TestAnthropicSSEToOpenAIChatSSE_CachePassthrough 锁定:上游 Anthropic SSE message_delta.usage
+// 携带 cache_read_input_tokens 时,AnthropicSSEToOpenAIChatSSE 把它取回为 cached 返回值(非零),
+// 供 replyAnthropicToOpenAI 流式链路透传驱动缓存命中率。input 也应被正确捕获(顺手修复其恒 0 缺陷)。
+func TestAnthropicSSEToOpenAIChatSSE_CachePassthrough(t *testing.T) {
+	events := []string{
+		`data: {"type":"message_start","message":{"id":"msg_1"}}`,
+		``,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+		``,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","usage":{"input_tokens":53263,"output_tokens":108,"cache_read_input_tokens":40000}}}`,
+		``,
+		`data: {"type":"message_stop"}`,
+		``,
+	}
+	reader := bytes.NewReader([]byte(strings.Join(events, "\n")))
+	var out bytes.Buffer
+	in, out2, cached, err := AnthropicSSEToOpenAIChatSSE(reader, &out, "claude")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if in != 53263 {
+		t.Errorf("input tokens: want 53263, got %d", in)
+	}
+	if out2 != 108 {
+		t.Errorf("output tokens: want 108, got %d", out2)
+	}
+	if cached != 40000 {
+		t.Errorf("cached tokens: want 40000, got %d (cache_read_input_tokens 未透传)", cached)
+	}
+}
+
+// TestAnthropicSSEToOpenAIChatSSE_NoCacheFieldNoError 锁定缺值兜底:上游 usage 不含
+// cache_read_input_tokens 时,cached 返回 0 且不报错(缺失即未命中语义)。
+func TestAnthropicSSEToOpenAIChatSSE_NoCacheFieldNoError(t *testing.T) {
+	events := []string{
+		`data: {"type":"message_start","message":{"id":"msg_2"}}`,
+		``,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}`,
+		``,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":5}}}`,
+		``,
+		`data: {"type":"message_stop"}`,
+		``,
+	}
+	reader := bytes.NewReader([]byte(strings.Join(events, "\n")))
+	var out bytes.Buffer
+	_, _, cached, err := AnthropicSSEToOpenAIChatSSE(reader, &out, "claude")
+	if err != nil {
+		t.Fatalf("unexpected err when cache field absent: %v", err)
+	}
+	if cached != 0 {
+		t.Errorf("cached: want 0 when upstream omits cache_read_input_tokens, got %d", cached)
+	}
+}
+
+// TestAnthropicResponseToOpenAIChat_CacheMapping 锁定非流式回译映射:上游 Anthropic 响应
+// usage.cache_read_input_tokens → OpenAIChatUsage.PromptTokensDetails.CachedTokens,
+// 使 replyAnthropicToOpenAI 非流式分支经 out.Usage.CachedTokens() 正确回收缓存命中。
+func TestAnthropicResponseToOpenAIChat_CacheMapping(t *testing.T) {
+	resp := &AnthropicResponse{
+		ID:         "msg_3",
+		Model:      "claude",
+		StopReason: "end_turn",
+		Content:    []AnthropicContent{{Type: "text", Text: "ok"}},
+		Usage: AnthropicResponseUsage{
+			InputTokens:          2100,
+			OutputTokens:         50,
+			CacheReadInputTokens: 2000,
+		},
+	}
+	out := AnthropicResponseToOpenAIChat(resp)
+	if out.Usage.PromptTokens != 2100 {
+		t.Errorf("prompt tokens: want 2100, got %d", out.Usage.PromptTokens)
+	}
+	if out.Usage.CompletionTokens != 50 {
+		t.Errorf("completion tokens: want 50, got %d", out.Usage.CompletionTokens)
+	}
+	if out.Usage.PromptTokensDetails.CachedTokens != 2000 {
+		t.Errorf("cached tokens mapping: want 2000, got %d", out.Usage.PromptTokensDetails.CachedTokens)
+	}
+	// round-trip:经 OpenAIChatUsage.CachedTokens() 取回应为 2000
+	if got := out.Usage.CachedTokens(); got != 2000 {
+		t.Errorf("out.Usage.CachedTokens() round-trip: want 2000, got %d", got)
+	}
+}
+
+// TestAnthropicResponseToOpenAIChat_NoCacheField 锁定非流式缺值兜底:usage 不含 cache_read
+// 时,PromptTokensDetails.CachedTokens 为 0,CachedTokens() 安全返回 0 不报错。
+func TestAnthropicResponseToOpenAIChat_NoCacheField(t *testing.T) {
+	resp := &AnthropicResponse{
+		Usage: AnthropicResponseUsage{InputTokens: 300, OutputTokens: 10},
+	}
+	out := AnthropicResponseToOpenAIChat(resp)
+	if got := out.Usage.CachedTokens(); got != 0 {
+		t.Errorf("cached when field absent: want 0, got %d", got)
+	}
+}
+
+// TestAnthropicResponseUsage_JSONUnmarshal 验证 AnthropicResponseUsage 反序列化:
+// 含 cache_read_input_tokens 时取到值;不含时不报错且 CachedTokens() 返回 0。
+func TestAnthropicResponseUsage_JSONUnmarshal(t *testing.T) {
+	// 含缓存字段
+	raw := []byte(`{"input_tokens":1000,"output_tokens":20,"cache_read_input_tokens":500,"cache_creation_input_tokens":100}`)
+	var u AnthropicResponseUsage
+	if err := json.Unmarshal(raw, &u); err != nil {
+		t.Fatalf("unmarshal with cache fields failed: %v", err)
+	}
+	if u.InputTokens != 1000 || u.OutputTokens != 20 || u.CacheReadInputTokens != 500 || u.CacheCreationInputTokens != 100 {
+		t.Errorf("fields: want 1000/20/500/100, got %+v", u)
+	}
+	if got := u.CachedTokens(); got != 500 {
+		t.Errorf("CachedTokens(): want 500, got %d", got)
+	}
+
+	// 不含缓存字段
+	rawNoCache := []byte(`{"input_tokens":80,"output_tokens":8}`)
+	var u2 AnthropicResponseUsage
+	if err := json.Unmarshal(rawNoCache, &u2); err != nil {
+		t.Fatalf("unmarshal without cache fields failed: %v", err)
+	}
+	if got := u2.CachedTokens(); got != 0 {
+		t.Errorf("CachedTokens() when absent: want 0, got %d", got)
 	}
 }

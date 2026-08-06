@@ -44,10 +44,12 @@
 
     <div class="flex flex-col gap-1.5">
       <label class="text-[12px] font-medium text-on-surface dark:text-white" data-i18n="nvidiaFieldApiKey">API Key</label>
-      <input type="password" id="inputOtherApiKey"
+      <PasswordInput
+        inputId="inputOtherApiKey"
         placeholder="sk-..."
-        data-i18n-placeholder="nvidiaFieldApiKeyPlaceholder"
-        class="px-3 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" />
+        dataI18nPlaceholder="nvidiaFieldApiKeyPlaceholder"
+        inputClass="w-full px-3 py-2 pr-10 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all"
+      />
     </div>
 
     <div class="flex flex-col gap-1.5">
@@ -103,4 +105,5 @@
 
 <script setup lang="ts">
 import BaseModal from './BaseModal.vue';
+import PasswordInput from './PasswordInput.vue';
 </script>

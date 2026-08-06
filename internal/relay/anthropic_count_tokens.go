@@ -61,6 +61,21 @@ func (h *APICompatHandler) handleNvidiaCountTokens(w http.ResponseWriter, bodyBy
 	})
 }
 
+// estimateInputTokensFromBody 从入站 Anthropic Messages 原始请求体字节估算 input_tokens。
+// 供仅持有原始 body bytes(未解析为 AnthropicRequest)的调用方复用,例如 Other 号池「入站 Anthropic +
+// 上游 OpenAI」响应回译链路首帧 message_start 的 input_tokens 估值填充。解析失败回退保底 1(与
+// estimateInputTokens 的 nil/空语义一致),绝不返回 0,避免让 CLI 误判上下文为空。
+func estimateInputTokensFromBody(bodyBytes []byte) int {
+	if len(bodyBytes) == 0 {
+		return 1
+	}
+	var req AnthropicRequest
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		return 1
+	}
+	return estimateInputTokens(&req)
+}
+
 // estimateInputTokens 纯函数估算 Anthropic 请求的 input_tokens:
 // 把 system + messages(各类 content block 文本) + tools(name/desc/input_schema) 拼成大字符串,
 // 按字符类别(CJK vs 其余)分别加权求和,保底 1、上限 countTokensHardCap。

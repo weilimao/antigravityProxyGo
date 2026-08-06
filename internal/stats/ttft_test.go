@@ -111,3 +111,51 @@ func TestFirstByteRecorder_DurationMsZeroFallback(t *testing.T) {
 		return
 	}
 }
+
+// TestFirstByteRecorder_StreamDurationMs_Marked 打点后 StreamDurationMs(end) 应返回 end-firstByte,
+// 即「第一帧→结束」的流式耗时(不含 TTFT)。
+func TestFirstByteRecorder_StreamDurationMs_Marked(t *testing.T) {
+	start := time.Now().Add(-1000 * time.Millisecond)
+	rec := NewFirstByteRecorder(start)
+	// 首帧在 start+600ms 打点 → TTFT=600ms
+	rec.MarkFirstByte() // 记录 firstByte=now
+
+	// 结束时刻在打点后 300ms → 流式耗时 ≈ 300ms
+	end := time.Now().Add(300 * time.Millisecond)
+	got := rec.StreamDurationMs(end)
+	if got <= 0 || got > 400 {
+		t.Fatalf("expected StreamDurationMs ≈ 300ms (end-firstByte), got %d", got)
+	}
+}
+
+// TestFirstByteRecorder_StreamDurationMs_Unmarked 未打点时 StreamDurationMs(end) 兜底返回端到端 end-start。
+func TestFirstByteRecorder_StreamDurationMs_Unmarked(t *testing.T) {
+	start := time.Now().Add(-500 * time.Millisecond)
+	rec := NewFirstByteRecorder(start)
+	end := time.Now().Add(100 * time.Millisecond)
+	got := rec.StreamDurationMs(end)
+	if got <= 0 || got > 700 {
+		t.Fatalf("expected StreamDurationMs fallback ≈ end-start=600ms, got %d", got)
+	}
+}
+
+// TestFirstByteRecorder_StreamDurationMs_NegativeClamp 结束时刻早于首帧(时钟漂移/边界)时恒 ≥ 0。
+func TestFirstByteRecorder_StreamDurationMs_NegativeClamp(t *testing.T) {
+	start := time.Now().Add(-100 * time.Millisecond)
+	rec := NewFirstByteRecorder(start)
+	rec.MarkFirstByte()
+	// 结束时刻早于首帧 → end.Sub(firstByte) 为负 → 截断为 0
+	end := time.Now().Add(-10 * time.Second)
+	if got := rec.StreamDurationMs(end); got != 0 {
+		t.Fatalf("expected StreamDurationMs clamped to 0 for early end, got %d", got)
+	}
+}
+
+// TestFirstByteRecorder_StreamDurationMs_Nil nil receiver 防御性返回 0。
+func TestFirstByteRecorder_StreamDurationMs_Nil(t *testing.T) {
+	var rec *FirstByteRecorder
+	end := time.Now()
+	if got := rec.StreamDurationMs(end); got != 0 {
+		t.Fatalf("expected nil receiver StreamDurationMs=0, got %d", got)
+	}
+}

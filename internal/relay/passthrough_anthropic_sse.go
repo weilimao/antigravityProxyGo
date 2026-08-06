@@ -18,7 +18,10 @@ import (
 
 // anthropicSSEToOpenAIChatSSEInto 是 AnthropicSSEToOpenAIChatSSE 的实现,接收 io.Reader/io.Writer 后能风格。
 // 逐行扫描上游 SSE,按 Anthropic 事件类型翻译为 OpenAI Chat SSE chunk。
-func anthropicSSEToOpenAIChatSSEInto(reader io.Reader, writer io.Writer, model string) (input, output int, err error) {
+// 返回累计 (input, output, cached):cached 取 message_delta.usage.cache_read_input_tokens(上游开启
+// Prompt Caching 时返回),供 replyAnthropicToOpenAI 透传给 recordOtherUsage 驱动缓存命中率。
+// 上游无 cache_read_input_tokens 字段时返回 0(不报错),与缺失即未命中的口径一致。
+func anthropicSSEToOpenAIChatSSEInto(reader io.Reader, writer io.Writer, model string) (input, output, cached int, err error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
@@ -136,13 +139,15 @@ func anthropicSSEToOpenAIChatSSEInto(reader io.Reader, writer io.Writer, model s
 					toolArgBuf.Reset()
 				}
 			case "message_delta":
-				// 解析 delta.usage(input/output tokens)与 delta.stop_reason → 写 finish chunk + usage。
+				// 解析 delta.usage(input/output/缓存 tokens)与 delta.stop_reason → 写 finish chunk + usage。
 				var d struct {
 					StopReason string                 `json:"stop_reason"`
 					Usage      AnthropicResponseUsage `json:"usage"`
 				}
 				_ = json.Unmarshal(ev.Delta, &d)
+				input = d.Usage.InputTokens
 				output = d.Usage.OutputTokens
+				cached = d.Usage.CachedTokens()
 				finish := anthropicStopToOpenAIFinish(d.StopReason)
 				chunk := OpenAIChatStreamChunk{
 					ID: chunkID, Object: "chat.completion.chunk", Model: model,
@@ -156,7 +161,7 @@ func anthropicSSEToOpenAIChatSSEInto(reader io.Reader, writer io.Writer, model s
 			case "message_stop":
 				// OpenAI 协议权威终止符 [DONE]。
 				_, _ = writer.Write([]byte("data: [DONE]\n\n"))
-				return input, output, nil
+				return input, output, cached, nil
 			}
 		}
 	}
@@ -172,7 +177,7 @@ func anthropicSSEToOpenAIChatSSEInto(reader io.Reader, writer io.Writer, model s
 	}
 	writeSSEChunk(writer, finishChunk)
 	_, _ = writer.Write([]byte("data: [DONE]\n\n"))
-	return input, output, err
+	return input, output, cached, err
 }
 
 // writeSSEChunk 把一个 OpenAIChatStreamChunk 序列化为 SSE data 行写出。

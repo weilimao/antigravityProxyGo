@@ -2,12 +2,16 @@ package relay
 
 // ocr_downgrade_gemini.go —— L2 协议适配层:Gemini InlineData 图片本地 OCR 降级。
 //
-// 三层分离架构的 L2(Gemini 协议):Gemini 入站请求中,当目标模型不支持多模态(非 gemini 系)
-// 但请求却含 InlineData 图片时,用 L1 OCRService 把每张图 OCR 成纯文本,把 InlineData 部分
-// 原地改为 Text 部分并拼接识别结果,再送上游。与号池入口层解耦:由 dispatchToGemini 调用。
+// 三层分离架构的 L2(Gemini 协议):Gemini 入站请求中,当目标模型不支持多模态
+// (非 gemini 系 / 未显式声明 Multimodal)但请求却含 InlineData 图片时,用 L1 OCRService 把
+// 每张图 OCR 成纯文本,把 InlineData 部分原地改为 Text 部分并拼接识别结果,再送上游。
+// 与号池入口层解耦:由 dispatchToGemini 调用。
 //
 // 历史背景:本逻辑原内联在 APICompatHandler.dispatchToGemini(compat_dispatch.go:244-306),
 // 没有抽成函数、不可被第三方号池复用且不可独立单测。现抽为 *OCRService 方法,行为逐行等价。
+//
+// 多模态判据由 L1 ocr_capability.go 的 modelSupportsImage 统一承载(配置优先 Multimodal 声明位 →
+// 启发式模型名前缀白名单),替代原 `strings.Contains(..., "gemini")` 粗粒度判据。
 //
 // 本降级不区分窗口:Gemini 直连链路的号池配额模型与 NVIDIA 池不同,历史图重复 OCR 的痛点
 // 由 L1 cache + singleflight 直接覆盖(同图同会话命中即返),故无需 window 逻辑。
@@ -18,16 +22,18 @@ import (
 )
 
 // DowngradeGeminiImagesToText 对 GeminiRequest 做多模态自愈:当 targetModelToQuery 不是
-// gemini 系(不支持多模态)且请求含 InlineData 图片时,逐张 OCR 转文本部分。
+// 多模态模型(非 gemini 系 / 未显式声明 Multimodal)且请求含 InlineData 图片时,逐张 OCR 转文本部分。
 //
-// 入参 targetModelToQuery 用于判定是否需要降级(含 "gemini" 子串则跳过,原样返回)。
+// 入参 targetModelToQuery 用于判定是否需要降级(多模态则跳过,原样返回)。
 // 返回 (downgradedCount, ocrHits, ocrMisses, lastErr):
 //   - downgradedCount: 实际把 InlineData 改成 Text 部分的张数(OCR 成功);
 //   - ocrHits/ocrMisses: 经 L1 缓存命中/未命中计数,供日志显示降级收益;
 //   - lastErr: OCR 过程遇到的最后一个错误(若有),失败不中止,继续处理其余图。
 //
-// 行为与原 compat_dispatch.go:244-306 内联逻辑逐行等价:
-//   - 仅当 !strings.Contains(strings.ToLower(targetModelToQuery), "gemini") 时降级;
+// 行为与原 compat_dispatch.go:244-306 内联逻辑逐行等价(仅判据升级):
+//   - 由原 `strings.Contains(strings.ToLower(targetModelToQuery), "gemini")` 改为 s.modelSupportsImage
+//     (配置优先 Multimodal 声明位 → 启发式模型名前缀白名单),既覆盖 gemini 全系,也放行
+//     qwen-vl / gpt-4o 等其它原生多模态上游,同时尊重用户显式声明的 false 否决;
 //   - userPromptCtx 取同消息内所有 Text 部分拼接(不跨消息,与原实现一致),
 //     仅用于 miss 真打 gemini 上游时的靶向 ocrPrompt,不参与 OcrImage 缓存键(image-only);
 //   - OCR 失败/空文本时仅记 continue, InlineData 保留(原实现即如此,上游可能拒图但降级不强制覆盖)。
@@ -35,8 +41,8 @@ func (s *OCRService) DowngradeGeminiImagesToText(geminiReq *GeminiRequest, userS
 	if s == nil || geminiReq == nil {
 		return 0, 0, 0, nil
 	}
-	// 目标模型是 gemini 系则原生支持多模态,无需降级。
-	if strings.Contains(strings.ToLower(targetModelToQuery), "gemini") {
+	// 目标模型原生支持多模态(配置优先 / 启发式兜底),无需降级,原样返回。
+	if s.modelSupportsImage(targetModelToQuery) {
 		return 0, 0, 0, nil
 	}
 	ocrModel := s.getOcrModel()

@@ -23,6 +23,7 @@ func (h *APICompatHandler) handleStreamResponse(
 	clientModel string,
 	geminiModel string,
 	apiFormat string,
+	inboundInputTokens int,
 	startTime time.Time,
 	path string,
 	reqID string,
@@ -72,6 +73,14 @@ func (h *APICompatHandler) handleStreamResponse(
 
 	// Anthropic 协议下，开始流时首发 message_start
 	if apiFormat == "anthropic" {
+		// input_tokens 保底 1:官方 message_start 即给真实 input_tokens(服务端请求一进来即知道),
+		// 代理经 Gemini 上游时流首拿不到真实值,此前置 0 会让 Claude Code spinner 只显示 ↓ 无 ↑。
+		// 现用入站请求本地估算值(estimateInputTokens,由调用方传 inboundInputTokens)填首帧,
+		// 让 spinner 流首即有非零 ↑;真实累计值仍由末帧 message_delta.usage 覆盖。
+		startInputTokens := inboundInputTokens
+		if startInputTokens < 1 {
+			startInputTokens = 1 // 保底 1,避免 0 让 CLI 误判上下文为空
+		}
 		msgStart := map[string]interface{}{
 			"type": "message_start",
 			"message": map[string]interface{}{
@@ -82,10 +91,10 @@ func (h *APICompatHandler) handleStreamResponse(
 				"model":         displayModel,
 				"stop_reason":   nil,
 				"stop_sequence": nil,
-				// usage:对齐 Anthropic 官方流式 message_start 实例 {"input_tokens":N,"output_tokens":1},
-				// output_tokens 起始占位为 1(官方惯例预扣占位,与 NVIDIA 路径 messageStartPayload 一致)。
-				// input_tokens 此阶段尚无累计值,置 0,由末帧 message_delta 补累计真实值。
-				"usage":         map[string]interface{}{"input_tokens": 0, "output_tokens": 1},
+				// usage:首帧 input_tokens 用入站请求本地估算值(保底 1),让客户端(Claude Code spinner
+				// 进行中)在流首即可显示 ↑;output_tokens 起始占位为 1(官方惯例预扣占位,与 NVIDIA 路径
+				// messageStartPayload 历史一致)。真实累计值由末帧 message_delta.usage 覆盖。
+				"usage":         map[string]interface{}{"input_tokens": startInputTokens, "output_tokens": 1},
 			},
 		}
 		msgStartBytes, _ := json.Marshal(msgStart)

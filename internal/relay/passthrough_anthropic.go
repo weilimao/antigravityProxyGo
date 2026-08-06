@@ -84,8 +84,8 @@ func OpenAIToAnthropicMessages(bodyBytes []byte, upstreamModel string, isRespons
 	for _, msg := range chatReq.Messages {
 		switch msg.Role {
 		case "system":
-			if strings.TrimSpace(msg.Content) != "" {
-				systemParts = append(systemParts, msg.Content)
+			if strings.TrimSpace(msg.Text()) != "" {
+				systemParts = append(systemParts, msg.Text())
 			}
 		case "assistant":
 			out.Messages = append(out.Messages, openAIAssistantToAnthropic(msg))
@@ -118,8 +118,8 @@ func OpenAIToAnthropicMessages(bodyBytes []byte, upstreamModel string, isRespons
 // 与 nvidia_translate_response.go 的 openAIChoiceMessageToAnthropic 对偶,但作用于请求侧(入站)。
 func openAIAssistantToAnthropic(m ChatMessage) AnthropicMessage {
 	var blocks []AnthropicContent
-	if strings.TrimSpace(m.Content) != "" {
-		blocks = append(blocks, AnthropicContent{Type: "text", Text: m.Content})
+	if strings.TrimSpace(m.Text()) != "" {
+		blocks = append(blocks, AnthropicContent{Type: "text", Text: m.Text()})
 	}
 	for i, tc := range m.ToolCalls {
 		var input map[string]interface{}
@@ -155,7 +155,7 @@ func openAIUserToAnthropic(m ChatMessage) AnthropicMessage {
 	return AnthropicMessage{
 		Role: "user",
 		Content: []AnthropicContent{
-			{Type: "text", Text: m.Content},
+			{Type: "text", Text: m.Text()},
 		},
 	}
 }
@@ -166,7 +166,7 @@ func openAIUserToAnthropic(m ChatMessage) AnthropicMessage {
 func openAIToolToAnthropic(m ChatMessage) AnthropicMessage {
 	isErr := false
 	// OpenAI 无明确的 is_error 语义,按 content 是否含 "error" 关键字粗判(保守:仅明显错误才标 true)。
-	if strings.Contains(strings.ToLower(m.Content), "error:") || strings.Contains(strings.ToLower(m.Content), "execution failed") {
+	if strings.Contains(strings.ToLower(m.Text()), "error:") || strings.Contains(strings.ToLower(m.Text()), "execution failed") {
 		isErr = true
 	}
 	block := AnthropicContent{
@@ -174,9 +174,9 @@ func openAIToolToAnthropic(m ChatMessage) AnthropicMessage {
 		ToolUseID: m.ToolCallID,
 		IsError:   &isErr,
 	}
-	if m.Content != "" {
+	if m.Text() != "" {
 		// content 字段兼容 string 或 []block;序列化为 JSON 字符串最简单(Anthropic 允许 tool_result.content 为 string)。
-		raw, _ := json.Marshal(m.Content)
+		raw, _ := json.Marshal(m.Text())
 		block.ToolResultContent = raw
 	}
 	return AnthropicMessage{
@@ -187,7 +187,11 @@ func openAIToolToAnthropic(m ChatMessage) AnthropicMessage {
 
 // AnthropicResponseToOpenAIChat 把上游 Anthropic 非流式响应转译为 OpenAI Chat 非流式响应。
 // 用于「入站 OpenAI Chat + 上游 Anthropic 格式组」场景的响应回译。
+// 缓存字段映射:Anthropic usage.cache_read_input_tokens → OpenAIChatUsage.PromptTokensDetails.CachedTokens,
+// 使转译后的 OpenAI 响应携带缓存命中口径;非流式 replyAnthropicToOpenAI 据此透传给 recordOtherUsage。
+// 上游无 cache_read_input_tokens 时为零值 0,映射无副作用。
 func AnthropicResponseToOpenAIChat(resp *AnthropicResponse) *OpenAIChatResponse {
+	cachedTokens := resp.Usage.CachedTokens()
 	out := &OpenAIChatResponse{
 		ID:      resp.ID,
 		Object:  "chat.completion",
@@ -197,6 +201,9 @@ func AnthropicResponseToOpenAIChat(resp *AnthropicResponse) *OpenAIChatResponse 
 			PromptTokens:     resp.Usage.InputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
 			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
+			PromptTokensDetails: OpenAIChatUsageTokensDetails{
+				CachedTokens: cachedTokens,
+			},
 		},
 	}
 	if out.ID == "" {
@@ -290,7 +297,9 @@ func anthropicContentToChatMessage(blocks []AnthropicContent) ChatMessage {
 }
 
 // AnthropicSSEToOpenAIChatSSE 把上游 Anthropic Messages SSE 流实时重写为 OpenAI Chat Completions SSE 流。
-// reader 读上游 Anthropic SSE,writer 写 OpenAI Chat SSE。返回累计 input/output tokens。
+// reader 读上游 Anthropic SSE,writer 写 OpenAI Chat SSE。返回累计 (input, output, cached) tokens。
+// cached 取 message_delta.usage.cache_read_input_tokens(上游开启 Prompt Caching 时返回),
+// 供 replyAnthropicToOpenAI 流式回译链路透传给 recordOtherUsage。上游无该字段时返回 0,不报错。
 //
 // 协议事件序列对偶(Anthropic SSE → OpenAI SSE):
 //
@@ -305,7 +314,7 @@ func anthropicContentToChatMessage(blocks []AnthropicContent) ChatMessage {
 // 设计为薄函数,错误时仍补一个 finish + [DONE] 尾帧,避免客户端卡等。
 func AnthropicSSEToOpenAIChatSSE(reader interface{ Read(p []byte) (int, error) }, writer interface {
 	Write(p []byte) (int, error)
-}, model string) (input, output int, err error) {
+}, model string) (input, output, cached int, err error) {
 	// 复用现有 sseBlockStates / flushWriter 的事件驱动基础设施风险较大(它们面向 Anthropic 输出侧),
 	// 这里采用自包含的逐行扫描重写,逻辑直观可控,与 OpenAIChatSSEToAnthropicSSE 的对称结构对偶。
 	return anthropicSSEToOpenAIChatSSEInto(reader, writer, model)

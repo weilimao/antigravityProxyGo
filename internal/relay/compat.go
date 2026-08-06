@@ -30,6 +30,11 @@ import (
 
 var localProxyAddr = "127.0.0.1:18443"
 
+// localRelayAddr 是本地中继服务器(18444)回环地址,承载 /route/* 通用按模型路由入口。
+// OCR 引擎在处理非 Google 族前缀模型(如 nvidia/xxx、other/openai/xxx)时,
+// 把 Gemini 请求转译为 OpenAI Chat 后打到该入口,由 handleRoutedForward 路由到对应号池。
+var localRelayAddr = "127.0.0.1:18444"
+
 const defaultOcrModel = "gemini-2.5-flash"
 
 type APICompatHandler struct {
@@ -105,6 +110,26 @@ func NewAPICompatHandler(
 		// 并承接 settingsMgr / client / logFn,使 L1 与号池入口解耦。
 		ocr: NewOCRService(settingsMgr, netutil.NewClient(5*time.Minute), logFn),
 	}
+}
+
+// WireOcrRouteResolver 把 OCR 引擎的跨号池路由解析闭包绑定到 APICompatHandler.
+// 注入后 OCRService 能按带前缀模型名(如 nvidia/xxx、other/openai/xxx)解析目标号池,
+// 从而把 OCR 出站从纯 Google 家族(18443)扩展到其它号池多模态模型(18444 /route)。
+// 在 NewAPICompatHandler 返回后由 caller 显式调用,避免构造器内循环引用。
+func (h *APICompatHandler) WireOcrRouteResolver() {
+	if h == nil || h.ocr == nil {
+		return
+	}
+	h.ocr.SetRouteResolver(func(model string) (string, string, string, bool) {
+		return h.resolveRoutedTarget(model)
+	})
+	// 同步注入模型映射查询闭包,供 OCR 降级闸 modelSupportsImage 做"配置优先"判定:
+	// OCRService 不直接 handler,故用闭包捕获 getRelayModelMappingSafe(已含 recover 防 nil manager)。
+	// 闭包把 settings.LookupModelMultimodalFlag 的 (*bool, found) 三态透传给降级闸,
+	// 与 SetRouteResolver 同款解耦;relay 单测不调本方法即保持纯启发式旧行为。
+	h.ocr.SetMappingResolver(func(model string) (*bool, bool) {
+		return settings.LookupModelMultimodalFlag(h.getRelayModelMappingSafe(), model)
+	})
 }
 
 // SetGlobalStatsTracker 注入全局 *stats.Tracker, 使 NVIDIA 中继链路能把号池用量计入

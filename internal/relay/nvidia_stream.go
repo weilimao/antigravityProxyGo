@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,6 +24,24 @@ import (
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/netutil"
 )
+
+// errNvidiaClientCancelled 是 pullAnthropicStreamWithRetry 用来明确标记
+// 「入站客户端上下文取消(非上游重试耗尽)」的哨兵错误。调用方据此把 finalErr!=nil
+// 的处理分流:ctx 取消时 log 一条取消语义、不回写 overloaded_error、直接 return;
+// 真正的 3 周期×(5 直连+1 兜底)重试耗尽才回写 503 overloaded_error。
+//
+// 用哨兵而非沿用裸 fmt.Errorf 文案,是因为旧实现在三处 ctx 取消处各自包了不同前缀的文案
+// (client context cancelled during nvidia stream retry / during retry backoff /
+// during inter-cycle wait),调用方只能靠 "client context cancelled" 子串匹配来辨识,
+// 既脆弱又把异常控制流耦合到文案。哨兵 + errors.Is 让判定稳定且文案可自由演进。
+// 哨兵 被 finalErr 用 %w 包装,errors.Is(finalErr, errNvidiaClientCancelled) 仍能命中。
+var errNvidiaClientCancelled = errors.New("nvidia stream retry aborted: inbound client context cancelled")
+
+// isNvidiaClientCancelled 判定 finalErr 是否由客户端上下文取消引起(含三种取消时机:
+// 重试主体内 / 退避 select 内 / 周期间等待 select 内)。调用方据此与"真·重试耗尽"分流。
+func isNvidiaClientCancelled(finalErr error) bool {
+	return finalErr != nil && errors.Is(finalErr, errNvidiaClientCancelled)
+}
 
 // writeNvidiaAnthropicStream 处理流式 Anthropic 入站：上游 OpenAI Chat SSE → Anthropic SSE。
 // 响应头对齐 compat.go:826-837(Gemini 链路)保证 SSE 不被反代/框架缓冲:
@@ -39,7 +58,7 @@ import (
 //
 // r 透传 r.Context():客户端取消时立即终止重试与重拉;poolAccount 重试全程保持同一账号(按要求不换号)。
 // targetURL/upstreamBody 由主循环透传,供重试时原样重建上游 POST 请求体与目标 URL(不重新选号、不改动请求)。
-func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *http.Request, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte, logCtx nvidiaLogCtx) {
+func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *http.Request, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte, inboundInputTokens int, logCtx nvidiaLogCtx) {
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		// 上游非 200:翻译成 Anthropic 标准错误结构回写(原裸透 OpenAI JSON 会让 CLI 卡住/报奇怪错误)
@@ -94,17 +113,35 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 	}
 	liveFW.deferredActive = true // pull 阶段框架帧先进 deferred,等首条实质内容 flush
 
-	replay, state, in, out, finalErr := h.pullAnthropicStreamWithRetry(r, resp, poolAccount, targetURL, upstreamBody, model, liveFW)
+	replay, state, in, out, finalErr := h.pullAnthropicStreamWithRetry(r, resp, poolAccount, targetURL, upstreamBody, inboundInputTokens, model, liveFW)
 	if finalErr != nil {
-		// 重试耗尽。两种情况:
-		// 1) 200 头未发(deferred 未 flush,上游在首条思考实质内容前就次次断流):drop 丢弃框架帧,
-		//    回写 503 overloaded_error,客户端干净失败;
-		// 2) 200 头已发(首条思考实质内容已 flush):无法回退状态码,补闭合 live 上残留未闭合块(thinking+body)
-		//    后流内追加 event:error,让客户端 SDK 据此识别失败(SSE 流式失败规范语义)。
+		// 重试终止返回错误。两种根因,必须分流(旧实现一视同仁,导致客户端断开被误报成
+		// "3 周期×(5 直连+1 兜底) 全部失败"并误回写 overloaded_error,污染上游健康指标):
+		//   A) 客户端上下文取消(入站连接断开:CLI 按 Esc / 本地超时 / 切模型等):重试链路在
+		//      主体内 / 退避 select / 周期间等待 select 任一处命中 ctx.Done 后即带 errNvidiaClientCancelled
+		//      哨兵提前返回。此时真实重试轮次远未到 18 次,客户端已不读响应——回写 503 overloaded_error
+		//      既写不进去(死连接 broken pipe)又虚增 overloaded 计数。故只记一条信息性日志、丢弃未落盘
+		//      框架帧(若 200 头未发)、直接 return;200 头已发则同样 return(补 error 事件客户端收不到且语义错)。
+		//   B) 真·重试耗尽:3 周期×(5 直连+1 兜底) 真的 18 次全断。此时 finalErr 不含哨兵,
+		//      按原语义回写 overloaded_error:
+		//        1) 200 头未发(deferred 未 flush):drop 丢弃框架帧 + 回写 503 overloaded_error,干净失败;
+		//        2) 200 头已发(首条思考实质内容已 flush):无法回退状态码,补闭合 live 残留未闭合块(thinking+body)
+		//           后流内追加 event:error,让客户端 SDK 据此识别失败(SSE 流式失败规范语义)。
 		headerMu.Lock()
 		written := headerWritten
 		headerMu.Unlock()
 		resp.Body.Close()
+
+		if isNvidiaClientCancelled(finalErr) {
+			// A 类:客户端已断开。不回写 overloaded_error(语义错 + 写死连接浪费 + 污染指标)。
+			if !written {
+				liveFW.dropDeferred() // 丢弃暂存的 message_start 等框架帧,确保无半截字节残留
+			}
+			h.log("ℹ️ [NVIDIA Anthropic 流式] 客户端已断开, 终止重试(非上游耗尽, 不回写 overloaded_error): %v", finalErr)
+			return
+		}
+
+		// B 类:真·3 周期×(5 直连+1 兜底) 全部失败,回写 overloaded_error 让 CLI 看到真实上游失败。
 		h.log("🛑 [NVIDIA Anthropic 流式] 上游断流, 3 周期×(5 直连+1 兜底) 全部失败, 回写 overloaded_error: %v", finalErr)
 		if !written {
 			liveFW.dropDeferred() // 丢弃暂存的 message_start 等框架帧,确保 503 回写前无字节落盘
@@ -184,7 +221,10 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 //
 // 超大流保护:蓄流超过 nvidiaReplayMaxBytes(16MiB)判定为超大输出,放弃重试(转 finalErr→overloaded),
 // 不切路径——正文本就实时下发,无"退回边读边写"旧路径可退。
-func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstResp *http.Response, poolAccount *account.Account, targetURL string, upstreamBody []byte, model string, liveFW *flushWriter) (replay *replayWriter, state *liveStreamState, in, out int, finalErr error) {
+//
+// inboundInputTokens 为入站请求本地估算的输入 token 数(保底 1),写入 message_start.usage.input_tokens,
+// 让客户端(Claude Code spinner)在流首即显示 ↑;真实累计值仍由末帧 message_delta.usage 覆盖。
+func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstResp *http.Response, poolAccount *account.Account, targetURL string, upstreamBody []byte, inboundInputTokens int, model string, liveFW *flushWriter) (replay *replayWriter, state *liveStreamState, in, out int, finalErr error) {
 	const (
 		maxRetries = 5
 		// maxCycles 是断流重试的周期数:每周期 = maxRetries 次直连蓄流重试 + 1 次兜底出站代理,
@@ -277,14 +317,14 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				sink = tee
 			} else {
 				if resume == nil {
-					resume = newResumeSink(liveFW, tee.replay, tee.liveThinkingOpen, tee.liveBodyOpenIdx, tee.liveMaxUsedIdx)
+					resume = newResumeSink(liveFW, tee.replay, tee.liveThinkingOpen, tee.liveBodyOpenIdx, tee.liveMaxUsedIdx, tee.liveThinkingPushed)
 				} else {
 					resume.reset()
 				}
 				tee.replay.reset() // 蓄流缓冲复用:重试轮重蓄整条上游内容(由 resumeSink.replay 写入)
 				sink = resume
 			}
-			attemptIn, attemptOut, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, activeBody, activeBody, sink, streamID, model)
+			attemptIn, attemptOut, _, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, activeBody, activeBody, sink, streamID, model, inboundInputTokens)
 			activeBody.Close() // 本轮上游响应体读完即关,下一轮(若有)重拉会拿到全新 body
 
 			// 完整性判定:收到 finish_reason 帧或上游流以 [DONE]/正常 EOF 正常终止,且无上游错误/未 ctx 取消 → 整条 ready。
@@ -293,8 +333,13 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 			// 且 sseErr!=nil,本判定不满足,落入重试路径。
 			if sseErr == nil && (finishEmitted || streamTerminated) {
 				// 成功:构造 live 协议态快照供调用方 replayFollowingInto 决定跳过哪些已 live 块 + 补尾帧。
-				// 首个 attempt 成功(cycle 0 attempt 0,无重试):快照取 tee(liveIdxMap=identity 已 live 的 text,thinkingLive=first-round thinking,最大 idx);
-				// 其后 attempt 成功(重试/续传轮):快照取 resume(indexMap=本轮新开 text 块映射,thinkingLive=false 因重试 thinking 草稿已丢弃不补)。
+				// 首个 attempt 成功(cycle 0 attempt 0,无重试):快照取 tee —— liveIdxMap=identity 已 live 的 text,
+				// thinkingLive=首轮思考是否曾推 live(tee.liveThinkingPushed),liveMaxIdx=首轮已用最大 idx。
+				// 其后 attempt 成功(重试/续传轮):快照取 resume —— indexMap=本轮新开 text 块上游→客户端 idx 映射,
+				// thinkingLive=resume 透传的首轮 thinkingPushed(跨轮保留)。关键:thinkingLive 必须=首轮思考是否已 live,
+				// replayFollowingInto 据此跳过成功轮 replay 的思考头(首轮思考草稿已 live,重发会违反"index 单调不复用"
+				// +"思考先于正文",触发客户端 SDK "Mismatched content block type ... thinking")。
+				// 早期此处误写常量 false,会把首轮已 live 思考后的成功轮 thinking 头原样回放 → index 0 思考块重复开启。
 				if cycle == 0 && attempt == 0 {
 					return tee.replay, &liveStreamState{
 						liveIdxMap:   tee.liveIdxMap,
@@ -307,12 +352,12 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				return resume.replay, &liveStreamState{
 					liveIdxMap:   resume.indexMap,
 					liveMaxIdx:   resume.liveMaxUsedIdx,
-					thinkingLive: false, // 重试轮 thinking 全跳未 live,replayFollowingInto 据此跳过成功轮思考头
+					thinkingLive: resume.liveThinkingPushed, // 透传首轮 thinkingPushed:首轮思考已 live 则跳过成功轮思考头
 				}, attemptIn, attemptOut, nil
 			}
 			// ctx 取消:客户端已断,不再重试,带上 ctx 错误返回。
 			if ctx != nil && ctx.Err() != nil {
-				finalErr = fmt.Errorf("client context cancelled during nvidia stream retry: %w", ctx.Err())
+				finalErr = fmt.Errorf("%w (during nvidia stream retry: %v)", errNvidiaClientCancelled, ctx.Err())
 				if sseErr != nil {
 					finalErr = fmt.Errorf("%v (last sse err: %v)", finalErr, sseErr)
 				}
@@ -335,7 +380,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				// 睡眠 5s 但受 ctx 取消打断,客户端断开立即放弃重试不空跑。
 				select {
 				case <-ctx.Done():
-					finalErr = fmt.Errorf("client context cancelled during retry backoff: %w", ctx.Err())
+					finalErr = fmt.Errorf("%w (during retry backoff: %v)", errNvidiaClientCancelled, ctx.Err())
 					return nil, nil, 0, 0, finalErr
 				case <-time.After(retryWait):
 				}
@@ -360,17 +405,27 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				h.log("🛟 [NVIDIA Anthropic 流式] 周期 %d/%d 直连重试耗尽,切兜底代理 %s 再试 1 轮 账号 %s", cycle+1, maxCycles, fbAddr, poolAccount.Email)
 				resume.reset()
 				tee.replay.reset()
-				fbReplay, fbIn, fbOut, fbFinalErr := h.pullAnthropicStreamOneRoundInto(ctx, fbClient, poolAccount, targetURL, upstreamBody, streamID, model, resume)
+				fbReplay, fbIn, fbOut, fbFinalErr := h.pullAnthropicStreamOneRoundInto(ctx, fbClient, poolAccount, targetURL, upstreamBody, streamID, model, inboundInputTokens, resume)
 				if fbFinalErr == nil && fbReplay != nil {
 					resume.commitPending() // 兜底轮整条 ready:提交重启段落 live + 回填持久态
 					return fbReplay, &liveStreamState{
 						liveIdxMap:   resume.indexMap,
 						liveMaxIdx:   resume.liveMaxUsedIdx,
-						thinkingLive: false, // 兜底轮 thinking 同样草稿丢弃,replayFollowingInto 据此跳过其思考头
+						// 与直连重试成功快照同构:透传首轮 thinkingPushed。兜底轮 thinking 走 resumeSink 同样全跳,
+						// 但首轮思考若已 live,replayFollowingInto 仍须跳过其 replay 思考头,否则 index 0 思考块重复开启。
+						thinkingLive: resume.liveThinkingPushed,
 					}, fbIn, fbOut, nil
 				}
 				if fbFinalErr != nil {
-					finalErr = fmt.Errorf("fallback proxy round also failed (cycle %d/%d): %w", cycle+1, maxCycles, fbFinalErr)
+					// 兜底轮若因客户端 ctx 取消而失败(fbFinalErr 含 errNvidiaClientCancelled 哨兵),
+					// 不再误包成"fallback proxy round also failed"——那是把客户端断开诬成兜底失败。
+					// 直接透传带哨兵的 fbFinalErr,让调用方 isNvidiaClientCancelled 判定为客户端取消,
+					// 走信息性日志 + 不回写 overloaded_error 分支。真·兜底上游故障才落 overloaded 语义。
+					if isNvidiaClientCancelled(fbFinalErr) {
+						finalErr = fbFinalErr
+					} else {
+						finalErr = fmt.Errorf("fallback proxy round also failed (cycle %d/%d): %w", cycle+1, maxCycles, fbFinalErr)
+					}
 				}
 			}
 		}
@@ -380,7 +435,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 			h.log("⏳ [NVIDIA Anthropic 流式] 周期 %d/%d(5 直连+1 兜底)耗尽, 等 %v 后请求计数归零继续 账号 %s", cycle+1, maxCycles, cycleWait, poolAccount.Email)
 			select {
 			case <-ctx.Done():
-				finalErr = fmt.Errorf("client context cancelled during inter-cycle wait: %w", ctx.Err())
+				finalErr = fmt.Errorf("%w (during inter-cycle wait: %v)", errNvidiaClientCancelled, ctx.Err())
 				return nil, nil, 0, 0, finalErr
 			case <-time.After(cycleWait):
 			}
@@ -399,7 +454,8 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 // 与旧 pullAnthropicStreamOneRound 的区别:接受外部 sink(而非自建纯 replayWriter),使兜底轮也能
 // 实时下发正文到 live,与直连重试轮同构,兜底成功后由调用方经 replayFollowingInto 统一补发未 live 段+尾帧。
 // roundLabel 仅用于日志。调用方需在调用前对 sink 做 reset() 并 tee.replay.reset()。
-func (h *APICompatHandler) pullAnthropicStreamOneRoundInto(ctx context.Context, httpClient *http.Client, poolAccount *account.Account, targetURL string, upstreamBody []byte, streamID, model string, sink sseEventSink) (*replayWriter, int, int, error) {
+// inboundInputTokens 透传给 message_start.usage.input_tokens(保底 1),与直连轮同口径。
+func (h *APICompatHandler) pullAnthropicStreamOneRoundInto(ctx context.Context, httpClient *http.Client, poolAccount *account.Account, targetURL string, upstreamBody []byte, streamID, model string, inboundInputTokens int, sink sseEventSink) (*replayWriter, int, int, error) {
 	roundLabel := "兜底"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
 	if err != nil {
@@ -416,7 +472,7 @@ func (h *APICompatHandler) pullAnthropicStreamOneRoundInto(ctx context.Context, 
 		resp.Body.Close()
 		return nil, 0, 0, fmt.Errorf("nvidia upstream (%s) status %d", roundLabel, resp.StatusCode)
 	}
-	attemptIn, attemptOut, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, resp.Body, resp.Body, sink, streamID, model)
+	attemptIn, attemptOut, _, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, resp.Body, resp.Body, sink, streamID, model, inboundInputTokens)
 	resp.Body.Close()
 	// 完整性判定:收到 finish_reason 或 [DONE]/正常 EOF 正常终止,且无上游错误/未 ctx 取消 → 整条 ready。
 	if sseErr == nil && (finishEmitted || streamTerminated) {
@@ -427,8 +483,10 @@ func (h *APICompatHandler) pullAnthropicStreamOneRoundInto(ctx context.Context, 
 		return nil, attemptIn, attemptOut, nil // 防御:非 resumeSink 不应出现
 	}
 	// ctx 取消:带上 ctx 错误返回,调用方据此放弃后续重试。
+	// 用 errNvidiaClientCancelled 哨兵包装,使上层 errors.Is 判定为"客户端取消而非兜底失败",
+	// 避免被误报成"fallback proxy round also failed"并误回写 overloaded_error。
 	if ctx != nil && ctx.Err() != nil {
-		err := fmt.Errorf("client context cancelled during (%s) round: %w", roundLabel, ctx.Err())
+		err := fmt.Errorf("%w (during %s round: %v)", errNvidiaClientCancelled, roundLabel, ctx.Err())
 		if sseErr != nil {
 			err = fmt.Errorf("%v (last sse err: %v)", err, sseErr)
 		}

@@ -707,6 +707,12 @@ func (a *App) ensureRelayInitialized() {
 	// 「使用趋势-NVIDIA」专用桶 (TrackNvidiaRequest), 与综合趋势桶隔离。
 	a.relayCompatAPIMgr.SetGlobalStatsTracker(a.statsTracker)
 
+	// 绑定 OCR 引擎的跨号池路由解析:使 OCR 模型下拉选中带前缀的非 Google 模型
+	// (如 nvidia/xxx、other/openai/xxx)时,OCR 出站能按模型映射路由到对应号池,
+	// 而不是死绑定 Google 家族(18443)。依赖 relayCompatAPIMgr.resolveRoutedTarget,
+	// 故必须在 NewAPICompatHandler 之后调用。
+	a.relayCompatAPIMgr.WireOcrRouteResolver()
+
 	// Start session cleanup timer
 	go func() {
 		ticker := time.NewTicker(10 * time.Minute)

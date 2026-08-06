@@ -17,12 +17,22 @@ import (
 // 否则 VS Code Claude 扩展 SDK 的 MessageAccumulator 解析不到 message.id / message.content，
 // 会报 "Message not found" 并降级为非流式模式——这正是 NVIDIA 中继流式持久失败而 antigravity(Gemini)
 // 链正常工作的根因差异所在（antigravity 链 compat.go:870-882 已按正确嵌套实现）。
-func messageStartPayload(streamID, model string) string {
+//
+// inputTokens 为入站请求本地估算的输入 token 数(保底 1):官方真实 API 在 message_start 即给出
+// 真实 input_tokens(它本身即服务端,请求一进来就知道输入 token);代理经 NVIDIA/Gemini 上游时,
+// 流首物理上拿不到真实输入 token(上游首帧不带),此前置 0 会导致 Claude Code spinner 进行中
+// 只显示 ↓(累计 output)而无 ↑(input),因为客户端读 message_start.usage.input_tokens 拿到 0。
+// 现改为首帧回填本地估算值,让流首即有非零 ↑;真实累计值仍由末帧 message_delta.usage 覆盖,
+// 结算精度(/cost、Stats 面板)不受影响。inputTokens<1 时保底 1,与官方非零语义一致。
+func messageStartPayload(streamID, model string, inputTokens int) string {
 	if model == "" {
 		model = "nvidia"
 	}
 	if streamID == "" {
 		streamID = fmt.Sprintf("msg_nvidia_%d", time.Now().UnixNano())
+	}
+	if inputTokens < 1 {
+		inputTokens = 1 // 保底 1,避免 0 让 CLI 误判上下文为空(与 estimateInputTokens 口径一致)
 	}
 	return jsonString(map[string]interface{}{
 		"type": "message_start",
@@ -34,7 +44,10 @@ func messageStartPayload(streamID, model string) string {
 			"content":       []interface{}{},
 			"stop_reason":   nil,
 			"stop_sequence": nil,
-			"usage": map[string]interface{}{"input_tokens": 0, "output_tokens": 1},
+			// usage:首帧 input_tokens 用入站请求本地估算值(保底 1),让客户端(Claude Code spinner
+			// 进行中)在流首即可显示 ↑;output_tokens 起始占位为 1(官方惯例预扣占位,与 NVIDIA 路径
+			// 历史一致)。真实累计值由末帧 message_delta.usage 覆盖(input/output 双填上游真实值)。
+			"usage":         map[string]interface{}{"input_tokens": inputTokens, "output_tokens": 1},
 		},
 	})
 }

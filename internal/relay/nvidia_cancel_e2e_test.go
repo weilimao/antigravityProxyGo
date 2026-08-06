@@ -38,7 +38,7 @@ func TestNvidiaMultiSessionCancelIsolation_AtoBNotDisturbed(t *testing.T) {
 	var aIn, aOut int
 	go func() {
 		defer close(doneA)
-		aIn, aOut, _ = OpenAIChatSSEToAnthropicSSE(ctxA, bodyA, bodyA, bwA, "z-ai/glm-5.2", nil)
+		aIn, aOut, _, _ = OpenAIChatSSEToAnthropicSSE(ctxA, bodyA, bodyA, bwA, "z-ai/glm-5.2", 0, nil)
 		bwA.Flush()
 	}()
 
@@ -58,7 +58,7 @@ func TestNvidiaMultiSessionCancelIsolation_AtoBNotDisturbed(t *testing.T) {
 	var errB error
 	go func() {
 		defer close(doneB)
-		bIn, bOut, errB = OpenAIChatSSEToAnthropicSSE(ctxB, strings.NewReader(sseB), nil, bwB, "z-ai/glm-5.2", nil)
+		bIn, bOut, _, errB = OpenAIChatSSEToAnthropicSSE(ctxB, strings.NewReader(sseB), nil, bwB, "z-ai/glm-5.2", 0, nil)
 		bwB.Flush()
 	}()
 
@@ -121,7 +121,7 @@ func TestNvidiaMultiSessionCancelBoth_NoCrossCorruption(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				_, _, _ = OpenAIChatSSEToAnthropicSSE(ctx, body, body, bw, "z-ai/glm-5.2", nil)
+				_, _, _, _ = OpenAIChatSSEToAnthropicSSE(ctx, body, body, bw, "z-ai/glm-5.2", 0, nil)
 				bw.Flush()
 			}()
 			select {

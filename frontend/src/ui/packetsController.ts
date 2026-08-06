@@ -481,14 +481,6 @@ export function initPacketsEvents() {
         btnExportPacketsCancel.addEventListener('click', hideExportPacketsModal);
     }
 
-    if (exportPacketsModal) {
-        exportPacketsModal.addEventListener('click', (e: MouseEvent) => {
-            if (e.target === exportPacketsModal) {
-                hideExportPacketsModal();
-            }
-        });
-    }
-
     if (btnExportPacketsConfirm) {
         btnExportPacketsConfirm.addEventListener('click', async () => {
             if (!exportPacketsTypeSelect) return;

@@ -170,6 +170,15 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	// 入站 input_tokens 估算:仅「入站 anthropic + 上游 openai」流式回译路径(replyOpenAIToAnthropic)
+	// 用此值填 message_start.usage.input_tokens,让 Claude Code spinner 在流首即显示 ↑(否则流首 0
+	// 使 spinner 只有 ↓ 无 ↑)。入站为 Anthropic 时 bodyBytes 即 Anthropic Messages 原始 body,用
+	// estimateInputTokensFromBody 估算;非 anthropic 入站不回译 Anthropic 流,inboundInputTokens 留 0。
+	// 真实累计值仍由末帧 message_delta.usage 覆盖,此值仅影响 spinner 进行中的 ↑ 显示。
+	if isMessages {
+		res.inboundInputTokens = estimateInputTokensFromBody(bodyBytes)
+	}
+
 	// 响应回译决策:入站协议 vs 上游 upstremFormat 不一致时转译,一致时纯透传。
 	// inboundFmt 由入站路径推断;upstreamFormat 由 passthroughForward 按组 Formats 决策后落入 res.upstreamFormat。
 	inboundFmt := ""
@@ -189,13 +198,18 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 	}
 	// 响应回译(upstream != inbound):入站 Anthropic + 上游 OpenAI → OpenAI→Anthropic 回译(NVIDIA 复用成果);
 	// 入站 OpenAI/Responses + 上游 Anthropic → Anthropic→OpenAI 回译(passthrough_anthropic.go 成果)。
-	h.passthroughReplyTranslated(w, r, res, isStreaming, inboundFmt, upFmt, upstreamModel)
+	// inboundInputTokens 已在上方(入站 Anthropic 时)写入 res.inboundInputTokens,此处透传给
+	// passthroughReplyTranslated → replyOpenAIToAnthropic → message_start.usage.input_tokens,
+	// 让客户端(Claude Code spinner)流首即显示 ↑;真实累计值仍由末帧 message_delta.usage 覆盖。
+	h.passthroughReplyTranslated(w, r, res, isStreaming, inboundFmt, upFmt, upstreamModel, res.inboundInputTokens)
 }
 
 // passthroughReplyTranslated 在上游协议与入站协议不一致时做响应回译后回写客户端。
 // 复用 NVIDIA 链路的 OpenAI→Anthropic 回译成果(OpenAIChatToAnthropic / OpenAIChatSSEToAnthropicSSE)
 // 与本文件族的 Anthropic→OpenAI 回译成果(AnthropicResponseToOpenAIChat / anthropicSSEToOpenAIChatSSEInto)。
-func (h *APICompatHandler) passthroughReplyTranslated(w http.ResponseWriter, r *http.Request, res *forwardResult, isStreaming bool, inboundFmt, upFmt, model string) {
+// inboundInputTokens 仅「入站 Anthropic + 上游 OpenAI + 流式」分支消费,填 message_start.usage.input_tokens,
+// 让客户端(Claude Code spinner)流首即显示 ↑;其余分支忽略。
+func (h *APICompatHandler) passthroughReplyTranslated(w http.ResponseWriter, r *http.Request, res *forwardResult, isStreaming bool, inboundFmt, upFmt, model string, inboundInputTokens int) {
 	if res == nil || res.resp == nil {
 		// 回退到普通兜底回复(失败路径已在 passthroughReply 处理)。
 		h.passthroughReply(w, r.Context(), res, isStreaming)
@@ -205,7 +219,7 @@ func (h *APICompatHandler) passthroughReplyTranslated(w http.ResponseWriter, r *
 
 	// 入站 Anthropic + 上游 OpenAI → OpenAI→Anthropic 回译(复用 NVIDIA 链路成果)。
 	if inboundFmt == "anthropic" && upFmt == "openai" {
-		h.replyOpenAIToAnthropic(w, r, res, isStreaming, model)
+		h.replyOpenAIToAnthropic(w, r, res, isStreaming, model, inboundInputTokens)
 		return
 	}
 	// 入站 OpenAI/Responses + 上游 Anthropic → Anthropic→OpenAI 回译。
@@ -220,7 +234,9 @@ func (h *APICompatHandler) passthroughReplyTranslated(w http.ResponseWriter, r *
 // replyOpenAIToAnthropic 把上游 OpenAI Chat 响应回译为 Anthropic Messages 响应回写客户端。
 // 复用 OpenAIChatToAnthropic(非流式)与 OpenAIChatSSEToAnthropicSSE(流式),逻辑与 NVIDIA 链路一致。
 // 回写同时捕获 usage 并经 recordOtherUsage 落库(请求日志/模型统计/趋势/中继与账号维度)。
-func (h *APICompatHandler) replyOpenAIToAnthropic(w http.ResponseWriter, r *http.Request, res *forwardResult, isStreaming bool, model string) {
+// inboundInputTokens 为入站 Anthropic 请求本地估算的输入 token 数(保底 1),仅流式分支写入
+// message_start.usage.input_tokens,让客户端(Claude Code spinner)流首即显示 ↑;非流式分支忽略。
+func (h *APICompatHandler) replyOpenAIToAnthropic(w http.ResponseWriter, r *http.Request, res *forwardResult, isStreaming bool, model string, inboundInputTokens int) {
 	resp := res.resp
 	if resp.StatusCode != http.StatusOK {
 		// 上游非 200:错误体原样透传(含错误 JSON),客户端按其协议解析。
@@ -246,12 +262,12 @@ func (h *APICompatHandler) replyOpenAIToAnthropic(w http.ResponseWriter, r *http
 		bw := bufio.NewWriter(w)
 		// 首字节回写即 TTFT 打点(幂等 sync.Once), 与 NVIDIA 链路口径一致。
 		res.logCtx.FirstByteRec.MarkFirstByte()
-		in, out, _ := OpenAIChatSSEToAnthropicSSE(r.Context(), resp.Body, resp.Body, bw, model, flusher)
+		in, out, cached, _ := OpenAIChatSSEToAnthropicSSE(r.Context(), resp.Body, resp.Body, bw, model, inboundInputTokens, flusher)
 		_ = bw.Flush()
 		if flusher != nil {
 			flusher.Flush()
 		}
-		h.recordOtherUsage(res.sess, model, in, out, 0, res.usedAccPtr, res.logCtx)
+		h.recordOtherUsage(res.sess, model, in, out, cached, res.usedAccPtr, res.logCtx)
 		return
 	}
 	bodyBytes, err := io.ReadAll(resp.Body)
@@ -300,11 +316,11 @@ func (h *APICompatHandler) replyAnthropicToOpenAI(w http.ResponseWriter, r *http
 		flusher, _ := w.(http.Flusher)
 		// 首字节回写即 TTFT 打点(幂等 sync.Once), 与 NVIDIA 链路口径一致。
 		res.logCtx.FirstByteRec.MarkFirstByte()
-		in, out, _ := AnthropicSSEToOpenAIChatSSE(resp.Body, w, model)
+		in, out, cached, _ := AnthropicSSEToOpenAIChatSSE(resp.Body, w, model)
 		if flusher != nil {
 			flusher.Flush()
 		}
-		h.recordOtherUsage(res.sess, model, in, out, 0, res.usedAccPtr, res.logCtx)
+		h.recordOtherUsage(res.sess, model, in, out, cached, res.usedAccPtr, res.logCtx)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -325,7 +341,7 @@ func (h *APICompatHandler) replyAnthropicToOpenAI(w http.ResponseWriter, r *http
 	_, _ = w.Write(payload)
 	// 非流式:写出即首字时刻,触发 TTFT 打点(幂等 sync.Once)。
 	res.logCtx.FirstByteRec.MarkFirstByte()
-	h.recordOtherUsage(res.sess, model, anthResp.Usage.InputTokens, anthResp.Usage.OutputTokens, 0, res.usedAccPtr, res.logCtx)
+	h.recordOtherUsage(res.sess, model, anthResp.Usage.InputTokens, anthResp.Usage.OutputTokens, anthResp.Usage.CachedTokens(), res.usedAccPtr, res.logCtx)
 }
 
 func isGoogleProvider(p string) bool {

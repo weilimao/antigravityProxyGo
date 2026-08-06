@@ -34,10 +34,10 @@ type passthroughForward struct {
 
 // forwardResult 透传结果,供调用方决定回写策略。
 type forwardResult struct {
-	resp        *http.Response // 成功时的上游响应(200),调用方负责 Body 关闭与回写
-	statusCode  int            // 失败时最后一次上游/兜底状态码
-	body        []byte         // 失败时的错误体
-	err         error          // 失败原因
+	resp        *http.Response   // 成功时的上游响应(200),调用方负责 Body 关闭与回写
+	statusCode  int              // 失败时最后一次上游/兜底状态码
+	body        []byte           // 失败时的错误体
+	err         error            // 失败原因
 	attempts    int              // 实际尝试次数
 	usedAccount string           // 成功时命中的账号 Email(供日志)
 	usedAccPtr  *account.Account // 成功时命中的账号指针(供 recordOtherUsage 落点2 账号维度统计)
@@ -54,6 +54,11 @@ type forwardResult struct {
 	//   - upstream==openai,inbound==anthropic:OpenAI→Anthropic 回译;
 	//   - upstream==anthropic,inbound==openai:Anthropic→OpenAI 回译。
 	upstreamFormat string
+	// inboundInputTokens 是入站请求本地估算的 input_tokens(保底 1),仅 anthropic 流式响应回译路径
+	// (replyOpenAIToAnthropic)用它填 message_start.usage.input_tokens,让客户端(Claude Code spinner)
+	// 流首即显示 ↑。由 handleRoutedForward 在 pf.run 后据入站 body 估算并注入。0 表示无需(非 anthropic
+	// 入站或非流式),replyOpenAIToAnthropic 内部对 <1 保底为 1。
+	inboundInputTokens int
 }
 
 // passthroughMaxAttempts 是单请求最多换号次数(含首号)。
@@ -155,6 +160,12 @@ func (pf *passthroughForward) run(
 		}
 	}
 
+	// OCR 自递归守卫:本请求若来自 OCR 引擎跨号池出站(携带 X-Antigravity-OCR-Self: 1),
+	// 其 image 块是给所选多模态模型看的,必须原样透传,任何 image→文本降级都应跳过。
+	// 该标志贯穿首构(165)与降级后重构(218)两处 buildUpstreamBody 的 allowOCR,从源头
+	// 让 Anthropic↔OpenAI 各分支的 Downgrade* 都不再触发,防 OCR→OCR 死循环。
+	isOcrSelf := r.Header.Get("X-Antigravity-OCR-Self") == "1"
+
 	// 构造上游请求体(首轮外层 attempt 构造一次;image 降级在 attempt==0 内重新构造)。
 	// 请求转译方向由 (入站协议, upstreamFormat) 决定:
 	//   入站 openai/responses + 上游 openai → 归一化为 OpenAIChatRequest(Responses→OpenAI 转换);
@@ -162,7 +173,7 @@ func (pf *passthroughForward) run(
 	//   入站 anthropic + 上游 anthropic → 原样透传 body(仅 model 改写);
 	//   入站 openai/responses + 上游 anthropic → OpenAIToAnthropicMessages(新写,见 passthrough_anthropic.go);
 	//   入站 responses + 上游 anthropic → Responses→OpenAIChat 再 OpenAI→Anthropic 两步。
-	upstreamBody, buildErr := pf.buildUpstreamBody(bodyBytes, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, true)
+	upstreamBody, buildErr := pf.buildUpstreamBody(bodyBytes, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, !isOcrSelf)
 	if buildErr != nil {
 		res.err = buildErr
 		res.statusCode = http.StatusBadRequest
@@ -207,7 +218,12 @@ func (pf *passthroughForward) run(
 		// image 自愈降级仅在"入站 OpenAI Chat + 上游 OpenAI"路径生效(与既有 passthroughForward 行为一致);
 		// 入站 Anthropic→OpenAI 的 image 降级已在 buildUpstreamBody 的 AnthropicToOpenAIChat 分支内通过
 		// DowngradeAnthropicImagesToText 完成;上游 Anthropic 原生端点接受 Anthropic 协议 image 块,无需降级。
-		if attempt == 0 && (isChat || isResponses) && upstreamFormat == "openai" {
+		// OCR 自递归守卫:若本请求来自 OCR 引擎跨号池出站(携带 X-Antigravity-OCR-Self: 1),
+		// 其 image 块是给所选多模态模型看的,跳过一次降级,原样透传给上游。
+		// 多模态判据:用 pf.h.ocr.modelSupportsImage(upstreamModel) 替代原"upstreamFormat==openai 即降"的盲判 ——
+		// DeepSeek-VL / Qwen-VL / Kimi-K2 等挂在 OpenAI 兼容端点上的多模态模型,显式或启发式命中后自动跳过
+		// 降级、图块原样透传,省 OCR 配额 + 保留原生视觉理解;非多模态上游则照旧降级。
+		if attempt == 0 && (isChat || isResponses) && upstreamFormat == "openai" && r.Header.Get("X-Antigravity-OCR-Self") != "1" && !pf.h.ocr.modelSupportsImage(upstreamModel) {
 			downBody, replacedDown, errDown, ocrHitsDown, ocrMissesDown, ocrSkippedDown := pf.h.ocr.DowngradeOpenAIChatImagesToText(bodyBytes, userSession)
 			if errDown != nil {
 				pf.h.log("⚠️ [路由转发] OpenAI Chat image 自愈降级出错(provider %s | 会话 %s): %v,继续原始请求", poolChannel, ocrSessionDisplay(userSession), errDown)
@@ -339,13 +355,19 @@ func (pf *passthroughForward) buildUpstreamBody(bodyBytes []byte, upstreamModel 
 				return nil, fmt.Errorf("invalid anthropic request: %w", err)
 			}
 			anthReq.Model = upstreamModel
-			if allowOCR && pf.h.ocr != nil {
+			// 多模态判据:上游模型原生支持视觉时跳过 image 降级(图块原样透传,保留原生视觉理解)。
+			// 与外层 attempt==0 的 OpenAI Chat 分支用同一份 pf.h.ocr.modelSupportsImage 判据,
+			// 覆盖 DeepSeek-VL / Qwen-VL / Kimi-K2 等挂在 OpenAI 兼容端点上的多模态上游。
+			if allowOCR && pf.h.ocr != nil && !pf.h.ocr.modelSupportsImage(upstreamModel) {
 				if replaced, errDown, _, _, _ := pf.h.ocr.DowngradeAnthropicImagesToText(&anthReq, userSession); errDown == nil && replaced > 0 {
 					pf.h.log("✅ [路由转发] Anthropic image 降级 %d 块 → OpenAI Chat(会话 %s)", replaced, ocrSessionDisplay(userSession))
 				}
 			}
 			mappings := pf.h.getRelayModelMappingSafe()
-			u, err := AnthropicToOpenAIChat(&anthReq, mappings)
+			// 多模态上游保图:与上方降级闸同一判据,上游原生支持视觉时让翻译层把 image 块转译为
+			// OpenAI Chat Vision 数组形态 content 原样透传(否则旧字符串路径静默丢图)。
+			preserveImages := allowOCR && pf.h.ocr != nil && pf.h.ocr.modelSupportsImage(upstreamModel)
+			u, err := AnthropicToOpenAIChatPreservingImages(&anthReq, preserveImages, mappings)
 			if err != nil {
 				return nil, fmt.Errorf("anthropic->openai transform failed: %w", err)
 			}

@@ -209,6 +209,15 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 		a.AddLog("🔄 NVIDIA Load Balancing Algorithm switched to: " + a.accountMgr.GetNvidiaLBMode())
 		a.emitAccountsRes()
 
+	case "other:set-lb-mode":
+		// args: [groupID, mode]。前端其他:下拉 ipcRenderer.send 走 IPCSend(非 invoke),
+		// 必须在此处理,否则 SetOtherLBMode 永不被调用、粘性无法持久化、切回号池回退轮询。
+		groupID := getStringArg(0)
+		mode := getStringArg(1)
+		a.accountMgr.SetOtherLBMode(groupID, mode)
+		a.AddLog(fmt.Sprintf("🔄 [Other] group %s LB mode → %s", groupID, a.accountMgr.GetOtherLBMode(groupID)))
+		a.emitAccountsRes()
+
 	/* case "pool:toggle-gemini-cli":
 	a.accountMgr.SetGeminiCliPoolMode(getBoolArg(0))
 	if getBoolArg(0) {

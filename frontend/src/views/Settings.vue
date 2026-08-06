@@ -190,7 +190,7 @@
 </div>
 <div class="flex flex-col gap-1.5">
 <label class="text-[12px] font-bold text-outline" data-i18n="customSocks5PasswordLabel">专属 SOCKS5 密码 (可选)</label>
-<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtCustomSocks5Password" placeholder="无" data-i18n-placeholder="optionalPlaceholder" type="password"/>
+<PasswordInput inputId="txtCustomSocks5Password" placeholder="无" dataI18nPlaceholder="optionalPlaceholder" inputClass="w-full px-3 py-2 pr-9 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white"/>
 </div>
 </div>
 </div>
@@ -463,7 +463,7 @@
 </div>
 <div class="flex flex-col gap-1.5">
 <label class="text-[12px] font-bold text-outline" data-i18n="fallbackProxyPasswordLabel">兜底代理密码 (可选)</label>
-<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtFallbackProxyPassword" placeholder="无" data-i18n-placeholder="optionalPlaceholder" type="password"/>
+<PasswordInput inputId="txtFallbackProxyPassword" placeholder="无" dataI18nPlaceholder="optionalPlaceholder" inputClass="w-full px-3 py-2 pr-9 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white"/>
 </div>
 </div>
 </div>
@@ -825,6 +825,7 @@
                         <th class="py-2.5 font-bold pl-2" data-i18n="relayMappingClientModel">客户端请求模型 (Client Model)</th>
                         <th class="py-2.5 font-bold pl-2" data-i18n="relayMappingTargetModel">真实目标模型 (Target Model)</th>
                         <th id="thInjectKwargs" class="py-2.5 font-bold text-center w-[160px] hidden" data-i18n="relayMappingInjectKwargs">注入 Template Kwargs</th>
+                        <th class="py-2.5 font-bold text-center w-[140px]" data-i18n="relayMappingMultimodal">多模态</th>
                         <th class="py-2.5 font-bold text-center w-[120px]" data-i18n="relayMappingExpose">是否公开 (Expose)</th>
                         <th class="py-2.5 font-bold text-center w-[80px]" data-i18n="autoTriggerColAction">操作</th>
                     </tr>
@@ -1012,6 +1013,7 @@ Authorization: Bearer sk-ant-...</pre>
 <script setup lang="ts">
 import { onMounted } from 'vue';
 import UsageHelpPanel from '../components/settings/UsageHelpPanel.vue';
+import PasswordInput from '../components/modals/PasswordInput.vue';
 import { initSettings } from '../ui/settingsController';
 import { initRelayEvents } from '../ui/relayController';
 import { initAboutPanelEvents } from '../ui/updaterController';

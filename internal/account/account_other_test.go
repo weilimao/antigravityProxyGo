@@ -42,6 +42,12 @@ func TestValidateOtherAccountInput_OK(t *testing.T) {
 	if err := ValidateOtherAccountInput(in3); err != nil {
 		t.Fatalf("expected nil error for baseURL with trailing slash, got: %v", err)
 	}
+	// BaseURL 允许内网 http(非 SSL 明文上游端点)。
+	in4 := validOtherInput()
+	in4.BaseURL = "http://112.124.3.174:55555/"
+	if err := ValidateOtherAccountInput(in4); err != nil {
+		t.Fatalf("expected nil error for http baseURL, got: %v", err)
+	}
 }
 
 func TestValidateOtherAccountInput_Errors(t *testing.T) {
@@ -56,8 +62,8 @@ func TestValidateOtherAccountInput_Errors(t *testing.T) {
 		{"groupId 含非法字符", func(in OtherAccountInput) OtherAccountInput { in.GroupID = "OpenAI!"; return in }, "仅允许小写字母"},
 		{"groupId 含空格", func(in OtherAccountInput) OtherAccountInput { in.GroupID = "open ai"; return in }, "仅允许小写字母"},
 		{"空 baseURL", func(in OtherAccountInput) OtherAccountInput { in.BaseURL = ""; return in }, "baseUrl 不能为空"},
-		{"非 https baseURL", func(in OtherAccountInput) OtherAccountInput { in.BaseURL = "http://api.openai.com/v1"; return in }, "https"},
-		{"非法 baseURL", func(in OtherAccountInput) OtherAccountInput { in.BaseURL = "://missing-scheme"; return in }, "https"},
+		{"非法 scheme baseURL", func(in OtherAccountInput) OtherAccountInput { in.BaseURL = "ftp://api.openai.com/v1"; return in }, "http"},
+		{"非法 baseURL", func(in OtherAccountInput) OtherAccountInput { in.BaseURL = "://missing-scheme"; return in }, "http"},
 		{"空 apiKey", func(in OtherAccountInput) OtherAccountInput { in.APIKey = ""; return in }, "apiKey 不能为空"},
 		{"空 formats", func(in OtherAccountInput) OtherAccountInput { in.Formats = nil; return in }, "formats 至少勾选"},
 		{"非法 format", func(in OtherAccountInput) OtherAccountInput { in.Formats = []string{"gemini"}; return in }, "仅支持 openai/anthropic"},

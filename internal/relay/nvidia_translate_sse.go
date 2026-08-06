@@ -17,7 +17,10 @@ import (
 // 从 nvidia_translate.go 拆分而出,仅作物理搬移,逻辑与原文件逐行等价。
 
 // OpenAIChatSSEToAnthropicSSE 实时把 NVIDIA(OpenAI Chat 兼容)的 SSE 流重写成 Anthropic Messages SSE 事件流。
-// reader 读上游 SSE，writer 写 Anthropic SSE。返回累计 input/output tokens。
+// reader 读上游 SSE，writer 写 Anthropic SSE。返回累计 input/output/cached tokens。
+// cached 取上游末帧 usage 的缓存命中口径(prompt_cache_hit_tokens 或 prompt_tokens_details.cached_tokens,
+// 由 OpenAIChatUsage.CachedTokens() 统一解析),供 Other 号池流式回译链路(replyOpenAIToAnthropic)
+// 透传给 recordOtherUsage 驱动缓存命中率/CacheStatus。上游无 cache 字段时返回 0,不报错。
 // 协议事件序列：message_start → (content_block_start/delta/stop × N) → message_delta(usage) → message_stop。
 //
 // ctx 为入站请求的 r.Context()：客户端主动取消时 ctx 被撤销，watchCancel 立即 Close 上游 body,
@@ -28,11 +31,15 @@ import (
 // 本函数为薄委托:将 sink 具体化为 flushWriter(写往 *bufio.Writer + 可选 http.Flusher),
 // 真正的转译逻辑在 openAIChatSSEToAnthropicSSEInto(接收 sseEventSink)。蓄流回放重试链路
 // 直接调 openAIChatSSEToAnthropicSSEInto 传 replayWriter,本函数签名保持不变,所有旧调用零改动。
-func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.ReadCloser, writer *bufio.Writer, model string, flusher ...http.Flusher) (input, output int, err error) {
+//
+// inputTokens 为入站请求本地估算的输入 token 数(保底 1),写入 message_start.usage.input_tokens,
+// 让客户端(Claude Code spinner 进行中)在流首即可显示 ↑(否则流首为 0 会让 spinner 只有 ↓ 无 ↑)。
+// 真实累计值仍由末帧 message_delta.usage 覆盖,结算精度不受影响。
+func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.ReadCloser, writer *bufio.Writer, model string, inputTokens int, flusher ...http.Flusher) (input, output, cached int, err error) {
 	streamID := fmt.Sprintf("msg_nvidia_%d", time.Now().UnixNano())
 	fw := newFlushWriter(streamID, writer, flusher...)
-	input, output, _, _, err = openAIChatSSEToAnthropicSSEInto(ctx, reader, body, fw, streamID, model)
-	return input, output, err
+	input, output, cached, _, _, err = openAIChatSSEToAnthropicSSEInto(ctx, reader, body, fw, streamID, model, inputTokens)
+	return input, output, cached, err
 }
 
 // openAIChatSSEToAnthropicSSEInto 把上游 OpenAI Chat SSE 翻译成 Anthropic SSE,写到 sink(flushWriter 或 replayWriter)。
@@ -48,7 +55,10 @@ func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.
 // 真·断流(unexpected EOF 在 [DONE] 之前打断)会使 streamTerminated=false 且 err!=nil,两条件均不满足 → 重试。
 //
 // 转译逻辑与原 OpenAIChatSSEToAnthropicSSE 逐行等价,仅参数化 sink 与 streamID,并新增 streamTerminated 信号。
-func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body io.ReadCloser, sink sseEventSink, streamID, model string) (input, output int, finishEmitted, streamTerminated bool, err error) {
+//
+// inputTokens 写入 message_start.usage.input_tokens(保底 1),让客户端流首即有非零 ↑;
+// 真实累计值由末帧 message_delta.usage 覆盖。参见 OpenAIChatSSEToAnthropicSSE 的 inputTokens 注释。
+func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body io.ReadCloser, sink sseEventSink, streamID, model string, inputTokens int) (input, output, cached int, finishEmitted, streamTerminated bool, err error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
@@ -59,7 +69,7 @@ func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body
 	}
 
 	// message_start
-	sink.writeEvent("message_start", messageStartPayload(streamID, model))
+	sink.writeEvent("message_start", messageStartPayload(streamID, model, inputTokens))
 
 	blockStates := &sseBlockStates{blocks: map[int]*sseBlock{}}
 	stopReason := ""
@@ -113,6 +123,7 @@ func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body
 		if chunk.Usage != nil {
 			input = chunk.Usage.PromptTokens
 			output = chunk.Usage.CompletionTokens
+			cached = chunk.Usage.CachedTokens()
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -179,7 +190,7 @@ func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body
 	sink.writeEvent("message_delta", messageDeltaPayload(stopReason, input, output))
 	sink.writeEvent("message_stop", `{"type":"message_stop"}`)
 	sink.flush()
-	return input, output, finishEmitted, streamTerminated, err
+	return input, output, cached, finishEmitted, streamTerminated, err
 }
 
 // sseBlock 记录当前打开的内容块(文本或工具调用)在 Anthropic 流中的索引与身份。
@@ -295,6 +306,17 @@ func (s *sseBlockStates) emitThinkingDelta(text string, fw sseEventSink) {
 		idx := s.nextFreeIndex()
 		b = &sseBlock{index: idx, kind: "thinking"}
 		s.blocks[idx] = b
+	}
+	// closed 守卫:thinking 块已被 closeThinkingIfOpen/closeAll 提前闭合(已发 content_block_stop,
+	// b.closed==true,仍占 index 0 位),此时再追推 thinking_delta 会落在已 stop 的(index, thinking)块上,
+	// 违反 Anthropic content_block 的(index, type)配对一致性,触发客户端 SDK 报
+	// "Mismatched content block type content_block_delta thinking"。
+	// 上游异常"思考→正文→再思考"交错时(部分 NIM/GLM 模型 reasoning_content 与 content 交叉下发),
+	// Anthropic 协议要求思考严格先于正文、index 单调不复用,后置思考在协议上无法表达,
+	// 故丢弃该异常思考分片:不改任何块状态、不发任何事件(等同已 closed 块不再收 delta 的语义)。
+	// 此路径只在非 IsReasoningAsText() 模式触发;伪装模式由主循环改走 emitTextDelta,不进本函数。
+	if b.closed {
+		return
 	}
 	if !b.thinkingStarted {
 		b.thinkingStarted = true
@@ -416,4 +438,3 @@ func (s *sseBlockStates) determineStopReason(rawFinishReason string) string {
 		return "end_turn"
 	}
 }
-

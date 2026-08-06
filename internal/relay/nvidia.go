@@ -110,6 +110,13 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 	// start: 入站请求接入时刻, 作为「请求日志」DurationMs 的端到端耗时基准(与 gemini/claude
 	// 直连链路口径一致), 经 writeNvidiaResponse → recordNvidiaUsage 透传到落点5。
 	start := time.Now()
+	// firstByteRec: 全程共享的 TTFT 打点器, 以入站接入时刻 start 为基准。
+	// 修复点: 之前在 writeNvidiaResponse 内新建并到 message_start 才打点, 而 handleNvidia 流式
+	// 分支的 bufio.Peek(1024)(本文件下方)会阻塞到上游累积 ≥1024 字节才放行 writeNvidiaResponse,
+	// 小首帧(<1024B)场景下打点被推迟到请求末尾 → FirstByteMs 兜底≈DurationMs → 前端「响应时间==耗时」。
+	// 现改为在 handleNvidia 唯一成功 200 判定点(下方 line 508, 响应头已到达、Peek 阻塞之前)打点,
+	// TTFT 如实反映上游响应头到达时刻。
+	firstByteRec := stats.NewFirstByteRecorder(start)
 	if h.settingsMgr != nil {
 		enabled := h.settingsMgr.GetEnableDebuggerMode()
 		logPath := h.settingsMgr.GetResolvedDebuggerLogPath()
@@ -295,6 +302,10 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 
 		// 根据入站协议构造发往上游的 OpenAI Chat 请求体
 		var upstreamReq *OpenAIChatRequest
+		// OCR 自递归守卫:本请求若来自 OCR 引擎的跨号池出站(打 18444 /route 命中本池),
+		// 携带 X-Antigravity-OCR-Self: 1,其 image 块是给所选多模态模型看的,必须原样透传,
+		// 不得再次触发 image→文本降级(否则形成 OCR→OCR 死循环)。
+		ocrSelf := r.Header.Get("X-Antigravity-OCR-Self") == "1"
 		if inboundAnthropic {
 			var anthReq AnthropicRequest
 			if err := json.Unmarshal(bodyBytes, &anthReq); err != nil {
@@ -304,24 +315,33 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			}
 			anthReq.Model = upstreamModel
 
-			// image 自愈降级:NVIDIA 上游(glm-5.2 等)不支持多模态,入站 Anthropic 的 image
-			// content block 不能直送上游(否则触发 400/内容丢失)。在转 OpenAI 之前先用本地
-			// Gemini(gemini-2.5-flash)对每张图 OCR,把 image 块原地改写为纯文本块,上游段
-			// 永远只见 text、永远零负担;非多模态模型无任何报错风险。失败不阻断(占位文本兜底)。
+			// image 自愈降级:仅当上游模型不原生支持多模态时才把入站 Anthropic 的 image
+			// content block 先用本地 Gemini(gemini-2.5-flash)OCR 降级为纯文本(避免直送触发 400 /
+			// 内容丢失),上游段永远只见 text、零负担。判据由 h.ocr.modelSupportsImage 统一承载
+			// (配置优先 RelayModelMapping 的 Multimodal 声明位 → 启发式模型名前缀白名单),替代原
+			// "NVIDIA 池一律降"的盲判:NIM 上游若为 qwen-vl / gpt-4o / glm-4v 等多模态模型会自动跳过
+			// 降级、图块原样透传,省 OCR 配额 + 保留原生视觉理解;DeepSeek/glm 等非多模态则照旧降级。
 			// 仅 AnthropicMessage.UnmarshalJSON 解析出 Source 字段后才命中(见 compat_translate.go)。
-			replaced, errDown, ocrHits, ocrMisses, ocrSkipped := h.ocr.DowngradeAnthropicImagesToText(&anthReq, userSession)
-			if errDown != nil {
-				h.log("⚠️ [NVIDIA 中继] image 自愈降级出错(账号 %s | 会话 %s): %v,继续原始请求", poolAccount.Email, ocrSessionDisplay(userSession), errDown)
-			} else if replaced > 0 {
-				// 透出三计数(命中/未命中/窗外占位)与会话 ID,消除"每次请求都打印 OCR 降级"日志的歧义:
-				// 命中=历史图纳秒级直接返回(不烧 antigravity 额度、无 ~3s 延迟);
-				// 未命中=cache miss 真打了 gemini 上游重新 OCR;窗外占位=末尾 10 条之外的图缓存未命中,
-				// 走占位文本兜底,绝不重新 OCR(省配额)。
-				h.log("✅ [NVIDIA 中继] 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(账号 %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replaced, poolAccount.Email, ocrSessionDisplay(userSession), ocrHits, ocrMisses, ocrSkipped)
+			if !ocrSelf && !h.ocr.modelSupportsImage(upstreamModel) {
+				replaced, errDown, ocrHits, ocrMisses, ocrSkipped := h.ocr.DowngradeAnthropicImagesToText(&anthReq, userSession)
+				if errDown != nil {
+					h.log("⚠️ [NVIDIA 中继] image 自愈降级出错(账号 %s | 会话 %s): %v,继续原始请求", poolAccount.Email, ocrSessionDisplay(userSession), errDown)
+				} else if replaced > 0 {
+					// 透出三计数(命中/未命中/窗外占位)与会话 ID,消除"每次请求都打印 OCR 降级"日志的歧义:
+					// 命中=历史图纳秒级直接返回(不烧 antigravity 额度、无 ~3s 延迟);
+					// 未命中=cache miss 真打了 gemini 上游重新 OCR;窗外占位=末尾 10 条之外的图缓存未命中,
+					// 走占位文本兜底,绝不重新 OCR(省配额)。
+					h.log("✅ [NVIDIA 中继] 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(账号 %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replaced, poolAccount.Email, ocrSessionDisplay(userSession), ocrHits, ocrMisses, ocrSkipped)
+				}
 			}
 
 			mappings := h.getRelayModelMappingSafe()
-			u, err := AnthropicToOpenAIChat(&anthReq, mappings)
+			// 多模态上游保图:上游模型原生支持视觉时,image 块不走降级(nvidia.go 上方闸已跳过),
+			// 必须让翻译层把 image 块转译为 OpenAI Chat Vision 数组形态 content 原样透传,否则
+			// AnthropicToOpenAIChat 旧默认分支会静默丢弃图块(字符串 content 装不下 image_url)。
+			// 非多模态 & ocrSelf 自递归 → 走旧字符串路径(零回归)。
+			preserveImages := !ocrSelf && h.ocr.modelSupportsImage(upstreamModel)
+			u, err := AnthropicToOpenAIChatPreservingImages(&anthReq, preserveImages, mappings)
 			if err != nil {
 				h.log("🚫 [NVIDIA 中继] Anthropic→OpenAI 转换失败(账号 %s): %v,回写 400", poolAccount.Email, err)
 				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "anthropic->openai transform failed: " + err.Error()})
@@ -353,12 +373,16 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			//   Unmarshal 成功。(2) NVIDIA 上游(glm-5.2 等)不支持多模态,image_url 直送上游会触发 400 /
 			//   内容丢失;先用本地 Gemini OCR 把每张图降级为纯文本,上游段永远只见 text、零负担。
 			//   失败不阻断(占位文本兜底)。无图时原样返回(零变更)。
-			downBody, replacedDown, errDown, ocrHitsDown, ocrMissesDown, ocrSkippedDown := h.ocr.DowngradeOpenAIChatImagesToText(bodyBytes, userSession)
-			if errDown != nil {
-				h.log("⚠️ [NVIDIA 中继] OpenAI Chat image 自愈降级出错(账号 %s | 会话 %s): %v,继续原始请求", poolAccount.Email, ocrSessionDisplay(userSession), errDown)
-			} else if replacedDown > 0 {
-				h.log("✅ [NVIDIA 中继] OpenAI Chat 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(账号 %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replacedDown, poolAccount.Email, ocrSessionDisplay(userSession), ocrHitsDown, ocrMissesDown, ocrSkippedDown)
-				bodyBytes = downBody
+			// 多模态判据由 h.ocr.modelSupportsImage 统一承载:NIM 上游若为 qwen-vl / gpt-4o / glm-4v 等
+			// 多模态模型会自动跳过降级、图块原样透传(保留原生视觉理解);非多模态则照旧降级。
+			if !ocrSelf && !h.ocr.modelSupportsImage(upstreamModel) {
+				downBody, replacedDown, errDown, ocrHitsDown, ocrMissesDown, ocrSkippedDown := h.ocr.DowngradeOpenAIChatImagesToText(bodyBytes, userSession)
+				if errDown != nil {
+					h.log("⚠️ [NVIDIA 中继] OpenAI Chat image 自愈降级出错(账号 %s | 会话 %s): %v,继续原始请求", poolAccount.Email, ocrSessionDisplay(userSession), errDown)
+				} else if replacedDown > 0 {
+					h.log("✅ [NVIDIA 中继] OpenAI Chat 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(账号 %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replacedDown, poolAccount.Email, ocrSessionDisplay(userSession), ocrHitsDown, ocrMissesDown, ocrSkippedDown)
+					bodyBytes = downBody
+				}
 			}
 			var chatReq OpenAIChatRequest
 			if err := json.Unmarshal(bodyBytes, &chatReq); err != nil {
@@ -506,6 +530,9 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			}
 
 			// 成功 HTTP 200
+			// 上游响应头已到达——在此刻打点 TTFT(幂等 sync.Once), 严格早于下方流式 Peek(1024) 阻塞。
+			// 这样小首帧(<1024B)场景下 FirstByteMs 如实反映上游响应头到达时刻, 不再被 Peek 推迟成≈DurationMs。
+			firstByteRec.MarkFirstByte()
 			if isStreaming {
 				bufReader := bufio.NewReader(resp.Body)
 				peekBytes, _ := bufReader.Peek(1024)
@@ -575,7 +602,16 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			} else if inboundResponses {
 				inboundKind = "responses"
 			}
-			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, targetURL, upstreamBody, start)
+			// 入站 input_tokens 估算:仅 anthropic 流式分支用此值填 message_start.usage.input_tokens,
+			// 让客户端(Claude Code spinner)流首即显示 ↑。非 anthropic/非流式分支忽略此值,传 0 即可
+			// (writeNvidiaResponse 仅在 anthropic+stream 路径透传它,其余路径不读)。estimateInputTokens
+			// 吃 *AnthropicRequest,此处 bodyBytes 是入站原始 body(Anthropic 形态),用其估算;
+			// OpenAI Chat/Responses 入站不回译 Anthropic,无需估算,传 0。
+			var inboundInputTokens int
+			if inboundAnthropic {
+				inboundInputTokens = estimateInputTokensFromBody(bodyBytes)
+			}
+			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, targetURL, upstreamBody, inboundInputTokens, start, firstByteRec)
 			return
 		}
 	}

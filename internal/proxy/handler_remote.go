@@ -253,7 +253,9 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			InputCost:    inputCost,
 			OutputCost:   outputCost,
 			CachedCost:   cachedCost,
-			DurationMs:   time.Since(startTime).Milliseconds(),
+			// DurationMs 采用「第一帧→流结束」的流式耗时(StreamDurationMs, 不含 TTFT);
+			// FirstByteMs 仍为请求→首帧的 TTFT, 以端到端为截断上界。
+			DurationMs:   firstByteRec.StreamDurationMs(time.Now()),
 			FirstByteMs:  firstByteRec.FirstByteMs(time.Since(startTime).Milliseconds()),
 			StatusCode:   resp.StatusCode,
 			Method:       logMethod,
@@ -294,7 +296,9 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			RequestBody:    reqBodyParsed,
 			RequestHeaders: headersMap,
 			SessionID:      sessionID,
-			DurationMs:     time.Since(startTime).Milliseconds(),
+			// DurationMs 采用「第一帧→流结束」的流式耗时(StreamDurationMs, 不含 TTFT);
+			// FirstByteMs 仍为请求→首帧的 TTFT, 以端到端为截断上界。
+			DurationMs:     firstByteRec.StreamDurationMs(time.Now()),
 			FirstByteMs:    firstByteRec.FirstByteMs(time.Since(startTime).Milliseconds()),
 		})
 
