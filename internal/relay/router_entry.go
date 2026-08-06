@@ -170,6 +170,14 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	// 入站请求体注入:供 Other 号池「上游 anthropic 纯透传」分支(proxyPassthroughAnthropic)
+	// 在上游 message_start 缺 input_tokens 时,经 PatchAnthropicMessageStart / EnsureInputTokens
+	// 用入站请求体本地估算补齐,让 Claude Code spinner 流首即显示 ↑。仅 isMessages + 上游
+	// anthropic 分支实际消费;其余分支不读该字段。切片头拷贝零开销。
+	if isMessages {
+		res.inboundBody = bodyBytes
+	}
+
 	// 入站 input_tokens 估算:仅「入站 anthropic + 上游 openai」流式回译路径(replyOpenAIToAnthropic)
 	// 用此值填 message_start.usage.input_tokens,让 Claude Code spinner 在流首即显示 ↑(否则流首 0
 	// 使 spinner 只有 ↓ 无 ↑)。入站为 Anthropic 时 bodyBytes 即 Anthropic Messages 原始 body,用

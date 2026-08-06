@@ -60,6 +60,11 @@ type forwardResult struct {
 	// 流首即显示 ↑。由 handleRoutedForward 在 pf.run 后据入站 body 估算并注入。0 表示无需(非 anthropic
 	// 入站或非流式),replyOpenAIToAnthropic 内部对 <1 保底为 1。
 	inboundInputTokens int
+	// inboundBody 是入站请求原始 body 字节,仅 Other 号池「上游 anthropic 纯透传」分支消费:供
+	// proxyPassthroughAnthropic 在上游 message_start 缺失 input_tokens 时,经 PatchAnthropicMessageStart
+	// / EnsureInputTokens 用入站请求体本地估算补齐,让 Claude Code spinner 流首即显示 ↑。其余分支不读。
+	// 由 handleRoutedForward 在 pf.run 后注入;为切片头拷贝,零额外拷贝开销。
+	inboundBody []byte
 }
 
 // passthroughMaxAttempts 是单请求最多换号次数(含首号)。
@@ -612,6 +617,12 @@ func (h *APICompatHandler) passthroughReply(w http.ResponseWriter, ctx context.C
 // 透传同时嗅探 usage(仿 proxyNvidiaOpenAIPassthrough), 成功路径(200)经 recordOtherUsage
 // 落库(请求日志/模型统计/趋势/中继与账号维度)。非流式先读全量 body 解析 usage 再原样写出;
 // 流式逐行读 SSE 帧、逐帧原样透传, 顺带解析每个 chunk 的 usage 字段(OpenAI 末帧 usage 为权威值)。
+//
+// 按 res.upstreamFormat 分发到对应透传函数:
+//   - upstream anthropic(Other 号池 Anthropic 格式组纯透传):proxyPassthroughAnthropic ——
+//     必须就地修补 message_start.usage.input_tokens(上游缺 0 时本地估算补齐),否则 Claude Code
+//     spinner 流首只有 ↓ 无 ↑;并按 Anthropic 形状(input_tokens/output_tokens)解析 usage 喂统计。
+//   - upstream openai(默认 / 其它号池裸透传):proxyPassthroughOpenAI —— 按 OpenAI 末帧 usage 解析。
 func (h *APICompatHandler) passthroughWriteSuccess(w http.ResponseWriter, res *forwardResult, isStreaming bool) {
 	if res == nil || res.resp == nil {
 		return
@@ -637,7 +648,12 @@ func (h *APICompatHandler) passthroughWriteSuccess(w http.ResponseWriter, res *f
 		w.Header().Set("Connection", "keep-alive")
 	}
 
-	inUsage, outUsage, cachedUsage := h.proxyPassthroughOpenAI(w, res.resp, isStreaming, res.logCtx.FirstByteRec)
+	var inUsage, outUsage, cachedUsage int
+	if res.upstreamFormat == "anthropic" {
+		inUsage, outUsage, cachedUsage = h.proxyPassthroughAnthropic(w, res.resp, isStreaming, res.logCtx.FirstByteRec, res.inboundBody)
+	} else {
+		inUsage, outUsage, cachedUsage = h.proxyPassthroughOpenAI(w, res.resp, isStreaming, res.logCtx.FirstByteRec)
+	}
 	// 成功路径(200)且 usage 非空时记录到五落点;非 200 / usage 为空 → recordOtherUsage 早退。
 	if res.resp.StatusCode == http.StatusOK {
 		h.recordOtherUsage(res.sess, res.usedModel, inUsage, outUsage, cachedUsage, res.usedAccPtr, res.logCtx)
@@ -738,6 +754,192 @@ func (h *APICompatHandler) proxyPassthroughOpenAI(w http.ResponseWriter, resp *h
 		}
 	}
 	return inUsage, outUsage, cachedUsage
+}
+
+// proxyPassthroughAnthropic 透传上游 Anthropic Messages 响应(/v1/messages)到客户端,
+// 同时嗅探 input/output/cached usage 供统计落库 + 补齐 message_start.usage.input_tokens。
+//
+// 设计动机:Anthropic 官方真机在 message_start 即给出真实 input_tokens(服务端一进来即知);
+// 但经第三方 Anthropic 镜像/网关代理时,该流首帧常缺 input_tokens 或为 0,导致 Claude Code
+// 客户端(Claude Code spinner)流首只有 ↓(output 累计)而无 ↑(input) —— 因为其 ↑ 字段
+// 完全由 message_start.usage.input_tokens(+cache_creation/cache_read)驱动,见官方协议:
+// total input = input_tokens + cache_creation_input_tokens + cache_read_input_tokens。
+// 本函数在透传流首 message_start 帧时,若 input_tokens <= 0 则用入站请求体本地估算
+// (PatchAnthropicMessageStart → EnsureInputTokens → estimateInputTokens)就地补齐,
+// 让 spinner 流首即显示非零 ↑;真实累计值仍由末帧 message_delta.usage 覆盖,结算精度不受影响。
+//
+// usage 解析按 Anthropic 形状(message_delta.usage.input_tokens/output_tokens/cumulative),
+// 而非 OpenAI 的 prompt_tokens/completion_tokens(原 proxyPassthroughOpenAI 走 OpenAI 形状,
+// 用于 anthropic 上游会恒读到 0,导致 recordOtherUsage 因 input==0&&output==0 早退、统计漏记)。
+//
+// inboundBody 为入站请求体字节,供补齐时估算;nil/空时由 EnsureInputTokens 保底 1。
+//
+// 返回累计 (input, output, cached):cached 取 message_delta.usage.cache_read_input_tokens。
+func (h *APICompatHandler) proxyPassthroughAnthropic(w http.ResponseWriter, resp *http.Response, isStreaming bool, firstByteRec *stats.FirstByteRecorder, inboundBody []byte) (int, int, int) {
+	if resp == nil {
+		return 0, 0, 0
+	}
+	// 上游非 200: 直接透传错误体, 不嗅探 usage。
+	if resp.StatusCode != http.StatusOK {
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		return 0, 0, 0
+	}
+	if !isStreaming {
+		// 非流式: 全量读 body, 解析 Anthropic usage, 原样透传。
+		// Anthropic 非流式响应顶层 usage 即真实 input/output,无需补齐(镜像是非流式体的 usage 通常齐全);
+		// 仍保险地用 EnsureInputTokens 在 input_tokens<=0 时按入站请求体估算补救。
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":"read upstream passthrough body failed"}`))
+			return 0, 0, 0
+		}
+		var anthResp AnthropicResponse
+		inUsage, outUsage, cachedUsage := 0, 0, 0
+		if json.Unmarshal(bodyBytes, &anthResp) == nil {
+			inUsage = anthResp.Usage.InputTokens
+			outUsage = anthResp.Usage.OutputTokens
+			cachedUsage = anthResp.Usage.CachedTokens()
+			if inUsage <= 0 {
+				inUsage = EnsureInputTokens(0, inboundBody)
+				// 把补齐值回写进透传 body,让客户端拿到(非流式没有 message_start 帧,
+				// 客户端读顶层 usage;补齐后原样写出需改值)。
+				bodyBytes = patchAnthropicNonStreamInputTokens(bodyBytes, inUsage)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(bodyBytes)
+		// 非流式透传:WriteHeader+写出即首字时刻,触发 TTFT 打点(幂等 sync.Once)。
+		if firstByteRec != nil {
+			firstByteRec.MarkFirstByte()
+		}
+		return inUsage, outUsage, cachedUsage
+	}
+
+	// 流式: 逐行嗅探 Anthropic SSE, 逐行透传, message_start 缺 input_tokens 时补齐,
+	// message_delta.usage(input_tokens/output_tokens/cache_read_input_tokens,均为累计)为权威。
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(resp.StatusCode)
+	flusher, _ := w.(http.Flusher)
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	var inUsage, outUsage, cachedUsage int
+	doneSent := false
+	firstByteMarked := false
+	markFirstByte := func() {
+		if firstByteMarked || firstByteRec == nil {
+			return
+		}
+		firstByteMarked = true
+		firstByteRec.MarkFirstByte()
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			_, _ = w.Write([]byte("\n"))
+			if flusher != nil {
+				flusher.Flush()
+			}
+			continue
+		}
+		markFirstByte()
+		// 仅对含 message_start 的 data: 行就地补齐 input_tokens(流首缺失 → Claude Code spinner 无 ↑)。
+		// 其余事件原样透传。
+		outLine := line
+		if strings.HasPrefix(line, "data:") && strings.Contains(line, "message_start") {
+			if patched := PatchAnthropicMessageStart([]byte(line), inboundBody); patched != nil {
+				outLine = string(patched)
+			}
+		}
+		_, _ = w.Write([]byte(outLine + "\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			doneSent = true
+			continue
+		}
+		// Anthropic SSE 事件:取 message_delta.usage 的累计 input/output/cached 作为权威。
+		// message_start 不带 message_delta,但若上游给了 message_start.usage 也读一次作初值兜底。
+		var ev struct {
+			Type  string                  `json:"type"`
+			Delta json.RawMessage         `json:"delta,omitempty"`
+			Usage *AnthropicResponseUsage `json:"usage,omitempty"`
+		}
+		if json.Unmarshal([]byte(data), &ev) != nil {
+			continue
+		}
+		if ev.Type == "message_delta" {
+			// message_delta 的 usage 在顶层(与 delta 平级),且为累计值。
+			var d struct {
+				Usage AnthropicResponseUsage `json:"usage"`
+			}
+			if json.Unmarshal(ev.Delta, &d) == nil && (d.Usage.InputTokens > 0 || d.Usage.OutputTokens > 0) {
+				inUsage = d.Usage.InputTokens
+				outUsage = d.Usage.OutputTokens
+				cachedUsage = d.Usage.CachedTokens()
+			}
+			// 部分 Anthropic 镜像把 usage 放在事件顶层而非 delta 内,作兜底。
+			if ev.Usage != nil && (ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0) {
+				inUsage = ev.Usage.InputTokens
+				outUsage = ev.Usage.OutputTokens
+				cachedUsage = ev.Usage.CachedTokens()
+			}
+		}
+	}
+	if !doneSent {
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	return inUsage, outUsage, cachedUsage
+}
+
+// patchAnthropicNonStreamInputTokens 把非流式 Anthropic 响应体顶层 usage.input_tokens 补齐为 estimated,
+// 兜底场景:第三方 Anthropic 镜像非流式 usage.input_tokens 缺失/为 0 时,保证客户端读到的顶层 usage 非零。
+// 用 map 重编以最小侵入(不破坏其它字段如 content/model);解析失败回退原 body,零负作用。
+func patchAnthropicNonStreamInputTokens(body []byte, estimated int) []byte {
+	if estimated <= 0 || len(body) == 0 {
+		return body
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(body, &obj) != nil {
+		return body
+	}
+	rawUsage, ok := obj["usage"]
+	if !ok {
+		return body
+	}
+	var usage map[string]interface{}
+	if json.Unmarshal(rawUsage, &usage) != nil {
+		return body
+	}
+	cur := 0
+	if v, exists := usage["input_tokens"]; exists {
+		if n, ok := v.(float64); ok {
+			cur = int(n)
+		}
+	}
+	if cur > 0 {
+		return body // 上游已给非零,不覆盖。
+	}
+	usage["input_tokens"] = estimated
+	newUsage, err := json.Marshal(usage)
+	if err != nil {
+		return body
+	}
+	obj["usage"] = newUsage
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // isPassthroughHopHeader 判定是否为透传时应剔除的头(含鉴权,避免泄露 key)。

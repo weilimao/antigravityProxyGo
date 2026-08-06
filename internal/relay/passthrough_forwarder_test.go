@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -414,3 +415,169 @@ func TestBuildPassthroughUpstreamReq_NormalizesDeveloperRole(t *testing.T) {
 
 // 保证 context 包被引用(转发器内部用 r.Context);若未来移除可删。
 var _ = context.Background
+
+// TestPassthroughForward_AnthropicUpstream_PatchesMissingInputTokens 锁定 Other 号池
+// 「Anthropic 格式组 + 入站 Anthropic Messages + 上游 Anthropic 原生端点」纯透传分支:
+// 上游 message_start.usage.input_tokens 缺失/为 0 时,relay 必须就地补齐为非零估值,
+// 让 Claude Code spinner 流首即显示 ↑(否则只有 ↓ 无 ↑)。
+//
+// 这是 input_tokens 不显示的根治点:此前 proxyPassthroughOpenAI 走 OpenAI 形状 chunk.Usage.PromptTokens
+// 解析 Anthropic SSE,恒读到 0,且原样转发上游空 message_start,导致 ↑ 永远为 0/不显示。
+// 现 passthroughWriteSuccess 按 upstreamFormat 分发到 proxyPassthroughAnthropic:
+// 流式经 PatchAnthropicMessageStart 就地补齐 message_start 帧,非流式经 patchAnthropicNonStreamInputTokens
+// 补齐顶层 usage。
+func TestPassthroughForward_AnthropicUpstream_PatchesMissingInputTokens(t *testing.T) {
+	// 上游 Anthropic 镜像:message_start 的 usage.input_tokens 缺失(只有 output_tokens:1),
+	// 末帧 message_delta.usage 给出累计真实 input=42,output=15。模拟第三方 Anthropic 网关
+	// 「流首不给 input_tokens」的常见缺陷。
+	upstreamSSE := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":1}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":42,"output_tokens":15}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte(upstreamSSE))
+		if fl != nil {
+			fl.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	mgr := account.NewManager()
+	mgr.AddAccount(&account.Account{
+		ID: "anth-1", Email: "anth@pool", Provider: "other", AccessToken: "k",
+		BaseURL: upstream.URL, Enabled: true, GroupID: "anthpool", GroupName: "Anthropic 组",
+		Formats:  []string{"anthropic"},
+		Cooldowns: map[string]int64{},
+	})
+
+	h := &APICompatHandler{
+		accountMgr: mgr,
+		settingsMgr: &stubPassThroughSettingsModelMapping{mappings: []settings.ModelMappingEntry{{
+			ClientModel:    "other/anthpool/claude",
+			TargetModel:    "claude",
+			TargetProvider: "other",
+			TargetGroupID:  "anthpool",
+			Expose:         true,
+		}}},
+		logFn:        func(string) {},
+		client:       &http.Client{Timeout: 5 * time.Second},
+		streamClient: &http.Client{Timeout: 0},
+	}
+
+	// 入站 Anthropic Messages 请求:body 含一条较长的 system + user,使本地估算必然 >1。
+	body := `{"model":"other/anthpool/claude","stream":true,"max_tokens":256,"system":"You are a thorough helpful assistant with detailed instructions.","messages":[{"role":"user","content":"请用中文详细回答这个问题并给出完整推理过程"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/route/v1/messages", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.handleRoutedForward(w, req, &RelaySession{UserKey: "t", UserID: "u"})
+
+	out := w.Body.String()
+
+	// 1) 透传后的 message_start 帧必须含补齐后的非零 input_tokens(>1,因入站 body 较长)。
+	// 这是 Claude Code 显示 ↑ 的唯一来源。
+	startIdx := strings.Index(out, "message_start")
+	if startIdx < 0 {
+		t.Fatalf("expected message_start event in passthrough, got:\n%s", out)
+	}
+	// 取 message_start 那段的 data 行。
+	dataIdx := strings.Index(out[startIdx:], `"usage":{"input_tokens":`)
+	if dataIdx < 0 {
+		t.Fatalf("message_start missing usage.input_tokens in passthrough, got:\n%s", out[startIdx:startIdx+400])
+	}
+	seg := out[startIdx+dataIdx : startIdx+dataIdx+60]
+	var patchedInput int
+	if n, _ := fmt.Sscanf(seg, `"usage":{"input_tokens":%d`, &patchedInput); n != 1 {
+		t.Fatalf("could not parse patched input_tokens from %q", seg)
+	}
+	if patchedInput <= 1 {
+		t.Errorf("message_start.input_tokens must be patched to a non-trivial estimate (>1), got %d (out=%s)", patchedInput, out[startIdx:startIdx+300])
+	}
+
+	// 2) message_delta.usage 的累计 output_tokens(15)必须原样透传(不被抹零),保证 ↓ 正常。
+	if !strings.Contains(out, `"output_tokens":15`) {
+		t.Errorf("message_delta.usage.output_tokens (15) must pass through intact, got:\n%s", out)
+	}
+
+	// 3) 事件序列完整:message_start / content_block_delta / message_delta / message_stop 全在。
+	for _, ev := range []string{"message_start", "content_block_delta", "message_delta", "message_stop"} {
+		if !strings.Contains(out, ev) {
+			t.Errorf("expected event %q in passthrough, got:\n%s", ev, out)
+		}
+	}
+}
+
+// TestPassthroughForward_AnthropicUpstream_NonStreamPatchesInputTokens 锁定非流式分支:
+// 上游非流式 Anthropic 响应顶层 usage.input_tokens 为 0 时,经 patchAnthropicNonStreamInputTokens
+// 补齐为非零估值,客户端读到的顶层 usage.input_tokens 必须非零。
+func TestPassthroughForward_AnthropicUpstream_NonStreamPatchesInputTokens(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// 上游非流式 usage.input_tokens 缺失/为 0(部分镜像的非流式 usage 缺字段)。
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"hello"}],"model":"claude","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":7}}`))
+	}))
+	defer upstream.Close()
+
+	mgr := account.NewManager()
+	mgr.AddAccount(&account.Account{
+		ID: "anth-2", Email: "anth2@pool", Provider: "other", AccessToken: "k",
+		BaseURL: upstream.URL, Enabled: true, GroupID: "anthpool", GroupName: "Anthropic 组",
+		Formats:  []string{"anthropic"},
+		Cooldowns: map[string]int64{},
+	})
+
+	h := &APICompatHandler{
+		accountMgr: mgr,
+		settingsMgr: &stubPassThroughSettingsModelMapping{mappings: []settings.ModelMappingEntry{{
+			ClientModel:    "other/anthpool/claude",
+			TargetModel:    "claude",
+			TargetProvider: "other",
+			TargetGroupID:  "anthpool",
+			Expose:         true,
+		}}},
+		logFn:        func(string) {},
+		client:       &http.Client{Timeout: 5 * time.Second},
+		streamClient: &http.Client{Timeout: 0},
+	}
+
+	body := `{"model":"other/anthpool/claude","max_tokens":256,"system":"You are a thorough helpful assistant.","messages":[{"role":"user","content":"请用中文详细回答"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/route/v1/messages", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.handleRoutedForward(w, req, &RelaySession{UserKey: "t", UserID: "u"})
+
+	out := w.Body.String()
+	// 顶层 usage.input_tokens 必须被补齐为非零。
+	var resp struct {
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("non-stream response not valid JSON: %v\n%s", err, out)
+	}
+	if resp.Usage.InputTokens <= 1 {
+		t.Errorf("non-stream usage.input_tokens must be patched to >1, got %d (out=%s)", resp.Usage.InputTokens, out)
+	}
+	if resp.Usage.OutputTokens != 7 {
+		t.Errorf("non-stream usage.output_tokens must pass through intact (7), got %d", resp.Usage.OutputTokens)
+	}
+}
+
