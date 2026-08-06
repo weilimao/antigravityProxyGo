@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -276,6 +277,15 @@ func (pf *passthroughForward) run(
 
 			resp, errDo := httpClient.Do(req)
 			if errDo != nil {
+				// 客户端主动取消/超时(如中断生成、关闭 SSE、断开连接):这是调用方行为,不是上游故障,
+				// 不应计入账号失败并触发号池冷却,否则一次取消就把账号冻结 60s/5min。
+				// 直接按客户端断开终止本轮转发,不换号、不冷却、不剔除。
+				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
+					res.err = errDo
+					res.statusCode = 499 // Client Closed Request
+					pf.h.log("📴 [路由转发] 客户端取消请求(账号 %s 上游 %s): %v,不触发号池冷却", acc.Email, poolChannel, errDo)
+					return res
+				}
 				res.err = errDo
 				res.statusCode = http.StatusBadGateway
 				pf.h.log("⚠️ [路由转发] 账号 %s 访问上游失败: %v", acc.Email, errDo)
@@ -450,6 +460,7 @@ func buildPassthroughUpstreamReq(bodyBytes []byte, upstreamModel string, isStrea
 		if isStreaming {
 			ensureIncludeUsage(&chatReq)
 		}
+		normalizeOpenAIChatRoles(&chatReq)
 		return &chatReq, nil
 	}
 	// Responses 形态(如 Codex /v1/responses):input[] 而非 messages[]。
@@ -460,7 +471,29 @@ func buildPassthroughUpstreamReq(bodyBytes []byte, upstreamModel string, isStrea
 	if isStreaming {
 		ensureIncludeUsage(u)
 	}
+	normalizeOpenAIChatRoles(u)
 	return u, nil
+}
+
+// normalizeOpenAIChatRoles 把 OpenAI Chat/Responses 入站消息的 role 归一化为第三方
+// OpenAI 兼容端点能识别的集合。
+//
+// 背景:OpenAI Codex CLI 等新客户端会把系统提示写成新版规范要求的 "developer" 角色,
+// 并原样经 /route/* 透传到 Other 号池(阿里云 deepseek / 商汤 sensenova 等)的
+// /v1/chat/completions。这些第三方端点仅兼容旧规范,允许的 role 只有
+// system/assistant/user/tool/function,收到 "developer" 会直接回 400
+// (invalid_request_error: "developer is not one of [...]")。
+// 这里在透传前统一把 developer 折叠为 system,语义等价(OpenAI 官方即把 developer 视作
+// system 的命名升级),彻底消除该 400。其余 role 原样保留,零副作用。
+func normalizeOpenAIChatRoles(req *OpenAIChatRequest) {
+	if req == nil {
+		return
+	}
+	for i := range req.Messages {
+		if req.Messages[i].Role == "developer" {
+			req.Messages[i].Role = "system"
+		}
+	}
 }
 
 // ensureIncludeUsage 注入 stream_options.include_usage,确保上游 SSE 末尾吐 usage,
@@ -472,6 +505,65 @@ func ensureIncludeUsage(req *OpenAIChatRequest) {
 	if req.StreamOptions == nil || !req.StreamOptions.IncludeUsage {
 		req.StreamOptions = &ChatStreamOptions{IncludeUsage: true}
 	}
+}
+
+// passthroughReplyResponses 处理「入站 Responses API + 上游 OpenAI Chat」的响应回译。
+// 上游返回 OpenAI Chat JSON/SSE(choices),Codex /v1/responses 客户端需要 Responses 事件流(response.completed)。
+// 复用 NVIDIA 链路的转换器:
+//   - 非流式:读全量上游 JSON → OpenAIChatToResponses → 写 Responses JSON。
+//   - 流式:上游 OpenAI Chat SSE → OpenAIChatSSEToResponsesSSE → Responses SSE 事件序列。
+func (h *APICompatHandler) passthroughReplyResponses(w http.ResponseWriter, r *http.Request, res *forwardResult, isStreaming bool, model string) {
+	if res == nil || res.resp == nil {
+		h.passthroughReply(w, r.Context(), res, isStreaming)
+		return
+	}
+	defer res.resp.Body.Close()
+
+	if res.resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(res.resp.Body)
+		h.log("⚠️ [路由转发 Responses] 上游状态码 %d 非透传 | body: %s", res.resp.StatusCode, truncateBody(bodyBytes, 500))
+		writeResponsesError(w, res.resp.StatusCode, bodyBytes)
+		return
+	}
+
+	if !isStreaming {
+		bodyBytes, err := io.ReadAll(res.resp.Body)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "read upstream body failed: " + err.Error()})
+			return
+		}
+		var chatResp OpenAIChatResponse
+		if err := json.Unmarshal(bodyBytes, &chatResp); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "invalid openai response json: " + err.Error()})
+			return
+		}
+		rr := OpenAIChatToResponses(&chatResp, model)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(jsonString(rr)))
+		if res.logCtx.FirstByteRec != nil {
+			res.logCtx.FirstByteRec.MarkFirstByte()
+		}
+		return
+	}
+
+	// 流式:上游 OpenAI Chat SSE → Responses SSE。
+	flusher, ok := w.(http.Flusher)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	if ok {
+		flusher.Flush()
+	}
+	if res.logCtx.FirstByteRec != nil {
+		res.logCtx.FirstByteRec.MarkFirstByte()
+	}
+	reqID := fmt.Sprintf("passthrough_resp_%d", time.Now().UnixNano())
+	fw := newFlushWriter(reqID, bufio.NewWriter(w), flusher)
+	OpenAIChatSSEToResponsesSSE(r.Context(), res.resp.Body, res.resp.Body, fw, model)
+	fw.flush()
 }
 
 // passthroughReply 把 forwardResult 回写到客户端,并在 upstreamFormat 与入站协议不一致时做响应回译。
@@ -487,6 +579,10 @@ func ensureIncludeUsage(req *OpenAIChatRequest) {
 func (h *APICompatHandler) passthroughReply(w http.ResponseWriter, ctx context.Context, res *forwardResult, isStreaming bool) {
 	if res == nil {
 		writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "route forward: no result"})
+		return
+	}
+	// 客户端主动取消(499):连接已断开,回写无意义,直接返回避免误写 502 掩盖取消语义。
+	if res.statusCode == 499 {
 		return
 	}
 	if res.resp != nil {

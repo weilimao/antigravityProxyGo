@@ -304,10 +304,6 @@ func TestGeminiAnthropicStream_UsageCompliance(t *testing.T) {
 	if deltaParsed.Type != "message_delta" {
 		t.Errorf("message_delta.type 期望 message_delta, 实际=%q", deltaParsed.Type)
 	}
-	if deltaParsed.Usage.InputTokens != 100 {
-		t.Errorf("message_delta.usage.input_tokens 期望 100(累计真实值 PromptTokenCount), 实际=%d",
-			deltaParsed.Usage.InputTokens)
-	}
 	if deltaParsed.Usage.OutputTokens != 42 {
 		t.Errorf("message_delta.usage.output_tokens 期望 42(累计真实值 CandidatesTokenCount), 实际=%d",
 			deltaParsed.Usage.OutputTokens)
@@ -360,9 +356,8 @@ func TestGeminiAnthropicStream_UsageCompliance_ToolUseStopReason(t *testing.T) {
 	if deltaParsed.Delta.StopReason != "tool_use" {
 		t.Errorf("带 functionCall 的 stop_reason 期望 tool_use, 实际=%q", deltaParsed.Delta.StopReason)
 	}
-	if deltaParsed.Usage.InputTokens != 50 || deltaParsed.Usage.OutputTokens != 8 {
-		t.Errorf("tool 路径 usage 双填期望 (50,8), 实际=(%d,%d)",
-			deltaParsed.Usage.InputTokens, deltaParsed.Usage.OutputTokens)
+	if deltaParsed.Usage.OutputTokens != 8 {
+		t.Errorf("tool 路径 usage 期望 output_tokens=8, 实际=%d", deltaParsed.Usage.OutputTokens)
 	}
 }
 

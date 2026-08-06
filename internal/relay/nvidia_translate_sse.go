@@ -187,10 +187,14 @@ func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body
 	if ctx != nil && ctx.Err() != nil && stopReason == "" {
 		stopReason = "end_turn"
 	}
-	sink.writeEvent("message_delta", messageDeltaPayload(stopReason, input, output))
+	finalInput := input
+	if finalInput <= 0 {
+		finalInput = inputTokens
+	}
+	sink.writeEvent("message_delta", messageDeltaPayload(stopReason, output))
 	sink.writeEvent("message_stop", `{"type":"message_stop"}`)
 	sink.flush()
-	return input, output, cached, finishEmitted, streamTerminated, err
+	return finalInput, output, cached, finishEmitted, streamTerminated, err
 }
 
 // sseBlock 记录当前打开的内容块(文本或工具调用)在 Anthropic 流中的索引与身份。

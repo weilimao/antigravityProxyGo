@@ -47,7 +47,12 @@ func messageStartPayload(streamID, model string, inputTokens int) string {
 			// usage:首帧 input_tokens 用入站请求本地估算值(保底 1),让客户端(Claude Code spinner
 			// 进行中)在流首即可显示 ↑;output_tokens 起始占位为 1(官方惯例预扣占位,与 NVIDIA 路径
 			// 历史一致)。真实累计值由末帧 message_delta.usage 覆盖(input/output 双填上游真实值)。
-			"usage":         map[string]interface{}{"input_tokens": inputTokens, "output_tokens": 1},
+			"usage": map[string]interface{}{
+				"input_tokens":                inputTokens,
+				"output_tokens":               1,
+				"cache_creation_input_tokens": 0,
+				"cache_read_input_tokens":     0,
+			},
 		},
 	})
 }
@@ -59,15 +64,14 @@ func messageStartPayload(streamID, model string, inputTokens int) string {
 // input_tokens 填真实累计输入 token 数。早期的硬编码 {"output_tokens":0} 会让部分
 // Claude Code SDK 的 MessageAccumulator 误判流未正常结束，触发"等连接关闭/下次请求
 // 才整条渲染"的退化路径。
-func messageDeltaPayload(stopReason string, inputTokens, outputTokens int) string {
+func messageDeltaPayload(stopReason string, outputTokens int) string {
 	return jsonString(map[string]interface{}{
 		"type": "message_delta",
 		"delta": map[string]interface{}{
-			"stop_reason": stopReason,
+			"stop_reason":   stopReason,
 			"stop_sequence": nil,
 		},
 		"usage": map[string]interface{}{
-			"input_tokens":  inputTokens,
 			"output_tokens": outputTokens,
 		},
 	})

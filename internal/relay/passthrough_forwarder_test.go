@@ -31,6 +31,17 @@ func (s *stubPassThroughSettings) GetRelayModelMapping() []settings.ModelMapping
 	return nil
 }
 
+// stubPassThroughSettingsModelMapping 提供 RelayModelMapping(含 TargetProvider/TargetGroupID),
+// 供需把入站 model 路由到 Other 号池某分组(如 other/aliyun/*)的测试使用。
+type stubPassThroughSettingsModelMapping struct {
+	settings.ManagerInterface
+	mappings []settings.ModelMappingEntry
+}
+
+func (s *stubPassThroughSettingsModelMapping) GetRelayModelMapping() []settings.ModelMappingEntry {
+	return s.mappings
+}
+
 // newPassThroughHandler 构造一个装配了 accountMgr + 自定义 routes 的 handler,
 // client 指向 ts(模拟上游),带 5s 超时以免测试卡死。
 func newPassThroughHandler(t *testing.T, mgr *account.Manager, routes []settings.ModelRouteRule, ts *httptest.Server) *APICompatHandler {
@@ -237,6 +248,168 @@ func TestRouteEndpoints_UnmatchedModel(t *testing.T) {
 func mustRead(r io.Reader) string {
 	b, _ := io.ReadAll(r)
 	return string(b)
+}
+
+// TestPassthroughForward_ClientCancelNoCooldown 客户端主动取消请求(context.Canceled)
+// 不应触发号池冷却:账号 cooldown 保持 0,而不是被 SetAccountCooldownForChannel 冻结 60s。
+func TestPassthroughForward_ClientCancelNoCooldown(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // 客户端取消场景上游等待连接断开
+	}))
+	defer upstream.Close()
+
+	mgr := account.NewManager()
+	mgr.AddAccount(&account.Account{ID: "ali-1", Email: "ali@pool", Provider: "other", AccessToken: "k", BaseURL: upstream.URL, Enabled: true, GroupID: "aliyun", GroupName: "阿里云", Cooldowns: map[string]int64{}})
+
+	// 用 RelayModelMapping 提供 TargetProvider=other + TargetGroupID=aliyun,
+	// 使 resolveRoutedTarget 正确解析出 other 组的 groupId(仅靠 ModelRouteRule 无 TargetGroupID 字段)。
+	h := &APICompatHandler{
+		accountMgr: mgr,
+		settingsMgr: &stubPassThroughSettingsModelMapping{mappings: []settings.ModelMappingEntry{{
+			ClientModel:    "other/aliyun/deepseek-v4-flash-0731",
+			TargetProvider: "other",
+			TargetGroupID:  "aliyun",
+			Expose:         true,
+		}}},
+		logFn:   func(string) {},
+		client:  &http.Client{Timeout: 5 * time.Second},
+		streamClient: &http.Client{Timeout: 0},
+	}
+
+	body := `{"model":"other/aliyun/deepseek-v4-flash-0731","messages":[{"role":"user","content":"hi"}]}`
+
+	// 构造一个启动后即取消的请求上下文,模拟客户端在请求发出前/中主动断开。
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 立即取消 → httpClient.Do 返回 context.Canceled
+
+	req := httptest.NewRequest(http.MethodPost, "/route/v1/chat/completions", strings.NewReader(body))
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	h.handleRoutedForward(w, req, &RelaySession{UserKey: "t", UserID: "u"})
+
+	// 关键断言:不管响应状态码如何,账号绝不能进冷却。
+	acc := mgr.GetAccountByID("ali-1")
+	if acc == nil {
+		t.Fatal("account not found")
+	}
+	for cat, until := range acc.Cooldowns {
+		if until > 0 {
+			t.Errorf("client cancel should NOT trigger cooldown, but category %q cooldown=%d", cat, until)
+		}
+	}
+	t.Logf("client-cancel path returned status %d, cooldowns=%v (expected all zero)", w.Result().StatusCode, acc.Cooldowns)
+}
+
+// TestPassthroughForward_ResponsesInboundRouting 入站 Responses API(/route/v1/responses, Codex)
+// + 上游 OpenAI Chat SSE:响应必须回译为 Responses SSE(含 response.completed),
+// 而非透传 OpenAI Chat SSE(choices+[DONE])——否则 Codex 报
+// 「stream disconnected before completion: stream closed before response.completed」。
+func TestPassthroughForward_ResponsesInboundRouting(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello response\"}}]}\n\n"))
+		if fl != nil {
+			fl.Flush()
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		if fl != nil {
+			fl.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	mgr := account.NewManager()
+	mgr.AddAccount(&account.Account{ID: "ali-1", Email: "ali@pool", Provider: "other", AccessToken: "k", BaseURL: upstream.URL, Enabled: true, GroupID: "aliyun", GroupName: "阿里云", Cooldowns: map[string]int64{}})
+
+	h := &APICompatHandler{
+		accountMgr: mgr,
+		settingsMgr: &stubPassThroughSettingsModelMapping{mappings: []settings.ModelMappingEntry{{
+			ClientModel:    "other/aliyun/deepseek-v4-flash",
+			TargetModel:    "deepseek-v4-flash",
+			TargetProvider: "other",
+			TargetGroupID:  "aliyun",
+			Expose:         true,
+		}}},
+		logFn:        func(string) {},
+		client:       &http.Client{Timeout: 5 * time.Second},
+		streamClient: &http.Client{Timeout: 0},
+	}
+
+	// Codex Responses 请求体:input[] 而非 messages[]。
+	body := `{"model":"other/aliyun/deepseek-v4-flash","stream":true,"input":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/route/v1/responses", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.handleRoutedForward(w, req, &RelaySession{UserKey: "t", UserID: "u"})
+
+	out := w.Body.String()
+
+	// 必须包含 Responses 协议的关键事件:response.created / response.completed。
+	if !strings.Contains(out, "response.completed") {
+		t.Errorf("responses inbound must emit response.completed, got: %s", out)
+	}
+	if !strings.Contains(out, "response.created") {
+		t.Errorf("responses inbound must emit response.created, got: %s", out)
+	}
+	// 不应再透传 OpenAI Chat SSE 的 [DONE] 终止帧(那是 Chat 协议,Responses 客户端不认)。
+	if strings.Contains(out, "[DONE]") {
+		t.Errorf("responses inbound must NOT pass through OpenAI Chat [DONE], got: %s", out)
+	}
+	// 正文增量应出现在 output_text.delta 事件里。
+	if !strings.Contains(out, "output_text.delta") {
+		t.Errorf("content delta should be rewritten as output_text.delta, got: %s", out)
+	}
+}
+
+// TestBuildPassthroughUpstreamReq_NormalizesDeveloperRole 验证透传上游请求体时,
+// Codex 等新客户端带来的 "developer" 角色被归一化为 "system"。
+// 这是 Other 号池(阿里云/商汤等 OpenAI 兼容端点)收到 400
+// "developer is not one of ['system','assistant','user','tool','function']" 的根治点。
+func TestBuildPassthroughUpstreamReq_NormalizesDeveloperRole(t *testing.T) {
+	// OpenAI Chat 直解路径:首条 developer 必须折叠为 system。
+	chatBody := `{"model":"deepseek-chat","messages":[{"role":"developer","content":"you are helpful"},{"role":"user","content":"hi"}]}`
+	chatReq, err := buildPassthroughUpstreamReq([]byte(chatBody), "deepseek-chat", false)
+	if err != nil {
+		t.Fatalf("chat path err: %v", err)
+	}
+	if len(chatReq.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(chatReq.Messages))
+	}
+	if got := chatReq.Messages[0].Role; got != "system" {
+		t.Errorf("chat path: first role = %q, want \"system\"", got)
+	}
+	if got := chatReq.Messages[1].Role; got != "user" {
+		t.Errorf("chat path: second role = %q, want \"user\" (must be untouched)", got)
+	}
+
+	// Responses 路径(Codex /v1/responses):input[0] 为 developer 时同样折叠。
+	respBody := `{"model":"gpt-5.4","input":[{"role":"developer","content":"you are helpful"},{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}`
+	respReq, err := buildPassthroughUpstreamReq([]byte(respBody), "deepseek-chat", false)
+	if err != nil {
+		t.Fatalf("responses path err: %v", err)
+	}
+	if len(respReq.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(respReq.Messages))
+	}
+	if got := respReq.Messages[0].Role; got != "system" {
+		t.Errorf("responses path: first role = %q, want \"system\"", got)
+	}
+	if got := respReq.Messages[1].Role; got != "user" {
+		t.Errorf("responses path: second role = %q, want \"user\" (must be untouched)", got)
+	}
+
+	// 已合规的 system 原样保留,不得被误改。
+	okBody := `{"model":"deepseek-chat","messages":[{"role":"system","content":"s"},{"role":"tool","content":"t","tool_call_id":"x"}]}`
+	okReq, err := buildPassthroughUpstreamReq([]byte(okBody), "deepseek-chat", false)
+	if err != nil {
+		t.Fatalf("ok path err: %v", err)
+	}
+	if got := okReq.Messages[0].Role; got != "system" {
+		t.Errorf("ok path: role = %q, want \"system\" (untouched)", got)
+	}
+	if got := okReq.Messages[1].Role; got != "tool" {
+		t.Errorf("ok path: role = %q, want \"tool\" (untouched)", got)
+	}
 }
 
 // 保证 context 包被引用(转发器内部用 r.Context);若未来移除可删。

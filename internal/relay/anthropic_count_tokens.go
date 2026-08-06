@@ -61,6 +61,19 @@ func (h *APICompatHandler) handleNvidiaCountTokens(w http.ResponseWriter, bodyBy
 	})
 }
 
+// EnsureInputTokens 校验输入 token 数:若 existingTokens > 0 则原样返回;
+// 若已为 0 或缺失,则基于 reqBody 纯本地估算 input_tokens 并保底返回 >= 1。
+func EnsureInputTokens(existingTokens int, reqBody []byte) int {
+	if existingTokens > 0 {
+		return existingTokens
+	}
+	tokens := estimateInputTokensFromBody(reqBody)
+	if tokens < 1 {
+		tokens = 1
+	}
+	return tokens
+}
+
 // estimateInputTokensFromBody 从入站 Anthropic Messages 原始请求体字节估算 input_tokens。
 // 供仅持有原始 body bytes(未解析为 AnthropicRequest)的调用方复用,例如 Other 号池「入站 Anthropic +
 // 上游 OpenAI」响应回译链路首帧 message_start 的 input_tokens 估值填充。解析失败回退保底 1(与

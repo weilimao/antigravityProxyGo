@@ -349,6 +349,9 @@ export function updateViewTabUI() {
 // ==================== Other 号池二级组名子 Tab + Modal 组自动填充 ====================
 // renderOtherGroupTabs:按 state.lastBackendData.otherGroups 渲染 Other 通道下方的组名子 Tab。
 // 0 组时整行隐藏。点击组 Tab 设 state.otherGroupFilter 并触发 renderAccounts 重新过滤。
+// 竞态修复:缓冲 lastBackendData.otherGroups 缺失/为空时(切 Tab 不主动拉、广播未达即可触发),
+// 回退主动调 other:list-groups 拉取真实组列表并写回缓冲后重渲染,避免在其他池切回时整行消失且不恢复。
+let otherGroupTabsSyncInFlight = false;
 export function renderOtherGroupTabs() {
     if (!otherGroupTabs) {
         otherGroupTabs = document.getElementById('otherGroupTabs') as HTMLDivElement | null;
@@ -359,11 +362,45 @@ export function renderOtherGroupTabs() {
         ? state.lastBackendData.otherGroups
         : [];
     // 仅 other 通道显示;0 组时整行隐藏。
-    if (state.currentViewTab !== 'other' || groups.length === 0) {
+    if (state.currentViewTab !== 'other') {
         otherGroupTabs.classList.add('hidden');
         otherGroupTabs.classList.remove('flex');
         otherGroupTabs.innerHTML = '';
-        // 切走 other 通道或 0 组时回到「全部组」默认过滤,避免残留上一个组过滤。
+        // 切走 other 通道时回到「全部组」默认过滤,避免残留上一个组过滤。
+        state.otherGroupFilter = 'ALL';
+        return;
+    }
+
+    // 竞态兜底:当前处于 other 通道但缓冲里没有组列表(广播未达/被薄载荷覆盖),主动向后端拉一次。
+    // 拉取成功即写回缓冲并重绘;确认后端确实 0 组才隐藏。用 in-flight 标志防并发重复请求。
+    if (groups.length === 0 && !otherGroupTabsSyncInFlight) {
+        otherGroupTabsSyncInFlight = true;
+        const tabEl = otherGroupTabs;
+        syncOtherGroupsFromBackend().then(reloaded => {
+            otherGroupTabsSyncInFlight = false;
+            if (reloaded) {
+                // 已写回 lastBackendData.otherGroups 并重渲染,无需再走隐藏分支。
+                return;
+            }
+            // 后端确认 0 组(或拉取失败):保留隐藏态,避免空 Tab 行占位。
+            const curGroups = (state.lastBackendData && Array.isArray(state.lastBackendData.otherGroups))
+                ? state.lastBackendData.otherGroups
+                : [];
+            if (curGroups.length === 0) {
+                tabEl.classList.add('hidden');
+                tabEl.classList.remove('flex');
+                tabEl.innerHTML = '';
+                state.otherGroupFilter = 'ALL';
+                renderOtherLBMode();
+            }
+        });
+        return;
+    }
+
+    if (groups.length === 0) {
+        otherGroupTabs.classList.add('hidden');
+        otherGroupTabs.classList.remove('flex');
+        otherGroupTabs.innerHTML = '';
         state.otherGroupFilter = 'ALL';
         return;
     }
@@ -428,6 +465,29 @@ export function renderOtherGroupTabs() {
 
     // 组内 LB 模式下拉已移至工具栏(otherLBModeContainer),见 renderOtherLBMode。
     renderOtherLBMode();
+}
+
+// syncOtherGroupsFromBackend:主动调 other:list-groups 拉取真实 Other 组列表,写回
+// state.lastBackendData.otherGroups 后重渲染 renderOtherGroupTabs。返回 true 表示已成功写回并重绘。
+// 用于修复「切回 Other 池时缓冲里 otherGroups 为空 → 二级组名 Tab 整行消失且不恢复」的竞态。
+async function syncOtherGroupsFromBackend(): Promise<boolean> {
+    try {
+        const res = await ipcRenderer.invoke('other:list-groups');
+        const list = (res && res.success && Array.isArray(res.groups)) ? res.groups : [];
+        if (!state.lastBackendData) {
+            state.lastBackendData = {};
+        }
+        // 写回缓冲,让后续 renderOtherGroupTabs / renderOtherLBMode / renderOtherGroupFetchButtons 复用。
+        state.lastBackendData.otherGroups = list;
+        if (list.length > 0) {
+            renderOtherGroupTabs();
+            return true;
+        }
+        return false;
+    } catch (e) {
+        console.error('[renderOtherGroupTabs] syncOtherGroupsFromBackend failed:', e);
+        return false;
+    }
 }
 
 // renderOtherLBMode:在工具栏(otherLBModeContainer)渲染当前 Other 组过滤对应的负载均衡方式下拉。

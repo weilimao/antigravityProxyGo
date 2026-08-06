@@ -71,16 +71,13 @@ func (h *APICompatHandler) handleStreamResponse(
 	hasFunctionCall := false
 	openAIRoleSent := false
 
+	startInputTokens := inboundInputTokens
+	if startInputTokens < 1 {
+		startInputTokens = 1 // 保底 1,避免 0 让 CLI 误判上下文为空
+	}
+
 	// Anthropic 协议下，开始流时首发 message_start
 	if apiFormat == "anthropic" {
-		// input_tokens 保底 1:官方 message_start 即给真实 input_tokens(服务端请求一进来即知道),
-		// 代理经 Gemini 上游时流首拿不到真实值,此前置 0 会让 Claude Code spinner 只显示 ↓ 无 ↑。
-		// 现用入站请求本地估算值(estimateInputTokens,由调用方传 inboundInputTokens)填首帧,
-		// 让 spinner 流首即有非零 ↑;真实累计值仍由末帧 message_delta.usage 覆盖。
-		startInputTokens := inboundInputTokens
-		if startInputTokens < 1 {
-			startInputTokens = 1 // 保底 1,避免 0 让 CLI 误判上下文为空
-		}
 		msgStart := map[string]interface{}{
 			"type": "message_start",
 			"message": map[string]interface{}{
@@ -94,7 +91,12 @@ func (h *APICompatHandler) handleStreamResponse(
 				// usage:首帧 input_tokens 用入站请求本地估算值(保底 1),让客户端(Claude Code spinner
 				// 进行中)在流首即可显示 ↑;output_tokens 起始占位为 1(官方惯例预扣占位,与 NVIDIA 路径
 				// messageStartPayload 历史一致)。真实累计值由末帧 message_delta.usage 覆盖。
-				"usage":         map[string]interface{}{"input_tokens": startInputTokens, "output_tokens": 1},
+				"usage": map[string]interface{}{
+					"input_tokens":                startInputTokens,
+					"output_tokens":               1,
+					"cache_creation_input_tokens": 0,
+					"cache_read_input_tokens":     0,
+				},
 			},
 		}
 		msgStartBytes, _ := json.Marshal(msgStart)
@@ -883,11 +885,7 @@ func (h *APICompatHandler) handleStreamResponse(
 				"stop_reason":   stopReason,
 				"stop_sequence": nil,
 			},
-			// usage:官方明确 message_delta 的 token 计数为累计值(cumulative),
-			// 故 input_tokens 填本轮累计输入(PromptTokenCount)、output_tokens 填累计输出
-			// (CandidatesTokenCount)。与 NVIDIA 路径 messageDeltaPayload 双填对齐,
-			// 让严格客户端(Claude Code SDK)的用度归集完整,松散客户端忽略多余字段不受影响。
-			"usage": map[string]interface{}{"input_tokens": inTokens, "output_tokens": outTokens},
+			"usage": map[string]interface{}{"output_tokens": outTokens},
 		}
 		msgDeltaBytes, _ := json.Marshal(msgDelta)
 		fmt.Fprintf(w, "event: message_delta\ndata: %s\n\n", string(msgDeltaBytes))

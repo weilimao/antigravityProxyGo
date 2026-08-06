@@ -192,6 +192,13 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		upFmt = "openai"
 	}
 	// 非 other 号池或 deepseek/qwen 等 openai 兼容上游:res.upstreamFormat 留空视作 openai,与入站 openai/chat 一致 → 纯透传。
+	if isResponses && upFmt == "openai" {
+		// 入站 Responses API(codex /v1/responses) + 上游 OpenAI Chat:响应必须回译为 Responses 事件流,
+		// 否则 Codex 收到 OpenAI Chat SSE(choices+[DONE])会判定「stream closed before response.completed」。
+		// 复用 NVIDIA 链路的 OpenAIChat*→Responses 转换器(nvidia_responses.go)。
+		h.passthroughReplyResponses(w, r, res, isStreaming, upstreamModel)
+		return
+	}
 	if inboundFmt == upFmt || (provider != "other" && upFmt == "openai") {
 		h.passthroughReply(w, r.Context(), res, isStreaming)
 		return

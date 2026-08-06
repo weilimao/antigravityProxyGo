@@ -783,8 +783,12 @@ export function initRelayEvents() {
                 <td class="py-2 text-center inject-kwargs-cell ${isNvidiaTab ? '' : 'hidden'}">
                     <input type="checkbox" class="text-primary focus:ring-primary rounded inject-kwargs-checkbox" ${item.injectChatTemplateKwargs !== false ? 'checked' : ''} data-index="${index}" title="是否向 NVIDIA 等上游注入 chat_template_kwargs (默认勾选)" />
                 </td>
-                <td class="py-2 text-center">
-                    <input type="checkbox" class="text-primary focus:ring-primary rounded multimodal-checkbox ${item.multimodal === false ? 'opacity-50' : ''}" ${item.multimodal === true ? 'checked' : ''} ${item.multimodal === false ? 'data-force-off' : ''} data-index="${index}" title="原生支持视觉(多模态)。勾选=跳过本地 OCR 降级、图块直送上游;取消并再次点击可强制非多模态" />
+                <td class="py-2 text-center px-1">
+                    <select class="px-2 py-1 text-[11px] rounded border border-outline-variant/30 bg-slate-50 dark:bg-[#1a1f30] text-on-surface dark:text-white multimodal-select cursor-pointer w-28 text-center focus:outline-none focus:border-primary" data-index="${index}" title="多模态模式：自动判定(启发式) / 强制多模态(直送) / 强制非多模态(OCR)">
+                        <option value="auto" ${item.multimodal === undefined || item.multimodal === null ? 'selected' : ''}>自动判定</option>
+                        <option value="true" ${item.multimodal === true ? 'selected' : ''}>强制多模态</option>
+                        <option value="false" ${item.multimodal === false ? 'selected' : ''}>强制非多模态</option>
+                    </select>
                 </td>
                 <td class="py-2 text-center">
                     <input type="checkbox" class="text-primary focus:ring-primary rounded expose-checkbox" ${item.expose ? 'checked' : ''} data-index="${index}" />
@@ -885,54 +889,35 @@ export function initRelayEvents() {
             });
         });
 
-        tbody.querySelectorAll('.inject-kwargs-checkbox').forEach(chk => {
-            chk.addEventListener('change', (e) => {
-                const target = e.target as HTMLInputElement;
+        tbody.querySelectorAll('.multimodal-select').forEach(sel => {
+            sel.addEventListener('change', (e) => {
+                const target = e.target as HTMLSelectElement;
                 const idx = parseInt(target.getAttribute('data-index') || '0');
-                currentTabMappings[idx].injectChatTemplateKwargs = target.checked;
-            });
-        });
-
-        // 多模态三态循环:auto(undefined) → 多模态(true) → 强制非多模态(false) → auto。
-        // 后端 settings.ModelMappingEntry.Multimodal 为 *bool 三态:
-        //   - undefined/nil:自动(默认,按模型名前缀启发式判定);
-        //   - true:显式多模态 → 跳过 OCR 降级、图块原样直送上游;
-        //   - false:显式非多模态 → 强制 OCR 降级(否决启发式误判,冷门 -vl 名也强制降)。
-        // 用点击事件覆盖原生 checkbox 切换,循环推进状态;原生 change 事件禁用以免双触发。
-        tbody.querySelectorAll('.multimodal-checkbox').forEach(chk => {
-            chk.addEventListener('click', (e) => {
-                e.preventDefault(); // 阻止原生 toggle(状态由 cycle 驱动)
-                const target = e.target as HTMLInputElement;
-                const idx = parseInt(target.getAttribute('data-index') || '0');
-                const cur = currentTabMappings[idx].multimodal;
-                let next: boolean | undefined;
-                if (cur === true) {
-                    next = false;
-                } else if (cur === false) {
-                    next = undefined; // 回到 auto
+                const val = target.value;
+                if (val === 'true') {
+                    currentTabMappings[idx].multimodal = true;
+                } else if (val === 'false') {
+                    currentTabMappings[idx].multimodal = false;
                 } else {
-                    next = true;
-                }
-                currentTabMappings[idx].multimodal = next;
-                // 回写 UI 三态:true→勾选;false→未勾选+data-force-off 标灰置灰;auto→未勾选(无标记)。
-                target.checked = next === true;
-                if (next === false) {
-                    target.setAttribute('data-force-off', '');
-                    target.classList.add('opacity-50');
-                } else {
-                    target.removeAttribute('data-force-off');
-                    target.classList.remove('opacity-50');
+                    currentTabMappings[idx].multimodal = undefined; // 默认自动判定模式
                 }
             });
         });
 
-        tbody.querySelectorAll('.expose-checkbox').forEach(chk => {
-            chk.addEventListener('change', (e) => {
-                const target = e.target as HTMLInputElement;
-                const idx = parseInt(target.getAttribute('data-index') || '0');
+        tbody.onclick = (e) => {
+            const target = (e.target as HTMLElement).closest('input[type="checkbox"]') as HTMLInputElement | null;
+            if (!target) {
+                return;
+            }
+            const idx = parseInt(target.getAttribute('data-index') || '-1');
+            if (idx < 0 || idx >= currentTabMappings.length) return;
+
+            if (target.classList.contains('expose-checkbox')) {
                 currentTabMappings[idx].expose = target.checked;
-            });
-        });
+            } else if (target.classList.contains('inject-kwargs-checkbox')) {
+                currentTabMappings[idx].injectChatTemplateKwargs = target.checked;
+            }
+        };
     }
 
     (window as any)._relayAddTab = () => {

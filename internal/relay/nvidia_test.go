@@ -938,9 +938,6 @@ func TestOpenAIChatSSEToAnthropicSSE_AnthropicUsageCompliance(t *testing.T) {
 		if parsed.Delta.StopReason != "end_turn" {
 			t.Errorf("message_delta.delta.stop_reason 期望 end_turn, 实际=%q", parsed.Delta.StopReason)
 		}
-		if parsed.Usage.InputTokens != 100 {
-			t.Errorf("message_delta.usage.input_tokens 期望 100(累计真实值), 实际=%d", parsed.Usage.InputTokens)
-		}
 		if parsed.Usage.OutputTokens != 42 {
 			t.Errorf("message_delta.usage.output_tokens 期望 42(累计真实值), 实际=%d", parsed.Usage.OutputTokens)
 		}
