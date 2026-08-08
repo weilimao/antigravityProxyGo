@@ -37,6 +37,7 @@ const translations: Translations = {
         totalTokens: "Token总使用量",
         cachedTokens: "缓存Token数量",
         cacheHitRate: "缓存命中率",
+        poolFilterLabel: "号池",
         memoryUsage: "内存占用",
         sysProcess: "活跃进程:",
         
@@ -885,6 +886,7 @@ const translations: Translations = {
         totalTokens: "Total Tokens",
         cachedTokens: "Cached Tokens",
         cacheHitRate: "Cache Hit Rate",
+        poolFilterLabel: "Pool",
         memoryUsage: "Memory Usage",
         sysProcess: "Active Processes:",
         

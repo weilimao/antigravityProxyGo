@@ -1,5 +1,6 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
+import { saveText } from '../shared/fileService';
 import { generateSinglePacketMarkdown, formatJsonText } from './packetFormatter';
 import i18n from '../shared/i18n';
 
@@ -270,15 +271,11 @@ export function initPacketsEvents() {
                 alert(state.currentLanguage === 'zh' ? '请先选择一条接口数据包进行导出' : 'Please select a packet to export first.');
                 return;
             }
-            try {
-                const md = generateSinglePacketMarkdown(selectedPacket);
-                const success = await ipcRenderer.invoke('packet:export-single', md, selectedPacket.method, selectedPacket.path);
-                if (success) {
-                    alert(state.currentLanguage === 'zh' ? '接口数据包已成功导出为 Markdown 文件！' : 'Packet successfully exported as Markdown!');
-                }
-            } catch (err: any) {
-                alert((state.currentLanguage === 'zh' ? '导出失败: ' : 'Export failed: ') + err.message);
-            }
+            await saveText(
+                { channel: 'packet:export-single', args: [generateSinglePacketMarkdown(selectedPacket), selectedPacket.method, selectedPacket.path] },
+                state.currentLanguage === 'zh' ? '接口数据包已成功导出为 Markdown 文件！' : 'Packet successfully exported as Markdown!',
+                state.currentLanguage === 'zh' ? '导出失败: ' : 'Export failed: ',
+            );
         });
     }
 
@@ -423,10 +420,11 @@ export function initPacketsEvents() {
                 return;
             }
 
-            const success = await ipcRenderer.invoke('packet:download', generatedDocContent);
-            if (success) {
-                alert(state.currentLanguage === 'zh' ? '接口文档成功保存！' : 'API documentation saved successfully!');
-            }
+            await saveText(
+                { channel: 'packet:download', args: [generatedDocContent] },
+                state.currentLanguage === 'zh' ? '接口文档成功保存！' : 'API documentation saved successfully!',
+                state.currentLanguage === 'zh' ? '保存失败: ' : 'Failed to save: ',
+            );
         });
     }
 
@@ -596,9 +594,12 @@ export function initPacketsEvents() {
 
             try {
                 // Invoke backend download log
-                const success = await ipcRenderer.invoke('packet:export-log', md, exportType);
-                if (success) {
-                    alert(state.currentLanguage === 'zh' ? '接口日志成功导出并保存！' : 'Interface logs exported and saved successfully!');
+                const saved = await saveText(
+                    { channel: 'packet:export-log', args: [md, exportType] },
+                    state.currentLanguage === 'zh' ? '接口日志成功导出并保存！' : 'Interface logs exported and saved successfully!',
+                    state.currentLanguage === 'zh' ? '导出失败: ' : 'Export failed: ',
+                );
+                if (saved === 'saved') {
                     hideExportPacketsModal();
                 }
             } catch (err: any) {

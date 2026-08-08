@@ -79,7 +79,11 @@
 </div>
 <!-- 指标 3: 缓存命中率 -->
 <div class="glass-card rounded-xl p-5 flex flex-col gap-2 relative overflow-hidden">
+<div class="flex items-center justify-between gap-2">
 <div class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="cacheHitRate">缓存命中率</div>
+<!-- 号池筛选下拉: 默认 antigravity, 可选 NVIDIA / Other 各组(动态组列表来自 state.lastBackendData.otherGroups)。各池/组分子分母独立互不串扰。 -->
+<select id="poolFilterSelect" class="text-[11px] bg-slate-100 dark:bg-white/5 border border-outline-variant/20 rounded-md px-1.5 py-0.5 text-slate-600 dark:text-slate-400 focus:outline-none focus:ring-1 focus:ring-primary/40 max-w-[140px]"></select>
+</div>
 <div class="flex items-center justify-between mt-1">
 <div class="flex flex-col">
 <span class="text-[24px] font-data-mono font-medium text-emerald-600 dark:text-emerald-400" id="valHitRate">0.0%</span>

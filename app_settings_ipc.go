@@ -321,6 +321,7 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		})
 		if err == nil && dir != "" {
 			_ = a.settingsMgr.SetDebuggerLogPath(dir)
+			a.dialogSvc.MemoizeDir(dir)
 			wailsRuntime.EventsEmit(a.ctx, "settings:debugger-log-path-res", dir)
 			a.AddLog(fmt.Sprintf("⚙️ Debugger 调试日志目录已选择: %s", dir))
 		}

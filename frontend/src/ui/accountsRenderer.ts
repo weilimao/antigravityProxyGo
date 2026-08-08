@@ -916,7 +916,15 @@ export function renderAccounts(accounts: any[]) {
             btnDownload.innerHTML = `<span class="material-symbols-outlined text-[14px]">download</span> ${dict.btnExport || '导出'}`;
             btnDownload.title = dict.exportAccountTitle || '导出该账号文件';
             btnDownload.onclick = () => {
-                ipcRenderer.send('accounts:export-single', acc.id);
+                // 走统一文件服务(invoke)(accountsController 注册的全局方法):
+                // 后端负责对话框 + 目录记忆 + 保存成功后精确定位文件。
+                const fn = (window as any).exportSingleAccount;
+                if (typeof fn === 'function') {
+                    fn(acc.id);
+                } else {
+                    // 兜底仍走 invoke,避免单向 send 无法回传成功态导致误报。
+                    void ipcRenderer.invoke('accounts:export-single', acc.id);
+                }
             };
 
             const btnDelete = document.createElement('button');

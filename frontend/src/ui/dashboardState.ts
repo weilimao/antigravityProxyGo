@@ -13,6 +13,10 @@ export interface DashboardState {
     // currentTrendScope: 使用趋势的数据维度切换。'all' = 综合趋势(原全局桶, 口径零回归);
     // 'nvidia' = NVIDIA 号池专用桶(由后端 TrackNvidiaRequest 累加, 仅含号池用量)。
     currentTrendScope: 'all' | 'nvidia';
+    // currentPoolFilter: 缓存命中率卡片的号池筛选。key 同后端 GlobalStats.Pools:
+    // "antigravity"(默认) / "nvidia" / "other:<groupId>"。各池/组分子分母独立互不串扰。
+    // 远端模式 stats.pools 缺失时, computeHitRateByPool 兜底回退旧三档全量口径。
+    currentPoolFilter: string;
     allRequests: any[];
     searchQuery: string;
     currentRange: string;
@@ -86,6 +90,7 @@ const state: DashboardState = {
     trendsData: [],
     nvidiaTrendsData: [],
     currentTrendScope: 'all',
+    currentPoolFilter: 'antigravity',
     allRequests: [],
     searchQuery: '',
     currentRange: '24h',

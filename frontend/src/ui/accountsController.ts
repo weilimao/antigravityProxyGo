@@ -1,7 +1,13 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
+import { saveText, openLocalFolder } from '../shared/fileService';
 import { showOneStopAuthModal } from './accountsAuthModal';
+import {
+    nvidiaRevealAccountId,
+    otherRevealAccountId,
+    setRevealKeyWarning
+} from '../shared/revealKeyState';
 import {
     initRendererElements,
     renderAccounts,
@@ -9,6 +15,25 @@ import {
     loadAccountQuota,
     getNvidiaCooldownRemaining
 } from './accountsRenderer';
+import * as hitRateFilter from './hitRateFilter';
+
+// 统一导出账号配置（走 fileService：后端负责对话框、目录记忆、保存成功后自动打开文件夹）。
+async function exportAccountConfig(provider: string) {
+    await saveText(
+        { channel: 'accounts:export-all', args: [provider] },
+        state.currentLanguage === 'zh' ? '账号配置已成功导出！' : 'Account configuration exported successfully!',
+        state.currentLanguage === 'zh' ? '导出失败: ' : 'Export failed: ',
+    );
+}
+
+// 导出单账号配置（全局暴露，供 accountsRenderer 中每账号"导出"按钮调用）。
+(window as any).exportSingleAccount = async (accId: string) => {
+    await saveText(
+        { channel: 'accounts:export-single', args: [accId] },
+        state.currentLanguage === 'zh' ? '账号配置已成功导出！' : 'Account configuration exported successfully!',
+        state.currentLanguage === 'zh' ? '导出失败: ' : 'Export failed: ',
+    );
+};
 
 // NVIDIA 冷却秒级翻牌倒计时定时器：单实例、自驱动、自停止。
 // 由 renderAccounts 末尾的 ensureNvidiaCooldownTimer 启动；tick 每秒只更新
@@ -1211,6 +1236,19 @@ export function initAccountsEvents() {
     if (btnNvidiaModalSave) btnNvidiaModalSave.addEventListener('click', submitNvidiaAccount);
     if (btnNvidiaFetchModels) btnNvidiaFetchModels.addEventListener('click', fetchNvidiaModels);
 
+    // 明文查看失败提示统一挂到 NVIDIA 模态框 error 红条:
+    // 单例 handler 会在打开/关闭编辑弹窗时的各对应函数中被重新注入,这里仅保证「有兜底」。
+    setRevealKeyWarning((msg: string) => {
+        if (nvidiaModalError) {
+            nvidiaModalError.textContent = msg;
+            nvidiaModalError.classList.remove('hidden');
+        }
+        if (otherModalError) {
+            otherModalError.textContent = msg;
+            otherModalError.classList.remove('hidden');
+        }
+    });
+
     // NVIDIA 全局专属模型清单 Modal:事件绑定 + 来源事件订阅(仅绑定一次)
     if (!nvidiaPreferredSourceRespEventBound) {
         ipcRenderer.on('settings:nvidia-preferred-models-res', (_e: any, res: any) => {
@@ -1237,15 +1275,31 @@ export function initAccountsEvents() {
     if (chkNvidiaPreferredSelectAllRight) chkNvidiaPreferredSelectAllRight.addEventListener('change', toggleNvidiaPreferredSelectAllRight);
 
     if (btnExportAccounts) {
-        btnExportAccounts.addEventListener('click', () => {
+        btnExportAccounts.addEventListener('click', async () => {
             const provider = state.currentViewTab || 'antigravity';
-            ipcRenderer.send('accounts:export-all', provider);
+            // 导出账号配置：走统一文件服务，后端负责对话框+目录记忆+自动打开文件夹
+            await exportAccountConfig(provider);
         });
     }
 
     if (btnImportAccounts) {
-        btnImportAccounts.addEventListener('click', () => {
-            ipcRenderer.send('accounts:import');
+        btnImportAccounts.addEventListener('click', async () => {
+            // 导入账号配置：后端 Open 对话框 + 目录记忆。
+            // 后端返回 {success, added, dir}：dir 为本次导入文件所在目录，
+            // 据此"定位到之前选择的文件夹"，与导出侧行为对称。
+            try {
+                const res = await ipcRenderer.invoke('accounts:import');
+                const payload = (res && typeof res === 'object') ? res : null;
+                if (!payload || payload.success === false) {
+                    // 后端表示用户取消或失败，不做提示
+                    return;
+                }
+                if (typeof payload.dir === 'string' && payload.dir) {
+                    openLocalFolder(payload.dir);
+                }
+            } catch (err) {
+                console.error('Failed to import accounts:', err);
+            }
         });
     }
 
@@ -1436,6 +1490,9 @@ export function initAccountsGlobalEvents() {
                 state.currentAccountsList = data.accounts;
                 // 每当后端广播账号快照,刷新 Other 二级组名子 Tab(新增/删除组、计数变化即时反映)。
                 renderOtherGroupTabs();
+                // 同步刷新缓存命中率卡片的号池筛选下拉(Other 组新增/删除时即时反映);
+                // dirty-check 仅在组列表变化时才重建, 不覆盖用户的 hover/选中态。
+                hitRateFilter.renderPoolFilterSelect();
                 // 只有当 DOM 列表容器存在时才重新绘制账号卡片
                 const accountsListEl = document.getElementById('accountsList');
                 if (accountsListEl) {
@@ -2111,6 +2168,8 @@ function openNvidiaAccountModal() {
 
     // 添加态:清空编辑态标记(标题/保存按钮文案由 data-i18n 静态文本承载,无需复位)。
     nvidiaEditId = null;
+    // 复位明文查看目标:添加态不允许从后端取回明文 Key。
+    nvidiaRevealAccountId.value = null;
 
     // Clear previous inputs
     const inputBaseUrl = document.getElementById('inputNvidiaBaseUrl') as HTMLInputElement;
@@ -2161,6 +2220,10 @@ function closeNvidiaAccountModal() {
     nvidiaAccountModalContainer.classList.remove('scale-100');
     nvidiaAccountModalContainer.classList.add('scale-95');
     nvidiaAccountModal.classList.add('opacity-0', 'pointer-events-none');
+    // 复位明文查看目标:确保「关闭→重新编辑同一账号」时 PasswordInput 的 watch
+    // 能被 null→acc.id 的变化触发(否则 revealed/show 不复位,而输入框已被 openEdit 清空,
+    // 眼睛会卡在「已取回」分支跳过 IPC,导致永远取不回明文)。
+    nvidiaRevealAccountId.value = null;
 }
 
 // 当前处于编辑态的 NVIDIA 账号 id(添加态为 null),供 submitNvidiaAccount 区分 add/update。
@@ -2172,6 +2235,8 @@ export function openEditNvidiaAccount(acc: any) {
     if (!nvidiaAccountModal || !nvidiaAccountModalContainer) return;
 
     nvidiaEditId = acc.id;
+    // 明文查看:把当前编辑账号 id 注入 PasswordInput(revealProvider="nvidia" 时据此取明文)。
+    nvidiaRevealAccountId.value = acc.id;
 
     const inputBaseUrl = document.getElementById('inputNvidiaBaseUrl') as HTMLInputElement;
     const inputApiKey = document.getElementById('inputNvidiaApiKey') as HTMLInputElement;
@@ -2389,6 +2454,8 @@ function openOtherAccountModal() {
 
     // 添加态:清空编辑态标记。
     otherEditId = null;
+    // 复位明文查看目标:添加态不允许从后端取回明文 Key。
+    otherRevealAccountId.value = null;
 
     const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
     const inputGroupName = document.getElementById('inputOtherGroupName') as HTMLInputElement | null;
@@ -2432,6 +2499,8 @@ function closeOtherAccountModal() {
     otherAccountModalContainer.classList.remove('scale-100');
     otherAccountModalContainer.classList.add('scale-95');
     otherAccountModal.classList.add('opacity-0', 'pointer-events-none');
+    // 复位明文查看目标:同 closeNvidiaAccountModal,保证「关闭→重新编辑同一账号」眼睛可再次取明文。
+    otherRevealAccountId.value = null;
 }
 
 // 当前处于编辑态的 Other 账号 id(添加态为 null),供 submitOtherAccount 区分 add/update。
@@ -2443,6 +2512,8 @@ export function openEditOtherAccount(acc: any) {
     if (!otherAccountModal || !otherAccountModalContainer) return;
 
     otherEditId = acc.id;
+    // 明文查看:把当前编辑账号 id 注入 PasswordInput(revealProvider="other" 时据此取明文)。
+    otherRevealAccountId.value = acc.id;
 
     const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
     const inputGroupName = document.getElementById('inputOtherGroupName') as HTMLInputElement | null;

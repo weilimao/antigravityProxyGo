@@ -570,6 +570,47 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		a.AddLog(fmt.Sprintf("✅ [Other] 成功获取到 %d 个模型 (group=%s baseURL=%s)", len(models), groupID, baseURL))
 		data, _ := marshalResponse(map[string]interface{}{"success": true, "models": models})
 		return data, true, nil
+
+	case "account:reveal-key":
+		// 明文查看 API Key(编辑号池账号时眼睛切明文)。
+		// args: [accountId, provider] —— provider 限定可被查看明文的池类型(nvidia / other),
+		// 对齐 other:remove/toggle 的安全守卫:账号必须存在且 Provider 匹配,否则拒绝下发。
+		// 安全说明(用户已确认):这是唯一把明文 Key 下发给渲染层的通道,仅用于编辑态"看回 Key";
+		// GetAccounts()/renderAccounts 仍保持脱敏,不扩散明文到列表/抓包展示。
+		accID := ""
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				accID = s
+			}
+		}
+		provider := ""
+		if len(args) > 1 {
+			if s, ok := args[1].(string); ok {
+				provider = s
+			}
+		}
+		provider = strings.ToLower(strings.TrimSpace(provider))
+		if accID == "" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "缺少 accountId"})
+			return data, true, nil
+		}
+		if provider != "nvidia" && provider != "other" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "provider 仅支持 nvidia/other"})
+			return data, true, nil
+		}
+		acc := a.accountMgr.GetAccountByID(accID)
+		if acc == nil || strings.ToLower(strings.TrimSpace(acc.Provider)) != provider {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "账号不存在或非 " + provider + " 类型"})
+			return data, true, nil
+		}
+		plainKey := acc.GetAccessToken()
+		if strings.TrimSpace(plainKey) == "" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "该账号未配置 API Key"})
+			return data, true, nil
+		}
+		a.AddLog(fmt.Sprintf("🔍 [%s] 明文查看 Key 账号 id=%s group=%s", provider, accID, acc.GroupID))
+		data, _ := marshalResponse(map[string]interface{}{"success": true, "apiKey": plainKey})
+		return data, true, nil
 	}
 
 	return "", false, nil

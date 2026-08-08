@@ -1,9 +1,11 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
+import { saveText } from '../shared/fileService';
 import * as chartRenderer from './chartRenderer';
 import * as usageDetails from './usageDetails';
 import * as pricingController from './pricingController';
+import * as hitRateFilter from './hitRateFilter';
 import { refreshDataDir } from './migrationController';
 import { initAppVersion } from './updaterController';
 import { startOtpTimer, stopOtpTimer } from './otpController';
@@ -559,6 +561,12 @@ export function setLanguage(lang: string) {
     }
 
     updateStatusLabel();
+    // 语言切换后缓存命中率卡片的下拉文案需重建:重置 dirty-check sig 强制下次重画。
+    hitRateFilter.resetPoolFilterSig();
+    hitRateFilter.renderPoolFilterSelect();
+    if (state.statsData) {
+        hitRateFilter.computeHitRateByPool(state.statsData);
+    }
     ipcRenderer.send('get-state');
 
     // Trigger re-rendering of dynamic UI components with the new language
@@ -832,6 +840,12 @@ export function initDashboardEvents() {
     valSuccessRate = document.getElementById('valSuccessRate');
     modelsTableBody = document.querySelector('#modelsTable tbody');
     logsTableBody = document.querySelector('#logsTable tbody');
+
+    // 缓存命中率卡片号池筛选下拉: 绑定 change 监听(只需绑一次) + 首次渲染选项。
+    // renderActiveView 内的 computeHitRateByPool/renderPoolFilterSelect 会在每次 stats-updated
+    // 经 dirty-check 重建选项, 这里 init 时先绑监听 + 画一次初始下拉(account-res 已推送过 otherGroups)。
+    hitRateFilter.bindPoolFilterSelect();
+    hitRateFilter.renderPoolFilterSelect();
 
     // 绑定事件委托：全局唯一代理日志表格中“查看”按钮的点击事件，支持 DOM 节点重置
     document.addEventListener('click', (e: Event) => {
@@ -1170,7 +1184,7 @@ export function initDashboardEvents() {
 
     // Export Logs Button
     if (btnExportLogs) {
-        btnExportLogs.addEventListener('click', () => {
+        btnExportLogs.addEventListener('click', async () => {
             try {
                 let text = '';
                 if (consoleBody) {
@@ -1181,7 +1195,12 @@ export function initDashboardEvents() {
                 if (!text) {
                     text = '暂无日志内容 / No logs available';
                 }
-                ipcRenderer.send('settings:export-logs', text);
+                const saved = await saveText(
+                    { channel: 'settings:export-logs', args: [text] },
+                    state.currentLanguage === 'zh' ? '系统日志已成功导出！' : 'System logs exported successfully!',
+                    state.currentLanguage === 'zh' ? '导出失败: ' : 'Export failed: ',
+                );
+                void saved;
             } catch (err) {
                 console.error('Failed to export logs:', err);
             }
@@ -1242,7 +1261,10 @@ export function initDashboardEvents() {
         const { stats, trends, nvidiaTrends, requests, usage } = payload;
 
         // Construct current payload signature for dirty-checking
-        const statsSig = stats ? `${stats.totalRequests}_${stats.totalErrors}_${stats.totalRetries}_${stats.totalInputTokens}_${stats.totalOutputTokens}_${stats.totalCachedTokens}_${stats.totalCacheEligibleInputTokens || 0}_${stats.totalCost}` : '';
+        // poolsSig 纳入: Pools 子聚合(号池/组命中率分子分母)变化时强制重画命中率卡片,
+        // 否则各池新增 token 时 sig 不变会被短路, 卡片停在旧数值。
+        const poolsSig = stats && stats.pools ? JSON.stringify(stats.pools) : '';
+        const statsSig = stats ? `${stats.totalRequests}_${stats.totalErrors}_${stats.totalRetries}_${stats.totalInputTokens}_${stats.totalOutputTokens}_${stats.totalCachedTokens}_${stats.totalCacheEligibleInputTokens || 0}_${stats.totalCost}_${poolsSig}` : '';
         const trendsLen = trends ? trends.length : 0;
         // nvidiaTrendsLen 纳入 sig: NVIDIA 号池桶有新数据时强制通过 renderActiveView 重画,
         // 否则 sig 不变会被短路, 导致「NVIDIA」Tab 曲线不更新。
@@ -1435,51 +1457,10 @@ export function renderActiveView() {
         if (barTokensIn) barTokensIn.style.width = `${inPercent}%`;
         if (barTokensOut) barTokensOut.style.width = `${outPercent}%`;
 
-        // 缓存命中率分母计算（消除历史残余小分母导致 > 100% 的异常）：
-        // 1. 优先从 models 模型列表中聚合 cachedTokens > 0 的模型的 inTokens，精准剔除 0% 缓存的模型（如 NVIDIA z-ai/glm-5.2 等无缓存请求）；
-        // 2. 若 Backend 下发的 totalCacheEligibleInputTokens >= totalCachedTokens，使用该字段；
-        // 3. 兜底使用 totalInputTokens。
-        const totalCached = Number(stats.totalCachedTokens || 0);
-        let hitDenom = 0;
-
-        if (stats.models && typeof stats.models === 'object') {
-            let modelEligibleSum = 0;
-            for (const mKey in stats.models) {
-                const m = stats.models[mKey];
-                if (m) {
-                    const cTokens = Number(m.cachedTokens || m.CachedTokens || 0);
-                    const iTokens = Number(m.inTokens || m.InTokens || 0);
-                    if (cTokens > 0) {
-                        modelEligibleSum += iTokens;
-                    }
-                }
-            }
-            if (modelEligibleSum >= totalCached && modelEligibleSum > 0) {
-                hitDenom = modelEligibleSum;
-            }
-        }
-
-        if (hitDenom <= 0) {
-            const rawCE = Number(stats.totalCacheEligibleInputTokens || stats.cacheEligibleInputTokens || 0);
-            if (rawCE >= totalCached && rawCE > 0) {
-                hitDenom = rawCE;
-            }
-        }
-
-        if (hitDenom <= 0) {
-            hitDenom = Number(stats.totalInputTokens || 0);
-        }
-
-        let rawHitRate = hitDenom > 0 ? (totalCached / hitDenom * 100) : 0;
-        if (rawHitRate > 100) {
-            rawHitRate = 100;
-        }
-        const hitRate = rawHitRate;
-        if (valHitRate) valHitRate.textContent = hitRate.toFixed(1) + '%';
-        if (valCached) valCached.textContent = chartRenderer.formatCompactNumber(stats.totalCachedTokens);
-        if (valSavedCost) valSavedCost.textContent = `$${(stats.totalCachedTokens * 0.3125 / 1000000).toFixed(2)}`;
-
-        if (gaugeCircle) gaugeCircle.setAttribute('stroke-dasharray', `${hitRate.toFixed(1)}, 100`);
+        // 缓存命中率: 按号池/组筛选(新口径, 各池/组独立互不串扰; 缺失则兜底旧三档全量)。
+        // 同时尝试重建下拉选项(dirty-check, 组列表变化才重建, 不覆盖用户交互)。
+        hitRateFilter.computeHitRateByPool(stats);
+        hitRateFilter.renderPoolFilterSelect();
 
         // 2. Draw SVG Area Trend line (throttled; only when trends actually change)
         maybeDrawTrendChart();

@@ -101,74 +101,6 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			a.AddLog(fmt.Sprintf("🔄 Account %s AI Credit Overages is now %s.", acc.Email, statusStr))
 		}
 
-	case "accounts:export-all":
-		provider := getStringArg(0)
-		var defaultName string
-		var logMsg string
-		switch provider {
-		case "antigravity":
-			defaultName = "accounts_antigravity_export.json"
-			logMsg = "📥 [账号导出] 成功导出 Antigravity 官方账号"
-		case "project":
-			defaultName = "accounts_project_export.json"
-			logMsg = "📥 [账号导出] 成功导出 谷歌云项目 API 账号"
-		case "nvidia":
-			defaultName = "accounts_nvidia_export.json"
-			logMsg = "📥 [账号导出] 成功导出 NVIDIA 号池账号"
-		default:
-			defaultName = "accounts_export.json"
-			logMsg = "📥 [账号导出] 成功导出所有账号"
-		}
-
-		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
-			Title:       "导出账号配置",
-			DefaultName: defaultName,
-			Filters:     []dialogs.FileFilter{{DisplayName: "JSON Files", Pattern: "*.json"}},
-		})
-		if ok {
-			accounts := a.accountMgr.GetRawAccountsByProvider(provider)
-			if accounts == nil {
-				accounts = []*account.Account{}
-			}
-			data, _ := json.MarshalIndent(map[string]interface{}{"accounts": accounts}, "", "  ")
-			_ = os.WriteFile(filePath, data, 0644)
-			a.AddLog(logMsg)
-		}
-
-	case "accounts:export-single":
-		acc := a.accountMgr.GetAccountByID(getStringArg(0))
-		if acc != nil {
-			filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
-				Title:       "导出单账号配置",
-				DefaultName: fmt.Sprintf("account_%s.json", acc.Email),
-				Filters:     []dialogs.FileFilter{{DisplayName: "JSON Files", Pattern: "*.json"}},
-			})
-			if ok {
-				data, _ := json.MarshalIndent(map[string]interface{}{"accounts": []*account.Account{acc}}, "", "  ")
-				_ = os.WriteFile(filePath, data, 0644)
-				a.AddLog("📥 [账号导出] 成功导出账号: " + acc.Email)
-			}
-		}
-
-	case "accounts:import":
-		filePath, ok, _ := a.dialogSvc.Open(a.ctx, dialogs.OpenRequest{
-			Title:   "导入账号配置",
-			Filters: []dialogs.FileFilter{{DisplayName: "JSON Files", Pattern: "*.json"}},
-		})
-		if ok {
-			if fileData, err := os.ReadFile(filePath); err == nil {
-				var wrapper struct {
-					Accounts []*account.Account `json:"accounts"`
-				}
-				if json.Unmarshal(fileData, &wrapper) == nil && len(wrapper.Accounts) > 0 {
-					addedCount := a.accountMgr.ImportAccountsList(wrapper.Accounts)
-					if addedCount > 0 {
-						a.AddLog(fmt.Sprintf("📥 [账号导入] 成功导入 %d 个账号", addedCount))
-					}
-				}
-			}
-		}
-
 	case "pool:toggle":
 		a.accountMgr.SetPoolMode(getBoolArg(0))
 		if getBoolArg(0) {
@@ -383,24 +315,18 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 			os.Exit(0)
 		}
 
-	case "settings:export-logs":
-		logContent := getStringArg(0)
-		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
-			DefaultName: fmt.Sprintf("system_logs_%s.txt", time.Now().Format("20060102150405")),
-			Title:       "Export System Logs",
-			Filters:     []dialogs.FileFilter{{DisplayName: "Text Files", Pattern: "*.txt"}},
-		})
-		if ok && filePath != "" {
-			err := os.WriteFile(filePath, []byte(logContent), 0644)
-			if err != nil {
-				a.AddLog(fmt.Sprintf("❌ Failed to export system logs: %v", err))
-			} else {
-				a.AddLog(fmt.Sprintf("✅ System logs exported to: %s", filePath))
-			}
-		}
-
 	case "settings:open-folder":
-		a.OpenPath(getStringArg(0))
+		// 打开本地目录/文件(URL 走浏览器,本地路径走文件管理器精确定位)。
+		// 供导入后打开目录、下载定位文件等场景。
+		pathVal := getStringArg(0)
+		if pathVal == "" {
+			return
+		}
+		if strings.HasPrefix(pathVal, "http://") || strings.HasPrefix(pathVal, "https://") {
+			a.OpenPath(pathVal)
+		} else {
+			a.OpenFolderInExplorer(pathVal)
+		}
 	}
 }
 
@@ -443,6 +369,115 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 	}
 
 	switch channel {
+	case "accounts:export-all":
+		provider := getStringArg(0)
+		var defaultName string
+		var logMsg string
+		switch provider {
+		case "antigravity":
+			defaultName = "accounts_antigravity_export.json"
+			logMsg = "📥 [账号导出] 成功导出 Antigravity 官方账号"
+		case "project":
+			defaultName = "accounts_project_export.json"
+			logMsg = "📥 [账号导出] 成功导出 谷歌云项目 API 账号"
+		case "nvidia":
+			defaultName = "accounts_nvidia_export.json"
+			logMsg = "📥 [账号导出] 成功导出 NVIDIA 号池账号"
+		default:
+			defaultName = "accounts_export.json"
+			logMsg = "📥 [账号导出] 成功导出所有账号"
+		}
+
+		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+			Title:       "导出账号配置",
+			DefaultName: defaultName,
+			Filters:     []dialogs.FileFilter{{DisplayName: "JSON Files", Pattern: "*.json"}},
+		})
+		if !ok {
+			return marshalResponse(false)
+		}
+		accounts := a.accountMgr.GetRawAccountsByProvider(provider)
+		if accounts == nil {
+			accounts = []*account.Account{}
+		}
+		data, _ := json.MarshalIndent(map[string]interface{}{"accounts": accounts}, "", "  ")
+		if err := os.WriteFile(filePath, data, 0644); err != nil {
+			a.AddLog(fmt.Sprintf("❌ [账号导出] 写盘失败: %v", err))
+			return marshalResponse(false)
+		}
+		a.AddLog(logMsg)
+		// 保存成功后自动打开文件夹并精确定位到该文件
+		a.dialogSvc.RevealFile(filePath)
+		return marshalResponse(true)
+
+	case "accounts:export-single":
+		acc := a.accountMgr.GetAccountByID(getStringArg(0))
+		if acc == nil {
+			return marshalResponse(false)
+		}
+		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+			Title:       "导出单账号配置",
+			DefaultName: fmt.Sprintf("account_%s.json", acc.Email),
+			Filters:     []dialogs.FileFilter{{DisplayName: "JSON Files", Pattern: "*.json"}},
+		})
+		if !ok {
+			return marshalResponse(false)
+		}
+		data, _ := json.MarshalIndent(map[string]interface{}{"accounts": []*account.Account{acc}}, "", "  ")
+		if err := os.WriteFile(filePath, data, 0644); err != nil {
+			a.AddLog(fmt.Sprintf("❌ [账号导出] 写盘失败: %v", err))
+			return marshalResponse(false)
+		}
+		a.AddLog("📥 [账号导出] 成功导出账号: " + acc.Email)
+		a.dialogSvc.RevealFile(filePath)
+		return marshalResponse(true)
+
+	case "accounts:import":
+		filePath, ok, _ := a.dialogSvc.Open(a.ctx, dialogs.OpenRequest{
+			Title:   "导入账号配置",
+			Filters: []dialogs.FileFilter{{DisplayName: "JSON Files", Pattern: "*.json"}},
+		})
+		if !ok {
+			// 用户取消,返回 success:true(空结果)避免前端误判为失败
+			return marshalResponse(map[string]interface{}{"success": true, "added": 0, "dir": ""})
+		}
+		var addedCount int
+		if fileData, err := os.ReadFile(filePath); err == nil {
+			var wrapper struct {
+				Accounts []*account.Account `json:"accounts"`
+			}
+			if json.Unmarshal(fileData, &wrapper) == nil && len(wrapper.Accounts) > 0 {
+				addedCount = a.accountMgr.ImportAccountsList(wrapper.Accounts)
+				if addedCount > 0 {
+					a.AddLog(fmt.Sprintf("📥 [账号导入] 成功导入 %d 个账号", addedCount))
+				}
+			}
+		}
+		// 返回成功状态 + 导入文件所在目录,供前端据此"定位到之前选择的文件夹"
+		return marshalResponse(map[string]interface{}{
+			"success": true,
+			"added":   addedCount,
+			"dir":     filepath.Dir(filePath),
+		})
+
+	case "settings:export-logs":
+		logContent := getStringArg(0)
+		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+			DefaultName: fmt.Sprintf("system_logs_%s.txt", time.Now().Format("20060102150405")),
+			Title:       "Export System Logs",
+			Filters:     []dialogs.FileFilter{{DisplayName: "Text Files", Pattern: "*.txt"}},
+		})
+		if !ok {
+			return marshalResponse(false)
+		}
+		if err := os.WriteFile(filePath, []byte(logContent), 0644); err != nil {
+			a.AddLog(fmt.Sprintf("❌ Failed to export system logs: %v", err))
+			return marshalResponse(false)
+		}
+		a.AddLog(fmt.Sprintf("✅ System logs exported to: %s", filePath))
+		a.dialogSvc.RevealFile(filePath)
+		return marshalResponse(true)
+
 	case "request:get-details":
 		// On-demand fetch of the (truncated) requestBody / requestHeaders for
 		// the details modal. The hot-path stats-updated payload only carries
@@ -699,6 +734,8 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		if !ok {
 			return marshalResponse(map[string]interface{}{"success": false, "error": "用户取消选择"})
 		}
+		// OpenDir 成功后内部已将该目录写入目录记忆(MemDataDir)，后续导入/导出
+		// 对话框默认定位到最近选择的目录。迁移成功后数据目录本身即承载数据。
 
 		if filepath.Clean(targetDir) == filepath.Clean(a.settingsMgr.GetActiveDataDirectory()) {
 			return marshalResponse(map[string]interface{}{"success": true, "activeDir": targetDir})
@@ -838,6 +875,7 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		}
 
 		_ = os.WriteFile(filePath, content, 0644)
+		a.dialogSvc.RevealFile(filePath)
 		return marshalResponse(true)
 
 	case "request-logs:export":
@@ -876,8 +914,12 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 			content, _ = json.MarshalIndent(logs, "", "  ")
 		}
 
-		_ = os.WriteFile(filePath, content, 0644)
+		if err := os.WriteFile(filePath, content, 0644); err != nil {
+			a.AddLog(fmt.Sprintf("❌ [请求日志导出] 写盘失败: %v", err))
+			return marshalResponse(false)
+		}
 		a.AddLog(fmt.Sprintf("📥 [请求日志导出] 成功导出请求日志到: %s", filePath))
+		a.dialogSvc.RevealFile(filePath)
 		return marshalResponse(true)
 
 	case "packet:get-all":
@@ -925,6 +967,7 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 			return marshalResponse(false)
 		}
 		_ = os.WriteFile(filePath, []byte(markdown), 0644)
+		a.dialogSvc.RevealFile(filePath)
 		return marshalResponse(true)
 
 	case "packet:export-log":
@@ -940,6 +983,7 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 			return marshalResponse(false)
 		}
 		_ = os.WriteFile(filePath, []byte(markdown), 0644)
+		a.dialogSvc.RevealFile(filePath)
 		return marshalResponse(true)
 
 	case "packet:export-single":
@@ -968,6 +1012,7 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 			return marshalResponse(false)
 		}
 		_ = os.WriteFile(filePath, []byte(markdown), 0644)
+		a.dialogSvc.RevealFile(filePath)
 		return marshalResponse(true)
 	}
 

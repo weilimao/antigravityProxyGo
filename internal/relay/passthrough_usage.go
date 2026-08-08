@@ -104,6 +104,14 @@ func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model str
 	if h.globalStatsTracker != nil {
 		h.globalStatsTracker.TrackRequestForModel(model, input, output, cached)
 
+		// 号池命中率筛选: Other 池按组细分为 other:<groupId> 桶(与 TrackRequestForModel 并行,
+		// 只写 Pools 子聚合, 不动全局标量)。poolAccount nil 时 Other 无"直连归 other"语义, 跳过
+		// (避免误归 antigravity 桶串扰)。GroupID 缺失兜底 other:__unknown__。
+		if poolAccount != nil {
+			poolKey := stats.PoolKeyForProvider(poolAccount.Provider, poolAccount.GroupID)
+			h.globalStatsTracker.TrackRequestForPool(model, input, output, cached, poolKey)
+		}
+
 		// DurationMs 采用「第一帧→流结束」的流式耗时口径(StreamDurationMs, 不含 TTFT,
 		// 与前端「响应时间」列语义分离); TTFT(FirstByteMs) 仍为请求→首帧的端到端截断。
 		end := time.Now()

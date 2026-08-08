@@ -161,6 +161,14 @@ func (sc *serveContext) classifyResponse(attemptIndex int, ro *routeOutcome, fo 
 
 		if sc.inTokens > 0 || sc.outTokens > 0 {
 			sc.h.statsTracker.TrackRequest(sc.currentModel, sc.inTokens, sc.outTokens, sc.cachedTokens)
+			// 号池命中率筛选(TrackRequestForPool): 与 TrackRequest 并行第四累加点, 只写 Pools 子聚合,
+			// 不动全局标量。poolKey 由 ro.poolAccount.Provider 推(直连链路 project/google/gcp/gemini-cli/
+			// 空 provider 一律归 antigravity 桶, 与默认链路口径一致); 直连无组, groupID 固定空。
+			poolKey := "antigravity"
+			if ro.poolAccount != nil {
+				poolKey = stats.PoolKeyForProvider(ro.poolAccount.Provider, "")
+			}
+			sc.h.statsTracker.TrackRequestForPool(sc.currentModel, sc.inTokens, sc.outTokens, sc.cachedTokens, poolKey)
 			if sc.relayUserID != "" && sc.h.relayStatsCallback != nil {
 				reqID := sc.r.Header.Get("X-Antigravity-Req-ID")
 				var headerKeys []string

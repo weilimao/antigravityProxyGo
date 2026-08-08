@@ -38,6 +38,12 @@ type GlobalStats struct {
 	TotalRetries                  int                    `json:"totalRetries"`
 	TotalErrors                   int                    `json:"totalErrors"`
 	Models                        map[string]*ModelStats `json:"models"`
+	// Pools 是「按号池/按组」维度的命中率子聚合(前端缓存命中率卡片号池筛选数据源)。
+	// key: "antigravity" / "nvidia" / "other:<groupId>"(缺失兜底 "other:__unknown__")。
+	// 由 TrackRequestForPool 累加, 与全局标量(TotalCachedTokens 等)两套独立口径并行:
+	// 全局口径含 NVIDIA/Other 合流, 池口径各自只取所属池/组, 互不串扰。旧口径不变式零回归。
+	// 远端中继模式(app_monitor.go 远端分支)不填本字段 → 前端兜底回退旧三档全量口径。
+	Pools map[string]*PoolStats `json:"pools,omitempty"`
 }
 
 type HourlyTrend struct {
@@ -158,6 +164,7 @@ func NewTracker(pricingMgr *pricing.Manager) *Tracker {
 	return &Tracker{
 		stats: GlobalStats{
 			Models: make(map[string]*ModelStats),
+			Pools:  make(map[string]*PoolStats),
 		},
 		trends:       make([]*HourlyTrend, 0),
 		nvidiaTrends: make([]*HourlyTrend, 0),
@@ -669,6 +676,7 @@ func (t *Tracker) GetPayload(usagePayload interface{}) map[string]interface{} {
 		TotalRetries:                  t.stats.TotalRetries,
 		TotalErrors:                   t.stats.TotalErrors,
 		Models:                        modelsCopy,
+		Pools:                         copyPools(t.stats.Pools),
 	}
 
 	trendsCopy := make([]*HourlyTrend, len(t.trends))
@@ -745,6 +753,9 @@ func (t *Tracker) GetPayloadSimplified(usagePayload interface{}) map[string]inte
 		TotalRetries:                  t.stats.TotalRetries,
 		TotalErrors:                   t.stats.TotalErrors,
 		Models:                        modelsCopy,
+		// Pools 随 stats-updated 一并下发供前端命中率卡片按池筛选;
+		// 与 GetPayload 同口径深拷贝, 避免返回内部 map 别名导致的并发写竞争。
+		Pools: copyPools(t.stats.Pools),
 	}
 
 	requestsCopy := make([]RequestLogLite, len(t.requests))
@@ -819,6 +830,7 @@ func (t *Tracker) SaveToDisk() {
 		TotalRetries:                  t.stats.TotalRetries,
 		TotalErrors:                   t.stats.TotalErrors,
 		Models:                        make(map[string]*ModelStats, len(t.stats.Models)),
+		Pools:                         copyPools(t.stats.Pools),
 	}
 	for k, v := range t.stats.Models {
 		ms := *v // value copy, not pointer
@@ -895,6 +907,12 @@ func (t *Tracker) LoadFromDisk() {
 	t.stats = parsed.Stats
 	if t.stats.Models == nil {
 		t.stats.Models = make(map[string]*ModelStats)
+	}
+	// Pools 回填: 旧 stats.json 无本字段时为 nil, 兜底为空 map 保持 NewTracker 口径一致
+	// (与 Models 兜底同构), 避免 TrackRequestForPool 的 getOrCreatePoolLocked 对 nil map 写入 panic。
+	// 历史 Pools 缺失 → 重启后"按池/组口径"从 0 累加(全局口径从旧标量正常读回, 不受影响)。
+	if t.stats.Pools == nil {
+		t.stats.Pools = make(map[string]*PoolStats)
 	}
 	t.trends = parsed.Trends
 	// nvidiaTrends 回填: 老 stats.json 无此字段时为 nil, 兜底为空切片保持 NewTracker 口径一致,

@@ -24,6 +24,7 @@
         inputId="inputNvidiaApiKey"
         placeholder="nvapi-..."
         dataI18nPlaceholder="nvidiaFieldApiKeyPlaceholder"
+        revealProvider="nvidia"
         inputClass="w-full px-3 py-2 pr-10 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all"
       />
     </div>

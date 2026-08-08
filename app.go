@@ -131,6 +131,19 @@ func (a *App) ShowItemInFolder(p string) {
 	}
 }
 
+// OpenFolderInExplorer 对外打开指定文件夹（文件管理器）。
+// 依赖注入 dialogs.RevealCallback 的落地实现：导出保存成功后打开文件夹。
+func (a *App) OpenFolderInExplorer(p string) {
+	if p == "" {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("cmd", "/c", "start", "", p).Start()
+	} else if runtime.GOOS == "darwin" {
+		_ = exec.Command("open", p).Start()
+	}
+}
+
 // SetWindowVisible 线程安全地设置窗口可见状态
 func (a *App) SetWindowVisible(v bool) {
 	a.isWindowVisibleMu.Lock()

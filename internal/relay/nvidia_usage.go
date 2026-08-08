@@ -115,6 +115,10 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 		// 一旦上游/兼容端点回报 cache 字段, 此处即如实计入综合桶的缓存命中分子(TotalCachedTokens)。
 		h.globalStatsTracker.TrackRequestForModel(displayModel, input, output, cached)
 
+		// 号池命中率筛选: NVIDIA 池独立累加(分子 cached 恒 0, 分母 inTokens 照算)。
+		// 与 TrackRequestForModel 并行, 只写 Pools["nvidia"] 子聚合, 不动全局标量。
+		h.globalStatsTracker.TrackRequestForPool(displayModel, input, output, cached, "nvidia")
+
 		// 5) 请求日志 (stats.Tracker.AddRequestLogForFamily): 把 NVIDIA 成功请求写入仪表盘
 		// 「请求日志」列表。绕过既有 AddRequestLog 的 isRealModel 过滤(要求 Path 含
 		// generatecontent/predict, NVIDIA 走 /v1/chat/completions 不满足), 由 family 显式入库。

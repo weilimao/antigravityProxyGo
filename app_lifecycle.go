@@ -56,7 +56,13 @@ func (a *App) startup(ctx context.Context) {
 	a.settingsMgr.Init(defaultUserData)
 
 	// Initialize unified file dialog service (依赖注入：settingsMgr + AddLog)
-	a.dialogSvc = dialogs.NewWailsDialogs(a.settingsMgr, a.AddLog)
+	a.dialogSvc = dialogs.NewWailsDialogs(a.settingsMgr, a.AddLog).
+		// 目录记忆持久化：位于应用数据根目录(不随数据目录迁移)
+		WithMemory(dialogs.NewFileDirMemory(a.settingsMgr.GetDefaultUserDataPath())).
+		// 导出保存成功后自动定位文件（explorer /select 精确定位并选中文件）
+		WithReveal(func(filePath string) {
+			a.ShowItemInFolder(filePath)
+		})
 
 	// Ensure registry key points to the correct/current executable path if autostart is enabled
 	if a.settingsMgr.GetAutoStart() {

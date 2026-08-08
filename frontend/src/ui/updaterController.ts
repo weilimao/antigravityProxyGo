@@ -268,6 +268,10 @@ export function initUpdaterEvents() {
     ipcRenderer.on('app:download-complete', (event: any, filePath: string) => {
         downloadedInstallerPath = filePath;
         setUpdaterUIState('downloaded');
+        // 下载安装包成功后，自动在文件管理器中定位到该安装包
+        if (filePath) {
+            ipcRenderer.send('settings:open-folder', filePath);
+        }
     });
 
     ipcRenderer.on('app:update-error', (event: any, errMsg: string) => {

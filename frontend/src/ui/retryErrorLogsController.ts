@@ -1,5 +1,6 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
+import { saveText } from '../shared/fileService';
 import i18n from '../shared/i18n';
 
 // DOM Elements
@@ -104,11 +105,11 @@ export function initRetryErrorLogsEvents() {
     // Export logs button click
     if (btnExportRetryErrorLogs) {
         btnExportRetryErrorLogs.addEventListener('click', async () => {
-            try {
-                await ipcRenderer.invoke('retry-error-logs:export');
-            } catch (e) {
-                console.error('Failed to export logs:', e);
-            }
+            await saveText(
+                { channel: 'retry-error-logs:export', args: [] },
+                state.currentLanguage === 'zh' ? '日志已成功导出！' : 'Logs exported successfully!',
+                state.currentLanguage === 'zh' ? '导出失败: ' : 'Export failed: ',
+            );
         });
     }
 
