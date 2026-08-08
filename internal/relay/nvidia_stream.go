@@ -113,7 +113,7 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 	}
 	liveFW.deferredActive = true // pull 阶段框架帧先进 deferred,等首条实质内容 flush
 
-	replay, state, in, out, finalErr := h.pullAnthropicStreamWithRetry(r, resp, poolAccount, targetURL, upstreamBody, inboundInputTokens, model, liveFW)
+	replay, state, in, out, cached, finalErr := h.pullAnthropicStreamWithRetry(r, resp, poolAccount, targetURL, upstreamBody, inboundInputTokens, model, liveFW)
 	if finalErr != nil {
 		// 重试终止返回错误。两种根因,必须分流(旧实现一视同仁,导致客户端断开被误报成
 		// "3 周期×(5 直连+1 兜底) 全部失败"并误回写 overloaded_error,污染上游健康指标):
@@ -189,7 +189,7 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 	if ok {
 		flusher.Flush() // 收尾刷净, 确保 message_stop 落盘
 	}
-	h.recordNvidiaUsage(userSession, model, in, out, poolAccount, logCtx)
+	h.recordNvidiaUsage(userSession, model, in, out, cached, poolAccount, logCtx)
 }
 
 // pullAnthropicStreamWithRetry 把上游 OpenAI Chat SSE 翻译并实时/续传下发到 liveFW,
@@ -208,10 +208,12 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 //   - 尾帧(message_delta/message_stop)首轮与重试轮都只蓄流不推 live,由调用方整体成功后一次性补发,
 //     避免断流轮把尾帧推 live 封死客户端流、后续重试无法续推正文。
 //
-// 返回 (replay, state, in, out, err):
+// 返回 (replay, state, in, out, cached, err):
 //   - replay:整条 ready 的成功轮 replay 缓冲,供调用方 replayFollowingInto 补发未 live 段+尾帧;
 //   - state:成功时的 live 协议态快照(liveIdxMap/liveMaxIdx/thinkingLive),供 replayFollowingInto 决定跳过哪些块;
 //   - in/out:成功这次累计 input/output tokens,用于号池账号维度统计;失败时为 0;
+//   - cached:成功这次上游末帧 usage 的缓存命中 token 数(prompt_cache_hit_tokens 或 prompt_tokens_details.cached_tokens,
+//     由 openAIChatSSEToAnthropicSSEInto 经 CachedTokens() 解析);当前 NVIDIA 官方 NIM 不回报 cache,恒 0;
 //   - err:重试耗尽仍失败时非 nil(含最后一次上游错误),调用方据此回写 overloaded_error。
 //
 // 完整性判定:openAIChatSSEToAnthropicSSEInto 返回 sseErr==nil && (finishEmitted||streamTerminated) 视为完整。
@@ -224,7 +226,7 @@ func (h *APICompatHandler) writeNvidiaAnthropicStream(w http.ResponseWriter, r *
 //
 // inboundInputTokens 为入站请求本地估算的输入 token 数(保底 1),写入 message_start.usage.input_tokens,
 // 让客户端(Claude Code spinner)在流首即显示 ↑;真实累计值仍由末帧 message_delta.usage 覆盖。
-func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstResp *http.Response, poolAccount *account.Account, targetURL string, upstreamBody []byte, inboundInputTokens int, model string, liveFW *flushWriter) (replay *replayWriter, state *liveStreamState, in, out int, finalErr error) {
+func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstResp *http.Response, poolAccount *account.Account, targetURL string, upstreamBody []byte, inboundInputTokens int, model string, liveFW *flushWriter) (replay *replayWriter, state *liveStreamState, in, out, cached int, finalErr error) {
 	const (
 		maxRetries = 5
 		// maxCycles 是断流重试的周期数:每周期 = maxRetries 次直连蓄流重试 + 1 次兜底出站代理,
@@ -280,7 +282,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 					if activeBody != nil {
 						activeBody.Close()
 					}
-					return nil, nil, 0, 0, finalErr
+					return nil, nil, 0, 0, 0, finalErr
 				}
 				req.Header.Set("Content-Type", "application/json")
 				req.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
@@ -303,7 +305,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				// 主循环已保证流式入站进入本函数时 resp.StatusCode==200,此处仅周期 0 attempt 0 防御性兼容。
 				finalErr = fmt.Errorf("nvidia upstream status %d", activeResp.StatusCode)
 				activeBody.Close()
-				return nil, nil, 0, 0, finalErr
+				return nil, nil, 0, 0, 0, finalErr
 			}
 
 			// sink 选择:首个 attempt(cycle 0 attempt 0)用 tee(思考+正文实时下发,tool/尾帧只蓄流);
@@ -324,7 +326,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				tee.replay.reset() // 蓄流缓冲复用:重试轮重蓄整条上游内容(由 resumeSink.replay 写入)
 				sink = resume
 			}
-			attemptIn, attemptOut, _, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, activeBody, activeBody, sink, streamID, model, inboundInputTokens)
+			attemptIn, attemptOut, attemptCached, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, activeBody, activeBody, sink, streamID, model, inboundInputTokens)
 			activeBody.Close() // 本轮上游响应体读完即关,下一轮(若有)重拉会拿到全新 body
 
 			// 完整性判定:收到 finish_reason 帧或上游流以 [DONE]/正常 EOF 正常终止,且无上游错误/未 ctx 取消 → 整条 ready。
@@ -345,7 +347,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 						liveIdxMap:   tee.liveIdxMap,
 						liveMaxIdx:   tee.liveMaxUsedIdx,
 						thinkingLive: tee.liveThinkingPushed,
-					}, attemptIn, attemptOut, nil
+					}, attemptIn, attemptOut, attemptCached, nil
 				}
 				// 重试/续传轮成功(含跨周期重试轮):先提交 pending(重启段一次性落 live)+ 回填持久态,再取快照。
 				resume.commitPending()
@@ -353,7 +355,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 					liveIdxMap:   resume.indexMap,
 					liveMaxIdx:   resume.liveMaxUsedIdx,
 					thinkingLive: resume.liveThinkingPushed, // 透传首轮 thinkingPushed:首轮思考已 live 则跳过成功轮思考头
-				}, attemptIn, attemptOut, nil
+				}, attemptIn, attemptOut, attemptCached, nil
 			}
 			// ctx 取消:客户端已断,不再重试,带上 ctx 错误返回。
 			if ctx != nil && ctx.Err() != nil {
@@ -361,13 +363,13 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				if sseErr != nil {
 					finalErr = fmt.Errorf("%v (last sse err: %v)", finalErr, sseErr)
 				}
-				return nil, nil, 0, 0, finalErr
+				return nil, nil, 0, 0, 0, finalErr
 			}
 			// 超大流保护:蓄流超过阈值,判定为超大输出,放弃重试转 overloaded(不切路径——正文已实时,无旧路径可退)。
 			if tee.replay.len() > replayMaxBytes {
 				h.log("⚠️ [NVIDIA Anthropic 流式] 蓄流 %d 字节超阈值 %d, 放弃重试转 overloaded", tee.replay.len(), replayMaxBytes)
 				finalErr = fmt.Errorf("nvidia replay stream oversized %d bytes (exceeds %d), abort retry", tee.replay.len(), replayMaxBytes)
-				return nil, nil, 0, 0, finalErr
+				return nil, nil, 0, 0, 0, finalErr
 			}
 			// 不完整(断流/未收尾/上游内嵌 error chunk):记录原因,睡眠 5s 后重拉(最后一轮不再睡)。
 			lastErr := sseErr
@@ -381,7 +383,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				select {
 				case <-ctx.Done():
 					finalErr = fmt.Errorf("%w (during retry backoff: %v)", errNvidiaClientCancelled, ctx.Err())
-					return nil, nil, 0, 0, finalErr
+					return nil, nil, 0, 0, 0, finalErr
 				case <-time.After(retryWait):
 				}
 			}
@@ -405,7 +407,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				h.log("🛟 [NVIDIA Anthropic 流式] 周期 %d/%d 直连重试耗尽,切兜底代理 %s 再试 1 轮 账号 %s", cycle+1, maxCycles, fbAddr, poolAccount.Email)
 				resume.reset()
 				tee.replay.reset()
-				fbReplay, fbIn, fbOut, fbFinalErr := h.pullAnthropicStreamOneRoundInto(ctx, fbClient, poolAccount, targetURL, upstreamBody, streamID, model, inboundInputTokens, resume)
+				fbReplay, fbIn, fbOut, fbCached, fbFinalErr := h.pullAnthropicStreamOneRoundInto(ctx, fbClient, poolAccount, targetURL, upstreamBody, streamID, model, inboundInputTokens, resume)
 				if fbFinalErr == nil && fbReplay != nil {
 					resume.commitPending() // 兜底轮整条 ready:提交重启段落 live + 回填持久态
 					return fbReplay, &liveStreamState{
@@ -414,7 +416,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 						// 与直连重试成功快照同构:透传首轮 thinkingPushed。兜底轮 thinking 走 resumeSink 同样全跳,
 						// 但首轮思考若已 live,replayFollowingInto 仍须跳过其 replay 思考头,否则 index 0 思考块重复开启。
 						thinkingLive: resume.liveThinkingPushed,
-					}, fbIn, fbOut, nil
+					}, fbIn, fbOut, fbCached, nil
 				}
 				if fbFinalErr != nil {
 					// 兜底轮若因客户端 ctx 取消而失败(fbFinalErr 含 errNvidiaClientCancelled 哨兵),
@@ -436,7 +438,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 			select {
 			case <-ctx.Done():
 				finalErr = fmt.Errorf("%w (during inter-cycle wait: %v)", errNvidiaClientCancelled, ctx.Err())
-				return nil, nil, 0, 0, finalErr
+				return nil, nil, 0, 0, 0, finalErr
 			case <-time.After(cycleWait):
 			}
 			// 计数「归零」:下一周期 attempt 循环从 0 重跑即天然归零;resume/tee 的 live 残留态保留
@@ -445,42 +447,43 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 		}
 	}
 	// 3 个周期(每周期 5 直连 + 1 兜底)全部失败:返回最后一次错误原因,由调用方回写 overloaded_error。
-	return nil, nil, 0, 0, finalErr
+	return nil, nil, 0, 0, 0, finalErr
 }
 
 // pullAnthropicStreamOneRoundInto 用指定的 httpClient(兜底代理 client)向 NVIDIA 上游发一次请求,
 // 把转译结果喂进给定 sink(resumeSink,正文按续传规则实时推 live + 蓄流 replay),
-// 并做完整性判定,返回 (replay, in, out, err)。ok=err==nil&&replay!=nil 表示本流完整;否则 err 含原因。
+// 并做完整性判定,返回 (replay, in, out, cached, err)。ok=err==nil&&replay!=nil 表示本流完整;否则 err 含原因。
 // 与旧 pullAnthropicStreamOneRound 的区别:接受外部 sink(而非自建纯 replayWriter),使兜底轮也能
 // 实时下发正文到 live,与直连重试轮同构,兜底成功后由调用方经 replayFollowingInto 统一补发未 live 段+尾帧。
 // roundLabel 仅用于日志。调用方需在调用前对 sink 做 reset() 并 tee.replay.reset()。
 // inboundInputTokens 透传给 message_start.usage.input_tokens(保底 1),与直连轮同口径。
-func (h *APICompatHandler) pullAnthropicStreamOneRoundInto(ctx context.Context, httpClient *http.Client, poolAccount *account.Account, targetURL string, upstreamBody []byte, streamID, model string, inboundInputTokens int, sink sseEventSink) (*replayWriter, int, int, error) {
+// cached 透传上游末帧 usage 的缓存命中 token 数,当前 NVIDIA 官方 NIM 不回报 cache,恒 0。
+func (h *APICompatHandler) pullAnthropicStreamOneRoundInto(ctx context.Context, httpClient *http.Client, poolAccount *account.Account, targetURL string, upstreamBody []byte, streamID, model string, inboundInputTokens int, sink sseEventSink) (*replayWriter, int, int, int, error) {
 	roundLabel := "兜底"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("rebuild nvidia upstream request (%s): %w", roundLabel, err)
+		return nil, 0, 0, 0, fmt.Errorf("rebuild nvidia upstream request (%s): %w", roundLabel, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
 	req.Header.Set("Accept", "application/json")
 	resp, errDo := httpClient.Do(req)
 	if errDo != nil {
-		return nil, 0, 0, fmt.Errorf("nvidia upstream (%s) do failed: %w", roundLabel, errDo)
+		return nil, 0, 0, 0, fmt.Errorf("nvidia upstream (%s) do failed: %w", roundLabel, errDo)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, 0, 0, fmt.Errorf("nvidia upstream (%s) status %d", roundLabel, resp.StatusCode)
+		return nil, 0, 0, 0, fmt.Errorf("nvidia upstream (%s) status %d", roundLabel, resp.StatusCode)
 	}
-	attemptIn, attemptOut, _, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, resp.Body, resp.Body, sink, streamID, model, inboundInputTokens)
+	attemptIn, attemptOut, attemptCached, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, resp.Body, resp.Body, sink, streamID, model, inboundInputTokens)
 	resp.Body.Close()
 	// 完整性判定:收到 finish_reason 或 [DONE]/正常 EOF 正常终止,且无上游错误/未 ctx 取消 → 整条 ready。
 	if sseErr == nil && (finishEmitted || streamTerminated) {
 		// 成功:返回 sink 内的 replay(resumeSink.replay)供调用方 replayFollowingInto 补发未 live 段+尾帧。
 		if rs, ok := sink.(*resumeSink); ok {
-			return rs.replay, attemptIn, attemptOut, nil
+			return rs.replay, attemptIn, attemptOut, attemptCached, nil
 		}
-		return nil, attemptIn, attemptOut, nil // 防御:非 resumeSink 不应出现
+		return nil, attemptIn, attemptOut, attemptCached, nil // 防御:非 resumeSink 不应出现
 	}
 	// ctx 取消:带上 ctx 错误返回,调用方据此放弃后续重试。
 	// 用 errNvidiaClientCancelled 哨兵包装,使上层 errors.Is 判定为"客户端取消而非兜底失败",
@@ -490,7 +493,7 @@ func (h *APICompatHandler) pullAnthropicStreamOneRoundInto(ctx context.Context, 
 		if sseErr != nil {
 			err = fmt.Errorf("%v (last sse err: %v)", err, sseErr)
 		}
-		return nil, 0, 0, err
+		return nil, 0, 0, 0, err
 	}
 	// 超大流保护:蓄流超过 nvidiaReplayMaxBytes 判定为超大输出。兜底无可退的边读边写路径,直接转 lastErr,
 	// 让上层把 finalErr 设为兜底失败、落 overloaded_error。也保护兜底轮不被超大流撑爆内存。
@@ -499,14 +502,14 @@ func (h *APICompatHandler) pullAnthropicStreamOneRoundInto(ctx context.Context, 
 		replayLen = rs.replay.len()
 	}
 	if replayLen > nvidiaReplayMaxBytes {
-		return nil, 0, 0, fmt.Errorf("nvidia upstream (%s) replay oversized %d bytes (exceeds %d), abort fallback round", roundLabel, replayLen, nvidiaReplayMaxBytes)
+		return nil, 0, 0, 0, fmt.Errorf("nvidia upstream (%s) replay oversized %d bytes (exceeds %d), abort fallback round", roundLabel, replayLen, nvidiaReplayMaxBytes)
 	}
 	// 不完整:返回原因(断流/未收尾/上游内嵌 error chunk)。
 	lastErr := sseErr
 	if lastErr == nil {
 		lastErr = fmt.Errorf("nvidia upstream (%s) stream incomplete (finishEmitted=%v streamTerminated=%v)", roundLabel, finishEmitted, streamTerminated)
 	}
-	return nil, 0, 0, lastErr
+	return nil, 0, 0, 0, lastErr
 }
 
 // replyAnthropicOverloaded 回写 Anthropic 标准 overloaded_error 给客户端(Claude Code CLI 据此识别为

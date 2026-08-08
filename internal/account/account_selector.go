@@ -518,8 +518,166 @@ func (m *Manager) GetNvidiaLBMode() string {
 
 func (m *Manager) SetNvidiaLBMode(mode string) {
 	m.Lock()
-	defer m.Unlock()
 	m.nvidiaLBMode = mode
+	m.Unlock()
+	_ = m.SaveAccounts(false)
+}
+
+// ============ 单账号最大并发数限制(四池 Get/Set + 计数器转发) ============
+//
+// 语义约定(对齐 LB 模式 Get/Set 范式):
+//   - Get:v<=0(0/负数)= 未配置,回退默认 10;返回正数即单调并发上限。
+//   - Set:负数置 0(等同回退,持久化为 0 经 omitempty 不落盘但语义清晰);Other 按 groupID 小写键。
+//   - 默认值 10 是产品约定(见 accounts.json 配置项),既有 accounts.json 无该字段时自动回退,零迁移。
+// 选号链路使用:Get 后把上限作为 limit 传 FilterByConcurrency 过滤超限账号,全满则 LeastLoaded 超额降级。
+// 见 concurrency.go 与各 relay/proxy 选号接入点。
+
+// defaultMaxConcurrency 是各号池单账号并发上限的「未配置」回退值:既有号池默认按 10 并发限流,
+// 与产品基线一致。0/负数视作未配置(序列化经 omitempty 不落盘),Get 时回退此值。
+const defaultMaxConcurrency = 10
+
+func (m *Manager) GetNvidiaMaxConcurrency() int {
+	m.RLock()
+	v := m.nvidiaMaxConcurrency
+	m.RUnlock()
+	if v <= 0 {
+		return defaultMaxConcurrency
+	}
+	return v
+}
+
+func (m *Manager) SetNvidiaMaxConcurrency(v int) {
+	if v < 0 {
+		v = 0
+	}
+	m.Lock()
+	m.nvidiaMaxConcurrency = v
+	m.Unlock()
+	_ = m.SaveAccounts(false)
+}
+
+func (m *Manager) GetAntigravityMaxConcurrency() int {
+	m.RLock()
+	v := m.antigravityMaxConcurrency
+	m.RUnlock()
+	if v <= 0 {
+		return defaultMaxConcurrency
+	}
+	return v
+}
+
+func (m *Manager) SetAntigravityMaxConcurrency(v int) {
+	if v < 0 {
+		v = 0
+	}
+	m.Lock()
+	m.antigravityMaxConcurrency = v
+	m.Unlock()
+	_ = m.SaveAccounts(false)
+}
+
+func (m *Manager) GetProjectMaxConcurrency() int {
+	m.RLock()
+	v := m.projectMaxConcurrency
+	m.RUnlock()
+	if v <= 0 {
+		return defaultMaxConcurrency
+	}
+	return v
+}
+
+func (m *Manager) SetProjectMaxConcurrency(v int) {
+	if v < 0 {
+		v = 0
+	}
+	m.Lock()
+	m.projectMaxConcurrency = v
+	m.Unlock()
+	_ = m.SaveAccounts(false)
+}
+
+// GetOtherMaxConcurrency 返回某组单账号并发上限,未知组回退默认 10。
+func (m *Manager) GetOtherMaxConcurrency(groupID string) int {
+	gid := strings.ToLower(strings.TrimSpace(groupID))
+	m.RLock()
+	if m.otherMaxConcurrency == nil {
+		m.RUnlock()
+		return defaultMaxConcurrency
+	}
+	v, ok := m.otherMaxConcurrency[gid]
+	m.RUnlock()
+	if !ok || v <= 0 {
+		return defaultMaxConcurrency
+	}
+	return v
+}
+
+// SetOtherMaxConcurrency 设置某组单账号并发上限并持久化到 accounts.json(经 AccountsData.OtherMaxConcurrency)。
+// groupID 经小写规范化与 OtherLBModes 同口径,保证 GetOtherGroups 回显与选号查询键一致。负数置 0。
+func (m *Manager) SetOtherMaxConcurrency(groupID string, v int) {
+	gid := strings.ToLower(strings.TrimSpace(groupID))
+	if gid == "" {
+		return
+	}
+	if v < 0 {
+		v = 0
+	}
+	m.Lock()
+	if m.otherMaxConcurrency == nil {
+		m.otherMaxConcurrency = make(map[string]int)
+	}
+	m.otherMaxConcurrency[gid] = v
+	m.Unlock()
+	_ = m.SaveAccounts(true)
+}
+
+// ============ 在途并发计数器转发(选号热路径用) ============
+
+// AcquireAccount 为该账号占用一个在途并发槽,由选号链路在确认选定账号后调用。
+// Manager.concurrency 非空(NewManager 初始化);nil 防御保测试桩与未注入场景。
+func (m *Manager) AcquireAccount(id string) {
+	if m == nil || m.concurrency == nil {
+		return
+	}
+	m.concurrency.Acquire(id)
+}
+
+// ReleaseAccount 释放该账号一个在途并发槽,由请求结束(流 EOF/响应回写完成/失败取消)处调用。
+// floor 0 兜底防负,见 concurrency.go。
+func (m *Manager) ReleaseAccount(id string) {
+	if m == nil || m.concurrency == nil {
+		return
+	}
+	m.concurrency.Release(id)
+}
+
+// FilterByConcurrency 返回 candidates 中在途并发数 < limit 的子集(保持原序)。
+// limit<=0 视作不限(原样返回全部);typically 由调用方传 Get*MaxConcurrency() 的正数。
+func (m *Manager) FilterByConcurrency(candidates []*Account, limit int) []*Account {
+	if m == nil || m.concurrency == nil {
+		return candidates
+	}
+	return m.concurrency.PickUnderLimit(candidates, limit)
+}
+
+// LeastLoadedAccount 返回 candidates 中当前在途并发数最小者(并列取首个);
+// 全满降级时用:挑并发最少的号允许超额并日志标注,绝不硬拒 503。
+func (m *Manager) LeastLoadedAccount(candidates []*Account) *Account {
+	if m == nil || m.concurrency == nil {
+		if len(candidates) == 0 {
+			return nil
+		}
+		return candidates[0]
+	}
+	return m.concurrency.LeastLoaded(candidates)
+}
+
+// AccountInFlightCount 返回某账号当前在途并发数(只读),供调试/日志/测试断言使用。
+func (m *Manager) AccountInFlightCount(id string) int {
+	if m == nil || m.concurrency == nil {
+		return 0
+	}
+	return m.concurrency.Count(id)
 }
 
 func (m *Manager) GetNvidiaPoolMode() bool {

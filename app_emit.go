@@ -14,14 +14,17 @@ func (a *App) emitAccountsRes() {
 		return
 	}
 	wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-		"accounts":          a.accountMgr.GetAccounts(),
-		"poolMode":          a.accountMgr.GetPoolMode(),
-		"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
-		"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
-		"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
-		"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
-		"otherPoolMode":     a.accountMgr.GetOtherPoolMode(),
-		"otherGroups":       a.accountMgr.GetOtherGroups(),
-		"activeChannel":     a.accountMgr.GetActiveChannel(),
+		"accounts":                    a.accountMgr.GetAccounts(),
+		"poolMode":                    a.accountMgr.GetPoolMode(),
+		"projectPoolMode":             a.accountMgr.GetProjectPoolMode(),
+		"geminiCliPoolMode":           a.accountMgr.GetGeminiCliPoolMode(),
+		"nvidiaPoolMode":              a.accountMgr.GetNvidiaPoolMode(),
+		"nvidiaLBMode":                a.accountMgr.GetNvidiaLBMode(),
+		"otherPoolMode":               a.accountMgr.GetOtherPoolMode(),
+		"otherGroups":                 a.accountMgr.GetOtherGroups(),
+		"activeChannel":               a.accountMgr.GetActiveChannel(),
+		"nvidiaMaxConcurrency":        a.accountMgr.GetNvidiaMaxConcurrency(),
+		"antigravityMaxConcurrency":   a.accountMgr.GetAntigravityMaxConcurrency(),
+		"projectMaxConcurrency":       a.accountMgr.GetProjectMaxConcurrency(),
 	})
 }

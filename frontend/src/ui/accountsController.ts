@@ -84,6 +84,12 @@ let nvidiaPoolModeContainer: HTMLDivElement | null;
 let nvidiaPoolModeToggle: HTMLInputElement | null;
 let nvidiaLBModeContainer: HTMLDivElement | null;
 let nvidiaLBModeSelect: HTMLSelectElement | null;
+// 单账号在途并发上限 input(0=未配置回退默认 10;超过自动换号)。
+// nvidiaNvidiaMaxConcurrency:NVIDIA 池;poolMaxConcurrency:antigravity/project 两 Tab 共用;
+// otherMaxConcurrency:Other 按组配置(选中具体组时显示)。
+let nvidiaMaxConcurrency: HTMLInputElement | null;
+let poolMaxConcurrency: HTMLInputElement | null;
+let otherMaxConcurrency: HTMLInputElement | null;
 let btnAddNvidiaAccount: HTMLButtonElement | null;
 let nvidiaAccountModal: HTMLDivElement | null;
 let nvidiaAccountModalContainer: HTMLDivElement | null;
@@ -255,6 +261,10 @@ export function updateViewTabUI() {
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.poolMode;
             }
+            // antigravity Tab:并发上限 input 用 antigravityMaxConcurrency 回填(?? 10 兜底)。
+            if (poolMaxConcurrency && state.lastBackendData) {
+                poolMaxConcurrency.value = String(state.lastBackendData.antigravityMaxConcurrency ?? 10);
+            }
         /* } else if (state.currentViewTab === 'gemini-cli') {
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = activeClass;
             btnChannelAntigravity.className = inactiveClass;
@@ -278,6 +288,10 @@ export function updateViewTabUI() {
             if (btnNvidiaPreferredModels) btnNvidiaPreferredModels.classList.remove('hidden');
             if (nvidiaLBModeSelect && state.lastBackendData) {
                 nvidiaLBModeSelect.value = state.lastBackendData.nvidiaLBMode || 'round-robin';
+            }
+            // NVIDIA Tab:并发上限 input 用 nvidiaMaxConcurrency 回填(?? 10 兜底)。
+            if (nvidiaMaxConcurrency && state.lastBackendData) {
+                nvidiaMaxConcurrency.value = String(state.lastBackendData.nvidiaMaxConcurrency ?? 10);
             }
         } else if (state.currentViewTab === 'other') {
             if (btnChannelOther) btnChannelOther.className = activeClass;
@@ -303,6 +317,10 @@ export function updateViewTabUI() {
             if (lblPoolMode) lblPoolMode.innerText = dict.projectLoadBalancing || '项目负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.projectPoolMode;
+            }
+            // project Tab:并发上限 input 用 projectMaxConcurrency 回填(?? 10 兜底)。
+            if (poolMaxConcurrency && state.lastBackendData) {
+                poolMaxConcurrency.value = String(state.lastBackendData.projectMaxConcurrency ?? 10);
             }
         }
         updatePoolModeUI();
@@ -519,6 +537,14 @@ function renderOtherLBMode() {
     otherLBModeSelect.value = curMode;
     otherLBModeContainer.classList.remove('hidden');
     otherLBModeContainer.classList.add('flex');
+
+    // 同步回填该组单账号并发上限(未配置为 0,前端 ?? 10 兜底显示)。
+    if (!otherMaxConcurrency) {
+        otherMaxConcurrency = document.getElementById('otherMaxConcurrency') as HTMLInputElement | null;
+    }
+    if (otherMaxConcurrency && g) {
+        otherMaxConcurrency.value = String((g as any).maxConcurrency ?? 10);
+    }
 }
 
 // otherLBModeSelectorVisible:工具栏 LB 模式下拉是否可见(选中具体 Other 组时)。
@@ -834,6 +860,11 @@ export function initAccountsEvents() {
     nvidiaPoolModeToggle = document.getElementById('nvidiaPoolModeToggle') as HTMLInputElement | null;
     nvidiaLBModeContainer = document.getElementById('nvidiaLBModeContainer') as HTMLDivElement | null;
     nvidiaLBModeSelect = document.getElementById('nvidiaLBModeSelect') as HTMLSelectElement | null;
+    // 并发上限 input 绑 DOM(三处容器共用 poolMaxConcurrency:NVIDIA 用 nvidiaMaxConcurrency,
+    // antigravity/project 两 Tab 共用 poolMaxConcurrency 按 currentViewTab 分流,Other 用 otherMaxConcurrency)。
+    nvidiaMaxConcurrency = document.getElementById('nvidiaMaxConcurrency') as HTMLInputElement | null;
+    poolMaxConcurrency = document.getElementById('poolMaxConcurrency') as HTMLInputElement | null;
+    otherMaxConcurrency = document.getElementById('otherMaxConcurrency') as HTMLInputElement | null;
     btnAddNvidiaAccount = document.getElementById('btnAddNvidiaAccount') as HTMLButtonElement | null;
     btnAddOtherAccount = document.getElementById('btnAddOtherAccount') as HTMLButtonElement | null;
     otherAccountModal = document.getElementById('otherAccountModal') as HTMLDivElement | null;
@@ -1117,8 +1148,52 @@ export function initAccountsEvents() {
     if (nvidiaLBModeSelect) {
         nvidiaLBModeSelect.addEventListener('change', (e: any) => {
             ipcRenderer.send('nvidia:set-lb-mode', e.target.value);
-            updateViewTabUI();
         });
+    }
+
+    // 单账号在途并发上限:NVIDIA 池。300ms debounce 防频繁落盘(对齐既有高频输入节流范式)。
+    if (nvidiaMaxConcurrency) {
+        let nvDebounce: ReturnType<typeof setTimeout> | null = null;
+        nvidiaMaxConcurrency.addEventListener('change', (e: any) => {
+            const v = Math.max(0, Math.min(1000, Number(e.target.value) || 0));
+            e.target.value = String(v);
+            if (nvDebounce) clearTimeout(nvDebounce);
+            nvDebounce = setTimeout(() => {
+                ipcRenderer.send('nvidia:set-max-concurrency', v);
+            }, 300);
+        });
+    }
+
+    // 单账号在途并发上限:antigravity/project 两 Tab 共用此 input,按 currentViewTab 分流 IPC 通道。
+    if (poolMaxConcurrency) {
+        let poolDebounce: ReturnType<typeof setTimeout> | null = null;
+        poolMaxConcurrency.addEventListener('change', (e: any) => {
+            const v = Math.max(0, Math.min(1000, Number(e.target.value) || 0));
+            e.target.value = String(v);
+            if (poolDebounce) clearTimeout(poolDebounce);
+            poolDebounce = setTimeout(() => {
+                if (state.currentViewTab === 'project') {
+                    ipcRenderer.send('project:set-max-concurrency', v);
+                } else {
+                    ipcRenderer.send('antigravity:set-max-concurrency', v);
+                }
+            }, 300);
+        });
+    }
+
+    // 单账号在途并发上限:Other 池按组配置(仅选中具体组时发送,「全部组」下拉不可见,不发送)。
+    if (otherMaxConcurrency) {
+        let otherDebounce: ReturnType<typeof setTimeout> | null = null;
+        otherMaxConcurrency.addEventListener('change', (e: any) => {
+            if (!otherLBModeSelectorVisible()) return;
+            const v = Math.max(0, Math.min(1000, Number(e.target.value) || 0));
+            e.target.value = String(v);
+            if (otherDebounce) clearTimeout(otherDebounce);
+            otherDebounce = setTimeout(() => {
+                ipcRenderer.send('other:set-max-concurrency', state.otherGroupFilter, v);
+            }, 300);
+        });
+        otherMaxConcurrency.addEventListener('click', (e) => e.stopPropagation());
     }
 
     // Other 号池组内负载均衡方式选择框:作用于当前选中组(「全部组」下拉不可见,不发送)。

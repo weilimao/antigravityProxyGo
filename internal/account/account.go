@@ -99,6 +99,15 @@ type AccountsData struct {
 	ActiveChannel     string     `json:"activeChannel"`
 	// OtherLBModes 按 GroupID 持久化 Other 号池各组独立 LB 算法(round-robin/sticky)。
 	OtherLBModes map[string]string `json:"otherLbModes,omitempty"`
+	// NvidiaLBMode 持久化 NVIDIA 号池 LB 算法
+	NvidiaLBMode string `json:"nvidiaLbMode,omitempty"`
+	// 单账号最大并发数限制:请求打到某账号起算占 1 槽,本次请求结束释放;超过上限即换号。
+	// 0/负数视作「未配置」,Get 时回退默认 10(对齐 NvidiaLBMode 空串回退范式)。
+	// 三池单值 + Other 按 GroupID map(与 OtherLBModes 同范式,持久化键小写规范化)。
+	NvidiaMaxConcurrency      int            `json:"nvidiaMaxConcurrency,omitempty"`
+	AntigravityMaxConcurrency int            `json:"antigravityMaxConcurrency,omitempty"`
+	ProjectMaxConcurrency     int            `json:"projectMaxConcurrency,omitempty"`
+	OtherMaxConcurrency      map[string]int `json:"otherMaxConcurrency,omitempty"`
 }
 
 type Manager struct {
@@ -118,6 +127,17 @@ type Manager struct {
 	// otherLBModes 按 GroupID 维度保存各组独立的 LB 算法(round-robin/sticky),与 nvidiaLBMode(单池单值)不同,
 	// 因 Other 号池内可有多个独立上游组,每组应有自己的轮询策略。
 	otherLBModes       map[string]string
+	// 单账号最大并发数限制(在途并发上限):对应 AccountsData 的三个单值 + Other map。
+	// 0/负数=未配置,Get 时回退默认 10。Set 负数置 0(等同回退);Other map 键小写规范化(与 otherLBModes 同范式)。
+	// relay 与 proxy 选号链路经 FilterByConcurrency 过滤超限账号、超限换号;全满则 LeastLoaded 超额降级。
+	nvidiaMaxConcurrency      int
+	antigravityMaxConcurrency int
+	projectMaxConcurrency     int
+	otherMaxConcurrency       map[string]int
+	// concurrency 是单账号在途并发计数器(纯内存易失),由 Manager 单实例持有,
+	// relay 的 APICompatHandler.accountMgr 与 proxy 的 ProxyHandler.accountMgr 同一引用,
+	// 天然共享同一份在途计数。NewManager 初始化非 nil。详见 concurrency.go。
+	concurrency *Concurrency
 	activeChannel      string
 	currentIndex       int
 	errorCounts        map[string]int // accountId -> error count

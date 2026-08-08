@@ -218,6 +218,33 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 		a.AddLog(fmt.Sprintf("🔄 [Other] group %s LB mode → %s", groupID, a.accountMgr.GetOtherLBMode(groupID)))
 		a.emitAccountsRes()
 
+	case "nvidia:set-max-concurrency":
+		// 单账号在途并发上限:0=未配置回退默认 10;超过自动换号(超额降级最少并发号)。
+		v := getIntArg(0)
+		a.accountMgr.SetNvidiaMaxConcurrency(v)
+		a.AddLog(fmt.Sprintf("🔄 NVIDIA Max Concurrency → %d", a.accountMgr.GetNvidiaMaxConcurrency()))
+		a.emitAccountsRes()
+
+	case "antigravity:set-max-concurrency":
+		v := getIntArg(0)
+		a.accountMgr.SetAntigravityMaxConcurrency(v)
+		a.AddLog(fmt.Sprintf("🔄 Antigravity Max Concurrency → %d", a.accountMgr.GetAntigravityMaxConcurrency()))
+		a.emitAccountsRes()
+
+	case "project:set-max-concurrency":
+		v := getIntArg(0)
+		a.accountMgr.SetProjectMaxConcurrency(v)
+		a.AddLog(fmt.Sprintf("🔄 Project Max Concurrency → %d", a.accountMgr.GetProjectMaxConcurrency()))
+		a.emitAccountsRes()
+
+	case "other:set-max-concurrency":
+		// args: [groupID, value]。与 other:set-lb-mode 同走 IPCSend(前端组操作既有分布)。
+		groupID := getStringArg(0)
+		v := getIntArg(1)
+		a.accountMgr.SetOtherMaxConcurrency(groupID, v)
+		a.AddLog(fmt.Sprintf("🔄 [Other] group %s max concurrency → %d", groupID, a.accountMgr.GetOtherMaxConcurrency(groupID)))
+		a.emitAccountsRes()
+
 	/* case "pool:toggle-gemini-cli":
 	a.accountMgr.SetGeminiCliPoolMode(getBoolArg(0))
 	if getBoolArg(0) {

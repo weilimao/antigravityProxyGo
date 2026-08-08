@@ -323,6 +323,157 @@ func TestHandleNvidia_MultimodalUpstream_SkipsDowngrade_ImagePreserved(t *testin
 	}
 }
 
+// TestHandleNvidia_MultimodalUpstream_TextFirstOrder_PreservesBoth:
+// 锁定 text-first 顺序(text 块在 image 块之前)的多模态入站——原 image-first 测试
+// 用 {image, text} 顺序,掩盖了"文本落后于 image 时被旧 textParts+imageParts 拼接重排到 image 之后"
+// 的缺陷(以及更早版本"先 text 后发现 image 则 text 进 sb、sb 又被数组形态 MarshalJSON 丢弃"的严重丢字段 bug)。
+// 本测试用 {text:"这张报错截图怎么解", image:b64} 顺序,断言:
+//   - 上游收到的数组形态 content 同时保留 text 块与 image_url 块(不丢字段);
+//   - 块顺序与入站一致:text 在前、image 在后(不乱序);
+//   - 文本内容原样到达(不被空串吞掉)。
+func TestHandleNvidia_MultimodalUpstream_TextFirstOrder_PreservesBoth(t *testing.T) {
+	// OCR mock:若误降级会触达此服务;本测试断言它**不被调用**(图未降级)。
+	ocr := ocrFlashServer(t, "should-not-be-called-on-text-first-vision", http.StatusOK)
+	defer ocr.Close()
+	origAddr := localProxyAddr
+	localProxyAddr = strings.TrimPrefix(ocr.URL, "http://")
+	t.Cleanup(func() { localProxyAddr = origAddr })
+
+	// 上游捕获体,并断言数组形态 content 的块顺序与字段完整。
+	var captured map[string]interface{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		captured = body
+		resp := map[string]interface{}{
+			"id": "chatcmpl-tf", "object": "chat.completion", "model": "qwen-vl-plus",
+			"choices": []map[string]interface{}{{
+				"index": 0,
+				"message": map[string]interface{}{"role": "assistant", "content": "已看到报错截图"},
+				"finish_reason": "stop",
+			}},
+			"usage": map[string]interface{}{"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer upstream.Close()
+
+	// 账号上游模型配为 qwen-vl-plus(命中 -vl 启发式)→ modelSupportsImage=true → 跳过降级保图。
+	acc := mkNvidiaAccount("nv-tf", "nv-tf@x.cloud", "k", upstream.URL, "qwen-vl-plus")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+
+	// 关键:text 在前、image 在后(与 image-first 测试互补,锁定乱序/丢字段回归)。
+	anthReq := &AnthropicRequest{
+		Model:    "claude-sonnet-4-5",
+		MaxTokens: func() *int { v := 200; return &v }(),
+		Messages: []AnthropicMessage{{
+			Role: "user",
+			Content: []AnthropicContent{
+				{Type: "text", Text: "这张报错截图怎么解"},
+				{Type: "image", Source: &AnthropicImageSource{Type: "base64", MediaType: "image/png", Data: fakeNvidiaImageB64}},
+			},
+		}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-tf", UserKey: "k1"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	msgs, _ := captured["messages"].([]interface{})
+	if !anyImageURLContent(msgs) {
+		t.Errorf("text-first multimodal upstream MUST receive image_url (preserved): %s", mustJSON(captured))
+	}
+	// 文本块必须保留(旧"先 text 后 image → text 进 sb 又被数组形态丢"的严重 bug 回归守卫)。
+	concat := concatUserText(msgs)
+	if !strings.Contains(concat, "这张报错截图怎么解") {
+		t.Errorf("text-first user text lost (regression of sb-discard bug): %s", concat)
+	}
+	// 顺序守卫:user 的数组形态 content 块类型序列必须与入站一致 [text, image_url]。
+	order := firstUserContentBlockOrder(msgs)
+	wantOrder := []string{"text", "image_url"}
+	if len(order) != len(wantOrder) || order[0] != wantOrder[0] || order[len(order)-1] != wantOrder[1] {
+		t.Errorf("text-first block order broken: got %v want %v (captured: %s)", order, wantOrder, mustJSON(captured))
+	}
+}
+
+// firstUserContentBlockOrder 取 OpenAI Chat messages 里第一条 role=user 消息的数组形态 content,
+// 返回其各块的 type 字段有序列表(用于断言 text/image_url 交错顺序不被重排)。
+// 若该消息 content 非数组形态,返回 nil。
+func firstUserContentBlockOrder(msgs []interface{}) []string {
+	for _, m := range msgs {
+		mm, ok := m.(map[string]interface{})
+		if !ok || mm["role"] != "user" {
+			continue
+		}
+		parts, ok := mm["content"].([]interface{})
+		if !ok {
+			return nil
+		}
+		var order []string
+		for _, p := range parts {
+			pp, ok := p.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if t, ok := pp["type"].(string); ok {
+				order = append(order, t)
+			}
+		}
+		return order
+	}
+	return nil
+}
+
+// TestAnthropicUserToChat_URLSourcePassthrough:
+// 锁定 imageBlockToDataURL 对 source.type=="url" 的处理:透传 Source.Url(http(s) 地址),
+// 而非误生成空 data URL("data:image/png;base64," — base64 分支在 url 源下 Data 为空)。
+// 直接在翻译层断言,绕开上游 mock,聚焦 url 源透传契约。
+func TestAnthropicUserToChat_URLSourcePassthrough(t *testing.T) {
+	const wantURL = "https://example.com/screenshots/error-42.png"
+	msg := AnthropicMessage{
+		Role: "user",
+		Content: []AnthropicContent{
+			{Type: "image", Source: &AnthropicImageSource{Type: "url", Url: wantURL}},
+			{Type: "text", Text: "看看这张网络图"},
+		},
+	}
+	// preserveImages=true 模拟多模态上游路径(AnthropicToOpenAIChatPreservingImages 调用方)。
+	out := anthropicUserToChat(msg, true)
+	if len(out) == 0 {
+		t.Fatal("expected at least one chat message")
+	}
+	// 仅最后一元素是承载图块的 user 数组形态消息(tool_result 场景无,这里直接取末尾)。
+	userMsg := out[len(out)-1]
+	if len(userMsg.ContentParts) == 0 {
+		t.Fatalf("expected ContentParts (array form) for multimodal url image, got string content %q", userMsg.Content)
+	}
+	// 找到 image_url 块并断言其 url 为原始 http(s) 地址(不是空 data URL)。
+	var gotURL string
+	var gotTexts []string
+	for _, p := range userMsg.ContentParts {
+		switch part := p.(type) {
+		case ChatMessageImageURLPart:
+			gotURL = part.ImageURL.URL
+		case ChatMessageTextPart:
+			gotTexts = append(gotTexts, part.Text)
+		}
+	}
+	if gotURL != wantURL {
+		t.Errorf("url source MUST passthrough %q, got %q (regression: empty data URL from base64 branch)", wantURL, gotURL)
+	}
+	if !strings.HasPrefix(gotURL, "http") {
+		t.Errorf("url source should passthrough http(s) URL, got %q", gotURL)
+	}
+	// 文本块亦保留(交错收集不丢字段)。
+	if len(gotTexts) == 0 || !strings.Contains(gotTexts[0], "看看这张网络图") {
+		t.Errorf("url-source user text lost: %v", gotTexts)
+	}
+}
+
 // TestHandleNvidia_NonMultimodalUpstream_DowngradesAsBefore:
 // NIM 上游模型名(glm-5.2)命中启发式 miss → modelSupportsImage=false → 照旧降级,
 // 上游只见 text、不含 image_url(回归基线,锁定旧行为不破)。

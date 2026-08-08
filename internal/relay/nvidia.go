@@ -287,11 +287,34 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		}
 
 		var poolAccount *account.Account
-		poolAccount = h.pickNvidiaAccount(lbMode, sessionKey, activeAvailable)
+		// 并发限制:先按上限过滤超限账号(对齐 passthrough 链路口径)。
+		// 过滤集非空喂 pickNvidiaAccount(保持 sticky/round-robin + nvidiaStats 最少计数语义,
+		// nvidiaStats 是 1 分钟历史请求计数,与在途并发计数正交,过滤在先、nvm 计数在后);
+		// 过滤集空则取在途并发最少的号允许超额降级(对齐用户「绝不硬拒」预期)。
+		limit := h.accountMgr.GetNvidiaMaxConcurrency()
+		filtered := h.accountMgr.FilterByConcurrency(activeAvailable, limit)
+		if len(filtered) > 0 {
+			poolAccount = h.pickNvidiaAccount(lbMode, sessionKey, filtered)
+		} else {
+			overAcc := h.accountMgr.LeastLoadedAccount(activeAvailable)
+			if overAcc != nil {
+				poolAccount = overAcc
+				h.log("⚠️ [并发限制] NVIDIA 池并发全满(限 %d),超额降级到最少并发号 %s", limit, overAcc.Email)
+			}
+		}
 		if poolAccount == nil {
 			lastErr = fmt.Errorf("no available nvidia account assigned from pool")
 			break
 		}
+
+		// 选号通过后立即占用并发槽。后续所有失败/早返 break/return 以本 poolAccount.ID 寻址 Release;
+		// 成功路径(行 614 writeNvidiaResponse 调用后)在请求结束前 Release(蓄流重试全程占槽,见 nvidia_stream.go)。
+		h.accountMgr.AcquireAccount(poolAccount.ID)
+		// acquired 标志用于外层 break 后统一判定:正常外层换号(被 skippedAccounts 标记)需释放;
+		// 但成功路径不通过外层 break 退出(直接 writeNvidiaResponse + return),故此处 acquire 与下方各
+		// 释放点严格按退出路径手工配对,不依赖 defer(defer 在 for 循环体内每次迭代不会立即执行)。
+		acquired := true
+		_ = acquired
 
 		// 模型映射(账号级四档位)
 		upstreamModel := mapNvidiaModel(inModel, poolAccount)
@@ -310,6 +333,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			var anthReq AnthropicRequest
 			if err := json.Unmarshal(bodyBytes, &anthReq); err != nil {
 				h.log("🚫 [NVIDIA 中继] 选号后 Anthropic 请求体二次解析失败(账号 %s): %v,回写 400", poolAccount.Email, err)
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid anthropic request: " + err.Error()})
 				return
 			}
@@ -331,7 +355,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 					// 命中=历史图纳秒级直接返回(不烧 antigravity 额度、无 ~3s 延迟);
 					// 未命中=cache miss 真打了 gemini 上游重新 OCR;窗外占位=末尾 10 条之外的图缓存未命中,
 					// 走占位文本兜底,绝不重新 OCR(省配额)。
-					h.log("✅ [NVIDIA 中继] 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(账号 %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replaced, poolAccount.Email, ocrSessionDisplay(userSession), ocrHits, ocrMisses, ocrSkipped)
+					h.log("✅ [NVIDIA 中继] 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(账号 %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)。若截图含复杂代码/表格,可在设置中将 OCR 模型切换为更强的多模态模型以提升转写保真", replaced, poolAccount.Email, ocrSessionDisplay(userSession), ocrHits, ocrMisses, ocrSkipped)
 				}
 			}
 
@@ -344,6 +368,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			u, err := AnthropicToOpenAIChatPreservingImages(&anthReq, preserveImages, mappings)
 			if err != nil {
 				h.log("🚫 [NVIDIA 中继] Anthropic→OpenAI 转换失败(账号 %s): %v,回写 400", poolAccount.Email, err)
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "anthropic->openai transform failed: " + err.Error()})
 				return
 			}
@@ -353,6 +378,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			u, err := ResponsesToOpenAIChat(bodyBytes, upstreamModel)
 			if err != nil {
 				h.log("🚫 [NVIDIA 中继] Responses→OpenAI 转换失败(账号 %s): %v,回写 400", poolAccount.Email, err)
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "responses->openai transform failed: " + err.Error()})
 				return
 			}
@@ -387,6 +413,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			var chatReq OpenAIChatRequest
 			if err := json.Unmarshal(bodyBytes, &chatReq); err != nil {
 				h.log("🚫 [NVIDIA 中继] 选号后 OpenAI Chat 请求体二次解析失败(账号 %s): %v,回写 400", poolAccount.Email, err)
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid openai request: " + err.Error()})
 				return
 			}
@@ -415,12 +442,16 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		upstreamBody, err := json.Marshal(upstreamReq)
 		if err != nil {
 			lastErr = err
+			// 上游请求体构造失败:释放并发槽再换号。
+			h.accountMgr.ReleaseAccount(poolAccount.ID)
 			break
 		}
 
 		req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
 		if err != nil {
 			lastErr = err
+			// 建请求失败(坏 URL):释放并发槽再换号。
+			h.accountMgr.ReleaseAccount(poolAccount.ID)
 			break
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -448,6 +479,8 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
 			if err != nil {
 				lastErr = err
+				// 内层建请求失败(坏 context):释放并发槽(外层 NewRequest 已 Acquire)。
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				break
 			}
 			req.Header.Set("Content-Type", "application/json")
@@ -467,6 +500,8 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
 					h.log("⏹️ [NVIDIA 中继] 账号 %s 上游请求被客户端取消(ctx err=%v),终止换号重试(不冷冻该号)。", poolAccount.Email, errDo)
 					lastErr = errDo
+					// 客户端断开:本次请求结束,释放并发槽。
+					h.accountMgr.ReleaseAccount(poolAccount.ID)
 					return
 				}
 				h.log("⚠️ [NVIDIA 中继] 账号 %s 访问上游失败: %v", poolAccount.Email, errDo)
@@ -476,6 +511,8 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				// 网络错误：短期冷静该号 60s，换号重试
 				h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, time.Now().UnixNano()/1e6+60*1000, nvidiaChannel, inModel)
 				h.sessionRouter.UnbindSession(sessionKey)
+				// 网络错误换号:本次请求在该号上结束,释放并发槽。
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				break
 			}
 
@@ -497,6 +534,8 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				skippedAccounts[poolAccount.ID] = true
 				h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, time.Now().UnixNano()/1e6+60*1000, nvidiaChannel, inModel)
 				h.sessionRouter.UnbindSession(sessionKey)
+				// 429 耗尽换号:释放并发槽。
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				break
 			}
 
@@ -513,6 +552,8 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				skippedAccounts[poolAccount.ID] = true
 				h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, time.Now().UnixNano()/1e6+int64(cooldown), nvidiaChannel, inModel)
 				h.sessionRouter.UnbindSession(sessionKey)
+				// 401/403 鉴权失败换号:释放并发槽。
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				break
 			}
 
@@ -526,6 +567,8 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				lastErrCode = resp.StatusCode
 				lastErr = fmt.Errorf("nvidia upstream server error %d", resp.StatusCode)
 				skippedAccounts[poolAccount.ID] = true
+				// 5xx 换号:释放并发槽。
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				break
 			}
 
@@ -573,12 +616,16 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 					if looksLikeContextTooLong(resentExhaustedFrame) {
 						h.log("🛑 [NVIDIA 中继] 账号 %s 压缩 3 轮仍失败且首帧含上下文超窗语义，回写 400 invalid_request_error 引导客户端自压...", poolAccount.Email)
 						h.replyAnthropicContextTooLong(w, inboundAnthropic, upstreamModel)
+						// 上下文超窗回写 400 后本次请求结束:释放并发槽。
+						h.accountMgr.ReleaseAccount(poolAccount.ID)
 						return
 					}
 					h.log("⚠️ [NVIDIA 中继] 账号 %s 压缩重试耗尽，冷冻该账号并换号...", poolAccount.Email)
 					skippedAccounts[poolAccount.ID] = true
 					h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, time.Now().UnixNano()/1e6+60*1000, nvidiaChannel, inModel)
 					h.sessionRouter.UnbindSession(sessionKey)
+					// 压缩耗尽换号:释放并发槽。
+					h.accountMgr.ReleaseAccount(poolAccount.ID)
 					break
 				}
 				resp.Body = struct {
@@ -612,6 +659,9 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				inboundInputTokens = estimateInputTokensFromBody(bodyBytes)
 			}
 			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, targetURL, upstreamBody, inboundInputTokens, start, firstByteRec)
+			// 蓄流重试(pullAnthropicStreamWithRetry)全程占账号槽,writeNvidiaResponse 返回即响应流结束,
+			// 本次请求结束,释放并发槽。release 必须在 writeNvidiaResponse 返回之后(见方案 §4)。
+			h.accountMgr.ReleaseAccount(poolAccount.ID)
 			return
 		}
 	}

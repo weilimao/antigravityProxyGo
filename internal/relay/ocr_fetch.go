@@ -36,6 +36,15 @@ const ocrFetchMaxBytes = 10 << 20
 // ocrFetchTimeout 是单次下载的整体超时(含拨号 + 读体),5 秒兼顾稳定性与体感。
 const ocrFetchTimeout = 5 * time.Second
 
+// ocrDownloadMaxAttempts 是 URL 图片下载的单次 fetch 内最大尝试次数(1 次原调 + 1 次重试)。
+// 取 2(而非 OCR 上游的 3):URL 图下载只是 OCR 的前置取料,失败影响有限(交上层占位文本兜底),
+// 且图床偶发抖动通常 1 次重试即恢复;再多会放大 SSRF 拨号次数与总延迟(每次重跑同一 SSRF 守卫)。
+const ocrDownloadMaxAttempts = 2
+
+// ocrDownloadRetryWait 是两次下载尝试之间的固定退避(可被主请求 ctx 中止)。
+// 取 500ms(短于 OCR 上游 800ms):下载属前置取料,不该让单次取料退避占用过多时间。
+const ocrDownloadRetryWait = 500 * time.Millisecond
+
 // ssrfRejectedPrefix 用于区分"拒绝(SSRF/非 image)"与"网络错误"两类失败,供日志区分。
 var errSSRFRejected = errors.New("ocr fetch: target rejected by SSRF guard")
 var errNotImage = errors.New("ocr fetch: response content-type is not image/*")
@@ -101,6 +110,11 @@ func isPublicIP(ip net.IP) bool {
 // fetchImageAsBase64 下载一张网络图片并转标准 base64。
 // 返回 (b64Std, mime, err):成功 mime 形如 "image/png";失败 err 区分 SSRF / 非 image / 网络/超时。
 // 调用方拿到 b64 后再交 L1 OCR 引擎识别。
+//
+// 瞬时失败轻量重试:最多 ocrDownloadMaxAttempts 次(1 次原调 + 1 次重试),退避 ocrDownloadRetryWait。
+// 仅对传输层瞬时错误(net 超时 / connection reset / EOF)与上游 5xx/429 重试;
+// 确定性失败(SSRF 拒绝 / 非 image content-type / 4xx 非 429 / 超过字节数)不重试,避免对被守卫
+// 拒绝的目标反复拨号、对非图资源重打。每次重试重跑同一 SSRF 拨号守卫,不放大 SSRF 风面。
 func fetchImageAsBase64(rawURL string) (b64Std, mime string, err error) {
 	u, perr := url.Parse(strings.TrimSpace(rawURL))
 	if perr != nil {
@@ -127,44 +141,103 @@ func fetchImageAsBase64(rawURL string) (b64Std, mime string, err error) {
 	}
 	defer transport.CloseIdleConnections()
 
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
-	if err != nil {
-		return "", "", fmt.Errorf("create image fetch request: %w", err)
-	}
-	req.Header.Set("User-Agent", "antigravity-proxy/ocr-fetch")
-	req.Header.Set("Accept", "image/*")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		// 区分 SSRF 拒绝与普通网络错误,供调用方日志约定。
-		if errors.Is(err, errSSRFRejected) {
-			return "", "", err
+	// 单次「建请求 → Do → 校验状态/Content-Type → 读体 → 转 base64」封装为 closure,供重试复用。
+	// 不把 transport/client 放进闭包,避免重试每次新建 transport(Socket 复用失效 + transport 句柄泄露);
+	// 重试期间复用同一 transport、同一 SSRF 拨号守卫,语义一致。
+	attemptOnce := func() (string, string, error) {
+		req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+		if err != nil {
+			return "", "", fmt.Errorf("create image fetch request: %w", err)
 		}
-		return "", "", fmt.Errorf("fetch image: %w", err)
-	}
-	defer resp.Body.Close()
+		req.Header.Set("User-Agent", "antigravity-proxy/ocr-fetch")
+		req.Header.Set("Accept", "image/*")
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", fmt.Errorf("fetch image: status %d", resp.StatusCode)
+		resp, err := client.Do(req)
+		if err != nil {
+			// 区分 SSRF 拒绝与普通网络错误,供调用方日志约定。
+			if errors.Is(err, errSSRFRejected) {
+				return "", "", err
+			}
+			return "", "", fmt.Errorf("fetch image: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return "", "", fmt.Errorf("fetch image: status %d", resp.StatusCode)
+		}
+
+		ct := strings.TrimSpace(resp.Header.Get("Content-Type"))
+		mime = ct
+		if idx := strings.Index(ct, ";"); idx > 0 {
+			mime = strings.TrimSpace(ct[:idx])
+		}
+		if !strings.HasPrefix(strings.ToLower(mime), "image/") {
+			return "", "", fmt.Errorf("%w: %s", errNotImage, ct)
+		}
+
+		// LimitReader 截断超限图,ReadAll 实际读到的字节数 < cap。
+		limited := io.LimitReader(resp.Body, ocrFetchMaxBytes+1)
+		body, rerr := io.ReadAll(limited)
+		if rerr != nil {
+			return "", "", fmt.Errorf("read image body: %w", rerr)
+		}
+		if len(body) > ocrFetchMaxBytes {
+			return "", "", fmt.Errorf("fetch image: exceeds %d bytes", ocrFetchMaxBytes)
+		}
+		return base64.StdEncoding.EncodeToString(body), mime, nil
 	}
 
-	ct := strings.TrimSpace(resp.Header.Get("Content-Type"))
-	mime = ct
-	if idx := strings.Index(ct, ";"); idx > 0 {
-		mime = strings.TrimSpace(ct[:idx])
+	// 轻量重试循环:确定性失败立即返回,瞬时失败最多 ocrDownloadMaxAttempts 次。
+	var lastErr error
+	for i := 1; i <= ocrDownloadMaxAttempts; i++ {
+		b, m, e := attemptOnce()
+		if e == nil {
+			return b, m, nil
+		}
+		lastErr = e
+		if !isOcrFetchRetryableErr(e) {
+			return "", "", e
+		}
+		if i < ocrDownloadMaxAttempts {
+			time.Sleep(ocrDownloadRetryWait)
+		}
 	}
-	if !strings.HasPrefix(strings.ToLower(mime), "image/") {
-		return "", "", fmt.Errorf("%w: %s", errNotImage, ct)
-	}
+	return "", "", lastErr
+}
 
-	// LimitReader 截断超限图,ReadAll 实际读到的字节数 < cap。
-	limited := io.LimitReader(resp.Body, ocrFetchMaxBytes+1)
-	body, rerr := io.ReadAll(limited)
-	if rerr != nil {
-		return "", "", fmt.Errorf("read image body: %w", rerr)
+// isOcrFetchRetryableErr 判定 URL 图片下载错误是否值得重试。
+// 与 OCR 上游 isOcrRetryableErr 同源,但范围更窄:下载属前置取料,失败交上层占位文本兜底,
+// 不必像 OCR 那样尽力;且需更严格守 SSRF 边界 —— SSRF 拒绝 / 非 image content-type / 超限一律不重试。
+//
+// 重试(瞬时):传输层 EOF / net 超时 / connection reset / broken pipe / 5xx / 429。
+// 不重试(确定):SSRF 拒绝、非 image content-type、4xx 非 429、URL 解析、超限、读体错。
+func isOcrFetchRetryableErr(err error) bool {
+	if err == nil {
+		return false
 	}
-	if len(body) > ocrFetchMaxBytes {
-		return "", "", fmt.Errorf("fetch image: exceeds %d bytes", ocrFetchMaxBytes)
+	// SSRF 拒绝 / 非 image content-type 属确定性安全/语义失败,绝不重试(避免对被守卫拒绝的目标反复拨号)。
+	if errors.Is(err, errSSRFRejected) || errors.Is(err, errNotImage) {
+		return false
 	}
-	return base64.StdEncoding.EncodeToString(body), mime, nil
+	// 上游 HTTP 状态码:5xx/429 重试,其余 4xx 不重试。
+	if code, ok := retryableStatusFromErr(err); ok {
+		return ocrRetryStatusCodes[code]
+	}
+	// 传输层瞬时错误。
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	low := strings.ToLower(err.Error())
+	if strings.Contains(low, "connection reset") ||
+		strings.Contains(low, "broken pipe") ||
+		strings.Contains(low, "timeout") ||
+		strings.Contains(low, "deadline") ||
+		strings.Contains(low, "eof") {
+		return true
+	}
+	return false
 }

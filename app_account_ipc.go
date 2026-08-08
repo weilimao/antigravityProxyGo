@@ -490,6 +490,30 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		data, _ := marshalResponse(map[string]interface{}{"success": true})
 		return data, true, nil
 
+	case "other:set-max-concurrency":
+		// args: [groupID, value]。与 other:set-lb-mode 同走 invoke 双通道(前端组操作既有分布)。
+		// 0=未配置回退默认 10;超过自动换号(超额降级最少并发号)。
+		groupID := ""
+		var v int
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				groupID = s
+			}
+		}
+		if len(args) > 1 {
+			if f, ok := args[1].(float64); ok {
+				v = int(f)
+			} else if i, ok := args[1].(int); ok {
+				v = i
+			}
+		}
+		a.accountMgr.SetOtherMaxConcurrency(groupID, v)
+		a.AddLog(fmt.Sprintf("🔄 [Other] group %s max concurrency → %d", groupID, a.accountMgr.GetOtherMaxConcurrency(groupID)))
+		// 与 other:set-lb-mode 同:广播让前端切 tab 时 renderOtherLBMode 用最新值回填,避免还原陈旧值。
+		a.emitAccountsRes()
+		data, _ := marshalResponse(map[string]interface{}{"success": true})
+		return data, true, nil
+
 	case "other:list-groups":
 		groups := a.accountMgr.GetOtherGroups()
 		data, _ := marshalResponse(map[string]interface{}{"success": true, "groups": groups})

@@ -14,15 +14,6 @@ import (
 	"strings"
 )
 
-// resolvedImage 承载 L2 从 Anthropic image block 解析出的、供 L1 OCR 使用的图片引用。
-// b64 非空即表示已拿到可送 OCR 的标准 base64(来自 base64 直存 / Data URL / URL 下载);
-// mime 为标准化的 image/*;needPlaceholder 标记该 block 是否应落占位文本(解析失败/窗外 URL 未下载过)。
-type resolvedAnthropicImage struct {
-	b64            string
-	mime           string
-	needPlaceholder bool
-}
-
 // nvidiaImageOcrDescHeader 把 OCR 识别出的纯文本包装成一段带上下文标记的描述,
 // 供 DowngradeAnthropicImagesToText 把 image 块原地改写为 text 块时使用。
 // 同时被 DowngradeGeminiImagesToText 复用(Gemini 入站自愈链路文案与 Anthropic 链路一致)。
@@ -69,15 +60,16 @@ const ocrRecentWindowMessages = 10
 //     ChatMessage.Content 永远是 string,上游段零侵入。
 //   - 失败不中止:返回 error 供调用方记日志,但仍把 block 改写成占位文本后继续,优先保证可用性。
 //
-// 返回:成功降级的 image 块数 + 遇到的最后一个错误(若有) + ocrHits/ocrMisses/ocrSkipped。
-// ocrHits   = 命中缓存直接返回(窗口内命中,纳秒级不烧配额) + 窗口外缓存复用的总数;
-// ocrMisses = 窗口内 cache miss 真打 gemini 上游的图数(含成功与失败);
-// ocrSkipped = 窗口外图缓存未命中 → 走占位文本兜底的块数(绝不重新 OCR,省配额)。
+// 多图批量优化(真·单请求批量):一条消息内 ≥2 张窗内 miss 图合并进一次上游 OCR 调用,
+// 模型按 [[图k]] 标记顺序输出,回译拆分后逐张回填 blocks[bi] 与缓存,把 N 次上游降到 1 次。
+// 仅窗内 miss 图参与批量(cache hit / 窗外图路径完全不动);=1 张窗内图仍走原 OcrImage 单图路径
+// (零回归,所有单图现有测试与体感不变);拆分失败整体回退逐图(由 L1 内部兜底,结果质量不劣于现状)。
+// 详见 ocr_batch.go 与 plans/cryptic-coalescing-mccarthy.md。
 //
-// 最近 N 条消息窗口:仅对 req.Messages 末尾 ocrRecentWindowMessages 条内的图片走"miss 即真打上游";
-// 窗口之外的图片只查缓存(OcrImageCacheOnlyLookup):命中则复用历史 OCR 文本(不烧配额),
-// 未命中写占位文本兜底。这样既防上游 400(永远只见 text 块),又避免 Claude Code 每轮
-// 重发完整历史时把几十张老图全部重新 OCR 烧爆 antigravity 号池配额。
+// 返回:成功降级的 image 块数 + 遇到的最后一个错误(若有) + ocrHits/ocrMisses/ocrSkipped。
+// ocrHits   = 命中缓存直接返回(窗内命中,纳秒级不烧配额) + 窗外缓存复用的总数;
+// ocrMisses = 窗内 cache miss 真打上游的图数(含批量合并的一次上游里覆盖的 N 张 与单图 1 张);
+// ocrSkipped = 窗外图缓存未命中 → 走占位文本兜底的块数(绝不重新 OCR,省配额)。
 func (s *OCRService) DowngradeAnthropicImagesToText(req *AnthropicRequest, userSession *RelaySession) (replaced int, lastErr error, ocrHits, ocrMisses, ocrSkipped int) {
 	if s == nil || req == nil {
 		return 0, nil, 0, 0, 0
@@ -88,10 +80,19 @@ func (s *OCRService) DowngradeAnthropicImagesToText(req *AnthropicRequest, userS
 	if msgCount > ocrRecentWindowMessages {
 		windowStart = msgCount - ocrRecentWindowMessages
 	}
-	var ocrModel string
+	ocrModel := s.getOcrModel()
+
+	// anthImgCand 是一条消息内单个窗内 miss 图的降级候选:记录它在 blocks 中的位置 bi
+	// 与已归一的 b64/mime,供第二遍按原位置写回。
+	type anthImgCand struct {
+		bi   int
+		b64  string
+		mime string
+	}
+
 	for mi := range req.Messages {
 		inWindow := mi >= windowStart
-		// 收集同消息或上下文的用户文案
+		// 收集同消息或上下文的用户文案(与原实现一致)。
 		var userTextBuilder strings.Builder
 		for _, b := range req.Messages[mi].Content {
 			if b.Type == "text" && b.Text != "" {
@@ -121,6 +122,11 @@ func (s *OCRService) DowngradeAnthropicImagesToText(req *AnthropicRequest, userS
 		userPromptCtx := userTextBuilder.String()
 
 		blocks := req.Messages[mi].Content
+
+		// 第一遍:逐图解析 b64。窗外图(cache 命中→复用 / 未命中→占位)与解析失败图当场写回;
+		// 窗内图解析出 b64 后收集为候选(不在此 probe 缓存,交 L1 统一判别,避免与
+		// OcrImage(OcrImageBatch) 内置 cache.get 双查)。
+		var cands []anthImgCand
 		for bi := range blocks {
 			if blocks[bi].Type != "image" || blocks[bi].Source == nil {
 				continue
@@ -164,15 +170,12 @@ func (s *OCRService) DowngradeAnthropicImagesToText(req *AnthropicRequest, userS
 				blocks[bi].Text = imageNotExtractablePlaceholder
 				continue
 			}
-			// 窗外历史图:只查缓存复用,绝不重新打上游。命中→复用历史 OCR 文本(replaced+1);
-			// 未命中→占位文本兜底,跳过(ocrSkipped+1),省下昂贵的号池 OCR 配额。
+			// 窗外历史图:只查缓存复用,绝不重新打上游。命中→复用历史 OCR 文本(replaced+1,ocrHits+1);
+			// 未命中→占位文本兜底(ocrSkipped+1),省下昂贵的号池 OCR 配额。
 			// 缓存键按 image-only(不含 promptCtx),故窗外复用与当前提问解耦,只按图片身份命中。
 			if !inWindow {
 				cachedText, hit := s.OcrImageCacheOnlyLookup(userSession, b64Data)
 				if hit && strings.TrimSpace(cachedText) != "" {
-					if ocrModel == "" {
-						ocrModel = s.getOcrModel()
-					}
 					blocks[bi].Source = nil
 					blocks[bi].Type = "text"
 					blocks[bi].Text = nvidiaImageOcrDescHeader(ocrModel, cachedText)
@@ -186,8 +189,20 @@ func (s *OCRService) DowngradeAnthropicImagesToText(req *AnthropicRequest, userS
 				}
 				continue
 			}
-			// 窗内图:走完整缓存+singleflight+miss 真打上游链路。
-			ocrText, ocrErr, cachedHit := s.OcrImage(userSession, b64Data, imgMime, userPromptCtx)
+			// 窗内图:解析出 b64 即收集为候选,交第二遍(=1 单图 / ≥2 批量)。
+			cands = append(cands, anthImgCand{bi: bi, b64: b64Data, mime: imgMime})
+		}
+		if len(cands) == 0 {
+			continue
+		}
+
+		// 第二遍:对窗内候选批量/单图 OCR 并按原位置写回 blocks[bi]。
+		// =1 张走原 OcrImage 单图路径(零回归,所有单图现有测试与体感不变);
+		// ≥2 张走 OcrImageBatch 合并一次上游(按 [[图k]] 标记拆分回填,解析失败整体回退逐图)。
+		if len(cands) == 1 {
+			cd := cands[0]
+			// 窗内图:走完整缓存+singleflight+miss 真打上游链路(与原实现逐行等价)。
+			ocrText, ocrErr, cachedHit := s.OcrImage(userSession, cd.b64, cd.mime, userPromptCtx)
 			if cachedHit {
 				ocrHits++
 			} else {
@@ -195,17 +210,47 @@ func (s *OCRService) DowngradeAnthropicImagesToText(req *AnthropicRequest, userS
 			}
 			if ocrErr != nil || strings.TrimSpace(ocrText) == "" {
 				lastErr = ocrErr
-				blocks[bi].Source = nil
-				blocks[bi].Type = "text"
-				blocks[bi].Text = imageNotExtractablePlaceholder
+				blocks[cd.bi].Source = nil
+				blocks[cd.bi].Type = "text"
+				blocks[cd.bi].Text = imageNotExtractablePlaceholder
 				continue
 			}
-			if ocrModel == "" {
-				ocrModel = s.getOcrModel()
+			blocks[cd.bi].Source = nil
+			blocks[cd.bi].Type = "text"
+			blocks[cd.bi].Text = nvidiaImageOcrDescHeader(ocrModel, ocrText)
+			replaced++
+			continue
+		}
+
+		// ≥2 张:构造批量入参,一次 OcrImageBatch 合并上游。
+		// OcrImageBatch 内部先逐项查缓存(命中即返 CachedHit=true,不进批量),仅把 miss 项
+		// 按消息合并一次上游;成功拆分逐张写 success 长 TTL,拆分失败整体回退逐图(调原 OcrImage)。
+		// L2 只消费返回的 []OcrBatchResult(逐项对齐),按 CachedHit 计 ocrHits/ocrMisses、
+		// 按 Ok/Text/Err 写回(descHeader / 占位),口径与单图路径完全一致。
+		items := make([]OcrBatchItem, len(cands))
+		for k, cd := range cands {
+			items[k] = OcrBatchItem{B64: cd.b64, Mime: cd.mime, PromptCtx: userPromptCtx}
+		}
+		results := s.OcrImageBatch(userSession, items)
+		for k, res := range results {
+			cd := cands[k]
+			if res.CachedHit {
+				ocrHits++
+			} else {
+				ocrMisses++
 			}
-			blocks[bi].Source = nil
-			blocks[bi].Type = "text"
-			blocks[bi].Text = nvidiaImageOcrDescHeader(ocrModel, ocrText)
+			if res.Err != nil || strings.TrimSpace(res.Text) == "" {
+				if res.Err != nil {
+					lastErr = res.Err
+				}
+				blocks[cd.bi].Source = nil
+				blocks[cd.bi].Type = "text"
+				blocks[cd.bi].Text = imageNotExtractablePlaceholder
+				continue
+			}
+			blocks[cd.bi].Source = nil
+			blocks[cd.bi].Type = "text"
+			blocks[cd.bi].Text = nvidiaImageOcrDescHeader(ocrModel, res.Text)
 			replaced++
 		}
 	}

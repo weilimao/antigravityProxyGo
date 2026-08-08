@@ -19,6 +19,16 @@ import (
 // 流式成功正常 EOF 与非流式读取完成返回 finalized=false,交 classify 继续。
 
 func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) forwardOutcome {
+	// 并发槽兜底释放:routeForAttempt 末尾已对选定 poolAccount.Acquire,
+	// 本次请求结束(forward 函数返回 = 上游响应体读尽/流结束/失败取消)即释放。
+	// nil 防御:isPoolReq=false 时 routeForAttempt 返回 poolAccount=nil(直连场景),不 acquire 也不释放。
+	// 所有 finalized 早返(建请求失败/errDo/流断流/中断/读失败)与成功路径均经此 defer 释放,严格配对。
+	defer func() {
+		if ro != nil && ro.poolAccount != nil {
+			sc.h.accountMgr.ReleaseAccount(ro.poolAccount.ID)
+		}
+	}()
+
 	// Forward request
 	targetUrl := "https://" + ro.targetHost + ro.targetPath
 

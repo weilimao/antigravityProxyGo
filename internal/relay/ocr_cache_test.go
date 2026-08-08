@@ -213,7 +213,16 @@ func TestOCR_TTLExpiredReCallsUpstream(t *testing.T) {
 }
 
 func TestOCR_FailureShortTTLNoSpam(t *testing.T) {
-	// mock 一个始终失败的 OCR 服务(500),hitUpstream 计每次真实触达。
+	// mock 一个始终失败的 OCR 服务(503),hitUpstream 计每次真实触达。
+	//
+	// 重试语义(ocr_retry.go):503 属可重试状态码,单次 OcrImage miss 内最多 ocrMaxAttempts=3 次
+	// 触达上游(1 次原调 + 2 次重试),全部失败后才交上层写 failure 短 TTL 熔断条目。
+	// 故本测试的 hits 期望按「每个 miss 命中 3 次」计量,而非旧行为的单次试探。
+	// 为不让 800ms 退避把单测拖到秒级,在测内把 ocrRetryWait 覆盖为 1ms(仅本测生效,t.Cleanup 还原)。
+	origWait := ocrRetryWait
+	ocrRetryWait = 1 * time.Millisecond
+	t.Cleanup(func() { ocrRetryWait = origWait })
+
 	var hits atomic.Int64
 	ocr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
@@ -231,12 +240,12 @@ func TestOCR_FailureShortTTLNoSpam(t *testing.T) {
 	h.ocr.cache = newOcrLRUCache(8, time.Minute, 50*time.Millisecond)
 	sess := &RelaySession{UserID: "u1", UserKey: "k1"}
 
-	// 第 1 次:真打上游,失败,缓存失败条目(短 TTL)。
+	// 第 1 次:miss 真打上游,503 可重试 → 连打 ocrMaxAttempts=3 次仍失败,缓存失败条目(短 TTL)。
 	if _, err, _ := callOcrWithCache(t, h, sess, "image/png", fakeNvidiaImageB64); err == nil {
-		t.Fatal("first call should fail (upstream 500)")
+		t.Fatal("first call should fail (upstream 503)")
 	}
-	if hits.Load() != 1 {
-		t.Fatalf("first call should hit upstream once, got %d", hits.Load())
+	if hits.Load() != 3 {
+		t.Fatalf("first call should hit upstream ocrMaxAttempts=3 times (503 retried), got %d", hits.Load())
 	}
 
 	// 第 2、3 次:命中失败缓存,不触达上游(熔断窗口内不雪崩打挂的服务)。
@@ -246,18 +255,18 @@ func TestOCR_FailureShortTTLNoSpam(t *testing.T) {
 	if _, err, _ := callOcrWithCache(t, h, sess, "image/png", fakeNvidiaImageB64); err == nil {
 		t.Fatal("third call should still fail")
 	}
-	if hits.Load() != 1 {
-		t.Fatalf("failure short-ttl should suppress spam (want 1), got %d", hits.Load())
+	if hits.Load() != 3 {
+		t.Fatalf("failure short-ttl should suppress spam (want 3), got %d", hits.Load())
 	}
 
 	time.Sleep(80 * time.Millisecond) // 失败熔断窗口过期
 
-	// 第 4 次:过期,再次试探上游一次。
+	// 第 4 次:过期,再次 miss → 又连打 ocrMaxAttempts=3 次上游。
 	if _, err, _ := callOcrWithCache(t, h, sess, "image/png", fakeNvidiaImageB64); err == nil {
 		t.Fatal("fourth call should still fail")
 	}
-	if hits.Load() != 2 {
-		t.Fatalf("after failure-ttl expired should re-hit upstream (want 2), got %d", hits.Load())
+	if hits.Load() != 6 {
+		t.Fatalf("after failure-ttl expired should re-hit upstream ocrMaxAttempts=3 times (want 6), got %d", hits.Load())
 	}
 }
 

@@ -465,15 +465,18 @@ func anthropicAssistantToChat(msg AnthropicMessage) ChatMessage {
 // 其余 text 块合并进一条 user 消息。
 //
 // preserveImages=true 时(多模态上游,调用方已确认):
-//   - image 块转译为 OpenAI Chat Vision 数组形态 content 的 image_url 块(data: URL);
-//   - 该条 user 消息的 text 与之合并为一条 ContentParts 数组消息(非字符串 content);
+//   - image 块转译为 OpenAI Chat Vision 数组形态 content 的 image_url 块(data: URL / http(s) URL);
+//   - text 与 image 块按原始 content 顺序交错收集进单一 parts 切片,合并为一条 ContentParts
+//     数组消息(非字符串 content),确保 text-first / image-first / 多图多文交错均不丢字段、不乱序;
 //   - 使多模态上游真正收到图片,而非走旧默认分支(b.Text 恒空 → 图片被静默丢弃)。
-// preserveImages=false 时行为与旧版完全一致:text 合并为字符串 content,image 块走 text 兜底(丢弃)。
+// preserveImages=false 时行为与旧版完全一致:text 合并为字符串 content,image 块走 text 兜底(b.Text 恒空静默丢弃)。
 func anthropicUserToChat(msg AnthropicMessage, preserveImages bool) []ChatMessage {
 	var toolResults []ChatMessage
 	var sb strings.Builder
-	var textParts []ChatMessageTextPart
-	var imageParts []ChatMessageImageURLPart
+	// parts 在 preserveImages=true 时承载 user content 块的交错数组形态(OpenAI Chat Vision):
+	// text 与 image 块按原始 content 顺序入栈,确保 text-first / image-first / 多图多文交错
+	// 全部不丢字段、不乱序。无图时(parts 仅含 text 或为空)走字符串 Content 兜底,数组形态被丢弃。
+	var parts []ChatMessageContentPart
 	hasText := false
 	hasImage := false
 	for _, b := range msg.Content {
@@ -487,19 +490,18 @@ func anthropicUserToChat(msg AnthropicMessage, preserveImages bool) []ChatMessag
 				ToolName:   b.Name,
 			})
 		case "text":
-			if preserveImages && len(imageParts) > 0 {
-				// 数组形态对齐收集:此条 text 追加为 text part,与 image 块同批。
-				textParts = append(textParts, ChatMessageTextPart{Type: "text", Text: b.Text})
-			} else {
-				if sb.Len() > 0 {
-					sb.WriteString("\n")
-				}
-				sb.WriteString(b.Text)
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(b.Text)
+			if preserveImages {
+				// 交错收集:text 块按原始 content 顺序入栈 parts,与 image 块同批保序。
+				parts = append(parts, ChatMessageTextPart{Type: "text", Text: b.Text})
 			}
 			hasText = true
 		case "image":
 			if preserveImages {
-				imageParts = append(imageParts, ChatMessageImageURLPart{
+				parts = append(parts, ChatMessageImageURLPart{
 					Type: "image_url",
 					ImageURL: ChatMessageImageURLPartObject{
 						URL: imageBlockToDataURL(b),
@@ -520,23 +522,21 @@ func anthropicUserToChat(msg AnthropicMessage, preserveImages bool) []ChatMessag
 				sb.WriteString("\n")
 			}
 			sb.WriteString(b.Text)
+			if preserveImages {
+				parts = append(parts, ChatMessageTextPart{Type: "text", Text: b.Text})
+			}
 			hasText = true
 		}
 	}
 	// 先放 tool 结果，再放普通文本；顺序与 OpenAI 期待一致
 	res := toolResults
 	if hasImage {
-		// 数组形态:把已收集的 text part 与 image part 合并为一条 ContentParts 消息。
-		parts := make([]ChatMessageContentPart, 0, len(textParts)+len(imageParts))
-		for i := range textParts {
-			parts = append(parts, textParts[i])
-		}
-		for i := range imageParts {
-			parts = append(parts, imageParts[i])
-		}
+		// 数组形态:parts 已按原始 content 块交错顺序收集 text+image(无重排),
+		// 多模态上游原样消化。Content 同写 sb.String() 作字符串兜底(有 ContentParts 时
+		// MarshalJSON 输出数组、Text() 取 parts 文本,Content 仅兜底不参与序列化)。
 		res = append(res, ChatMessage{
 			Role:         "user",
-			Content:      sb.String(), // 兜底:部分消费点仍用字符串 content
+			Content:      sb.String(),
 			ContentParts: parts,
 		})
 	} else if hasText {
@@ -549,12 +549,18 @@ func anthropicUserToChat(msg AnthropicMessage, preserveImages bool) []ChatMessag
 	return res
 }
 
-// imageBlockToDataURL 把 Anthropic image content block 转成 OpenAI Chat Vision 认的 data: URL。
-// Anthropic image 块: {type:"image", source:{type:"base64", media_type:"image/png", data:"<b64>"}}。
-// OpenAI 要求 image_url.url 为 "data:<media_type>;base64,<data>"。
+// imageBlockToDataURL 把 Anthropic image content block 转成 OpenAI Chat Vision image_url 认的 URL。
+// Anthropic image 块两种 source.type:
+//   - "base64":{media_type:"image/png", data:"<b64>"} → 转 "data:<media_type>;base64,<data>" 内联 URL;
+//   - "url":{url:"https://..."} → 直接透传该 http(s) URL(OpenAI image_url.url 接受网络地址,免 base64 下载)。
+// 其它/缺省 source(type 非空且非 base64/url、media_type 空)按 base64 分支兜底,避免误传空 data URL。
 func imageBlockToDataURL(b AnthropicContent) string {
 	if b.Source == nil {
 		return ""
+	}
+	// url 源:透传原始 http(s) 地址,OpenAI Chat Vision 认 image_url.url 为网络链接。
+	if b.Source.Type == "url" {
+		return strings.TrimSpace(b.Source.Url)
 	}
 	mediaType := b.Source.MediaType
 	if strings.TrimSpace(mediaType) == "" {

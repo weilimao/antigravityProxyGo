@@ -286,9 +286,39 @@ func TestDowngradeAnthropicImagesToText_NoImage(t *testing.T) {
 }
 
 func TestDowngradeAnthropicImagesToText_MultipleImages(t *testing.T) {
-	ocr := ocrFlashServer(t, "图N识别结果", http.StatusOK)
+	// 多图批量优化验证:一条消息内 ≥2 张窗内 miss 图应合并进一次上游 OCR 调用
+	// (OcrImageBatch),而非逐图各打一次。ocrFlashCountingServerV3 用 hitUpstream 原子计数
+	// 真实触达次数;mock 按入站 InlineData 数量回 [[图k]] 标记的批量响应。
+	var hitUpstream atomic.Int64
+	ocr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitUpstream.Add(1)
+		// 解析入站 Gemini generateContent 请求,按 InlineData 数量回逐图标记。
+		body, _ := io.ReadAll(r.Body)
+		var gemReq GeminiRequest
+		_ = json.Unmarshal(body, &gemReq)
+		nImg := 0
+		if len(gemReq.Contents) > 0 {
+			for _, p := range gemReq.Contents[0].Parts {
+				if p.InlineData != nil && p.InlineData.Data != "" {
+					nImg++
+				}
+			}
+		}
+		text := ""
+		for k := 1; k <= nImg; k++ {
+			text += fmt.Sprintf("[[图%d]]图%02d识别结果\n", k, k)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		resp := fmt.Sprintf(`{"candidates":[{"content":{"parts":[{"text":%s}]}}]}`, jsonString(text))
+		w.Write([]byte(resp))
+	}))
 	defer ocr.Close()
-	h := newImageTestHandler(t, ocr)
+	origAddr := localProxyAddr
+	localProxyAddr = strings.TrimPrefix(ocr.URL, "http://")
+	t.Cleanup(func() { localProxyAddr = origAddr })
+
+	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
+	h.ocr.cache = newOcrLRUCache(0, 0, 0)
 
 	req := &AnthropicRequest{
 		Messages: []AnthropicMessage{{
@@ -297,14 +327,19 @@ func TestDowngradeAnthropicImagesToText_MultipleImages(t *testing.T) {
 				{Type: "text", Text: "起点"},
 				{Type: "image", Source: &AnthropicImageSource{Type: "base64", MediaType: "image/png", Data: fakeNvidiaImageB64}},
 				{Type: "text", Text: "中间文本"},
-				{Type: "image", Source: &AnthropicImageSource{Type: "base64", MediaType: "image/jpeg", Data: fakeNvidiaImageB64}},
+				{Type: "image", Source: &AnthropicImageSource{Type: "base64", MediaType: "image/jpeg", Data: fakeNvidiaImageB64 + "AA"}},
 				{Type: "text", Text: "终点"},
 			},
 		}},
 	}
-	replaced, err, _, _, _ := h.ocr.DowngradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
-	if err != nil || replaced != 2 {
-		t.Fatalf("replaced want 2 got %d err=%v", replaced, err)
+	_, _, _, ocrMisses, _ := h.ocr.DowngradeAnthropicImagesToText(req, &RelaySession{UserID: "u1", UserKey: "k1"})
+	// 批量契约:2 张窗内 miss 图 → 上游只触达 1 次(N→1 生效),而非逐图 2 次。
+	if got := hitUpstream.Load(); got != 1 {
+		t.Fatalf("batch upstream should be hit exactly 1 time for 2 images, got %d (N→1 not applied)", got)
+	}
+	// 两张图各计 1 次 miss(OcrImageBatch 逐项 miss 计数,与单图口径一致)。
+	if ocrMisses != 2 {
+		t.Fatalf("ocrMisses want 2 (one per in-window miss image), got %d", ocrMisses)
 	}
 	if len(req.Messages[0].Content) != 5 {
 		t.Fatalf("block order/count changed: %d", len(req.Messages[0].Content))
@@ -318,8 +353,12 @@ func TestDowngradeAnthropicImagesToText_MultipleImages(t *testing.T) {
 	if req.Messages[0].Content[0].Text != "起点" || req.Messages[0].Content[2].Text != "中间文本" || req.Messages[0].Content[4].Text != "终点" {
 		t.Errorf("original text corrupted in mix case")
 	}
-	if !strings.Contains(req.Messages[0].Content[1].Text, "图N识别结果") || !strings.Contains(req.Messages[0].Content[3].Text, "图N识别结果") {
-		t.Errorf("image blocks not OCR-replaced")
+	// 拆分后两张图应各自落自己的 OCR 文本(图1 与图2 标记对应)。
+	if !strings.Contains(req.Messages[0].Content[1].Text, "图01识别结果") {
+		t.Errorf("image block 1 not mapped to [[图1]] segment: %s", req.Messages[0].Content[1].Text)
+	}
+	if !strings.Contains(req.Messages[0].Content[3].Text, "图02识别结果") {
+		t.Errorf("image block 2 not mapped to [[图2]] segment: %s", req.Messages[0].Content[3].Text)
 	}
 }
 

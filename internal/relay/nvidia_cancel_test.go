@@ -180,10 +180,10 @@ func TestOpenAIChatSSEToResponsesSSE_ClientCancelEmitsCompleted(t *testing.T) {
 	buf := &flushBuffer{}
 	fw := newFlushWriter("test_resp", bufio.NewWriter(buf))
 	done := make(chan struct{})
-	var in, out int
+	var in, out, cached int
 	go func() {
 		defer close(done)
-		in, out = OpenAIChatSSEToResponsesSSE(ctx, body, body, fw, "z-ai/glm-5.2")
+		in, out, cached = OpenAIChatSSEToResponsesSSE(ctx, body, body, fw, "z-ai/glm-5.2")
 		fw.flush()
 	}()
 
@@ -215,6 +215,7 @@ func TestOpenAIChatSSEToResponsesSSE_ClientCancelEmitsCompleted(t *testing.T) {
 	}
 	_ = in
 	_ = out
+	_ = cached
 }
 
 // === ④ OpenAI 透传路径:ctx 取消即断 + [DONE] 补发 ===
@@ -235,10 +236,10 @@ func TestProxyNvidiaOpenAIPassthrough_ClientCancelEmitsDone(t *testing.T) {
 
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	done := make(chan struct{})
-	var inU, outU int
+	var inU, outU, cachedU int
 	go func() {
 		defer close(done)
-		inU, outU = handler.proxyNvidiaOpenAIPassthrough(ctx, rr, resp, true, nil)
+		inU, outU, cachedU = handler.proxyNvidiaOpenAIPassthrough(ctx, rr, resp, true, nil)
 	}()
 
 	time.Sleep(30 * time.Millisecond)
@@ -259,6 +260,7 @@ func TestProxyNvidiaOpenAIPassthrough_ClientCancelEmitsDone(t *testing.T) {
 	}
 	_ = inU
 	_ = outU
+	_ = cachedU
 }
 
 // === ⑤ 正常(未取消)路径回归:不应误补尾帧语义 ===

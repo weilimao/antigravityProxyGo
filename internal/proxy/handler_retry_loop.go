@@ -61,7 +61,21 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 				available = []*account.Account{available[0]}
 			}
 
-			lastUsedAccount = sc.h.sessionRouter.GetOrAssignAccount(sc.sessionKey, available, nil)
+			// 并发过滤(与 routeForAttempt 同口径):避免二次 GetOrAssignAccount 的 lastUsedAccount
+			// 指向已过滤的超限账号 → 误冷却。本循环仅做 sticky 跟踪(供下方冷静期/Token 刷新寻址),
+			// 不 acquire/release(routeForAttempt+forwardForAttempt 已严格配对)。
+			var retryLimit int
+			if retryChannel == "project" {
+				retryLimit = sc.h.accountMgr.GetProjectMaxConcurrency()
+			} else {
+				retryLimit = sc.h.accountMgr.GetAntigravityMaxConcurrency()
+			}
+			filtered := sc.h.accountMgr.FilterByConcurrency(available, retryLimit)
+			if len(filtered) > 0 {
+				lastUsedAccount = sc.h.sessionRouter.GetOrAssignAccount(sc.sessionKey, filtered, nil)
+			} else if overAcc := sc.h.accountMgr.LeastLoadedAccount(available); overAcc != nil {
+				lastUsedAccount = overAcc
+			}
 		}
 
 		if lastUsedAccount != nil {

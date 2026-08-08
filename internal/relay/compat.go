@@ -23,6 +23,7 @@ import (
 	"antigravity-proxy/internal/settings"
 	"antigravity-proxy/internal/stats"
 	"fmt"
+	"sync"
 	"net/http"
 	"strings"
 	"time"
@@ -62,6 +63,9 @@ type APICompatHandler struct {
 	// nvidiaCursor 是 round-robin 模式下用于打破"最少计数平局"的全局游标, 单调递增。
 	// 历史上它是纯取模轮询游标; 接入 nvidiaStats 后退化为"候选集合内取模打破平局"用。
 	nvidiaCursor uint64
+	// otherCursors 是 Other 号池按组隔离的轮询游标 (key: groupID, value: *uint64)
+	// 采用按组隔离避免多个数量极少的组（如2个号）在全局游标累加时发生取模共振（Stride Collision）导致饿死。
+	otherCursors sync.Map
 	// nvidiaStats 是 NVIDIA 号池"每账号最近 1 分钟请求计数盘", 供选号时优先挑
 	// 计数最少的账号, 把突发高并发洪流摊到负载最轻的账号上, 降低单账号 1 分钟内
 	// >40 次必然 429 的概率。纯内存易失, 不持久化, 重启清零。详见 nvidia_counter.go。

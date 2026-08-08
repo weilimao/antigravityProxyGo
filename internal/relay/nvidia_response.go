@@ -89,22 +89,24 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Re
 		// 入站是 OpenAI Chat：直接透传上游响应（含流式 SSE）。
 		// 方案 A：边透传边嗅探 usage，非流式从全量 JSON 提 usage，
 		// 流式从 SSE 末帧 data:{...usage...} 提 usage，统计口径与 Anthropic 入站一致。
-		inUsage, outUsage := h.proxyNvidiaOpenAIPassthrough(r.Context(), w, resp, isStreaming, logCtx.FirstByteRec)
-		h.recordNvidiaUsage(userSession, model, inUsage, outUsage, poolAccount, logCtx)
+		inUsage, outUsage, cachedUsage := h.proxyNvidiaOpenAIPassthrough(r.Context(), w, resp, isStreaming, logCtx.FirstByteRec)
+		h.recordNvidiaUsage(userSession, model, inUsage, outUsage, cachedUsage, poolAccount, logCtx)
 	}
 }
 
 // proxyNvidiaOpenAIPassthrough 处理入站为 OpenAI Chat 时的上游响应透传，
-// 同时嗅探出 (inputTokens, outputTokens) 用于号池成员账号维度统计。
+// 同时嗅探出 (inputTokens, outputTokens, cachedTokens) 用于号池成员账号维度统计。
 // 透传坚持逐字节不变：非流式先读全量 body 解析 usage 再原样写出；
 // 流式逐行读 SSE 帧、逐帧原样透传，顺带解析每个 chunk 的 usage 字段(OpenAI 末帧 usage 字段为权威值)。
+// cachedTokens 取上游 usage 的缓存命中口径(prompt_cache_hit_tokens 或 prompt_tokens_details.cached_tokens,
+// 由 OpenAIChatUsage.CachedTokens() 统一解析),当前 NVIDIA 官方 NIM 端不回报 cache 字段,恒 0。
 // 上游非 200(错误/限流/鉴权失败等)直接透传原 body，usage 返回 0 不计入号池账号成本。
-// 返回 (inTokens, outTokens)。
+// 返回 (inTokens, outTokens, cachedTokens)。
 //
 // ctx 为入站请求 r.Context()：流式透传时客户端取消 → watchCancel 捕获 ctx.Done() 立即
 // Close 上游 resp.Body → scanner.Scan() 退出；随后在循环外补发一帧 data: [DONE]\n\n,
 // 给 OpenAI 客户端 SDK 明确的流结束语义(避免客户端卡等上游末帧)。
-func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w http.ResponseWriter, resp *http.Response, isStreaming bool, firstByteRec *stats.FirstByteRecorder) (int, int) {
+func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w http.ResponseWriter, resp *http.Response, isStreaming bool, firstByteRec *stats.FirstByteRecorder) (int, int, int) {
 	// 复制上游响应头(保留 Content-Type 等给客户端)，再写状态码。
 	for k, values := range resp.Header {
 		for _, v := range values {
@@ -116,7 +118,7 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 	if resp.StatusCode != http.StatusOK {
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
-		return 0, 0
+		return 0, 0, 0
 	}
 
 	if !isStreaming {
@@ -125,14 +127,15 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
 			_, _ = w.Write([]byte(`{"error":"read upstream passthrough body failed"}`))
-			return 0, 0
+			return 0, 0, 0
 		}
 		// 仅在解析成功时记 usage，避免坏响应污染统计；body 始终原样透传。
 		var chatResp OpenAIChatResponse
-		inUsage, outUsage := 0, 0
+		inUsage, outUsage, cachedUsage := 0, 0, 0
 		if json.Unmarshal(bodyBytes, &chatResp) == nil {
 			inUsage = chatResp.Usage.PromptTokens
 			outUsage = chatResp.Usage.CompletionTokens
+			cachedUsage = chatResp.Usage.CachedTokens()
 		}
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(bodyBytes)
@@ -141,7 +144,7 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 		if firstByteRec != nil {
 			firstByteRec.MarkFirstByte()
 		}
-		return inUsage, outUsage
+		return inUsage, outUsage, cachedUsage
 	}
 
 	// 流式：逐行嗅探 SSE，逐行原样透传，末帧 usage 为权威。
@@ -165,7 +168,7 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 	scanner := bufio.NewScanner(resp.Body)
 	// 单帧可能较大(尤其带工具调用/长内容)，放宽单行上限避免截断丢 usage。
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	var inUsage, outUsage int
+	var inUsage, outUsage, cachedUsage int
 	doneSent := false // 是否已向下游透传过 [DONE] 终止帧
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -200,6 +203,7 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 		if chunk.Usage != nil {
 			inUsage = chunk.Usage.PromptTokens
 			outUsage = chunk.Usage.CompletionTokens
+			cachedUsage = chunk.Usage.CachedTokens()
 		}
 	}
 	// 上游未发出 [DONE](常见于客户端取消触发 body.Close 后 scanner 提前退出):
@@ -211,7 +215,7 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 			flusher.Flush()
 		}
 	}
-	return inUsage, outUsage
+	return inUsage, outUsage, cachedUsage
 }
 
 // writeNvidiaAnthropicNormal 处理非流式 Anthropic 入站：读全量 OpenAI Chat 响应 → 回译 → 写出。
@@ -292,5 +296,8 @@ func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, res
 	logCtx.FirstByteRec.MarkFirstByte()
 
 	// 配额/统计回调(复用 statsTracker)
-	h.recordNvidiaUsage(userSession, model, anthResp.Usage.InputTokens, anthResp.Usage.OutputTokens, poolAccount, logCtx)
+	// 非流式 Anthropic 入站 cached 取自已回译的 AnthropicResponseUsage.CacheReadInputTokens
+	// (OpenAIChatToAnthropic 已从上游 chatResp.Usage.CachedTokens() 填充),当前 NVIDIA 官方
+	// NIM 不回报 cache,恒 0;一旦上游/兼容端点回报 cache 字段,此处即如实计入。
+	h.recordNvidiaUsage(userSession, model, anthResp.Usage.InputTokens, anthResp.Usage.OutputTokens, anthResp.Usage.CachedTokens(), poolAccount, logCtx)
 }

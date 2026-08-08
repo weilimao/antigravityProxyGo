@@ -59,10 +59,33 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 			available = []*account.Account{available[0]}
 		}
 
-		poolAccount = sc.h.sessionRouter.GetOrAssignAccount(sc.sessionKey, available, sc.h.logFn)
+		// 并发限制:按上限过滤超限账号再喂 sessionRouter(保持 sticky/round-robin 语义,
+		// sessionRouter 既有「原绑定不可用→删除改绑」分支会永久迁移达上限的 sticky 号,零改共享组件)。
+		// 过滤集空则取在途并发最少的号允许超额降级(对齐用户「绝不硬拒」预期),
+		// 此时不再走 sessionRouter 绑定(超额临时号,不永久改绑到超额状态)。
+		var limit int
+		if poolChannel == "project" {
+			limit = sc.h.accountMgr.GetProjectMaxConcurrency()
+		} else {
+			limit = sc.h.accountMgr.GetAntigravityMaxConcurrency()
+		}
+		filtered := sc.h.accountMgr.FilterByConcurrency(available, limit)
+		if len(filtered) > 0 {
+			poolAccount = sc.h.sessionRouter.GetOrAssignAccount(sc.sessionKey, filtered, sc.h.logFn)
+		} else {
+			overAcc := sc.h.accountMgr.LeastLoadedAccount(available)
+			if overAcc != nil {
+				poolAccount = overAcc
+				sc.h.logFn(fmt.Sprintf("⚠️ [并发限制] %s 池并发全满(限 %d),超额降级到最少并发号 %s", poolChannel, limit, overAcc.Email))
+			}
+		}
 		if poolAccount == nil {
 			return nil, errors.New("QUOTA_EXHAUSTED")
 		}
+
+		// 选号通过后立即占用并发槽:本次请求打到该账号起算占 1 个槽,
+		// 直到本次请求结束(forwardForAttempt 顶部 defer 释放)。
+		sc.h.accountMgr.AcquireAccount(poolAccount.ID)
 	}
 
 	var finalReqBody = sc.bodyBytes

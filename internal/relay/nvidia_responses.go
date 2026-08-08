@@ -281,7 +281,9 @@ func (h *APICompatHandler) writeNvidiaResponsesNormal(w http.ResponseWriter, res
 	logCtx.FirstByteRec.MarkFirstByte()
 
 	// 配额/统计回调，与 Chat 透传链路口径一致
-	h.recordNvidiaUsage(userSession, model, rr.Usage.InputTokens, rr.Usage.OutputTokens, poolAccount, logCtx)
+	// 非流式 Responses 入站 cached 取上游 OpenAI Chat usage 的缓存命中口径(chatResp.Usage.CachedTokens()),
+	// 当前 NVIDIA 官方 NIM 不回报 cache,恒 0;一旦上游/兼容端点回报 cache 字段,此处即如实计入。
+	h.recordNvidiaUsage(userSession, model, rr.Usage.InputTokens, rr.Usage.OutputTokens, chatResp.Usage.CachedTokens(), poolAccount, logCtx)
 }
 
 // writeNvidiaResponsesStream 处理流式 Responses 入站：上游 OpenAI Chat SSE → Responses SSE 事件序列。
@@ -311,14 +313,18 @@ func (h *APICompatHandler) writeNvidiaResponsesStream(w http.ResponseWriter, r *
 	fw := newFlushWriter(reqID, bufio.NewWriter(w), flusher)
 	// 透传 r.Context() 与 resp.Body：客户端取消时 watchCancel 立即 Close 上游,
 	// scanner 退出后循环外既有 response.completed 尾帧自动补发(stop 语义)。
-	in, out := OpenAIChatSSEToResponsesSSE(r.Context(), resp.Body, resp.Body, fw, model)
+	in, out, cached := OpenAIChatSSEToResponsesSSE(r.Context(), resp.Body, resp.Body, fw, model)
 	fw.flush()
 
-	h.recordNvidiaUsage(userSession, model, in, out, poolAccount, logCtx)
+	// cached 取上游末帧 usage 的缓存命中口径,当前 NVIDIA 官方 NIM 不回报 cache,恒 0;
+	// 一旦上游/兼容端点回报 cache 字段,此处即如实计入缓存命中率链路。
+	h.recordNvidiaUsage(userSession, model, in, out, cached, poolAccount, logCtx)
 }
 
 // OpenAIChatSSEToResponsesSSE 实时把 NVIDIA(OpenAI Chat 兼容)的 SSE 流重写成 Responses API 事件流。
-// reader 读上游 SSE，fw 写 Responses SSE。返回累计 input/output tokens。
+// reader 读上游 SSE，fw 写 Responses SSE。返回累计 input/output/cached tokens。
+// cached 取上游末帧 usage 的缓存命中口径(prompt_cache_hit_tokens 或 prompt_tokens_details.cached_tokens,
+// 由 OpenAIChatUsage.CachedTokens() 统一解析);当前 NVIDIA 官方 NIM 端不回报 cache 字段,恒 0。
 // 事件序列：response.created → response.in_progress →
 //   (response.output_item.added → response.content_part.added → response.output_text.delta×N →
 //    response.output_text.done → response.content_part.done → response.output_item.done)  // 文本
@@ -328,7 +334,7 @@ func (h *APICompatHandler) writeNvidiaResponsesStream(w http.ResponseWriter, r *
 //
 // ctx 为入站请求的 r.Context()：客户端取消时 watchCancel Close 上游 body 让 scanner 退出,
 // 循环外既有 response.completed 尾帧自动补发,body 为 nil 时退化兼容旧行为(不接入取消即断)。
-func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.ReadCloser, fw *flushWriter, model string) (input, output int) {
+func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.ReadCloser, fw *flushWriter, model string) (input, output, cached int) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
@@ -380,6 +386,7 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 		if chunk.Usage != nil {
 			input = chunk.Usage.PromptTokens
 			output = chunk.Usage.CompletionTokens
+			cached = chunk.Usage.CachedTokens()
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -516,7 +523,7 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 	}
 	fw.writeEvent("response.completed", responsesCompletedPayload(streamID, createdAt, model, stopReason, input, output))
 
-	return input, output
+	return input, output, cached
 }
 
 // responsesStreamItem 记录流中一个 output 条目的打开状态与累积内容。

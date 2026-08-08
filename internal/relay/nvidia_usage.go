@@ -28,7 +28,7 @@ import (
 // ModelName 在 relayStatsMgr 侧带 "nvidia/" 前缀，使 DB 的 family LIKE 查询("nvidia/") 能命中 NVIDIA 族，
 // 不污染 gemini/claude 统计；usageTracker 侧去前缀喂入，前端模型列显示为 upstreamModel(如 z-ai/glm-5.2)，
 // pricing 的 fuzzy 匹配仍能按子串(kimi/llama/nemotron)命价。
-func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model string, input, output int, poolAccount *account.Account, logCtx nvidiaLogCtx) {
+func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model string, input, output, cached int, poolAccount *account.Account, logCtx nvidiaLogCtx) {
 	if input == 0 && output == 0 {
 		return
 	}
@@ -64,7 +64,10 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 	}
 
 	// 2) 号池成员账号维度统计(usage.json) —— 复用 Gemini/claude 直连链路同样口径。
-	// NVIDIA 上游走 OpenAI Chat 协议，响应 usage 无 cache 概念，CachedTokens 置 0。
+	// cached 透传上游 OpenAI Chat usage 的缓存命中口径(prompt_cache_hit_tokens 或
+	// prompt_tokens_details.cached_tokens,由上层经 CachedTokens() 解析后透传)。当前 NVIDIA
+	// 官方 NIM 端不回报 cache 字段,cached 恒 0,与旧行为等价;一旦 NVIDIA 或兼容上游开始
+	// 回报 cache 命中,此处即如实计入,不再硬编码压 0。
 	if h.usageTracker == nil || userSession == nil {
 		return
 	}
@@ -86,7 +89,7 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 		ModelName:    displayModel,
 		InTokens:     input,
 		OutTokens:    output,
-		CachedTokens: 0,
+		CachedTokens: cached,
 		Account:      accMeta,
 	})
 
@@ -96,7 +99,7 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 	// 与顶部指标卡口径完全不变(零回归), 「NVIDIA」Tab 单独反映号池时间曲线。
 	// globalStatsTracker 未注入(relay 单测场景)时为 nil, 安全跳过, 不影响既有两路统计。
 	// displayModel 已去 "nvidia/" 前缀, 满足 TrackNvidiaRequest 对上游展示名的约定;
-	// NVIDIA 上游(OpenAI Chat 协议)无 cache, cachedTokens 固定 0。
+	// nvidiaTrends 桶按 NVIDIA 专属口径计成本与曲线, 不计入 cached(与 cachedCost 仍 0 一致对齐)。
 	if h.globalStatsTracker != nil {
 		h.globalStatsTracker.TrackNvidiaRequest(displayModel, input, output)
 
@@ -108,18 +111,23 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 		// 与落点1(relay 维度 RecordUsage, 模型名带 nvidia/ 前缀, 供 relay:get-user-stats 族查询)
 		// 数据源隔离: 落点4 写 stats.json(主仪表盘), 落点1 写 relay_stats.json(中继用户维度页),
 		// 二者走不同 IPC/不同 Tab, 无前端汇总相加逻辑, 故去前缀 vs 带前缀不产生叠加误导。
-		// NVIDIA 上游无 cache, cachedTokens 固定 0。
-		h.globalStatsTracker.TrackRequestForModel(displayModel, input, output, 0)
+		// cached 透传上游真实缓存命中: 当前 NVIDIA 官方 NIM 不回报 cache, cached 恒 0,与旧行为等价;
+		// 一旦上游/兼容端点回报 cache 字段, 此处即如实计入综合桶的缓存命中分子(TotalCachedTokens)。
+		h.globalStatsTracker.TrackRequestForModel(displayModel, input, output, cached)
 
 		// 5) 请求日志 (stats.Tracker.AddRequestLogForFamily): 把 NVIDIA 成功请求写入仪表盘
 		// 「请求日志」列表。绕过既有 AddRequestLog 的 isRealModel 过滤(要求 Path 含
 		// generatecontent/predict, NVIDIA 走 /v1/chat/completions 不满足), 由 family 显式入库。
-		// Model 用去前缀上游展示名, 与「模型统计」展示口径一致; CacheStatus="NONE"
-		// (NVIDIA 上游 OpenAI Chat 协议无 cache, 前端紫色 NONE badge 自动渲染); DurationMs 由
-		// handleNvidia 入口 startTs 算得端到端耗时, 极快返回时下限保底 1ms 避免 0ms 误读。
+		// Model 用去前缀上游展示名, 与「模型统计」展示口径一致; CacheStatus 由 cached 推导:
+		// cached>0 → "HIT"(前端绿色 HIT badge), cached==0 → "NONE"(前端紫色 NONE badge,与现状一致)。
+		// DurationMs 由 handleNvidia 入口 startTs 算得端到端耗时, 极快返回时下限保底 1ms 避免 0ms 误读。
 		// ID 经原子序列 nvidiaReqLogSeq 去碰撞, 与 relay 维度落点1 的 ReqID 命名空间分离(便于对照排查)。
 		// DurationMs 采用「第一帧→流结束」的流式耗时口径(StreamDurationMs, 不含 TTFT,
 		// 前端「耗时」列与「响应时间」列语义分离); TTFT(FirstByteMs) 仍为请求→首帧的端到端截断。
+		cacheStatus := "NONE"
+		if cached > 0 {
+			cacheStatus = "HIT"
+		}
 		end := time.Now()
 		endToEndMs := end.Sub(logCtx.StartTs).Milliseconds()
 		durationMs := logCtx.FirstByteRec.StreamDurationMs(end)
@@ -136,8 +144,8 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 			Model:        displayModel,
 			InTokens:     input,
 			OutTokens:    output,
-			CachedTokens: 0,
-			CacheStatus:  "NONE",
+			CachedTokens: cached,
+			CacheStatus:  cacheStatus,
 			StatusCode:   logCtx.StatusCode,
 			Account:      logCtx.Account,
 			SessionID:    logCtx.SessionID,

@@ -256,7 +256,7 @@ func TestOpenAIChatSSEToResponsesSSE_TextStream(t *testing.T) {
 
 	buf := &flushBuffer{}
 	fw := newFlushWriter("test_resp", bufio.NewWriter(buf))
-	in, out := OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "moonshotai/kimi-k2.5")
+	in, out, _ := OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "moonshotai/kimi-k2.5")
 	fw.flush()
 
 	if in != 7 || out != 2 {
@@ -344,7 +344,7 @@ func TestOpenAIChatSSEToResponsesSSE_ToolCallStream(t *testing.T) {
 
 	buf := &flushBuffer{}
 	fw := newFlushWriter("test_resp", bufio.NewWriter(buf))
-	in, out := OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "z-ai/glm-5.2")
+	in, out, _ := OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "z-ai/glm-5.2")
 	fw.flush()
 
 	if in != 3 || out != 1 {
@@ -680,7 +680,7 @@ func TestOpenAIChatSSEToResponsesSSE_ReasoningStream(t *testing.T) {
 
 	buf := &flushBuffer{}
 	fw := newFlushWriter("test_resp_reason", bufio.NewWriter(buf))
-	in, out := OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "moonshotai/kimi-k2.5")
+	in, out, _ := OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "moonshotai/kimi-k2.5")
 	fw.flush()
 
 	if in != 5 || out != 3 {
@@ -775,7 +775,7 @@ func TestOpenAIChatSSEToResponsesSSE_ReasoningFieldFallback(t *testing.T) {
 
 	buf := &flushBuffer{}
 	fw := newFlushWriter("test_resp_rf", bufio.NewWriter(buf))
-	_, _ = OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "z-ai/glm-5.2")
+	_, _, _ = OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "z-ai/glm-5.2")
 	fw.flush()
 
 	events := parseSSEEvents(buf.String())
@@ -819,7 +819,7 @@ func TestOpenAIChatSSEToResponsesSSE_ReasoningAsText(t *testing.T) {
 
 	buf := &flushBuffer{}
 	fw := newFlushWriter("test_resp_rat", bufio.NewWriter(buf))
-	_, _ = OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "moonshotai/kimi-k2.5")
+	_, _, _ = OpenAIChatSSEToResponsesSSE(context.Background(), strings.NewReader(sse.String()), nil, fw, "moonshotai/kimi-k2.5")
 	fw.flush()
 
 	events := parseSSEEvents(buf.String())

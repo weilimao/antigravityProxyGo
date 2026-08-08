@@ -20,8 +20,9 @@ func OpenAIChatToAnthropic(resp *OpenAIChatResponse) *AnthropicResponse {
 		StopReason:   openAIFinishToAnthropicStop(resp.FinishReason()),
 		StopSequence: nil,
 		Usage: AnthropicResponseUsage{
-			InputTokens:  resp.Usage.PromptTokens,
-			OutputTokens: resp.Usage.CompletionTokens,
+			InputTokens:          resp.Usage.PromptTokens,
+			OutputTokens:         resp.Usage.CompletionTokens,
+			CacheReadInputTokens: resp.Usage.CachedTokens(),
 		},
 	}
 	if out.ID == "" {

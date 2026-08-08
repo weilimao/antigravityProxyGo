@@ -45,6 +45,10 @@ type OtherGroupInfo struct {
 	EnabledCount int      `json:"enabledCount"`
 	// LbMode 是该组当前 LB 算法(round-robin/sticky),供前端组 tab 下拉展示。
 	LbMode string `json:"lbMode"`
+	// MaxConcurrency 是该组单账号在途并发上限(回显供前端组 tab input 回填)。
+	// 已经 GetOtherMaxConcurrency 规整:v<=0(0/负数)= 未配置,回退默认 10,与选号热路径
+	// 同口径,故回显永远 >=10 或用户配置的正数,前端无需再做 0 兜底。
+	MaxConcurrency int `json:"maxConcurrency"`
 }
 
 // reserveOtherProviderGroupIDs 是禁止用作 GroupID 的保留值,避免与现有号池 Provider 冲突导致路由歧义。
@@ -263,6 +267,11 @@ func (m *Manager) GetOtherGroups() []OtherGroupInfo {
 				BaseURL:   a.BaseURL,
 				Formats:   append([]string{}, a.Formats...),
 				LbMode:    m.otherLBModes[strings.ToLower(strings.TrimSpace(gid))],
+				// MaxConcurrency 回显该组单账号在途并发上限,与选号热路径同口径:
+				// 经 GetOtherMaxConcurrency 内建 v<=0 → defaultMaxConcurrency(10) 回退,
+				// 故未配置组回显 10 而非 0,与 NVIDIA/Antigravity/Project 三池 emitter 回退范式对齐,
+				// 前端组 tab input 显示与实际限流行为一致(均按 10)。
+				MaxConcurrency: m.GetOtherMaxConcurrency(gid),
 			}
 			if gi.LbMode == "" {
 				gi.LbMode = "round-robin"

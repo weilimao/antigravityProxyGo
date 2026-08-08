@@ -40,6 +40,12 @@
                     <input class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out" id="poolModeToggle" type="checkbox">
                     <label class="toggle-label block overflow-hidden h-5 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer" for="poolModeToggle"></label>
                 </div>
+                <!-- 单账号在途并发上限(antigravity/project 两 Tab 共用此 input,按 currentViewTab 分流 IPC):
+                     0=未配置回退默认 10;超过自动换号(超额降级最少并发号)。 -->
+                <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20" id="poolMaxConcurrencyWrap">
+                    <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="maxConcurrencyLabel">并发上限</span>
+                    <input type="number" min="0" max="1000" id="poolMaxConcurrency" class="w-14 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="maxConcurrencyTip" title="0=未配置(默认10);超过自动换号" />
+                </div>
             </div>
 
             <div class="flex items-center gap-2 bg-slate-50/50 dark:bg-white/5 px-3 py-1.5 rounded-lg border border-outline-variant/30 flex-shrink-0 hidden" id="nvidiaLBModeContainer">
@@ -48,6 +54,11 @@
                     <option value="round-robin" class="dark:bg-[#1a1f30] text-slate-800 dark:text-white">游标轮询 (默认)</option>
                     <option value="sticky" class="dark:bg-[#1a1f30] text-slate-800 dark:text-white">粘性会话</option>
                 </select>
+                <!-- NVIDIA 池单账号在途并发上限:0=未配置回退默认 10;超过自动换号。 -->
+                <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20">
+                    <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="maxConcurrencyLabel">并发上限</span>
+                    <input type="number" min="0" max="1000" id="nvidiaMaxConcurrency" class="w-14 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="maxConcurrencyTip" title="0=未配置(默认10);超过自动换号" />
+                </div>
             </div>
             <button type="button" id="btnNvidiaPreferredModels" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg text-[13px] font-medium text-amber-600 dark:text-amber-400 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer" data-i18n-title="nvidiaPreferredModelsBtn">
                 <span class="material-symbols-outlined text-[16px]">inventory</span>
@@ -126,6 +137,11 @@
                         <option value="round-robin" data-i18n="lbRoundRobin">轮询</option>
                         <option value="sticky" data-i18n="lbSticky">粘性</option>
                     </select>
+                    <!-- Other 池按组单账号在途并发上限(仅选中具体组时显示,与 LB 下拉同显隐):0=未配置回退默认 10。 -->
+                    <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20">
+                        <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="maxConcurrencyLabel">并发上限</span>
+                        <input type="number" min="0" max="1000" id="otherMaxConcurrency" class="w-14 px-1.5 py-0.5 bg-transparent border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="maxConcurrencyTip" title="0=未配置(默认10);超过自动换号" />
+                    </div>
                 </div>
                 <!-- 布局切换按钮组 -->
                 <div class="flex items-center bg-slate-100 dark:bg-white/5 p-0.5 rounded-lg border border-outline-variant/10 ml-1 flex-shrink-0">

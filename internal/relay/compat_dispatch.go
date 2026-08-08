@@ -270,7 +270,7 @@ func (h *APICompatHandler) dispatchToGemini(
 	// qwen-vl / gpt-4o / glm-4v 等其它原生多模态上游,同时尊重用户在映射表显式声明的 false 否决。
 	if hasImage && !h.ocr.modelSupportsImage(targetModelToQuery) && r.Header.Get("X-Antigravity-OCR-Self") != "1" {
 		ocrModel := h.ocr.getOcrModel()
-		h.log("⚠️ [Relay Compat] 检测到目标模型 %s 不支持多模态，但请求包含图片。正在自动通过本地 Gemini(%s)执行 OCR 和图片描述...", targetModelToQuery, ocrModel)
+		h.log("⚠️ [Relay Compat] 检测到目标模型 %s 不支持多模态，但请求包含图片。正在自动通过本地 Gemini(%s)执行 OCR 和图片描述...（若截图含复杂代码/表格，可在设置中更换更强多模态 OCR 模型以提升转写保真）", targetModelToQuery, ocrModel)
 		downgraded, ocrHits, ocrMisses, ocrErrDown := h.ocr.DowngradeGeminiImagesToText(geminiReq, userSession, targetModelToQuery)
 		if ocrErrDown != nil {
 			h.log("❌ [Relay Compat] %v", ocrErrDown)

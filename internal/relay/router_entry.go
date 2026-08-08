@@ -142,6 +142,16 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 	pf := &passthroughForward{h: h, accountMgr: h.accountMgr}
 	res := pf.run(w, r, provider, targetGroupID, upstreamModel, inModel, bodyBytes, isStreaming, isChat, isResponses, isMessages, userSession)
 
+	// 并发槽兜底释放:成功路径(pf.run 内 res.usedAccPtr 已赋值且未释放)在此 defer 释放,
+	// 时序在下方各 reply 函数消费完 res.resp.Body 流式回写返回之后(defer LIFO,后注册先执行?
+	// 不——defer 按注册顺序逆序执行,本 defer 先于 reply 调用注册,故在 reply 返回后才 fire,
+	// 即「本次请求结束」点)。失败路径 usedAccPtr 为 nil(pf.run 内已显式 Release),本 defer 不双减。
+	// nil 防御:res 可能为 nil(passthroughForward.run 理论不返回 nil,但防御保平安)。
+	if res != nil && res.usedAccPtr != nil {
+		usedAccID := res.usedAccPtr.ID
+		defer h.accountMgr.ReleaseAccount(usedAccID)
+	}
+
 	// 装配 Other 号池请求日志/统计上下文(在 pf.run 返回后, 此时 res.usedAccPtr 已就绪)。
 	// 供三个回写路径 passthroughWriteSuccess / replyOpenAIToAnthropic / replyAnthropicToOpenAI
 	// 的 recordOtherUsage 使用。Host 优先取上游账号 BaseURL 裸 host, 其次入站 r.Host。

@@ -19,6 +19,7 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -256,12 +257,9 @@ func (s *OCRService) ocrImageUncached(userSession *RelaySession, b64Data string,
 		promptCtx = strings.TrimSpace(userPromptText[0])
 	}
 
-	var ocrPrompt string
-	if promptCtx != "" {
-		ocrPrompt = fmt.Sprintf("你是一个顶级的多模态视觉分析助手。请深入分析图片内容并准确提取关键信息。\n\n【用户提问上下文】：用户在发送此图片时附带的提问/说明文本为：\n\"%s\"\n\n请按以下要求分析：\n1. [重点靶向分析]：结合上述用户的提问与关注点，重点分析图片中与问题相关的代码行、报错提示、界面元素或逻辑关系。\n2. [文字与代码精准提取 (OCR)]：\n   - 原样逐字提取图中涉及的代码、控制台报错或文本，保持原始缩进与排版，不要自动修正错别字，用 Markdown 代码块包裹。\n3. [画面结构与视觉布局]：描述界面 UI 状态、高亮提示框或图表节点关系。\n4. [输出要求]：直接输出结构化结果，严禁包含任何前言或客套话。", promptCtx)
-	} else {
-		ocrPrompt = "你是一个顶级的多模态视觉分析助手。请深入分析图片内容并准确提取关键信息。要求如下：\n1. [图像总体概览]：用一句话概括图片类型（如：IDE代码截图、控制台报错、UI界面、架构流程图等）及核心意图。\n2. [文字与代码精准提取 (OCR)]：\n   - 提取图中所有的文本、代码、终端命令与报错堆栈。\n   - 代码与报错日志必须【原样逐字提取】，严格保留缩进、换行与标点符号，严禁自动修改拼写错误。使用 Markdown 代码块包裹。\n3. [视觉布局与逻辑关系]：\n   - 若包含 UI 界面，注明高亮项、报错弹窗或按钮状态；\n   - 若包含流程图/表格，还原节点间的关系或表格数据。\n4. [输出要求]：直接输出结构化的提取与分析结果，不要包含任何前言、引言或客套话。"
-	}
+	// 单图 OCR prompt 由 ocr_prompt.go 的 buildSingleOcrPrompt 构造,与批量 prompt 共享
+	// 保真条款单一信息源(转写铁律 / 不确定标注 / 空间坐标三常量),避免单图与批量口径漂移。
+	ocrPrompt := buildSingleOcrPrompt(promptCtx)
 
 	// 按 OCR 模型前缀分流执行号池:
 	//   - Google 族(google/antigravity/gcp/project/gemini-cli/空):走本地 18443 Gemini 原生端点(旧行为,零回归);
@@ -292,11 +290,37 @@ func (s *OCRService) ocrImageUncached(userSession *RelaySession, b64Data string,
 		return "", fmt.Errorf("marshal ocr request: %w", errMarshal)
 	}
 
+	// 瞬时失败重试:把「建请求 → Do → 解析响应」整段作为一次 attempt 闭包,交给 ocrCallWithRetry
+	// 最多 ocrMaxAttempts 次。传输层 EOF / 上游 429/5xx → 重试;4xx 非 429 / 编解码 / 空候选 → 不重试。
+	// 每次重试用同一 retryCtx(NewRequestWithContext 绑定),ctx 总超时上界 ocrRetryTotalTimeout(30s)。
+	// RelaySession 当前不携带入站 ctx,此处传 nil,ocrCallWithRetry 内部退化为 context.Background() + 总超时。
+	// 缓存/singleflight 契约零变动:重试在 OcrImage 的 singleflight call 函数体内,成功交上层写 success 长 TTL,
+	// 全部耗尽交上层写 failure 短 TTL 30s 熔断。
+	result := ocrCallWithRetry(nil, "ocr", s.logf, func(ctx context.Context) ocrAttemptResult {
+		return s.ocrGeminiAttempt(ctx, userSession, upstreamModel, ocrReqBytes)
+	})
+	return result.text, result.err
+}
+
+// ocrGeminiAttempt 是 Google 族路径「一次真打 18443 Gemini + 解析响应」的纯上游尝试,
+// 供 ocrImageUncached 经 ocrCallWithRetry 重试调用。
+//
+// 每次重试都新建独立 http.Request(绑定本次 ctx)并发 Do;响应体读完即 Close。
+// 把"解析响应"也放进同一 attempt 闭包:2xx 但候选为空属确定性失败(上游安全拦截的一种),
+// 在此返回带 status 文本的 error 交 isOcrRetryableErr 判为不重试,避免对它狂打上游。
+//
+// 错误文本约定(供 isOcrRetryableErr 解析):非 200 → "ocr service returned status %d: %s"
+// (含 "status " 关键词,retryableStatusFromErr 据此提取状态码定 4xx/5xx 重试性)。
+func (s *OCRService) ocrGeminiAttempt(ctx context.Context, userSession *RelaySession, upstreamModel string, ocrReqBytes []byte) ocrAttemptResult {
+	if s == nil || s.client == nil {
+		return ocrAttemptResult{err: fmt.Errorf("ocrGeminiAttempt: nil service or client")}
+	}
+
 	// 模型名参数化:默认 gemini-2.5-flash,前端可改任意 Gemini 系模型。
 	ocrURL := fmt.Sprintf("http://%s/v1beta/models/%s:generateContent", localProxyAddr, upstreamModel)
-	ocrHTTPReq, errReq := http.NewRequest(http.MethodPost, ocrURL, bytes.NewReader(ocrReqBytes))
+	ocrHTTPReq, errReq := http.NewRequestWithContext(ctx, http.MethodPost, ocrURL, bytes.NewReader(ocrReqBytes))
 	if errReq != nil {
-		return "", fmt.Errorf("create ocr request: %w", errReq)
+		return ocrAttemptResult{err: fmt.Errorf("create ocr request: %w", errReq)}
 	}
 	ocrHTTPReq.Header.Set("Content-Type", "application/json")
 	ocrHTTPReq.Header.Set("Authorization", "Bearer "+userSession.UserKey)
@@ -309,24 +333,24 @@ func (s *OCRService) ocrImageUncached(userSession *RelaySession, b64Data string,
 
 	ocrResp, errDo := s.client.Do(ocrHTTPReq)
 	if errDo != nil {
-		return "", fmt.Errorf("execute ocr request: %w", errDo)
+		return ocrAttemptResult{err: fmt.Errorf("execute ocr request: %w", errDo)}
 	}
 	defer ocrResp.Body.Close()
 
 	if ocrResp.StatusCode != http.StatusOK {
 		errBytes, _ := io.ReadAll(ocrResp.Body)
-		return "", fmt.Errorf("ocr service returned status %d: %s", ocrResp.StatusCode, string(errBytes))
+		return ocrAttemptResult{err: fmt.Errorf("ocr service returned status %d: %s", ocrResp.StatusCode, string(errBytes))}
 	}
 
 	respBytes, _ := io.ReadAll(ocrResp.Body)
 	var gemResp GeminiResponse
 	if errUnmarshal := json.Unmarshal(respBytes, &gemResp); errUnmarshal != nil {
-		return "", fmt.Errorf("unmarshal ocr response: %w", errUnmarshal)
+		return ocrAttemptResult{err: fmt.Errorf("unmarshal ocr response: %w", errUnmarshal)}
 	}
 	if len(gemResp.Candidates) == 0 || len(gemResp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("ocr response candidates are empty")
+		return ocrAttemptResult{err: fmt.Errorf("ocr response candidates are empty")}
 	}
-	return gemResp.Candidates[0].Content.Parts[0].Text, nil
+	return ocrAttemptResult{text: gemResp.Candidates[0].Content.Parts[0].Text}
 }
 
 // ocrImageUncachedViaRoute 处理非 Google 族前缀模型(如 nvidia/xxx、other/openai/xxx)
@@ -374,11 +398,39 @@ func (s *OCRService) ocrImageUncachedViaRoute(userSession *RelaySession, ocrProm
 		return "", fmt.Errorf("marshal ocr route request: %w", errMarshal)
 	}
 
+	s.logf("跨号池 OCR(经 /route):model %s → upstream %s | 图 %s | 字节 %d", reqModel, upstreamModel, mimeType, len(b64Data))
+
+	// 瞬时失败重试:与 Google 族路径同款 ocrCallWithRetry,最多 ocrMaxAttempts 次,
+	// 传输层 EOF / 上游 429/5xx → 重试。每次重试重建 http.Request 并重设所有头(含
+	// X-Antigravity-OCR-Self 自递归守卫头),守卫语义在重试下不破。总超时上界 30s。
+	result := ocrCallWithRetry(nil, "ocr route", s.logf, func(ctx context.Context) ocrAttemptResult {
+		return s.ocrRouteAttempt(ctx, userSession, ocrReqBytes)
+	})
+	return result.text, result.err
+}
+
+// ocrRouteAttempt 是非 Google 族路径「一次真打 18444 /route + 解析响应」的纯上游尝试,
+// 供 ocrImageUncachedViaRoute 经 ocrCallWithRetry 重试调用。
+//
+// 每次重试都新建独立 http.Request(绑定本次 ctx)并发 Do;**所有头都在此重设**,
+// 特别是 X-Antigravity-OCR-Self 自递归守卫头 —— 因重试会重建请求,守卫头必须在每次尝试都带上,
+// 否则重试请求会被下游号池降级入口误判为普通入站、再次触发 OCR 形成自递归。
+//
+// 错误文本约定(供 isOcrRetryableErr 解析):非 200 → "ocr route service returned status %d: %s"
+// (含 "status " 关键词,retryableStatusFromErr 据此提取状态码定 4xx/5xx 重试性)。
+func (s *OCRService) ocrRouteAttempt(ctx context.Context, userSession *RelaySession, ocrReqBytes []byte) ocrAttemptResult {
+	if s == nil || s.client == nil {
+		return ocrAttemptResult{err: fmt.Errorf("ocrRouteAttempt: nil service or client")}
+	}
+	if userSession == nil {
+		return ocrAttemptResult{err: fmt.Errorf("ocrRouteAttempt: nil session")}
+	}
+
 	// 打到本地 18444 /route/v1/chat/completions 入口,由 handleRoutedForward 按前缀路由。
 	ocrURL := fmt.Sprintf("http://%s/route/v1/chat/completions", localRelayAddr)
-	ocrHTTPReq, errReq := http.NewRequest(http.MethodPost, ocrURL, bytes.NewReader(ocrReqBytes))
+	ocrHTTPReq, errReq := http.NewRequestWithContext(ctx, http.MethodPost, ocrURL, bytes.NewReader(ocrReqBytes))
 	if errReq != nil {
-		return "", fmt.Errorf("create ocr route request: %w", errReq)
+		return ocrAttemptResult{err: fmt.Errorf("create ocr route request: %w", errReq)}
 	}
 	ocrHTTPReq.Header.Set("Content-Type", "application/json")
 	ocrHTTPReq.Header.Set("Authorization", "Bearer "+userSession.UserKey)
@@ -387,21 +439,20 @@ func (s *OCRService) ocrImageUncachedViaRoute(userSession *RelaySession, ocrProm
 		ocrHTTPReq.Header.Set("X-Relay-Api-Key-Id", userSession.APIKeyID)
 	}
 	// 自递归守卫:下游 nvidia/passthrough 降级入口识别此头后跳过 image→文本降级。
+	// 重试下每次重建请求都重设,守卫语义不破。
 	ocrHTTPReq.Header.Set("X-Antigravity-OCR-Self", "1")
 	ocrHTTPReq.Header.Set("X-Antigravity-Original-Path", "/route/v1/chat/completions/ocr-fallback")
 	ocrHTTPReq.Header.Set("X-Antigravity-Original-Method", "POST")
 
-	s.logf("跨号池 OCR(经 /route):model %s → upstream %s | 图 %s | 字节 %d", reqModel, upstreamModel, mimeType, len(b64Data))
-
 	ocrResp, errDo := s.client.Do(ocrHTTPReq)
 	if errDo != nil {
-		return "", fmt.Errorf("execute ocr route request: %w", errDo)
+		return ocrAttemptResult{err: fmt.Errorf("execute ocr route request: %w", errDo)}
 	}
 	defer ocrResp.Body.Close()
 
 	if ocrResp.StatusCode != http.StatusOK {
 		errBytes, _ := io.ReadAll(ocrResp.Body)
-		return "", fmt.Errorf("ocr route service returned status %d: %s", ocrResp.StatusCode, string(errBytes))
+		return ocrAttemptResult{err: fmt.Errorf("ocr route service returned status %d: %s", ocrResp.StatusCode, string(errBytes))}
 	}
 
 	respBytes, _ := io.ReadAll(ocrResp.Body)
@@ -413,17 +464,17 @@ func (s *OCRService) ocrImageUncachedViaRoute(userSession *RelaySession, ocrProm
 		} `json:"choices"`
 	}
 	if errUnmarshal := json.Unmarshal(respBytes, &openAIResp); errUnmarshal != nil {
-		return "", fmt.Errorf("unmarshal ocr route response: %w", errUnmarshal)
+		return ocrAttemptResult{err: fmt.Errorf("unmarshal ocr route response: %w", errUnmarshal)}
 	}
 	if len(openAIResp.Choices) == 0 {
-		return "", fmt.Errorf("ocr route response choices are empty")
+		return ocrAttemptResult{err: fmt.Errorf("ocr route response choices are empty")}
 	}
 	// content 可能是 string,也可能是多个分段(数组)。统一提取为纯文本字符串。
 	text := contentToString(openAIResp.Choices[0].Message.Content)
 	if strings.TrimSpace(text) == "" {
-		return "", fmt.Errorf("ocr route response content is empty")
+		return ocrAttemptResult{err: fmt.Errorf("ocr route response content is empty")}
 	}
-	return text, nil
+	return ocrAttemptResult{text: text}
 }
 
 // contentToString 把 OpenAI Chat 响应里 message.content 的 string / []string 形态归一为纯文本。

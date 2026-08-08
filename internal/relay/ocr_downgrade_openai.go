@@ -65,6 +65,12 @@ var openAITextBlockTypes = map[string]bool{
 //     (命中=缓存直接返回;未命中=窗内真打上游;窗外占位=窗外图缓存未命中走 placeholder)。
 //
 // 解析失败(body 非 JSON 对象 / 无 messages / messages 非数组)时原样返回,绝不阻断主请求。
+//
+// 多图批量优化(真·单请求批量):一条消息内 ≥2 张窗内 miss 图合并进一次上游 OCR 调用,
+// 模型按 [[图k]] 标记顺序输出,回译拆分后逐张回填 segment 列表与缓存,把 N 次上游降到 1 次。
+// 仅窗内 miss 图参与批量(cache hit / 窗外图路径完全不动);=1 张窗内图仍走原 OcrImage 单图路径
+// (零回归,所有单图现有测试与体感不变);拆分失败整体回退逐图(由 L1 内部兜底,结果质量不劣于现状)。
+// 详见 ocr_batch.go 与 plans/cryptic-coalescing-mccarthy.md。
 func (s *OCRService) DowngradeOpenAIChatImagesToText(bodyBytes []byte, userSession *RelaySession) (newBody []byte, replaced int, lastErr error, ocrHits, ocrMisses, ocrSkipped int) {
 	if s == nil || len(bodyBytes) == 0 {
 		return bodyBytes, 0, nil, 0, 0, 0
@@ -90,7 +96,7 @@ func (s *OCRService) DowngradeOpenAIChatImagesToText(bodyBytes []byte, userSessi
 		windowStart = msgCount - ocrRecentWindowMessages
 	}
 
-	var ocrModel string
+	ocrModel := s.getOcrModel()
 	anyChanged := false
 	for i := range msgs {
 		inWindow := i >= windowStart
@@ -127,17 +133,26 @@ func (s *OCRService) DowngradeOpenAIChatImagesToText(bodyBytes []byte, userSessi
 			userPromptCtx = collectPrevOpenAIUserText(msgs, i)
 		}
 
-		// 按原顺序合并:文本块原样拼接 + 图片块降级为 OCR 描述/占位文本。
-		var merged strings.Builder
+		// openAISeg 是最终 merged(以 \n 拼接)里的一个有序段:文本块直接定稿 text;
+		// 图片块的窗内 miss 候选先标 defer=true、text 留空,第二遍回填后 text 落 OCR 描述/占位。
+		// 严格保持 content 数组原顺序(只对"产生输出"的块建段:非空文本块 / 图片块),
+		// 与原实现的跳过空文本、跳过非图非文本块的体感逐行一致。
+		type openAISeg struct {
+			text  string
+			defer_ bool // true=第二遍回填(窗内 miss 候选),text 字段此时为空待填
+			b64   string
+			mime  string
+		}
+		segs := make([]openAISeg, 0, len(blocks))
+		// 第一遍:逐块走文本直拼 / 图片解析。文本与窗外/失败图片当场定稿(写进 segs),
+		// 窗内 miss 图片留 defer=true 空段,交第二遍回填。
 		for _, b := range blocks {
 			t, _ := b["type"].(string)
 			if openAITextBlockTypes[t] {
 				if txt, ok := b["text"].(string); ok && txt != "" {
-					if merged.Len() > 0 {
-						merged.WriteString("\n")
-					}
-					merged.WriteString(txt)
+					segs = append(segs, openAISeg{text: txt})
 				}
+				// 空文本块:不产生输出段,跳过(与原实现一致)。
 				continue
 			}
 			if t != openAIImgBlockTypeChat && t != openAIImgBlockTypeResponses {
@@ -146,20 +161,113 @@ func (s *OCRService) DowngradeOpenAIChatImagesToText(bodyBytes []byte, userSessi
 			}
 			// 图片块:三态归一到 AnthropicImageSource,复用 L1 入口解析层。
 			src := buildAnthropicImageSourceFromOpenAIBlock(b)
-			replacedThis, errThis, hitThis, missThis, skipThis := s.downgradeOneOpenAIImageBlock(&merged, src, inWindow, userSession, userPromptCtx, &ocrModel)
-			replaced += replacedThis
-			if errThis != nil {
-				lastErr = errThis
+			if inWindow {
+				b64, imgMime, ferr := s.resolveB64WithFetch(src)
+				if ferr != nil || strings.TrimSpace(b64) == "" {
+					// 解析/下载失败 → 当场定稿占位(不进批量),与单图路径一致。
+					segs = append(segs, openAISeg{text: imageNotExtractablePlaceholder})
+					if ferr != nil {
+						lastErr = ferr
+					}
+					continue
+				}
+				// 窗内 miss 候选:留 defer 空段,交第二遍批量/单图回填。
+				segs = append(segs, openAISeg{defer_: true, b64: b64, mime: imgMime})
+			} else {
+				// 窗外:仅查缓存,绝不真打上游。
+				b64, _, ok := s.resolveB64NoFetch(src)
+				if !ok {
+					// 窗外未解析出 b64 → 占位,不计 replaced 也不计 skipped(与单图路径一致)。
+					segs = append(segs, openAISeg{text: imageNotExtractablePlaceholder})
+					continue
+				}
+				cachedText, hit := s.OcrImageCacheOnlyLookup(userSession, b64)
+				if hit && strings.TrimSpace(cachedText) != "" {
+					segs = append(segs, openAISeg{text: nvidiaImageOcrDescHeader(ocrModel, cachedText)})
+					replaced++
+					ocrHits++
+				} else {
+					segs = append(segs, openAISeg{text: imageNotExtractablePlaceholder})
+					ocrSkipped++
+				}
 			}
-			ocrHits += hitThis
-			ocrMisses += missThis
-			ocrSkipped += skipThis
+		}
+
+		// 第二遍:对窗内 miss 候选批量/单图 OCR 并按序回填对应 seg 的 text。
+		// 先收集所有 defer 段的下标(即 content 数组里窗内 miss 图的原顺序),再按其数量
+		// 走 =1 单图 / ≥2 批量,保证 content 数组原顺序零错位。
+		var deferIdx []int
+		for k, seg := range segs {
+			if seg.defer_ {
+				deferIdx = append(deferIdx, k)
+			}
+		}
+		if len(deferIdx) == 1 {
+			k := deferIdx[0]
+			seg := &segs[k]
+			ocrText, ocrErr, cachedHit := s.OcrImage(userSession, seg.b64, seg.mime, userPromptCtx)
+			if cachedHit {
+				ocrHits++
+			} else {
+				ocrMisses++
+			}
+			if ocrErr != nil || strings.TrimSpace(ocrText) == "" {
+				if ocrErr != nil {
+					lastErr = ocrErr
+				}
+				seg.text = imageNotExtractablePlaceholder
+			} else {
+				seg.text = nvidiaImageOcrDescHeader(ocrModel, ocrText)
+				replaced++
+			}
+		} else if len(deferIdx) >= 2 {
+			// ≥2 张:构造批量入参,一次 OcrImageBatch 合并上游。
+			// OcrImageBatch 内部先逐项查缓存(命中即返 CachedHit=true,不进批量),仅把 miss 项
+			// 按消息合并一次上游;成功拆分逐张写 success 长 TTL,拆分失败整体回退逐图(调原 OcrImage)。
+			// L2 只消费返回的 []OcrBatchResult(逐项对齐),按 CachedHit 计 ocrHits/ocrMisses、
+			// 按 Ok/Text/Err 写回(描述 / 占位),口径与单图路径完全一致。
+			items := make([]OcrBatchItem, len(deferIdx))
+			for k, idx := range deferIdx {
+				seg := &segs[idx]
+				items[k] = OcrBatchItem{B64: seg.b64, Mime: seg.mime, PromptCtx: userPromptCtx}
+			}
+			results := s.OcrImageBatch(userSession, items)
+			for k, res := range results {
+				seg := &segs[deferIdx[k]]
+				if res.CachedHit {
+					ocrHits++
+				} else {
+					ocrMisses++
+				}
+				if res.Err != nil || strings.TrimSpace(res.Text) == "" {
+					if res.Err != nil {
+						lastErr = res.Err
+					}
+					seg.text = imageNotExtractablePlaceholder
+					continue
+				}
+				seg.text = nvidiaImageOcrDescHeader(ocrModel, res.Text)
+				replaced++
+			}
+		}
+
+		// 按原顺序合并所有段(文本块 + 图片块描述/占位),\n 分隔。
+		var merged strings.Builder
+		for k, seg := range segs {
+			if seg.text == "" {
+				// defer 段理论上必被第二遍回填;text 仍空则补占位兜底(防御)。
+				seg.text = imageNotExtractablePlaceholder
+				segs[k].text = seg.text
+			}
+			if merged.Len() > 0 {
+				merged.WriteString("\n")
+			}
+			merged.WriteString(seg.text)
 		}
 		// content 重写为合并后的纯字符串。即便图片全部走占位,也保留文本块 + 占位文案,绝不丢原文。
 		newContent, merr := json.Marshal(merged.String())
 		if merr != nil {
 			// 理论不至:merged 是 string,Marshal 必成功;兜底防御:跳过本条,不改 content。
-			anyChanged = false // 该条退化不写,但其它条仍可能已 anyChanged=true
 			continue
 		}
 		msgs[i]["content"] = newContent
@@ -178,80 +286,6 @@ func (s *OCRService) DowngradeOpenAIChatImagesToText(bodyBytes []byte, userSessi
 		return bodyBytes, replaced, lastErr, ocrHits, ocrMisses, ocrSkipped
 	}
 	return out, replaced, lastErr, ocrHits, ocrMisses, ocrSkipped
-}
-
-// downgradeOneOpenAIImageBlock 处理单张图片块的降级,把 OCR 描述/占位文本 append 到 merged,
-// 返回本块的计数增量(replaced/hits/misses/skipped)与可能的 ocrErr。
-//
-// 语义与 DowngradeAnthropicImagesToText 逐分支对齐:
-//   - 窗内:resolveB64WithFetch 允许下载 → OcrImage(miss 真打上游)。失败/空 → 占位,不计 replaced;
-//   - 窗外:resolveB64NoFetch 仅查缓存,未解析出 b64 → 占位,不计 replaced 也不计 skipped(因跳过
-//     OcrImageCacheOnlyLookup 这一步,与 Anthropic 链路该分支口径一致);解析出 b64 但缓存未命中 →
-//     占位并 ocrSkipped++;缓存命中 → OCR 描述并 replaced++/ocrHits++。
-//
-// 内部所有占位文案统一 append imageNotExtractablePlaceholder(跨协议共享,经 appendOpenAIPlaceholder)。
-func (s *OCRService) downgradeOneOpenAIImageBlock(merged *strings.Builder, src *AnthropicImageSource, inWindow bool, userSession *RelaySession, userPromptCtx string, ocrModel *string) (replaced int, lastErr error, ocrHits, ocrMisses, ocrSkipped int) {
-	if src == nil {
-		appendOpenAIPlaceholder(merged)
-		return 0, nil, 0, 0, 0
-	}
-	if inWindow {
-		b64, imgMime, ferr := s.resolveB64WithFetch(src)
-		if ferr != nil || strings.TrimSpace(b64) == "" {
-			appendOpenAIPlaceholder(merged)
-			return 0, ferr, 0, 0, 0
-		}
-		ocrText, ocrErr, cachedHit := s.OcrImage(userSession, b64, imgMime, userPromptCtx)
-		if cachedHit {
-			ocrHits++
-		} else {
-			ocrMisses++
-		}
-		if ocrErr != nil || strings.TrimSpace(ocrText) == "" {
-			appendOpenAIPlaceholder(merged)
-			return 0, ocrErr, ocrHits, ocrMisses, ocrSkipped
-		}
-		if *ocrModel == "" {
-			*ocrModel = s.getOcrModel()
-		}
-		appendOpenAIOcrDesc(merged, *ocrModel, ocrText)
-		return 1, nil, ocrHits, ocrMisses, ocrSkipped
-	}
-	// 窗外:仅查缓存,绝不真打上游。
-	b64, _, ok := s.resolveB64NoFetch(src)
-	if !ok {
-		// 与 Anthropic 链路一致:此处走占位但既不 replaced++ 也不 ocrSkipped++(跳过 cache-only 查询)。
-		appendOpenAIPlaceholder(merged)
-		return 0, nil, 0, 0, 0
-	}
-	// 窗外:仅查缓存,绝不真打上游。缓存键按 image-only(不含 promptCtx),窗外复用与当前提问解耦。
-	cachedText, hit := s.OcrImageCacheOnlyLookup(userSession, b64)
-	if hit && strings.TrimSpace(cachedText) != "" {
-		if *ocrModel == "" {
-			*ocrModel = s.getOcrModel()
-		}
-		appendOpenAIOcrDesc(merged, *ocrModel, cachedText)
-		return 1, nil, 1, 0, 0
-	}
-	appendOpenAIPlaceholder(merged)
-	return 0, nil, 0, 0, 1
-}
-
-// appendOpenAIOcrDesc 把 OCR 识别文本以协议统一的描述头 append 到 merged,与 Anthropic/Gemini
-// 链路共用 nvidiaImageOcrDescHeader 文案,保证跨号池降级体感一致。
-func appendOpenAIOcrDesc(merged *strings.Builder, ocrModel, ocrText string) {
-	if merged.Len() > 0 {
-		merged.WriteString("\n")
-	}
-	merged.WriteString(nvidiaImageOcrDescHeader(ocrModel, ocrText))
-}
-
-// appendOpenAIPlaceholder append 占位文本(跨 L2 协议共享的 imageNotExtractablePlaceholder)。
-func appendOpenAIPlaceholder(merged *strings.Builder) {
-	if merged.Len() > 0 {
-		merged.WriteString("\n")
-	}
-	merged.WriteString(imageNotExtractablePlaceholder)
 }
 
 // isOpenAIImageBlock 判定 content 块是否为图片块(image_url / input_image)。

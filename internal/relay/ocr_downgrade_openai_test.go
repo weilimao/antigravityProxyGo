@@ -9,11 +9,14 @@ package relay
 //   - 端到端 passthroughForward:含 image_url 的入站经降级后送上游的 body content 全为 string、无 image_url。
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"antigravity-proxy/internal/account"
@@ -177,6 +180,84 @@ func TestDowngradeOpenAIChatImagesToText_Base64DataURL(t *testing.T) {
 		t.Errorf("original text block should be merged: %s", c)
 	}
 	// 上游可消化性校验:降级后 body 能被 OpenAIChatRequest 的 Unmarshal 成功吃下(content 为 string)。
+	var chatReq OpenAIChatRequest
+	if err := json.Unmarshal(out, &chatReq); err != nil {
+		t.Fatalf("downgraded body must unmarshal into OpenAIChatRequest: %v", err)
+	}
+}
+
+// TestDowngradeOpenAIChatImagesToText_MultipleImages_NTo1 锁定 OpenAI Chat L2 多图批量 N→1:
+// 一条消息内 ≥2 张窗内 miss 图(image_url 块)合并进一次上游 OCR 调用(OcrImageBatch),
+// 而非逐图各打一次。mock 按入站 InlineData 数量回带 [[图k]] 标记的批量响应;hitUpstream 原子计数
+// 真实触达次数,断言 ==1 证明 N→1 生效。降级后 content 为纯字符串、无 image_url、两图文本各自落位。
+func TestDowngradeOpenAIChatImagesToText_MultipleImages_NTo1(t *testing.T) {
+	var hitUpstream atomic.Int64
+	ocr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitUpstream.Add(1)
+		// 解析入站 Gemini generateContent 请求,按 InlineData 数量回逐图标记。
+		body, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		var gemReq GeminiRequest
+		_ = json.Unmarshal(body, &gemReq)
+		nImg := 0
+		if len(gemReq.Contents) > 0 {
+			for _, p := range gemReq.Contents[0].Parts {
+				if p.InlineData != nil && p.InlineData.Data != "" {
+					nImg++
+				}
+			}
+		}
+		text := ""
+		for k := 1; k <= nImg; k++ {
+			text += fmt.Sprintf("[[图%d]]OpenAI图%02d结果\n", k, k)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		resp := fmt.Sprintf(`{"candidates":[{"content":{"parts":[{"text":%s}]}}]}`, jsonString(text))
+		w.Write([]byte(resp))
+	}))
+	defer ocr.Close()
+	origAddr := localProxyAddr
+	localProxyAddr = strings.TrimPrefix(ocr.URL, "http://")
+	t.Cleanup(func() { localProxyAddr = origAddr })
+
+	h := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
+	h.ocr.cache = newOcrLRUCache(0, 0, 0)
+
+	// 用两份各自独立的合法 base64 PNG,构造两个不同的 image_url 块,避免 base64 失败导致落占位而漏断言批量 N→1。
+	img1 := fakeNvidiaImageB64
+	img2 := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x42})
+	in := buildOpenAIChatBody("deepseek-chat", []map[string]interface{}{
+		ocrTextBlock("[Image #1] 看第一个报错"),
+		ocrBase64Block(img1),
+		ocrTextBlock("[Image #2] 看第二个报错"),
+		ocrBase64Block(img2),
+	})
+	out, replaced, _, _, ocrMisses, _ := h.ocr.DowngradeOpenAIChatImagesToText(in, &RelaySession{UserID: "u1", UserKey: "k1"})
+	// 批量契约:2 张窗内 miss 图 → 上游只触达 1 次(N→1 生效)。
+	if got := hitUpstream.Load(); got != 1 {
+		t.Fatalf("batch upstream should be hit exactly 1 time for 2 images, got %d (N→1 not applied)", got)
+	}
+	if replaced != 2 {
+		t.Fatalf("replaced want 2 (both images OCR'd), got %d", replaced)
+	}
+	if ocrMisses != 2 {
+		t.Fatalf("ocrMisses want 2 (one per in-window miss image), got %d", ocrMisses)
+	}
+	c := firstUserContentStringFromOpenAI(t, out)
+	// content 必须已是纯字符串、无 image_url 残留、含两图各自 OCR 文本 + 原文。
+	if strings.Contains(c, "image_url") || strings.Contains(c, "data:image") {
+		t.Errorf("image block leaked into content: %s", c)
+	}
+	if !strings.Contains(c, "OpenAI图01结果") {
+		t.Errorf("img1 OCR text ([[图1]] segment) missing: %s", c)
+	}
+	if !strings.Contains(c, "OpenAI图02结果") {
+		t.Errorf("img2 OCR text ([[图2]] segment) missing: %s", c)
+	}
+	if !strings.Contains(c, "[Image #1]") || !strings.Contains(c, "[Image #2]") {
+		t.Errorf("original text blocks must be merged and preserved: %s", c)
+	}
+	// 上游可消化性校验:降级后 body 能被 OpenAIChatRequest Unmarshal 成功吃下(content 为 string)。
 	var chatReq OpenAIChatRequest
 	if err := json.Unmarshal(out, &chatReq); err != nil {
 		t.Fatalf("downgraded body must unmarshal into OpenAIChatRequest: %v", err)

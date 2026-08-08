@@ -31,6 +31,7 @@ func NewManager() *Manager {
 		twofaAccounts: make([]*Account, 0),
 		activeChannel: "antigravity",
 		errorCounts:   make(map[string]int),
+		concurrency:   NewConcurrency(),
 	}
 }
 
@@ -99,6 +100,25 @@ func (m *Manager) LoadAccounts() {
 				mode = "round-robin"
 			}
 			m.otherLBModes[lgid] = mode
+		}
+	}
+	m.nvidiaLBMode = parsed.NvidiaLBMode
+	// 单账号最大并发数限制载入(对齐 otherLBModes 范式;0/负数=未配置,Get 时回退默认 10)。
+	// Other map 持久化键规范化为小写 groupID,与 SetOtherMaxConcurrency 的 key 口径一致。
+	m.nvidiaMaxConcurrency = parsed.NvidiaMaxConcurrency
+	m.antigravityMaxConcurrency = parsed.AntigravityMaxConcurrency
+	m.projectMaxConcurrency = parsed.ProjectMaxConcurrency
+	if parsed.OtherMaxConcurrency != nil {
+		m.otherMaxConcurrency = make(map[string]int, len(parsed.OtherMaxConcurrency))
+		for gid, v := range parsed.OtherMaxConcurrency {
+			lgid := strings.ToLower(strings.TrimSpace(gid))
+			if lgid == "" {
+				continue
+			}
+			if v < 0 {
+				v = 0 // 负数非法,规整为 0(等同未配置,Get 回退 10)
+			}
+			m.otherMaxConcurrency[lgid] = v
 		}
 	}
 	if m.activeChannel == "gemini-cli" {
@@ -177,13 +197,18 @@ func (m *Manager) LoadAccounts() {
 func (m *Manager) SaveAccounts(silent bool) error {
 	m.RLock()
 	data := AccountsData{
-		Accounts:          m.accounts,
-		TwoFAAccounts:     m.twofaAccounts,
-		PoolMode:          m.poolMode,
-		ProjectPoolMode:   m.projectPoolMode,
-		GeminiCliPoolMode: m.geminiCliPoolMode,
-		ActiveChannel:     m.activeChannel,
-		OtherLBModes:      m.otherLBModes,
+		Accounts:                  m.accounts,
+		TwoFAAccounts:             m.twofaAccounts,
+		PoolMode:                   m.poolMode,
+		ProjectPoolMode:           m.projectPoolMode,
+		GeminiCliPoolMode:         m.geminiCliPoolMode,
+		ActiveChannel:             m.activeChannel,
+		OtherLBModes:              m.otherLBModes,
+		NvidiaLBMode:               m.nvidiaLBMode,
+		NvidiaMaxConcurrency:       m.nvidiaMaxConcurrency,
+		AntigravityMaxConcurrency: m.antigravityMaxConcurrency,
+		ProjectMaxConcurrency:     m.projectMaxConcurrency,
+		OtherMaxConcurrency:       m.otherMaxConcurrency,
 	}
 	m.RUnlock()
 

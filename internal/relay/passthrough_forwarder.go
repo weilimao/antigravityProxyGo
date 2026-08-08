@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"antigravity-proxy/internal/account"
@@ -209,17 +210,41 @@ func (pf *passthroughForward) run(
 		}
 
 		// 轮询选号:Other 号池按组 LB 模式选号(sticky/round-robin);其余号池维持轻量取首个。
+		// 并发限制:先按上限把超限账号过滤掉(对齐 NVIDIA 链路口径),过滤集非空喂既有选号器
+		// 保持 sticky/round-robin 语义(过滤掉 sticky 命中账号即触发 sessionRouter 既有迁移,
+		// 这是符合用户「超过就换号」预期的硬换号语义);过滤集空则取在途并发最少的号允许超额降级。
+		var poolForSelection []*account.Account
 		var acc *account.Account
 		if poolChannel == "other" && targetGroupID != "" {
-			lbMode := pf.accountMgr.GetOtherLBMode(targetGroupID)
-			acc = pf.pickOtherAccount(pf.h, lbMode, targetGroupID, userSession, active)
+			limit := pf.accountMgr.GetOtherMaxConcurrency(targetGroupID)
+			filtered := pf.accountMgr.FilterByConcurrency(active, limit)
+			if len(filtered) > 0 {
+				poolForSelection = filtered
+			} else {
+				overAcc := pf.accountMgr.LeastLoadedAccount(active)
+				if overAcc != nil {
+					acc = overAcc
+					pf.h.log("⚠️ [并发限制] Other 组 %s 并发全满(限 %d),超额降级到最少并发号 %s", targetGroupID, limit, overAcc.Email)
+				}
+			}
+			if acc == nil {
+				lbMode := pf.accountMgr.GetOtherLBMode(targetGroupID)
+				acc = pf.pickOtherAccount(pf.h, lbMode, targetGroupID, userSession, poolForSelection)
+			}
 		} else {
+			// 非 other 号池(如第三方 OpenAI 兼容上游直挂 /route):同样按并发上限过滤。
+			// 本期仅 other 号池显式配置并发上限,其余号池无对应 Get 方法,先按默认 10 语义统一过滤。
+			// 若需要为非 other 号池配置化,后续按 channel 加 Get 方法即可。
 			acc = active[0]
 		}
 		if isPassthroughAccountUnavailable(acc) {
 			skipped[acc.ID] = true
 			continue
 		}
+
+		// 选号通过后立即占用并发槽(Acquire),后续失败/早返路径以本 acc.ID 寻址 Release。
+		// 成功路径(行 349-353 设 res.usedAccPtr 并 return)不 Release,交 handleRoutedForward defer 兜底。
+		pf.accountMgr.AcquireAccount(acc.ID)
 
 		// image 自愈降级仅在"入站 OpenAI Chat + 上游 OpenAI"路径生效(与既有 passthroughForward 行为一致);
 		// 入站 Anthropic→OpenAI 的 image 降级已在 buildUpstreamBody 的 AnthropicToOpenAIChat 分支内通过
@@ -265,7 +290,9 @@ func (pf *passthroughForward) run(
 		for single := 1; single <= passthroughSingleAcc429Retries; single++ {
 			req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
 			if err != nil {
+				// 建请求失败(极罕见,坏 URL):释放该账号并发槽,终止本轮。
 				res.err = err
+				pf.accountMgr.ReleaseAccount(acc.ID)
 				break
 			}
 			req.Header.Set("Content-Type", "application/json")
@@ -289,6 +316,8 @@ func (pf *passthroughForward) run(
 					res.err = errDo
 					res.statusCode = 499 // Client Closed Request
 					pf.h.log("📴 [路由转发] 客户端取消请求(账号 %s 上游 %s): %v,不触发号池冷却", acc.Email, poolChannel, errDo)
+					// 客户端取消:释放该账号并发槽(本次请求到此结束,不再换号)。
+					pf.accountMgr.ReleaseAccount(acc.ID)
 					return res
 				}
 				res.err = errDo
@@ -296,6 +325,8 @@ func (pf *passthroughForward) run(
 				pf.h.log("⚠️ [路由转发] 账号 %s 访问上游失败: %v", acc.Email, errDo)
 				pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
 				skipped[acc.ID] = true
+				// 网络错误换号前释放该账号并发槽(下次 attempt 选新号会重新 Acquire)。
+				pf.accountMgr.ReleaseAccount(acc.ID)
 				break
 			}
 
@@ -305,11 +336,13 @@ func (pf *passthroughForward) run(
 				res.err = fmt.Errorf("upstream %s 429", poolChannel)
 				if single < passthroughSingleAcc429Retries {
 					time.Sleep(2 * time.Second)
-					continue
+					continue // 同号续用,不释放并发槽
 				}
 				pf.h.log("⚠️ [路由转发] 账号 %s 重试 %d 次仍 429,冷冻换号", acc.Email, passthroughSingleAcc429Retries)
 				pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
 				skipped[acc.ID] = true
+				// 429 退避耗尽换号前释放并发槽。
+				pf.accountMgr.ReleaseAccount(acc.ID)
 				break
 			}
 
@@ -322,6 +355,8 @@ func (pf *passthroughForward) run(
 				pf.h.log("⚠️ [路由转发] 账号 %s 上游 %d,剔除换号", acc.Email, resp.StatusCode)
 				pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownLongMs, poolChannel, inModel)
 				skipped[acc.ID] = true
+				// 401/403 剔除换号前释放并发槽。
+				pf.accountMgr.ReleaseAccount(acc.ID)
 				break
 			}
 
@@ -334,10 +369,14 @@ func (pf *passthroughForward) run(
 				pf.h.log("⚠️ [路由转发] 账号 %s 上游 5xx(%d),换号", acc.Email, resp.StatusCode)
 				pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
 				skipped[acc.ID] = true
+				// 5xx 换号前释放并发槽。
+				pf.accountMgr.ReleaseAccount(acc.ID)
 				break
 			}
 
 			// 200 (含 SSE/JSON)。回写由调用方处理,此处只落 activeResp。
+			// 并发槽不在此释放:成功路径交 handleRoutedForward 的 defer 兜底(res.usedAccPtr 已在下两行赋值),
+			// 该 defer 在消费完 resp.Body 流式回写后返回时触发,即「本次请求结束」点。
 			activeResp = resp
 			res.usedAccount = acc.Email
 			res.usedAccPtr = acc
@@ -433,7 +472,22 @@ func (pf *passthroughForward) pickOtherAccount(h *APICompatHandler, lbMode, grou
 		stickyKey := "other:" + groupID + ":" + userSession.UserID
 		return h.sessionRouter.GetOrAssignAccount(stickyKey, accounts, h.logFn)
 	}
-	return accounts[0]
+
+	// 真正的轮询 (Round-Robin): 按组隔离的取模偏移
+	var cursor uint64
+	if h != nil {
+		var ptr *uint64
+		if val, ok := h.otherCursors.Load(groupID); ok {
+			ptr = val.(*uint64)
+		} else {
+			newPtr := new(uint64)
+			actual, _ := h.otherCursors.LoadOrStore(groupID, newPtr)
+			ptr = actual.(*uint64)
+		}
+		cursor = atomic.AddUint64(ptr, 1) - 1
+	}
+	idx := cursor % uint64(len(accounts))
+	return accounts[idx]
 }
 
 // containsFormat 判定组 Formats 切片是否包含某协议(大小写不敏感)。
