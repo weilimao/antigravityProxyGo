@@ -7,11 +7,12 @@ import "strings"
 // 不触发 "tool_use ids were found without tool_result blocks immediately after" 400。
 //
 // 背景(线上 400 实测根因):
-//   Codex /v1/responses 把 assistant 文本 message 插在 function_call 与 function_call_output 之间时,
-//   parseResponsesInput 先 flush 出只含 ToolCalls 的 assistant(FC)、再发只含 text 的 assistant(T),
-//   两条连续 model 消息被 mergeConsecutiveRoles 合并成 model[FC, T] —— Text 排到了 functionCall 之后。
-//   daily-cloudcode-pa 重译为 Vertex Anthropic 时,tool_use 不再位于助手回合末尾,其「紧接的下一条消息」
-//   不再是只含 tool_result 的 user 消息,触发 tool_use/tool_result 紧邻 400。
+//
+//	Codex /v1/responses 把 assistant 文本 message 插在 function_call 与 function_call_output 之间时,
+//	parseResponsesInput 先 flush 出只含 ToolCalls 的 assistant(FC)、再发只含 text 的 assistant(T),
+//	两条连续 model 消息被 mergeConsecutiveRoles 合并成 model[FC, T] —— Text 排到了 functionCall 之后。
+//	daily-cloudcode-pa 重译为 Vertex Anthropic 时,tool_use 不再位于助手回合末尾,其「紧接的下一条消息」
+//	不再是只含 tool_result 的 user 消息,触发 tool_use/tool_result 紧邻 400。
 //
 // Anthropic 官方约束(https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls):
 //   - Tool result blocks must immediately follow their corresponding tool use blocks in the message history.

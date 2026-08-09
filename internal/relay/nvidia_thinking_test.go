@@ -143,13 +143,13 @@ func TestReasoningThenTextCorrectIndexOrder(t *testing.T) {
 	//          → cbs(text,1) → text_delta → cbs_stop(1) → message_delta → message_stop
 	want := []string{
 		"message_start",
-		"content_block_start",   // thinking, index 0
-		"content_block_delta",  // thinking_delta
-		"content_block_delta",  // signature_delta (空)
-		"content_block_stop",   // index 0
-		"content_block_start",  // text, index 1
-		"content_block_delta",  // text_delta
-		"content_block_stop",   // index 1
+		"content_block_start", // thinking, index 0
+		"content_block_delta", // thinking_delta
+		"content_block_delta", // signature_delta (空)
+		"content_block_stop",  // index 0
+		"content_block_start", // text, index 1
+		"content_block_delta", // text_delta
+		"content_block_stop",  // index 1
 		"message_delta",
 		"message_stop",
 	}
@@ -421,12 +421,12 @@ func TestResolveReasoningEffort_OutputConfigEffort(t *testing.T) {
 // adaptive→max,enabled+budget 分档,enabled 无 budget→high,disabled→空。
 func TestResolveReasoningEffort_ThinkingFallback(t *testing.T) {
 	cases := map[string]string{
-		`{"type":"adaptive"}`:              "max",
+		`{"type":"adaptive"}`:                      "max",
 		`{"type":"enabled","budget_tokens":1024}`:  "low",
-		`{"type":"enabled","budget_tokens":8000}`: "medium",
-		`{"type":"enabled","budget_tokens":32000}`:"high",
-		`{"type":"enabled"}`:                "high",
-		`{"type":"disabled"}`:               "",
+		`{"type":"enabled","budget_tokens":8000}`:  "medium",
+		`{"type":"enabled","budget_tokens":32000}`: "high",
+		`{"type":"enabled"}`:                       "high",
+		`{"type":"disabled"}`:                      "",
 	}
 	for tk, want := range cases {
 		req := makeAnthReq(t, "deepseek-ai/deepseek-v4-flash", tk, "")
@@ -450,12 +450,12 @@ func TestResolveReasoningEffort_OutputConfigBeatsThinking(t *testing.T) {
 // max/xhigh→max,其余(low/medium/high)→high —— 不产 low/medium,避免 NIM v4-flash 400。
 func TestMapReasoningEffort_DeepSeekMode(t *testing.T) {
 	cases := map[string]string{
-		"low":  "high",
+		"low":    "high",
 		"medium": "high",
-		"high": "high",
-		"max":  "max",
-		"xhigh": "max",
-		"none": "", // 关闭不注入
+		"high":   "high",
+		"max":    "max",
+		"xhigh":  "max",
+		"none":   "", // 关闭不注入
 	}
 	for in, want := range cases {
 		got := mapReasoningEffort(in, "deepseek")

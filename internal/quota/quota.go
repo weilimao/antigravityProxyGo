@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/modelfetch"
 	"antigravity-proxy/internal/netutil"
 )
 
@@ -604,70 +605,22 @@ func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]accou
 //   - ModelID: "可用模型数 N 个"（前端气泡副文案，由前端直接渲染）
 //   - RemainingFraction=1 / RemainPercent=100（语义：可用，非配额度量）
 // 失败时返回带 error 的 QuotaResult，error 文案带上游失败原因供前端红泡展示。
-// 请求拼接与 app_account_ipc.go 的 nvidia:fetch-models 保持一致，确保上游端点命中。
+//
+// 模型列表探测委托 internal/modelfetch:与 app_account_ipc.go 的 fetchRemoteNvidiaModels
+// 共用同一套候选端点生成 + 404/405 续试逻辑,确保两处上游端点命中行为完全一致,不再各自维护
+// 一份重复的端点拼接 + {data}/{models} 解析代码。NVIDIA baseURL 恒以 /v1 结尾 → 单候选,
+// 与历史硬拼端点逐字等价,行为无变化。
 func fetchNvidiaQuota(acc *account.Account) (*account.QuotaResult, error) {
 	baseURL := strings.TrimSpace(acc.BaseURL)
 	if baseURL == "" {
 		return nil, errors.New("账号未配置 Base URL")
 	}
-	baseURL = strings.TrimRight(baseURL, "/")
 
-	endpoint := baseURL + "/v1/models"
-	if strings.HasSuffix(baseURL, "/v1") {
-		endpoint = baseURL + "/models"
-	}
-
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	models, err := modelfetch.FetchModels(baseURL, acc.AccessToken)
 	if err != nil {
-		return nil, fmt.Errorf("配额请求失败: 构造请求失败 %v", err)
+		return nil, fmt.Errorf("配额请求失败: %w", err)
 	}
-	if acc.AccessToken != "" {
-		req.Header.Set("Authorization", "Bearer "+acc.AccessToken)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	client := netutil.NewClient(15 * time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("配额请求失败: 网络请求失败 %v", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("配额请求失败: 读取响应失败 %v", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		bodySnip := truncateNvidiaErrBody(bodyBytes)
-		return nil, fmt.Errorf("配额请求失败: 上游 HTTP %d %s", resp.StatusCode, bodySnip)
-	}
-
-	// 兼容 {"data":[...]} 与 {"models":[...]} 两种模型清单结构，去重计数。
-	var parsed struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-		Models []struct {
-			ID string `json:"id"`
-		} `json:"models"`
-	}
-	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
-		return nil, fmt.Errorf("配额请求失败: 解析模型数据失败 %v", err)
-	}
-
-	modelSet := make(map[string]bool)
-	for _, m := range parsed.Data {
-		if m.ID != "" {
-			modelSet[m.ID] = true
-		}
-	}
-	for _, m := range parsed.Models {
-		if m.ID != "" {
-			modelSet[m.ID] = true
-		}
-	}
-	count := len(modelSet)
+	count := len(models)
 
 	credits := float64(count)
 	return &account.QuotaResult{
@@ -683,15 +636,6 @@ func fetchNvidiaQuota(acc *account.Account) (*account.QuotaResult, error) {
 		},
 		Credits: &credits,
 	}, nil
-}
-
-// truncateNvidiaErrBody 截断失败响应体用于错误信息，避免超长报错污染 UI。
-func truncateNvidiaErrBody(body []byte) string {
-	const maxLen = 200
-	if len(body) <= maxLen {
-		return string(body)
-	}
-	return string(body[:maxLen]) + "...(truncated)"
 }
 
 func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*account.Account) (string, error), updateTokenCallback func(string, string)) (*account.QuotaResult, error) {

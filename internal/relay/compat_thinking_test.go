@@ -130,7 +130,7 @@ func TestGeminiThoughtThenTextCorrectOrder(t *testing.T) {
 	// → cbs(text) → cbd(text_delta) → cbs_stop → message_delta → message_stop
 	want := []string{
 		"message_start",
-		"content_block_start",  // thinking
+		"content_block_start", // thinking
 		"content_block_delta", // thinking_delta
 		"content_block_delta", // signature_delta
 		"content_block_stop",
@@ -563,7 +563,7 @@ func TestTranslateAnthropicToGemini_InjectsIncludeThoughts(t *testing.T) {
 
 	budget := 4096
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5", // 含 sonnet 不会被 MapClientModelToGemini 当 gemini 保留,但翻译前不走映射
+		Model:     "claude-sonnet-4-5", // 含 sonnet 不会被 MapClientModelToGemini 当 gemini 保留,但翻译前不走映射
 		MaxTokens: new(int),
 		Thinking: &AnthropicThinking{
 			Type:         "enabled",
@@ -594,7 +594,7 @@ func TestTranslateAnthropicToGemini_DisabledNoThoughts(t *testing.T) {
 	budget := 4096
 	maxTok := 1024
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5",
+		Model:     "claude-sonnet-4-5",
 		MaxTokens: &maxTok,
 		Thinking: &AnthropicThinking{
 			Type:         "disabled",
@@ -620,7 +620,7 @@ func TestTranslateAnthropicToGemini_NonThinkingModelSkipsIncludeThoughts(t *test
 	// "claude-3-haiku" 会被 MapClientModelToGemini 映射为 gemini-1.5-flash,但翻译函数本身用入站 model 名判定。
 	// 此处直接用一个不含 flash/pro/thinking/reasoning 关键字的模型名,验证 geminiModelSupportsThinking 返回 false。
 	anthReq := &AnthropicRequest{
-		Model:    "gpt-3.5-turbo",
+		Model:     "gpt-3.5-turbo",
 		MaxTokens: &maxTok,
 	}
 	gemReq := TranslateAnthropicToGemini(anthReq)
@@ -640,9 +640,9 @@ func TestTranslateOpenAIToGemini_InjectsIncludeThoughts(t *testing.T) {
 
 	maxTok := 2048
 	openReq := &OpenAIRequest{
-		Model:    "gemini-2.5-flash",
+		Model:     "gemini-2.5-flash",
 		MaxTokens: &maxTok,
-		Messages: []OpenAIMessage{{Role: "user", Content: "hi"}},
+		Messages:  []OpenAIMessage{{Role: "user", Content: "hi"}},
 	}
 	gemReq := TranslateOpenAIToGemini(openReq)
 	if gemReq.GenerationConfig == nil || gemReq.GenerationConfig.ThinkingConfig == nil {

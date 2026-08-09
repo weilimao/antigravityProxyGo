@@ -1,12 +1,12 @@
 package relay
 
 import (
+	"antigravity-proxy/internal/account"
 	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
 	"time"
-	"antigravity-proxy/internal/account"
 )
 
 // nvidia_translate_payload.go: Anthropic SSE event payload 构造器 + 全局思考开关 + reasoning-as-text 开关 + mapNvidiaModel。
@@ -64,7 +64,16 @@ func messageStartPayload(streamID, model string, inputTokens int) string {
 // input_tokens 填真实累计输入 token 数。早期的硬编码 {"output_tokens":0} 会让部分
 // Claude Code SDK 的 MessageAccumulator 误判流未正常结束，触发"等连接关闭/下次请求
 // 才整条渲染"的退化路径。
-func messageDeltaPayload(stopReason string, outputTokens int) string {
+//
+// inputTokens 为本次流的真实累计输入 token 数：Anthropic 官方 message_delta.usage 的
+// input_tokens 是"整条消息在本轮请求中实际消耗的输入"（含缓存命中），Claude Code
+// 客户端用它做上下文台账的余额结算。上游 NIM 的 usage 帧(prompt_tokens)在该帧送达前
+// 为 0，故调用方（openAIChatSSEToAnthropicSSEInto）需在帧落地后把真实值传入；缺失时
+// 传 1（保底，与 message_start 的非零语义一致）。
+func messageDeltaPayload(stopReason string, outputTokens, inputTokens int) string {
+	if inputTokens < 1 {
+		inputTokens = 1
+	}
 	return jsonString(map[string]interface{}{
 		"type": "message_delta",
 		"delta": map[string]interface{}{
@@ -73,6 +82,7 @@ func messageDeltaPayload(stopReason string, outputTokens int) string {
 		},
 		"usage": map[string]interface{}{
 			"output_tokens": outputTokens,
+			"input_tokens":  inputTokens,
 		},
 	})
 }
@@ -191,4 +201,3 @@ func IsEnableThinkingMode() bool {
 	}
 	return globalEnableThinkingMode.Load()
 }
-

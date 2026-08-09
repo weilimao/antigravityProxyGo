@@ -83,11 +83,11 @@ func TestTranslateOpenAIToGemini(t *testing.T) {
 // TestTranslateAnthropicToGemini 验证 Anthropic -> Gemini 协议转换
 func TestTranslateAnthropicToGemini(t *testing.T) {
 	req := &AnthropicRequest{
-		Model: "claude-3-5-sonnet",
+		Model:  "claude-3-5-sonnet",
 		System: "You are a translator.",
 		Messages: []AnthropicMessage{
 			{
-				Role: "user",
+				Role:    "user",
 				Content: []AnthropicContent{{Type: "text", Text: "Hello, translate this."}},
 			},
 		},
@@ -582,17 +582,17 @@ func TestTranslateToolsToGemini(t *testing.T) {
 			},
 		},
 	}
-	
+
 	gemTools := translateToolsToGemini(anthTools)
 	if len(gemTools) != 1 || len(gemTools[0].FunctionDeclarations) != 1 {
 		t.Fatalf("expected 1 gemini tool declaration, got %+v", gemTools)
 	}
-	
+
 	decl := gemTools[0].FunctionDeclarations[0]
 	if decl.Name != "get_weather" {
 		t.Errorf("expected name 'get_weather', got %q", decl.Name)
 	}
-	
+
 	// 验证 parameters 有值，且 parametersJsonSchema 为 nil 字段，以防止 Google API 参数校验冲突
 	if decl.Parameters == nil {
 		t.Fatalf("expected Parameters to be non-nil")
@@ -600,18 +600,18 @@ func TestTranslateToolsToGemini(t *testing.T) {
 	if decl.ParametersJsonSchema != nil {
 		t.Fatalf("expected ParametersJsonSchema to be nil")
 	}
-	
+
 	// 序列化验证，确保 JSON 中只包含 "parameters"，且不包含 "parametersJsonSchema"
 	jsonBytes, err := json.Marshal(decl)
 	if err != nil {
 		t.Fatalf("failed to marshal GeminiFunctionDecl: %v", err)
 	}
-	
+
 	var rawMap map[string]interface{}
 	if err := json.Unmarshal(jsonBytes, &rawMap); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
-	
+
 	if _, ok := rawMap["parameters"]; !ok {
 		t.Errorf("JSON output is missing 'parameters' key")
 	}

@@ -11,10 +11,10 @@ import (
 	"testing"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/session"
 	"antigravity-proxy/internal/settings"
 	"antigravity-proxy/internal/stats"
-	"antigravity-proxy/internal/pricing"
 )
 
 // chatcompress_nvidia_e2e_test.go —— chatcompress 接入 handleNvidia 的端到端集成测试。
@@ -35,7 +35,7 @@ type chatcompressE2ESettings struct {
 func (m *chatcompressE2ESettings) GetSessionOptimization() settings.SessionOptimizationConfig {
 	return m.compCfg
 }
-func (m *chatcompressE2ESettings) GetEnableDebuggerMode() bool { return false }
+func (m *chatcompressE2ESettings) GetEnableDebuggerMode() bool        { return false }
 func (m *chatcompressE2ESettings) GetResolvedDebuggerLogPath() string { return "" }
 
 // newNvidiaCompressTestHandler 构造一个开启 chatcompress 配置的 handler。
@@ -162,9 +162,9 @@ func TestHandleNvidia_ResourceExhausted_CompressFailsThenReply400(t *testing.T) 
 
 	// 用 Anthropic 入站(/nvidia/v1/messages)以验证 400 回的是 Anthropic 错误体结构
 	anthReq := &AnthropicRequest{
-		Model: "claude-sonnet-4-5",
-		System: "sys",
-		Stream: true,
+		Model:    "claude-sonnet-4-5",
+		System:   "sys",
+		Stream:   true,
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: strings.Repeat("a", 20000)}}}},
 	}
 	body, _ := json.Marshal(anthReq)
@@ -236,7 +236,7 @@ func TestHandleNvidia_AnthropicPureToolUse_NoMissingContentField(t *testing.T) {
 	//  - user/tool_result: 空 content(命中 flattenToolResultContent 返空 → tool 角色 Content:"")
 	// 这三种是过去因 ChatMessage.Content omitempty 导致 "content" 键丢失、上游回 400 的典型形态。
 	anthReq := &AnthropicRequest{
-		Model: "claude-sonnet-4-5",
+		Model:  "claude-sonnet-4-5",
 		Stream: false,
 		Messages: []AnthropicMessage{
 			{Role: "user", Content: []AnthropicContent{{Type: "text", Text: ""}}},

@@ -1,9 +1,9 @@
 package relay
 
 import (
+	"antigravity-proxy/internal/settings"
 	"net/http"
 	"strings"
-	"antigravity-proxy/internal/settings"
 )
 
 // compat_models.go: /v1/models 模型列表 handler(OpenAI 与 Anthropic 两种响应形态)。
@@ -29,12 +29,21 @@ func (h *APICompatHandler) handleModels(w http.ResponseWriter, r *http.Request) 
 	if isAnthropic {
 		var data []map[string]interface{}
 		for _, m := range exposed {
-			data = append(data, map[string]interface{}{
+			// max_input_tokens：仅当映射条目显式声明 MaxInputTokens(>0) 时输出,对齐 Anthropic
+			// 官方 Models API schema(ModelInfo.max_input_tokens)。未配置则省略——Claude Code
+			// 客户端对未知模型名的窗口认知由内置表兜底(见内部机制),本字段为对未来客户端读取
+			// /v1/models.max_input_tokens 预置的值通道,不影响当前视图。
+			item := map[string]interface{}{
 				"type":         "model",
 				"id":           m.ID,
 				"display_name": strings.Title(strings.ReplaceAll(m.ID, "-", " ")),
 				"created_at":   "2024-05-14T00:00:00Z",
-			})
+				// max_input_tokens 由 buildExposedModelMap 按映射条目 MaxInputTokens 填充(见 exposedModel)。
+			}
+			if m.MaxInputTokens > 0 {
+				item["max_input_tokens"] = m.MaxInputTokens
+			}
+			data = append(data, item)
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"data":     data,
@@ -61,6 +70,9 @@ func (h *APICompatHandler) handleModels(w http.ResponseWriter, r *http.Request) 
 type exposedModel struct {
 	ID      string
 	OwnedBy string
+	// MaxInputTokens 是该模型声明的上下文窗口(input 上限, token 数)。
+	// 仅服务 Anthropic 形态 /v1/models 的 max_input_tokens 字段;0 表示不声明。
+	MaxInputTokens int64
 }
 
 // buildExposedModelMap 收集所有 Expose=true 的模型及其 owned_by 归属,保持映射表顺序。
@@ -87,7 +99,11 @@ func (h *APICompatHandler) buildExposedModelMap(includePrefixed bool) []exposedM
 		if ownedBy == "" {
 			ownedBy = inferOwnedBy(entry.ClientModel)
 		}
-		out = append(out, exposedModel{ID: entry.ClientModel, OwnedBy: ownedBy})
+		maxInputTokens := int64(0)
+		if entry.MaxInputTokens != nil && *entry.MaxInputTokens > 0 {
+			maxInputTokens = *entry.MaxInputTokens
+		}
+		out = append(out, exposedModel{ID: entry.ClientModel, OwnedBy: ownedBy, MaxInputTokens: maxInputTokens})
 	}
 	return out
 }
@@ -109,5 +125,3 @@ func isRoutedPrefixedModel(clientModel string) bool {
 	}
 	return !isGoogleProvider(provider)
 }
-
-

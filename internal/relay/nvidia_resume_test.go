@@ -230,7 +230,7 @@ func TestLiveTee_BodyTextRealtimeNotReplayed(t *testing.T) {
 func TestLiveTee_ToolUseStaysReplay(t *testing.T) {
 	h := newTeeTestHarness()
 	upstream := writeUpstream(
-		textChunkLine("text before tool."),  // text 块 index 0,实时落 live
+		textChunkLine("text before tool."), // text 块 index 0,实时落 live
 		toolChunkLine(0, "call_0", "get_weather", "{\"location\":\"Lecce\"}"),
 		finishChunkLine("tool_calls"),
 	)

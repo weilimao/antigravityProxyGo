@@ -215,8 +215,8 @@ type ChatToolCall struct {
 }
 
 type ChatTool struct {
-	Type      string         `json:"type"`
-	Function  ChatToolFunc   `json:"function"`
+	Type     string       `json:"type"`
+	Function ChatToolFunc `json:"function"`
 }
 
 type ChatToolFunc struct {
@@ -226,8 +226,8 @@ type ChatToolFunc struct {
 }
 
 type ChatToolChoice struct {
-	Type     string              `json:"type,omitempty"`
-	Function ChatToolChoiceFunc  `json:"function,omitempty"`
+	Type     string             `json:"type,omitempty"`
+	Function ChatToolChoiceFunc `json:"function,omitempty"`
 }
 
 type ChatToolChoiceFunc struct {
@@ -240,11 +240,11 @@ type ChatStreamOptions struct {
 
 // OpenAIChatRequest 是发给 NVIDIA 上游的 OpenAI Chat Completions 请求体。
 type OpenAIChatRequest struct {
-	Model        string          `json:"model"`
-	Messages     []ChatMessage   `json:"messages"`
-	Temperature  *float64        `json:"temperature,omitempty"`
-	MaxTokens    *int            `json:"max_tokens,omitempty"`
-	Stream       bool            `json:"stream,omitempty"`
+	Model         string             `json:"model"`
+	Messages      []ChatMessage      `json:"messages"`
+	Temperature   *float64           `json:"temperature,omitempty"`
+	MaxTokens     *int               `json:"max_tokens,omitempty"`
+	Stream        bool               `json:"stream,omitempty"`
 	Tools         []ChatTool         `json:"tools,omitempty"`
 	ToolChoice    interface{}        `json:"tool_choice,omitempty"`
 	StreamOptions *ChatStreamOptions `json:"stream_options,omitempty"`
@@ -263,18 +263,18 @@ type OpenAIChatRequest struct {
 
 // OpenAIChatResponse 是 NVIDIA 上游返回的 OpenAI Chat Completions 非流式响应。
 type OpenAIChatResponse struct {
-	ID      string                  `json:"id"`
-	Object  string                  `json:"object"`
-	Created int64                   `json:"created"`
-	Model   string                  `json:"model"`
-	Choices []OpenAIChatChoice      `json:"choices"`
-	Usage   OpenAIChatUsage         `json:"usage"`
+	ID      string             `json:"id"`
+	Object  string             `json:"object"`
+	Created int64              `json:"created"`
+	Model   string             `json:"model"`
+	Choices []OpenAIChatChoice `json:"choices"`
+	Usage   OpenAIChatUsage    `json:"usage"`
 }
 
 type OpenAIChatChoice struct {
-	Index        int        `json:"index"`
+	Index        int         `json:"index"`
 	Message      ChatMessage `json:"message"`
-	FinishReason string     `json:"finish_reason"`
+	FinishReason string      `json:"finish_reason"`
 }
 
 // OpenAIChatUsageTokensDetails 是 usage.prompt_tokens_details 的嵌套明细(OpenAI 标准缓存口径)。
@@ -284,9 +284,9 @@ type OpenAIChatUsageTokensDetails struct {
 }
 
 type OpenAIChatUsage struct {
-	PromptTokens     int                          `json:"prompt_tokens"`
-	CompletionTokens int                          `json:"completion_tokens"`
-	TotalTokens      int                          `json:"total_tokens"`
+	PromptTokens        int                          `json:"prompt_tokens"`
+	CompletionTokens    int                          `json:"completion_tokens"`
+	TotalTokens         int                          `json:"total_tokens"`
 	PromptTokensDetails OpenAIChatUsageTokensDetails `json:"prompt_tokens_details"`
 	// PromptCacheHitTokens 是 DeepSeek 等上游在 usage 顶层返回的缓存命中 token 数(OpenAI 标准无此字段)。
 	PromptCacheHitTokens int `json:"prompt_cache_hit_tokens"`
@@ -315,27 +315,26 @@ func (r *OpenAIChatResponse) FinishReason() string {
 
 // OpenAIChatStreamChunk 是 NVIDIA 上游的流式 chunk。
 type OpenAIChatStreamChunk struct {
-	ID      string                  `json:"id"`
-	Object  string                  `json:"object"`
-	Created int64                   `json:"created"`
-	Model   string                  `json:"model"`
+	ID      string                   `json:"id"`
+	Object  string                   `json:"object"`
+	Created int64                    `json:"created"`
+	Model   string                   `json:"model"`
 	Choices []OpenAIChatStreamChoice `json:"choices"`
-	Usage   *OpenAIChatUsage        `json:"usage,omitempty"`
+	Usage   *OpenAIChatUsage         `json:"usage,omitempty"`
 }
 
 type OpenAIChatStreamChoice struct {
-	Index        int                     `json:"index"`
-	Delta        OpenAIChatDelta         `json:"delta"`
-	FinishReason interface{}             `json:"finish_reason"`
+	Index        int             `json:"index"`
+	Delta        OpenAIChatDelta `json:"delta"`
+	FinishReason interface{}     `json:"finish_reason"`
 }
 
 type OpenAIChatDelta struct {
-	Role             string         `json:"role,omitempty"`
-	Content          string         `json:"content,omitempty"`
-	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	Role             string `json:"role,omitempty"`
+	Content          string `json:"content,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 	// Reasoning 是部分 NIM 上游模型(D/S 派系官方示例用 getattr 兜底)返回思考文本的字段名兜底。
 	// 当 reasoning_content 缺失、reasoning 有值时也走 thinking_delta 回译。
 	Reasoning string         `json:"reasoning,omitempty"`
 	ToolCalls []ChatToolCall `json:"tool_calls,omitempty"`
 }
-

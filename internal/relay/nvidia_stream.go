@@ -411,8 +411,8 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				if fbFinalErr == nil && fbReplay != nil {
 					resume.commitPending() // 兜底轮整条 ready:提交重启段落 live + 回填持久态
 					return fbReplay, &liveStreamState{
-						liveIdxMap:   resume.indexMap,
-						liveMaxIdx:   resume.liveMaxUsedIdx,
+						liveIdxMap: resume.indexMap,
+						liveMaxIdx: resume.liveMaxUsedIdx,
 						// 与直连重试成功快照同构:透传首轮 thinkingPushed。兜底轮 thinking 走 resumeSink 同样全跳,
 						// 但首轮思考若已 live,replayFollowingInto 仍须跳过其 replay 思考头,否则 index 0 思考块重复开启。
 						thinkingLive: resume.liveThinkingPushed,

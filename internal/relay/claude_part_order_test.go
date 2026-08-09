@@ -7,10 +7,13 @@ import (
 // TestNormalizePartOrderForClaudeVertex 锁定 Anthropic 典范顺序规整纯函数:
 //   - model 消息必须规整为 [Text..., FunctionCall...](tool_use 在助手回合末尾)
 //   - user 消息必须规整为 [FunctionResponse..., Text/InlineData...](tool_result 排在 text 前)
+//
 // 各分区保持原相对顺序;不动 id/不删 part;非 model/user 与 ≤1 part 的消息原样深拷贝。
 //
 // 背景: Codex → Vertex Anthropic(daily-cloudcode-pa 重译)线上 400:
-//   "tool_use ids were found without tool_result blocks immediately after: call_..."
+//
+//	"tool_use ids were found without tool_result blocks immediately after: call_..."
+//
 // 根因是 mergeConsecutiveRoles 把 [FC] + [T] 合并成 model[FC, T], Text 失序导致 tool_use 不再处于
 // 助手回合末尾。本规整在合并之后把 parts 拉回典范顺序,消除紧邻违例。
 func TestNormalizePartOrderForClaudeVertex(t *testing.T) {
@@ -30,62 +33,62 @@ func TestNormalizePartOrderForClaudeVertex(t *testing.T) {
 		desc   string
 	}{
 		{
-			name: "model_fc_then_text_normalized",
-			desc: "Codex interleaved_text 场景: model[FC,T] 规整为 model[T,FC],tool_use 末尾化",
+			name:   "model_fc_then_text_normalized",
+			desc:   "Codex interleaved_text 场景: model[FC,T] 规整为 model[T,FC],tool_use 末尾化",
 			input:  []GeminiContent{{Role: "model", Parts: []GeminiPart{mkFC("shell_command", "call_a_1"), mkText("我来执行一下")}}},
 			expect: []GeminiContent{{Role: "model", Parts: []GeminiPart{mkText("我来执行一下"), mkFC("shell_command", "call_a_1")}}},
 		},
 		{
-			name: "model_text_then_fc_already_canonical_noop",
-			desc: "已是典范 model[T,FC]: 顺序不动",
+			name:   "model_text_then_fc_already_canonical_noop",
+			desc:   "已是典范 model[T,FC]: 顺序不动",
 			input:  []GeminiContent{{Role: "model", Parts: []GeminiPart{mkText("let me check"), mkFC("shell_command", "call_a_1")}}},
 			expect: []GeminiContent{{Role: "model", Parts: []GeminiPart{mkText("let me check"), mkFC("shell_command", "call_a_1")}}},
 		},
 		{
-			name: "model_multi_text_multi_fc_stable_within_partition",
-			desc: "model[T2,FC2,T1,FC1] → [T2,T1,FC2,FC1]: 各分区保持原相对顺序(稳定分区)",
+			name:   "model_multi_text_multi_fc_stable_within_partition",
+			desc:   "model[T2,FC2,T1,FC1] → [T2,T1,FC2,FC1]: 各分区保持原相对顺序(稳定分区)",
 			input:  []GeminiContent{{Role: "model", Parts: []GeminiPart{mkText("T2"), mkFC("fn", "id2"), mkText("T1"), mkFC("fn", "id1")}}},
 			expect: []GeminiContent{{Role: "model", Parts: []GeminiPart{mkText("T2"), mkText("T1"), mkFC("fn", "id2"), mkFC("fn", "id1")}}},
 		},
 		{
-			name: "user_text_then_fr_normalized",
-			desc: "user[T,FR] 规整为 user[FR,T],tool_result 前移",
+			name:   "user_text_then_fr_normalized",
+			desc:   "user[T,FR] 规整为 user[FR,T],tool_result 前移",
 			input:  []GeminiContent{{Role: "user", Parts: []GeminiPart{mkText("继续分析"), mkFR("shell_command", "call_a_1")}}},
 			expect: []GeminiContent{{Role: "user", Parts: []GeminiPart{mkFR("shell_command", "call_a_1"), mkText("继续分析")}}},
 		},
 		{
-			name: "user_fr_then_text_already_canonical_noop",
-			desc: "已是典范 user[FR,T]: 顺序不动",
+			name:   "user_fr_then_text_already_canonical_noop",
+			desc:   "已是典范 user[FR,T]: 顺序不动",
 			input:  []GeminiContent{{Role: "user", Parts: []GeminiPart{mkFR("shell_command", "call_a_1"), mkText("看完")}}},
 			expect: []GeminiContent{{Role: "user", Parts: []GeminiPart{mkFR("shell_command", "call_a_1"), mkText("看完")}}},
 		},
 		{
-			name: "user_text_image_then_fr_normalized_keeps_image_after",
-			desc: "user[T,Img,FR] 规整为 user[FR,T,Img],图片作为 textLike 跟在 FR 之后",
+			name:   "user_text_image_then_fr_normalized_keeps_image_after",
+			desc:   "user[T,Img,FR] 规整为 user[FR,T,Img],图片作为 textLike 跟在 FR 之后",
 			input:  []GeminiContent{{Role: "user", Parts: []GeminiPart{mkText("看图"), mkImg(), mkFR("shell_command", "call_a_1")}}},
 			expect: []GeminiContent{{Role: "user", Parts: []GeminiPart{mkFR("shell_command", "call_a_1"), mkText("看图"), mkImg()}}},
 		},
 		{
-			name: "single_part_noop_model",
-			desc: "单 part 的 model 消息无需分区,原样",
+			name:   "single_part_noop_model",
+			desc:   "单 part 的 model 消息无需分区,原样",
 			input:  []GeminiContent{{Role: "model", Parts: []GeminiPart{mkFC("shell_command", "call_a_1")}}},
 			expect: []GeminiContent{{Role: "model", Parts: []GeminiPart{mkFC("shell_command", "call_a_1")}}},
 		},
 		{
-			name: "empty_parts_noop",
-			desc: "空 parts 原样返回 nil",
+			name:   "empty_parts_noop",
+			desc:   "空 parts 原样返回 nil",
 			input:  []GeminiContent{{Role: "user", Parts: nil}},
 			expect: []GeminiContent{{Role: "user", Parts: nil}},
 		},
 		{
-			name: "non_target_role_noop",
-			desc: "system 等非 model/user 角色原样深拷贝(不规整)",
+			name:   "non_target_role_noop",
+			desc:   "system 等非 model/user 角色原样深拷贝(不规整)",
 			input:  []GeminiContent{{Role: "system", Parts: []GeminiPart{mkFC("fn", "id1"), mkText("说明")}}},
 			expect: []GeminiContent{{Role: "system", Parts: []GeminiPart{mkFC("fn", "id1"), mkText("说明")}}},
 		},
 		{
-			name: "empty_slice",
-			desc: "空切片原样返回",
+			name:   "empty_slice",
+			desc:   "空切片原样返回",
 			input:  []GeminiContent{},
 			expect: []GeminiContent{},
 		},

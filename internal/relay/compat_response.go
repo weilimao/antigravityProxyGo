@@ -226,5 +226,3 @@ func (h *APICompatHandler) handleNormalResponse(
 	}
 
 }
-
-

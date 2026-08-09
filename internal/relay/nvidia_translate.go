@@ -15,4 +15,3 @@ package relay
 //   nvidia_translate_payload.go   Anthropic SSE payload 构造 + 全局思考/reasoning 开关 + mapNvidiaModel
 //   nvidia_translate_types.go     OpenAI Chat 兼容类型定义
 //   nvidia_translate_ocr.go       已迁出至 ocr_downgrade_anthropic.go + ocr_engine.go(本文件保留空锚点)
-

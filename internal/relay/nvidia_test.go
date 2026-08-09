@@ -1122,7 +1122,8 @@ func TestOpenAIChatSSEToAnthropicSSE_EmptyAndWhitespace(t *testing.T) {
 
 // preferredSettings 是 handleNvidiaModels 清单过滤测试专用的最小 settings mock。
 // 沿用 chatcompressE2ESettings 范式:嵌入 settings.ManagerInterface 实现接口,
-// 仅重写被该方法链调用的 GetNvidiaPreferredModels;其余不被调用的方法走嵌入字段(无 nil deref 风险)。
+// 仅重写被该方法链调用的 GetNvidiaPreferredModels 与 GetMaxInputTokensByModel(窗口声明查询;
+// 其余测试路径不校验 max_input_tokens,返回 nil 即等价"不附加字段",明确不 panic)。
 type preferredSettings struct {
 	settings.ManagerInterface
 	preferred []string
@@ -1135,6 +1136,12 @@ func (m *preferredSettings) GetNvidiaPreferredModels() []string {
 	out := make([]string, len(m.preferred))
 	copy(out, m.preferred)
 	return out
+}
+
+// GetMaxInputTokensByModel 无窗口声明语义:返回 nil 查询函数(handleNvidiaModels 对此
+// nil 安全,formatNvidiaModelListAnthropic 在 lookup==nil 时跳过字段附加)。
+func (m *preferredSettings) GetMaxInputTokensByModel(allowlist []string, fallback int64) func(string) int64 {
+	return nil
 }
 
 // newNvidiaTestHandlerWithSettings 在 newNvidiaTestHandler 基础上注入 settingsMgr,供清单过滤测试。
@@ -1963,7 +1970,7 @@ func TestPullAnthropicStream_ClientCancelInInterCycleWait(t *testing.T) {
 
 	acc := mkNvidiaAccount("nv-cancel-cw", "cancelcw@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
 	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
-	handler.nvidiaStreamRetryWait = 5 * time.Millisecond // 每次退避极短,5 次直连快速耗尽进周期间等待
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond   // 每次退避极短,5 次直连快速耗尽进周期间等待
 	handler.nvidiaStreamCycleWait = 800 * time.Millisecond // 周期间等待设大,取消前确实挂在此 select 上
 
 	anthReq := &AnthropicRequest{

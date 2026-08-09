@@ -62,14 +62,14 @@ func (m *Manager) GetSessionOptimization() SessionOptimizationConfig {
 	m.RLock()
 	defer m.RUnlock()
 	return SessionOptimizationConfig{
-		EnableCustomCompression:        m.config.EnableCustomCompression,
-		MaxTokensThreshold:             m.config.MaxTokensThreshold,
-		CompressionStrategy:            m.config.CompressionStrategy,
-		SummaryModel:                   m.config.SummaryModel,
-		KeepRecentTurns:                m.config.KeepRecentTurns,
-		NvidiaCompressEnabled:          m.config.NvidiaCompressEnabled,
-		NvidiaCompressThresholdTokens:  m.config.NvidiaCompressThresholdTokens,
-		NvidiaCompressKeepToolResults:  m.config.NvidiaCompressKeepToolResults,
+		EnableCustomCompression:       m.config.EnableCustomCompression,
+		MaxTokensThreshold:            m.config.MaxTokensThreshold,
+		CompressionStrategy:           m.config.CompressionStrategy,
+		SummaryModel:                  m.config.SummaryModel,
+		KeepRecentTurns:               m.config.KeepRecentTurns,
+		NvidiaCompressEnabled:         m.config.NvidiaCompressEnabled,
+		NvidiaCompressThresholdTokens: m.config.NvidiaCompressThresholdTokens,
+		NvidiaCompressKeepToolResults: m.config.NvidiaCompressKeepToolResults,
 	}
 }
 
@@ -85,6 +85,57 @@ func (m *Manager) SetSessionOptimization(cfg SessionOptimizationConfig) error {
 		c.NvidiaCompressThresholdTokens = v.NvidiaCompressThresholdTokens
 		c.NvidiaCompressKeepToolResults = v.NvidiaCompressKeepToolResults
 	}, cfg)
+}
+
+// GetMaxInputTokensByModel 返回「上游模型 id → 声明的上下文窗口(window in tokens)」的查询函数。
+// 供 NVIDIA 链路 /v1/models 的 Anthropic 形态回写时按上游 id 附加 max_input_tokens 字段。
+//
+// 解析规则(指针 + 持久层 "已有值才改" 语义,与 Multimodal 同款):
+//   - 映射条目显式配置 MaxInputTokens(>0):取该值;
+//   - 其余条目:回退 fallback(NVIDIA 模型列表的上下文窗口默认)逐条传入,
+//     因此 fallback != 0 时所有可见条目都覆盖声明,受 allowlist 收窄;
+//   - fallback == 0(从未配置默认):仅显式配置的条目声明,其余省略字段。
+//
+// allowlist 为的专属清单(NvidiaPreferredModels):非空时仅清单内 id 声明窗口,
+// 清单外 id 返回 0(不附加字段)。nil/空 allowlist 表示不过滤。
+//
+// 返回 nil 时调用方不得使用(等价零值,不附加字段):settingsMgr 为 nil(测试构造或未注入)时早退。
+func (m *Manager) GetMaxInputTokensByModel(allowlist []string, fallback int64) func(string) int64 {
+	if m == nil {
+		return nil
+	}
+	explicit := map[string]int64{}
+	m.RLock()
+	for _, entry := range m.config.RelayModelMapping {
+		if entry.MaxInputTokens == nil || *entry.MaxInputTokens <= 0 {
+			continue
+		}
+		// key 用 TargetModel: /v1/models 上游 id 属目标模型命名空间(如 nvidia/deepseek-ai/gemma-3-27b-it)。
+		explicit[strings.TrimSpace(entry.TargetModel)] = *entry.MaxInputTokens
+	}
+	fb := fallback
+	m.RUnlock()
+	return func(modelID string) int64 {
+		id := strings.TrimSpace(modelID)
+		if v, ok := explicit[id]; ok {
+			return v
+		}
+		// allowlist 收窄:清单非空时仅有清单内 id 才声明(兜底也需落在清单内)。
+		if allowlist != nil && len(allowlist) > 0 && !containsStr(allowlist, id) {
+			return 0
+		}
+		return fb
+	}
+}
+
+// containsStr 判定字符串切片是否包含目标(精确匹配,与清单过滤同口径)。
+func containsStr(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // 接口断言:保证 *Manager 实现 ManagerInterface(定义于 settings.go)。

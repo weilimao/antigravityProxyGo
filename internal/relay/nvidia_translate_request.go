@@ -595,4 +595,3 @@ func flattenToolResultContent(raw json.RawMessage) string {
 	}
 	return string(raw)
 }
-

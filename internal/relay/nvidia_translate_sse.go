@@ -187,11 +187,17 @@ func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body
 	if ctx != nil && ctx.Err() != nil && stopReason == "" {
 		stopReason = "end_turn"
 	}
+	// finalInput 是本次流的真实累计输入 token 数：优先取上游 usage 帧(OpenAI
+	// prompt_tokens，NIM 在 finish_reason 之后、[DONE] 之前才送达)，缺失时回退
+	// message_start 用的本地估算值(inputTokens)。message_delta.usage.input_tokens
+	// 按官方 cumulative 语义填写该真实值，让 Claude Code 客户端上下文台账按上游真实
+	// 消耗结算（上一版此处只回 output_tokens、input_tokens 缺席，客户端对 input 侧
+	// 只记 message_start 估算值，导致"已用 token"长期高于上游真实值）。
 	finalInput := input
 	if finalInput <= 0 {
 		finalInput = inputTokens
 	}
-	sink.writeEvent("message_delta", messageDeltaPayload(stopReason, output))
+	sink.writeEvent("message_delta", messageDeltaPayload(stopReason, output, finalInput))
 	sink.writeEvent("message_stop", `{"type":"message_stop"}`)
 	sink.flush()
 	return finalInput, output, cached, finishEmitted, streamTerminated, err

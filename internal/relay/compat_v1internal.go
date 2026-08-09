@@ -1,6 +1,9 @@
 package relay
 
 import (
+	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/sigcache"
+	antigravityStats "antigravity-proxy/internal/stats"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -9,8 +12,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"antigravity-proxy/internal/account"
-	"antigravity-proxy/internal/sigcache"
 )
 
 // compat_v1internal.go: /v1internal:generateContent / streamGenerateContent 桥接到 Gemini 号池 + mapModelForProjectInRelay 模型映射。
@@ -151,6 +152,10 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 
 	var finalResp *http.Response
 	var finalErr error
+	// 直连成功后用于记账的最终目标与账号: 循环内每轮尝试都重新声明 targetHost/targetPath/poolAccount
+	// 为局部变量, 必须在成功 break 前把最终值兜出, 供响应拷贝段组装 googleLogCtx 与 recordGoogleUsage。
+	var finalTargetHost, finalTargetPath string
+	var finalPoolAccount *account.Account
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// 筛选未在此次请求中失败的账号
@@ -245,25 +250,15 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 
 		// 构造直连发包请求
 		targetURL := fmt.Sprintf("https://%s%s", targetHost, targetPath)
-		req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(finalReqBody))
-		if err != nil {
-			finalErr = err
-			break
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+poolAccount.GetAccessToken())
-		req.Header.Set("User-Agent", "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)")
 
 		h.log("🚀 [中继直连重试 %d/%d] 正在为用户 %s 分配账号 %s | 目标: https://%s%s", attempt+1, maxAttempts, userSession.UserID, poolAccount.Email, targetHost, targetPath)
 
-		// 执行请求并流式响应
-		httpClient := h.client
-		if isStreaming {
-			httpClient = h.streamClient
+		resp, errDo := h.finalRequester(poolAccount, http.MethodPost, targetURL, finalReqBody)
+		if h.fixtureRequest != nil && errDo == nil {
+			// 单测夹具: 记录 HTTP 元信息供断言, 不改变响应语义。
+			h.fixtureRequest.targetURL = targetURL
+			h.fixtureRequest.poolProvider = poolAccount.Provider
 		}
-
-		resp, errDo := httpClient.Do(req)
 		if errDo != nil {
 			h.log("⚠️ [中继直连] 账号 %s 访问谷歌失败: %v", poolAccount.Email, errDo)
 			skippedAccounts[poolAccount.ID] = true
@@ -287,6 +282,9 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 
 		finalResp = resp
 		finalErr = nil
+		finalTargetHost = targetHost
+		finalTargetPath = targetPath
+		finalPoolAccount = poolAccount
 		break
 	}
 
@@ -317,13 +315,46 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 	}
 	w.WriteHeader(finalResp.StatusCode)
 
+	// 直连出站用量记账入口: 由 accountMgr/sessionRouter 装配的真实出站(不经本地 18443 代理,
+	// 故 proxy.classifyResponse 不会为该请求记账)。在此按 Google 号池族在成功响应的字节流尾部
+	// 解析 usageMetadata, 与本函数的 recordGoogleUsage 五落点闭环(中继/账号/全局/池桶/请求日志)。
+	// — 注意: 严禁经 dispatchToGemini 的 18443 回路路径调用 recordGoogleUsage, 那会与
+	//   classifyResponse 对同一事务双计, 直接导致 antigravity 池桶/全局/请求日志翻倍(见 google_usage.go)。
+	// — 流式与非流式统一: googleTailWriter 作为「最近 googleUsageTailMaxBytes 字节」尾部环形缓冲
+	//   (io.MultiWriter 透写原文, 恒占 512KB, 无随响应变大), usageMetadata 恒在响应末尾(非流式
+	//   JSON 末尾 / 流式 SSE 终帧), 循环结束后一次解析取末个匹配权威值; 不会把跨帧残缺半 usage
+	//   误拆成多条记账(field 缺则 0 兜底, input==0&&output==0 在 recordGoogleUsage 早退)。
+	// — 首字时刻打点: 首次向客户端写出内容时 MarkFirstByte, 使流式 DurationMs(首帧→流结束)
+	//   与 TTFT 语义真实; 非流式整包 JSON 一次性写出, 二者≈端到端, 与既有直连口径一致。
+	startAt := time.Now()
+	tw := newGoogleTailWriter(googleUsageTailMaxBytes)
+	var respWriter io.Writer = w
+	if finalResp.StatusCode == http.StatusOK {
+		respWriter = io.MultiWriter(w, tw)
+	}
+	logCtx := googleLogCtx{
+		Method:       http.MethodPost,
+		Host:         finalTargetHost,
+		Path:         finalTargetPath,
+		SessionID:    userSession.UserID,
+		Account:      finalPoolAccount.ID,
+		StatusCode:   finalResp.StatusCode,
+		StartTs:      startAt,
+		FirstByteRec: antigravityStats.NewFirstByteRecorder(startAt),
+	}
+
 	// 流式传输响应体
 	buf := make([]byte, 4096)
 	flusher, isFlusher := w.(http.Flusher)
+	firstByteDone := false
 	for {
 		n, errRead := finalResp.Body.Read(buf)
 		if n > 0 {
-			_, _ = w.Write(buf[:n])
+			if !firstByteDone {
+				logCtx.FirstByteRec.MarkFirstByte()
+				firstByteDone = true
+			}
+			_, _ = respWriter.Write(buf[:n])
 			if isFlusher {
 				flusher.Flush()
 			}
@@ -334,8 +365,14 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			break
 		}
 	}
-}
 
+	// 成功路径统一收尾记账: 从尾部环形缓冲一次解析 usageMetadata(流式/非流式各字段同帧权威)。
+	if finalResp.StatusCode == http.StatusOK {
+		if in, out, cached := googleUsageFromRaw(tw.Bytes()); in > 0 || out > 0 {
+			h.recordGoogleUsage(userSession, currentModel, in, out, cached, finalPoolAccount, logCtx)
+		}
+	}
+}
 
 func mapModelForProjectInRelay(modelName string) string {
 	modelNameLower := strings.ToLower(modelName)
@@ -350,5 +387,3 @@ func mapModelForProjectInRelay(modelName string) string {
 	}
 	return "gemini-1.5-flash"
 }
-
-

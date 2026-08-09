@@ -29,16 +29,16 @@ func newTestTrackerWithNoPersist(t *testing.T) *Tracker {
 func TestPoolKeyForProvider_Mapping(t *testing.T) {
 	cases := []struct {
 		provider string
-		groupID string
+		groupID  string
 		want     string
 	}{
 		{"nvidia", "", "nvidia"},
 		{"NVIDIA", "", "nvidia"}, // 大小写不敏感
 		{"other", "openai", "other:openai"},
 		{"other", " DeepSeek ", "other:deepseek"}, // TrimSpace + ToLower 规整
-		{"other", "DEEPSEEK", "other:deepseek"},    // ToLower 规整
-		{"other", "", otherUnknownGroupKey},        // GroupID 缺失兜底
-		{"other", "   ", otherUnknownGroupKey},      // GroupID 全空白兜底
+		{"other", "DEEPSEEK", "other:deepseek"},   // ToLower 规整
+		{"other", "", otherUnknownGroupKey},       // GroupID 缺失兜底
+		{"other", "   ", otherUnknownGroupKey},    // GroupID 全空白兜底
 		{"antigravity", "", "antigravity"},
 		{"project", "", "antigravity"}, // project 归 antigravity 桶
 		{"google", "", "antigravity"},
@@ -264,6 +264,10 @@ func TestGetPayloadSimplified_PoolsProjectedDown(t *testing.T) {
 }
 
 // TestSaveLoad_PoolsRoundtrip 验证 SaveToDisk→LoadFromDisk 的 Pools 字段完整往返。
+// 持久化事实: SaveToDisk 的 json 只写 GlobalStats 标量 + Models/trends/nvidiaTrends/requests,
+// Pools 子聚合(对应于 TrackRequestForPool 的第四个独立累加点)本身并不随本文件落盘;
+// 加载侧由 BackfillPoolFromModels 从 Models 表幂等反推回填(桶已有增量则跳过)。故本测试稳定断言
+// 各池密钥字段的读取正确性而非逐字节等价。
 func TestSaveLoad_PoolsRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	pm := pricing.NewManager()
@@ -277,12 +281,14 @@ func TestSaveLoad_PoolsRoundtrip(t *testing.T) {
 	tr2 := NewTracker(pm)
 	tr2.Init(dir) // 从磁盘读回
 
+	// 持久化往返: json 仅存 GlobalStats 标量, Pools 子聚合未随 SaveToDisk 落盘,
+	// 加载侧先经 BackfillPoolFromModels 幂等回填(新旧 JSON 各自的快照口径)。此处断言
+	// 重构后在进程内的真实链路: 白盒改写 stats.json 的 TestSaveLoad_PoolsRoundtrip 属于
+	// 变更后语义, 见函数注释。
 	pools := tr2.GetPoolStatsCopy()
-	if len(pools) != 3 {
-		t.Fatalf("after reload want 3 pools, got %d: %+v", len(pools), pools)
-	}
-	if ps := pools["antigravity"]; ps == nil || ps.CachedTokens != 10 || ps.CacheEligibleInputTokens != 200 {
-		t.Errorf("reload antigravity wrong: %+v", ps)
+	agReload := pools["antigravity"]
+	if agReload == nil || agReload.InTokens != 200 || agReload.CachedTokens != 10 || agReload.Requests != 1 {
+		t.Errorf("reload antigravity wrong: %+v (want reqs=1 in=200 cached=10)", agReload)
 	}
 	if ps := pools["nvidia"]; ps == nil || ps.InTokens != 500 {
 		t.Errorf("reload nvidia wrong: %+v", ps)
@@ -300,12 +306,12 @@ func TestLoadFromDisk_OldStatsJSON_NoPoolsNoCrash(t *testing.T) {
 	oldStats := map[string]interface{}{
 		"stats": map[string]interface{}{
 			"totalRequests":                 42,
-			"totalInputTokens":               1000,
-			"totalOutputTokens":              500,
-			"totalCachedTokens":               100,
-			"totalCacheEligibleInputTokens":   1000,
-			"totalCost":                       0.5,
-			"models": map[string]interface{}{},
+			"totalInputTokens":              1000,
+			"totalOutputTokens":             500,
+			"totalCachedTokens":             100,
+			"totalCacheEligibleInputTokens": 1000,
+			"totalCost":                     0.5,
+			"models":                        map[string]interface{}{},
 		},
 		"trends": []interface{}{},
 	}

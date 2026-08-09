@@ -11,6 +11,7 @@ package relay
 
 import (
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -40,14 +41,14 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 			prefixedModel = "nvidia/" + model
 		}
 		h.statsTracker.RecordUsage(RelaySample{
-			ReqID:      fmt.Sprintf("nv-%d", time.Now().UnixNano()),
-			UserID:     userSession.UserID,
-			UserKey:    userSession.UserKey,
-			ModelName:  prefixedModel,
-			InTokens:   input,
-			OutTokens:  output,
-			Method:     "POST",
-			Host:       "nvidia",
+			ReqID:     fmt.Sprintf("nv-%d", time.Now().UnixNano()),
+			UserID:    userSession.UserID,
+			UserKey:   userSession.UserKey,
+			ModelName: prefixedModel,
+			InTokens:  input,
+			OutTokens: output,
+			Method:    "POST",
+			Host:      "nvidia",
 			// Path 用 logCtx.Path(由 writeNvidiaResponse 从入站 r.URL.Path 装配),反映真实入站前缀:
 			// /nvidia/* 记 "/nvidia/v1/messages" 等,别名 /vc/* 记 "/vc/v1/messages" 等,
 			// 不再写死 "/nvidia"——relay_stats.json 可区分两条别名入口的流量分布。
@@ -140,7 +141,7 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 		}
 		firstByteMs := logCtx.FirstByteRec.FirstByteMs(endToEndMs)
 		reqLog := &stats.RequestLog{
-			ID:           fmt.Sprintf("nvlog-%d-%d", atomic.AddUint64(&nvidiaReqLogSeq, 1), time.Now().UnixNano()),
+			ID:           fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
 			Timestamp:    time.Now().Format("01/02 15:04:05"),
 			Method:       logCtx.Method,
 			Host:         logCtx.Host,

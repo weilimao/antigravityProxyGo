@@ -31,8 +31,8 @@ func TestHandleModels_DynamicOwnedBy(t *testing.T) {
 			mappings: []settings.ModelMappingEntry{
 				{ClientModel: "gemini-2.5-pro", TargetModel: "gemini-2.5-pro", Expose: true, OwnedBy: "google"},
 				{ClientModel: "deepseek-chat", TargetModel: "deepseek-chat", Expose: true, OwnedBy: "deepseek"}, // 显式
-				{ClientModel: "claude-3-5-sonnet", TargetModel: "claude-3-5-sonnet", Expose: true}, // 空 OwnedBy → 兜底 anthropic
-				{ClientModel: "internal-x", TargetModel: "x", Expose: false},                       // 不暴露,不应出现
+				{ClientModel: "claude-3-5-sonnet", TargetModel: "claude-3-5-sonnet", Expose: true},              // 空 OwnedBy → 兜底 anthropic
+				{ClientModel: "internal-x", TargetModel: "x", Expose: false},                                    // 不暴露,不应出现
 			},
 		},
 		logFn: func(string) {},

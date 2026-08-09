@@ -214,9 +214,9 @@ func TestNvidiaHostFromBaseURL(t *testing.T) {
 		{"https://integrate.api.nvidia.com", "integrate.api.nvidia.com"},
 		{"http://localhost:8080/v1", "localhost:8080"},
 		{"integrate.api.nvidia.com/v1", "integrate.api.nvidia.com"}, // 无协议 — 兜底分支
-		{"", "nvidia"},                                            // 空串 — 回退占位
-		{"   https://api.x.com/v1  ", "api.x.com"},                // 前后空白
-		{"://bad-url", ""}, // url.Parse 解析不出 Host → 回退去前缀; 检查不 panic 即可
+		{"", "nvidia"}, // 空串 — 回退占位
+		{"   https://api.x.com/v1  ", "api.x.com"}, // 前后空白
+		{"://bad-url", ""},                         // url.Parse 解析不出 Host → 回退去前缀; 检查不 panic 即可
 	}
 	for _, c := range cases {
 		got := nvidiaHostFromBaseURL(c.in)

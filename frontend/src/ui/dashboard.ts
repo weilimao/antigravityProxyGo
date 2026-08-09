@@ -255,6 +255,12 @@ interface LogsRowSlot {
 
 const logsRowSlots: LogsRowSlot[] = [];
 
+// viewBtnLogMap: 渲染时把当前 lite 日志捕获到「查看」按钮 DOM 上(WeakMap, key=按钮元素),
+// 使点击不再依赖「该 id 点击时刻仍在 state.allRequests 里」这一脆弱前提——OCR 行等高频
+// 覆盖/已挤出 50 窗口/旧残留场景下 data-log-id 查表会落空,改用捕获对象直接开弹窗根治。
+// WeakMap:按钮 DOM 被回收时条目自动释放,驻留内存恒等于可见按钮数,无泄漏。
+const viewBtnLogMap = new WeakMap<HTMLButtonElement, any>();
+
 function buildLogsRowSlot(): LogsRowSlot {
     const tr = document.createElement('tr');
     tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors';
@@ -402,6 +408,9 @@ function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
     slot.httpCode.className = `block text-[10px] font-bold mt-1 ${statusColor}`;
 
     slot.viewBtn.setAttribute('data-log-id', log.id);
+    // 渲染时把当前 lite 日志对象捕获到按钮上,点击委托优先用它直接开弹窗,
+    // 绕开「id 须在 state.allRequests 里」的脆弱前提(OCR 行等查表落空场景)。
+    viewBtnLogMap.set(slot.viewBtn, log);
     slot.viewBtn.textContent = state.currentLanguage === 'zh' ? '查看' : 'View';
 }
 
@@ -850,8 +859,16 @@ export function initDashboardEvents() {
     // 绑定事件委托：全局唯一代理日志表格中“查看”按钮的点击事件，支持 DOM 节点重置
     document.addEventListener('click', (e: Event) => {
         const target = e.target as HTMLElement;
-        const btn = target.closest('.view-details-btn');
+        const btn = target.closest('.view-details-btn') as HTMLButtonElement | null;
         if (btn) {
+            // 优先用渲染时绑定到按钮上的 lite 日志对象开弹窗,绕开「id 需在 state.allRequests 里」
+            // 的脆弱前提(OCR 高频覆盖 / 已挤出 50 窗口 / 旧残留等 data-log-id 查表落空场景)。
+            const captured = viewBtnLogMap.get(btn);
+            if (captured) {
+                showModal(captured);
+                return;
+            }
+            // 退化回退:捕获缺失(理论上不应发生)时仍按 data-log-id 查表。
             const logId = btn.getAttribute('data-log-id');
             if (logId) {
                 const foundLog = state.allRequests.find(l => l.id === logId);

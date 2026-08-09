@@ -2,7 +2,7 @@ package relay
 
 import (
 	"fmt"
-	"sync/atomic"
+	"math/rand"
 	"time"
 
 	"antigravity-proxy/internal/account"
@@ -56,17 +56,17 @@ func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model str
 	// (缓存命中率分母)正常累加(Other 上游可能支持 cache, 与 NVIDIA 刻意排除口径相反)。
 	if h.statsTracker != nil && userSession != nil {
 		h.statsTracker.RecordUsage(RelaySample{
-			ReqID:      fmt.Sprintf("other-%d", time.Now().UnixNano()),
-			UserID:     userSession.UserID,
-			UserKey:    userSession.UserKey,
-			ModelName:  model,
-			InTokens:   input,
-			OutTokens:  output,
+			ReqID:        fmt.Sprintf("other-%d", time.Now().UnixNano()),
+			UserID:       userSession.UserID,
+			UserKey:      userSession.UserKey,
+			ModelName:    model,
+			InTokens:     input,
+			OutTokens:    output,
 			CachedTokens: cached,
-			Method:     "POST",
-			Host:       logCtx.Host,
-			Path:       logCtx.Path,
-			StatusCode: 200,
+			Method:       "POST",
+			Host:         logCtx.Host,
+			Path:         logCtx.Path,
+			StatusCode:   200,
 		})
 
 		// 单 API Key 的用量回填(与 NVIDIA / gemini/claude 链路对齐)。
@@ -131,7 +131,7 @@ func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model str
 			cacheStatus = "HIT"
 		}
 		reqLog := &stats.RequestLog{
-			ID:           fmt.Sprintf("otherlog-%d-%d", atomic.AddUint64(&otherReqLogSeq, 1), time.Now().UnixNano()),
+			ID:           fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
 			Timestamp:    time.Now().Format("01/02 15:04:05"),
 			Method:       logCtx.Method,
 			Host:         logCtx.Host,

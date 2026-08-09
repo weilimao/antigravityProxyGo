@@ -428,7 +428,7 @@ func TestHandleNvidia_AnthropicImage_DowngradesToText(t *testing.T) {
 
 	// 入站 Anthropic 含 image block,模拟 Claude Code VSCode 粘图后附一句模糊指代(无 [Image #N] 芯片)。
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5",
+		Model:     "claude-sonnet-4-5",
 		MaxTokens: func() *int { v := 200; return &v }(),
 		Messages: []AnthropicMessage{{
 			Role: "user",
@@ -501,7 +501,7 @@ func TestHandleNvidia_AnthropicImage_OCRUnavailable_StillSendsText(t *testing.T)
 	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
 
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5",
+		Model:     "claude-sonnet-4-5",
 		MaxTokens: func() *int { v := 200; return &v }(),
 		Messages: []AnthropicMessage{{
 			Role: "user",
@@ -603,7 +603,7 @@ func TestHandleNvidia_HistoricImageNotReOCROnSecondTurn(t *testing.T) {
 
 	// 入站 Anthropic 含一张图 + 模糊指代。
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5",
+		Model:     "claude-sonnet-4-5",
 		MaxTokens: func() *int { v := 200; return &v }(),
 		Messages: []AnthropicMessage{{
 			Role: "user",
@@ -672,8 +672,9 @@ func TestHandleNvidia_HistoricImageNotReOCROnSecondTurn(t *testing.T) {
 // 切换 settings.OcrModel 到 gemini-2.5-pro 后,缓存键变化(模型维度隔离)→ 重新 OCR 一次,
 // 且文案里展示真实使用的模型名。
 // 注:这里用 settingsMgr=nil 的 handler,通过环境变量或直接覆写 defaultOcrModel 不现实;
-//   故走具体路径:用两次 NewAPICompatHandler,各持不同 settingsMgr mock 返回不同 OcrModel,
-//   共享同一 OCR mock(计数),验证模型切换会再次触达上游。
+//
+//	故走具体路径:用两次 NewAPICompatHandler,各持不同 settingsMgr mock 返回不同 OcrModel,
+//	共享同一 OCR mock(计数),验证模型切换会再次触达上游。
 func TestOCR_ModelSwitchReOCRs(t *testing.T) {
 	var ocrHits atomic.Int64
 	ocr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1054,7 +1055,7 @@ func TestHandleNvidia_ClaudeCodeSessionHeader_InjectsSessionKey(t *testing.T) {
 	anthReq := &AnthropicRequest{
 		Model:     "claude-sonnet-4-5",
 		MaxTokens: func() *int { v := 50; return &v }(),
-		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+		Messages:  []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
 	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
@@ -1095,7 +1096,7 @@ func TestHandleNvidia_NoClaudeSessionHeader_FallsBackToExtractSessionKey(t *test
 	anthReq := &AnthropicRequest{
 		Model:     "claude-sonnet-4-5",
 		MaxTokens: func() *int { v := 50; return &v }(),
-		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+		Messages:  []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	body, _ := json.Marshal(anthReq)
 	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
@@ -1114,5 +1115,3 @@ func TestHandleNvidia_NoClaudeSessionHeader_FallsBackToExtractSessionKey(t *test
 		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
-
-

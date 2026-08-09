@@ -47,5 +47,3 @@ func (l *RateLimiter) Allow(userID string, limit int) bool {
 	l.userRequests[userID] = validReqs
 	return true
 }
-
-

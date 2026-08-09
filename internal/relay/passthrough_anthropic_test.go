@@ -286,6 +286,7 @@ func accumulateContent(chunks []map[string]interface{}) string {
 	}
 	return sb.String()
 }
+
 // parseOpenAIChunks 从 SSE 输出里提取所有 data 行的 JSON chunk,便于断言事件序列。
 func parseOpenAIChunks(t *testing.T, sse []byte) []map[string]interface{} {
 	t.Helper()

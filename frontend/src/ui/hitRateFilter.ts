@@ -113,39 +113,42 @@ export function bindPoolFilterSelect(): void {
  * computeHitRateByPool 按 state.currentPoolFilter 计算并写入缓存命中率卡片三件套:
  * valHitRate / valCached / valSavedCost / gaugeCircle。
  *
- * 口径优先级:
- *  1) stats.pools[key] 存在且 cacheEligibleInputTokens>0 → 新口径独立分子分母(各池互不串扰);
- *  2) stats.pools 缺失(远端模式)或该池暂无数据 → 回退旧三档全量口径(modelEligibleSum→
- *     totalCacheEligibleInputTokens→totalInputTokens), 与卡片改造前一致。
+ * 三态口径(修复"池桶缺失时冒充全局数"误导, 见用户反馈: 缓存token/节约成本串到 Other·日日新):
+ *  1) stats.pools 非空(已启用按池记账) 且选中池桶存在 → 严格用该池真实分子分母
+ *     (含 0 值, 不再要求 poolEligible>0 才采用), 各池/组互不串扰;
+ *  2) stats.pools 非空但选中池桶缺失 → 该池自筛选上线后从未记账, 诚实显示 0%/$0/0,
+ *     不再回退全局 totalCachedTokens 冒充该池(根治"某池无数据却显示全局 9.57B");
+ *  3) stats.pools 字段缺失(远端中继模式 app_monitor.go 远端分支不带 Pools) 或为空 map
+ *     (刚升级、尚未产生任何池增量) → 保留旧三档全量口径, 与卡片改造前一致, 零回归。
  *
- * valCached / valSavedCost 同步改为按池分子(或兜底全量分子), 三件套口径自洽。
+ * valCached / valSavedCost 同步由 totalCached 派生, 三件套口径自洽。
  */
 export function computeHitRateByPool(stats: any): void {
     if (!stats) return;
 
     const poolKey = (state.currentPoolFilter || DEFAULT_POOL);
-    const pools = stats.pools || {};
-    const ps = (pools[poolKey] !== undefined) ? pools[poolKey] : undefined;
+    const pools = stats.pools;
+    // 区分 "远端模式/空 map → 全局兜底" 与 "已启用按池记账 → 严格按池"。
+    // pools===undefined/null: 后端未下发 Pools(远端中继模式); {} 空对象: 刚升级尚未增量;
+    // 两者都视为"按池口径不可用", 回退旧三档全量, 零回归。
+    const hasPoolsField = (pools !== undefined && pools !== null);
+    const poolBucketsExist = hasPoolsField && Object.keys(pools).length > 0;
+    const ps = hasPoolsField ? pools[poolKey] : undefined;
 
     let totalCached = 0;
     let hitDenom = 0;
-    let usedNewMetric = false;
 
-    if (ps && typeof ps === 'object') {
-        const poolCached = Number(ps.cachedTokens || 0);
-        const poolEligible = Number(ps.cacheEligibleInputTokens || 0);
-        if (poolEligible > 0) {
-            totalCached = poolCached;
-            hitDenom = poolEligible;
-            usedNewMetric = true;
-        }
-    }
-
-    // 兜底: 远端模式(后端无 pools)或该池暂无数据 → 旧三档全量口径。
-    if (!usedNewMetric) {
+    if (poolBucketsExist && ps && typeof ps === 'object') {
+        // 已启用按池记账且该池桶存在: 严格用池真实值(含 0 值), 不再喂全局数。
+        totalCached = Number(ps.cachedTokens || 0);
+        hitDenom = Number(ps.cacheEligibleInputTokens || 0);
+    } else if (!poolBucketsExist) {
+        // 远端模式(pools 字段缺失) 或 刚升级尚未产生桶数据: 保留旧三档全局兜底, 零回归。
         totalCached = Number(stats.totalCachedTokens || 0);
         hitDenom = computeLegacyHitDenom(stats);
     }
+    // else: poolBucketsExist && ps 缺失 → 该池从未记账, 显式显示 0% / $0 / 0
+    //       (不再回退全局冒充该池, 根治"Other·日日新 无数据却显示全局 9.57B")。
 
     let rawHitRate = hitDenom > 0 ? (totalCached / hitDenom * 100) : 0;
     if (rawHitRate > 100) rawHitRate = 100;
@@ -198,7 +201,8 @@ function isPoolKeyValid(key: string, groups: any[]): boolean {
 
 // computeLegacyHitDenom 复刻改造前 dashboard.ts:1445-1471 的旧三档兜底分母:
 // 1) models 里 cachedTokens>0 的模型 inTokens 之和; 2) totalCacheEligibleInputTokens; 3) totalInputTokens。
-// 仅在 stats.pools 缺失(远端模式)或该池无数据时使用, 保证远端模式零回归。
+// 仅在 stats.pools 字段缺失(远端中继模式)或为空 map(刚升级无增量)时使用, 保证这两种场景零回归;
+// 一旦按池口径已启用(至少一个池桶存在), 本函数不再触达, 避免尾包全量数冒充某个空池。
 function computeLegacyHitDenom(stats: any): number {
     const totalCached = Number(stats.totalCachedTokens || 0);
     let hitDenom = 0;

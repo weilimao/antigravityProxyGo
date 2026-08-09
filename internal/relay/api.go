@@ -304,11 +304,11 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	// Make a shallow copy to inject quotas without mutating memory stats
 	statsCopy := *stats
-	
+
 	user := h.authMgr.userMgr.GetUserByID(session.UserID)
 	if user != nil {
 		statsCopy.Quotas = user.Quotas
-		
+
 		packageName := "自定义套餐"
 		isGeminiDisabled := !user.Quotas.Gemini.EnableFixed && !user.Quotas.Gemini.EnableHourly && !user.Quotas.Gemini.EnableDaily
 		isClaudeDisabled := !user.Quotas.Claude.EnableFixed && !user.Quotas.Claude.EnableHourly && !user.Quotas.Claude.EnableDaily
@@ -325,10 +325,10 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		statsCopy.PackageName = packageName
-		
+
 		usage := make(map[string]int64)
 		resetAt := make(map[string]string)
-		
+
 		// For Gemini quotas
 		if user.Quotas.Gemini.EnableHourly && user.Quotas.Gemini.HourlyHours > 0 {
 			if u, resetStr, err := GetActiveWindow(session.UserID, "gemini", "gemini_hourly", user.Quotas.Gemini.HourlyHours, false); err == nil {

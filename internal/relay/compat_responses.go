@@ -107,7 +107,7 @@ func parseResponsesInput(items []ResponsesInputItem) []OpenAIMessage {
 			})
 		}
 	}
-	
+
 	flushPendingToolCalls()
 	return messages
 }
@@ -119,21 +119,21 @@ func parseResponsesTools(tools []ResponsesToolDef) []AnthropicTool {
 		if t.Type != "function" {
 			continue
 		}
-		
+
 		name := t.Name
 		desc := t.Description
 		params := t.Parameters
-		
+
 		if t.Function != nil && t.Function.Name != "" {
 			name = t.Function.Name
 			desc = t.Function.Description
 			params = t.Function.Parameters
 		}
-		
+
 		if name == "" {
 			continue
 		}
-		
+
 		anthropicTools = append(anthropicTools, AnthropicTool{
 			Name:        name,
 			Description: desc,

@@ -154,7 +154,7 @@ func TestResponsesToOpenAIChat_ToolsDefinition(t *testing.T) {
 
 func TestOpenAIChatToResponses_TextOnly(t *testing.T) {
 	resp := &OpenAIChatResponse{
-		ID:   "chatcmpl-1",
+		ID:    "chatcmpl-1",
 		Model: "moonshotai/kimi-k2.5",
 		Choices: []OpenAIChatChoice{{
 			Index: 0, Message: ChatMessage{Role: "assistant", Content: "Hello from NVIDIA"}, FinishReason: "stop",
@@ -184,7 +184,7 @@ func TestOpenAIChatToResponses_TextOnly(t *testing.T) {
 
 func TestOpenAIChatToResponses_ToolCalls(t *testing.T) {
 	resp := &OpenAIChatResponse{
-		ID:   "chatcmpl-2",
+		ID:    "chatcmpl-2",
 		Model: "z-ai/glm-5.2",
 		Choices: []OpenAIChatChoice{{
 			Index: 0,
@@ -192,8 +192,8 @@ func TestOpenAIChatToResponses_ToolCalls(t *testing.T) {
 				Role:    "assistant",
 				Content: "",
 				ToolCalls: []ChatToolCall{{
-					ID:   "call_abc",
-					Type: "function",
+					ID:       "call_abc",
+					Type:     "function",
 					Function: ChatToolCallFunction{Name: "run_bash", Arguments: `{"cmd":"ls"}`},
 				}},
 			},
@@ -250,7 +250,7 @@ func TestOpenAIChatSSEToResponsesSSE_TextStream(t *testing.T) {
 	writeSSEData(&sse, mustJSONString(map[string]interface{}{
 		"id": "chatcmpl-s1", "object": "chat.completion.chunk",
 		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{}, "finish_reason": "stop"}},
-		"usage":  map[string]int{"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9},
+		"usage":   map[string]int{"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9},
 	}))
 	sse.WriteString("data: [DONE]\n\n")
 
@@ -328,7 +328,7 @@ func TestOpenAIChatSSEToResponsesSSE_ToolCallStream(t *testing.T) {
 			"index": 0,
 			"delta": map[string]interface{}{
 				"tool_calls": []map[string]interface{}{{
-					"index": 0,
+					"index":    0,
 					"function": map[string]string{"arguments": "\"ls\"}"},
 				}},
 			},
@@ -338,7 +338,7 @@ func TestOpenAIChatSSEToResponsesSSE_ToolCallStream(t *testing.T) {
 	writeSSEData(&sse, mustJSONString(map[string]interface{}{
 		"id": "chatcmpl-t1", "object": "chat.completion.chunk",
 		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{}, "finish_reason": "tool_calls"}},
-		"usage":  map[string]int{"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+		"usage":   map[string]int{"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
 	}))
 	sse.WriteString("data: [DONE]\n\n")
 
@@ -503,7 +503,7 @@ func TestHandleNvidia_ResponsesStream(t *testing.T) {
 		writeSSEToWriter(w, flusher, mustJSONString(map[string]interface{}{
 			"id": "chatcmpl-rs1", "object": "chat.completion.chunk",
 			"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{}, "finish_reason": "stop"}},
-			"usage":  map[string]int{"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+			"usage":   map[string]int{"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
 		}))
 		fmtFprintf(w, "data: [DONE]\n\n")
 		if flusher != nil {
@@ -674,7 +674,7 @@ func TestOpenAIChatSSEToResponsesSSE_ReasoningStream(t *testing.T) {
 	writeSSEData(&sse, mustJSONString(map[string]interface{}{
 		"id": "chatcmpl-rs-reason", "object": "chat.completion.chunk",
 		"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{}, "finish_reason": "stop"}},
-		"usage":  map[string]int{"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+		"usage":   map[string]int{"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
 	}))
 	sse.WriteString("data: [DONE]\n\n")
 
@@ -861,7 +861,7 @@ func TestOpenAIChatToResponses_ReasoningAsText(t *testing.T) {
 	defer SetGlobalReasoningAsText(false)
 
 	resp := &OpenAIChatResponse{
-		ID:   "chatcmpl-rat2",
+		ID:    "chatcmpl-rat2",
 		Model: "moonshotai/kimi-k2.5",
 		Choices: []OpenAIChatChoice{{
 			Index: 0,
@@ -917,7 +917,7 @@ func textOfDelta(events []sseEvent, eventName string) string {
 // 回译出的 Responses output[0] 为 reasoning_text message item,正文 output[1] 为 output_text。
 func TestOpenAIChatToResponses_ReasoningItem(t *testing.T) {
 	resp := &OpenAIChatResponse{
-		ID:   "chatcmpl-rc",
+		ID:    "chatcmpl-rc",
 		Model: "moonshotai/kimi-k2.5",
 		Choices: []OpenAIChatChoice{{
 			Index: 0,

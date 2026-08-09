@@ -15,27 +15,27 @@ import (
 )
 
 type ModelQuota struct {
-	EnableFixed  bool   `json:"enableFixed"`
-	FixedTokens  int64  `json:"fixedTokens"`
-	ResetAt      string `json:"resetAt,omitempty"`
+	EnableFixed bool   `json:"enableFixed"`
+	FixedTokens int64  `json:"fixedTokens"`
+	ResetAt     string `json:"resetAt,omitempty"`
 
 	EnableHourly bool    `json:"enableHourly"`
 	HourlyHours  float64 `json:"hourlyHours"`
 	HourlyTokens int64   `json:"hourlyTokens"`
 
-	EnableDaily  bool    `json:"enableDaily"`
-	DailyDays    float64 `json:"dailyDays"`
-	DailyTokens  int64   `json:"dailyTokens"`
+	EnableDaily bool    `json:"enableDaily"`
+	DailyDays   float64 `json:"dailyDays"`
+	DailyTokens int64   `json:"dailyTokens"`
 }
 
 type UserQuotas struct {
-	Gemini ModelQuota `json:"gemini"`
-	Claude ModelQuota `json:"claude"`
-	Nvidia ModelQuota `json:"nvidia"`
-	ValidDuration int `json:"validDuration"`
-	ValidUnit     string `json:"validUnit"` // "days", "months", "years"
-	ExpireAt      int64  `json:"expireAt"`
-	RateLimit     int    `json:"rateLimit"` // 每分钟请求次数限制，0 表示默认 30
+	Gemini        ModelQuota `json:"gemini"`
+	Claude        ModelQuota `json:"claude"`
+	Nvidia        ModelQuota `json:"nvidia"`
+	ValidDuration int        `json:"validDuration"`
+	ValidUnit     string     `json:"validUnit"` // "days", "months", "years"
+	ExpireAt      int64      `json:"expireAt"`
+	RateLimit     int        `json:"rateLimit"` // 每分钟请求次数限制，0 表示默认 30
 }
 
 type UserAPIKey struct {

@@ -33,7 +33,7 @@ func TestInferOwnedBy(t *testing.T) {
 		{"glm-4.6", "zhipu"},
 		{"nvidia/llama-3.1-nemotron-70b-instruct", "nvidia"},
 		{"something-nemotron-70b", "nvidia"},
-		{"", "openai"},        // 空模型兜底 openai
+		{"", "openai"},               // 空模型兜底 openai
 		{"unknown-random", "openai"}, // 兜底 openai(不再是 google)
 	}
 	for _, c := range cases {

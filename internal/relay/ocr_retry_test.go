@@ -104,7 +104,7 @@ func TestIsOcrRetryableErr_NetTimeout(t *testing.T) {
 type netTimeoutError struct{}
 
 func (netTimeoutError) Error() string   { return "i/o timeout" }
-func (netTimeoutError) Timeout() bool    { return true }
+func (netTimeoutError) Timeout() bool   { return true }
 func (netTimeoutError) Temporary() bool { return false }
 
 func TestIsOcrRetryableErr_HTTPStatus(t *testing.T) {
@@ -500,9 +500,9 @@ func TestOcrImageUncachedViaRoute_RetryOnEOFThenSuccess(t *testing.T) {
 // 断言两次请求都带守卫头(自递归守卫语义在重试下不破)。
 func TestOcrImageUncachedViaRoute_GuardHeaderResentOnRetry(t *testing.T) {
 	var (
-		hits       int32
-		selfSeen   int32
-		authSeen   int32
+		hits     int32
+		selfSeen int32
+		authSeen int32
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&hits, 1)

@@ -272,8 +272,8 @@ func TestPassthroughForward_ClientCancelNoCooldown(t *testing.T) {
 			TargetGroupID:  "aliyun",
 			Expose:         true,
 		}}},
-		logFn:   func(string) {},
-		client:  &http.Client{Timeout: 5 * time.Second},
+		logFn:        func(string) {},
+		client:       &http.Client{Timeout: 5 * time.Second},
 		streamClient: &http.Client{Timeout: 0},
 	}
 
@@ -465,7 +465,7 @@ func TestPassthroughForward_AnthropicUpstream_PatchesMissingInputTokens(t *testi
 	mgr.AddAccount(&account.Account{
 		ID: "anth-1", Email: "anth@pool", Provider: "other", AccessToken: "k",
 		BaseURL: upstream.URL, Enabled: true, GroupID: "anthpool", GroupName: "Anthropic 组",
-		Formats:  []string{"anthropic"},
+		Formats:   []string{"anthropic"},
 		Cooldowns: map[string]int64{},
 	})
 
@@ -539,7 +539,7 @@ func TestPassthroughForward_AnthropicUpstream_NonStreamPatchesInputTokens(t *tes
 	mgr.AddAccount(&account.Account{
 		ID: "anth-2", Email: "anth2@pool", Provider: "other", AccessToken: "k",
 		BaseURL: upstream.URL, Enabled: true, GroupID: "anthpool", GroupName: "Anthropic 组",
-		Formats:  []string{"anthropic"},
+		Formats:   []string{"anthropic"},
 		Cooldowns: map[string]int64{},
 	})
 
@@ -580,4 +580,3 @@ func TestPassthroughForward_AnthropicUpstream_NonStreamPatchesInputTokens(t *tes
 		t.Errorf("non-stream usage.output_tokens must pass through intact (7), got %d", resp.Usage.OutputTokens)
 	}
 }
-

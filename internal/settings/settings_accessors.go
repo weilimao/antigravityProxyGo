@@ -207,6 +207,16 @@ func (m *Manager) GetRelayModelMapping() []ModelMappingEntry {
 	return m.config.RelayModelMapping
 }
 
+// GetRelayModelMappingSafe 是 GetRelayModelMapping 的 nil 安全版本:Manager 未初始化(m==nil,
+// 测试构造 handler 或未注入时)返回空切片。供 relay 层 buildExposedModelMap 等在 settingsMgr
+// 为 nil 时兜底读取映射,避免 test nil-deref 与生产降级路径 panic。
+func (m *Manager) GetRelayModelMappingSafe() []ModelMappingEntry {
+	if m == nil {
+		return []ModelMappingEntry{}
+	}
+	return m.GetRelayModelMapping()
+}
+
 // SetRelayModelMapping 在写锁内计算被删除的默认映射,再落盘,逻辑与原实现一致。
 func (m *Manager) SetRelayModelMapping(val []ModelMappingEntry) error {
 	return setSetting(m, func(c *Config, v []ModelMappingEntry) {

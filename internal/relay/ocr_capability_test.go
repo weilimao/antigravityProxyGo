@@ -72,7 +72,7 @@ func TestHeuristicModelSupportsImage_NonVisionTextModels(t *testing.T) {
 		"o1-mini", "o1-preview",
 		"qwen-plus", "qwen-max", // qwen-max 非视觉系(不带 -vl)
 		"glm-4-plus", "glm-4-air", // glm-4 系非视觉变体
-		"llama-3.3-70b-instruct", // 无 -vision 后缀
+		"llama-3.3-70b-instruct",             // 无 -vision 后缀
 		"claude-3-haiku", "claude-3-5-haiku", // haiku 系非 vision
 		"unknown-random-model",
 	} {
@@ -236,8 +236,8 @@ func nvidiaChatUpstreamAssertingImageURL(t *testing.T, captured *map[string]inte
 		resp := map[string]interface{}{
 			"id": "chatcmpl-vis", "object": "chat.completion", "model": "qwen-vl-plus",
 			"choices": []map[string]interface{}{{
-				"index": 0,
-				"message": map[string]interface{}{"role": "assistant", "content": "已看到截图"},
+				"index":         0,
+				"message":       map[string]interface{}{"role": "assistant", "content": "已看到截图"},
 				"finish_reason": "stop",
 			}},
 			"usage": map[string]interface{}{"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
@@ -294,7 +294,7 @@ func TestHandleNvidia_MultimodalUpstream_SkipsDowngrade_ImagePreserved(t *testin
 	// (调用会注入 routeResolver 把 OCR 出站改路由到其它号池,破坏本地 Gemini mock)。
 
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5",
+		Model:     "claude-sonnet-4-5",
 		MaxTokens: func() *int { v := 200; return &v }(),
 		Messages: []AnthropicMessage{{
 			Role: "user",
@@ -348,8 +348,8 @@ func TestHandleNvidia_MultimodalUpstream_TextFirstOrder_PreservesBoth(t *testing
 		resp := map[string]interface{}{
 			"id": "chatcmpl-tf", "object": "chat.completion", "model": "qwen-vl-plus",
 			"choices": []map[string]interface{}{{
-				"index": 0,
-				"message": map[string]interface{}{"role": "assistant", "content": "已看到报错截图"},
+				"index":         0,
+				"message":       map[string]interface{}{"role": "assistant", "content": "已看到报错截图"},
 				"finish_reason": "stop",
 			}},
 			"usage": map[string]interface{}{"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
@@ -365,7 +365,7 @@ func TestHandleNvidia_MultimodalUpstream_TextFirstOrder_PreservesBoth(t *testing
 
 	// 关键:text 在前、image 在后(与 image-first 测试互补,锁定乱序/丢字段回归)。
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5",
+		Model:     "claude-sonnet-4-5",
 		MaxTokens: func() *int { v := 200; return &v }(),
 		Messages: []AnthropicMessage{{
 			Role: "user",
@@ -493,7 +493,7 @@ func TestHandleNvidia_NonMultimodalUpstream_DowngradesAsBefore(t *testing.T) {
 	// 不调 WireOcrRouteResolver:glm-5.2 纯启发式 miss → 走降级,且 OCR 出站保持本地 Gemini mock。
 
 	anthReq := &AnthropicRequest{
-		Model:    "claude-sonnet-4-5",
+		Model:     "claude-sonnet-4-5",
 		MaxTokens: func() *int { v := 200; return &v }(),
 		Messages: []AnthropicMessage{{
 			Role: "user",

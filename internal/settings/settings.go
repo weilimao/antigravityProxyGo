@@ -49,6 +49,11 @@ type ModelMappingEntry struct {
 	//   - 显式 false:强制视为非多模态,即使名字命中启发式白名单也仍走 OCR 降级(否决冷门误判)。
 	// 指针类型与 InjectChatTemplateKwargs 同款,nil 视作"未配置",非 nil 视作"已声明"。
 	Multimodal *bool `json:"multimodal,omitempty"`
+	// MaxInputTokens 是该模型的真实上下文窗口(input 上限, token 数),如 128000 / 262144 / 200000。
+	// 仅用作 /v1/models(含 /nvidia/v1/models)Anthropic 形态响应的 max_input_tokens 字段声明,
+	// 供客户端模型列表按官方 Models API schema 对齐;零值(缺省)表示不声明,沿用 Anthropic 官方
+	// 对未知模型名的默认窗口认知。指针类型与 Multimodal 同款,nil/0 视作"未配置"。
+	MaxInputTokens *int64 `json:"maxInputTokens,omitempty"`
 }
 
 // IsMultimodal 返回该映射项是否声明为多模态模型。
@@ -353,6 +358,11 @@ type ManagerInterface interface {
 	GetResolvedDebuggerLogPath() string
 	GetNvidiaPreferredModels() []string
 	SetNvidiaPreferredModels(val []string) error
+	// GetMaxInputTokensByModel: 按「上游模型 id → 上下文窗口」解析模型列表 max_input_tokens
+	// 声明的查询函数。allowlist 为空不过滤;fallback 为未显式配置时的兜底窗口(0=不声明)。
+	GetMaxInputTokensByModel(allowlist []string, fallback int64) func(string) int64
+	// GetRelayModelMappingSafe: GetRelayModelMapping 的 nil 安全版本(测试/未注入 Manager 时返回空)。
+	GetRelayModelMappingSafe() []ModelMappingEntry
 	// GetRelayModelRoutes/SetRelayModelRoutes:「按模型路由到号池」规则表。
 	// /route/* 专属入口按入站 model 命中规则,分发到 TargetProvider 号池。
 	GetRelayModelRoutes() []ModelRouteRule

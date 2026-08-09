@@ -17,9 +17,9 @@ import (
 
 // ChatCompressor 持有压缩参数。无状态，字段仅作配置载体。
 type ChatCompressor struct {
-	ThresholdTokens      int // 触发压缩的估算 token 阈值（超过才启动），默认 80000
-	KeepToolResults      int // L1 微压缩保留最近多少个 tool 结果原文，默认 4
-	MaxCompressRetries   int // 单请求压缩重试断路器上限，默认 3
+	ThresholdTokens    int // 触发压缩的估算 token 阈值（超过才启动），默认 80000
+	KeepToolResults    int // L1 微压缩保留最近多少个 tool 结果原文，默认 4
+	MaxCompressRetries int // 单请求压缩重试断路器上限，默认 3
 }
 
 // ChatCompressorDefaults 是开箱即用的默认参数，供 settings.go 默认值与调用方兜底复用。
@@ -218,7 +218,7 @@ func microCompress(msgs []ChatMessage, keepN int) ([]ChatMessage, bool) {
 //   - user 消息单独成组(或与紧随其后的 tool 结果合并到下一组,简化为各 user 单独成组);
 // 返回分组切片,每组的 (start,end) 半开区间在原 msgs 中的下标。
 type messageGroup struct {
-	start, end int // [start,end) 半开区间,下标指向原 msgs
+	start, end int  // [start,end) 半开区间,下标指向原 msgs
 	keepLock   bool // system 锁定不可删
 }
 

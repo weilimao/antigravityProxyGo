@@ -70,6 +70,39 @@ func formatNvidiaModelList(ids []string, isAnthropic bool) map[string]interface{
 	}
 }
 
+// formatNvidiaModelListAnthropic 组 Anthropic 形态模型列表并附带每个模型声明的上下文窗口
+// (max_input_tokens 字段)。lookup 为「上游模型 id → 上下文窗口」映射:
+//   - id 命中且窗口非 0 → 输出 max_input_tokens,对齐 Anthropic 官方 Models API schema;
+//   - 未命中 → 不输出该字段(沿用 Anthropic 对未知模型名的默认窗口认知),与旧行为逐字节等价。
+//
+// 与 formatNvidiaModelList(filtered, true) 的差异仅在于每条目附带 context window;调用方
+// (handleNvidiaModels 路径 (b))显式走本函数而非 formatNvidiaModelList 的 anthropic 分支,避免
+// 模型列表对外形态分裂。
+func formatNvidiaModelListAnthropic(ids []string, lookup func(string) int64) map[string]interface{} {
+	if ids == nil {
+		ids = []string{}
+	}
+	type anthropicModel struct {
+		Type           string `json:"type"`
+		ID             string `json:"id"`
+		MaxInputTokens int64  `json:"max_input_tokens,omitempty"`
+	}
+	anthModels := make([]anthropicModel, 0, len(ids))
+	for _, id := range ids {
+		m := anthropicModel{Type: "model", ID: id}
+		if lookup != nil {
+			if win := lookup(id); win > 0 {
+				m.MaxInputTokens = win
+			}
+		}
+		anthModels = append(anthModels, m)
+	}
+	return map[string]interface{}{
+		"data":     anthModels,
+		"has_more": false,
+	}
+}
+
 // filterNvidiaModelIDs 把上游 id 列表按全局"NVIDIA 专属模型清单"过滤。
 // preferred 为空 → 原样返回全部(不过滤，语义=放行全量)；
 // preferred 非空 → 仅保留命中清单的 id，保持原顺序(命中顺序，非清单顺序)。
@@ -143,6 +176,13 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 	var available []*account.Account
 	if h.accountMgr != nil {
 		available = h.accountMgr.GetEnabledNvidiaAccounts()
+	}
+
+	// 查询函数:按上游模型 id 取声明的上下文窗口(映射条目 MaxInputTokens;未配置回退
+	// defaultNvidiaContextWindow)。settingsMgr==nil(测试构造)时返回 nil,format 层不附加字段。
+	var windowLookup func(string) int64
+	if h.settingsMgr != nil {
+		windowLookup = h.settingsMgr.GetMaxInputTokensByModel(preferred, defaultNvidiaContextWindow)
 	}
 
 	if len(available) == 0 {
@@ -226,8 +266,9 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 	filtered := filterNvidiaModelIDs(ids, preferred)
 
 	if isAnthropic {
-		// 路径 (b):Anthropic 入站 → 组 Anthropic 形态回写
-		writeJSON(w, http.StatusOK, formatNvidiaModelList(filtered, true))
+		// 路径 (b):Anthropic 入站 → 组 Anthropic 形态回写,并为每个模型附带声明/兜底的上下文窗口
+		// (windowLookup 按上游 id 解析;settingsMgr 为 nil 时不附加,测试构造兼容)。
+		writeJSON(w, http.StatusOK, formatNvidiaModelListAnthropic(filtered, windowLookup))
 		return
 	}
 
@@ -249,6 +290,12 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(bodyBytes)
 }
+
+// defaultNvidiaContextWindow 是 NVIDIA 号池模型未显式配置 MaxInputTokens 时的兜底上下文窗口。
+// 128000 对齐 NVIDIA NIM 上主流的 DeepSeek/RTX 系模型的真实 input 窗口;上游 GPU 上下文各异,
+// 声明一个合理默认让客户端模型列表按 Anthropic schema 有值、便于未来客户端读取(见
+// formatNvidiaModelListAnthropic)。映射条目显式配置优先覆盖本默认。
+const defaultNvidiaContextWindow int64 = 128_000
 
 // truncateBody 截断响应体用于日志输出，避免超长日志。
 func truncateBody(body []byte, maxLen int) string {

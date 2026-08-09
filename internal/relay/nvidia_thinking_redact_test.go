@@ -247,7 +247,7 @@ func TestHandleNvidia_NoThinkingFieldAndRedactHeader_NoInjection(t *testing.T) {
 		"max_tokens":    32000,
 		"stream":        false,
 		"output_config": map[string]interface{}{"effort": "max"},
-		"messages":       []map[string]interface{}{{"role": "user", "content": "hi"}},
+		"messages":      []map[string]interface{}{{"role": "user", "content": "hi"}},
 	}
 	body, _ := json.Marshal(anthReq)
 	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytes.NewReader(body))
@@ -286,7 +286,7 @@ func TestHandleNvidia_AdaptiveThinking_InjectsDespiteRedactHeader(t *testing.T) 
 		"stream":        false,
 		"thinking":      map[string]interface{}{"type": "adaptive"},
 		"output_config": map[string]interface{}{"effort": "max"},
-		"messages":       []map[string]interface{}{{"role": "user", "content": "hi"}},
+		"messages":      []map[string]interface{}{{"role": "user", "content": "hi"}},
 	}
 	body, _ := json.Marshal(anthReq)
 	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytes.NewReader(body))
@@ -317,8 +317,8 @@ func TestHandleNvidia_Disabled_NoInjection(t *testing.T) {
 
 	anthReq := map[string]interface{}{
 		"model":      "claude-sonnet-4-5",
-		"max_tokens":  32000,
-		"stream":      false,
+		"max_tokens": 32000,
+		"stream":     false,
 		"thinking":   map[string]interface{}{"type": "disabled"},
 		"messages":   []map[string]interface{}{{"role": "user", "content": "hi"}},
 	}
@@ -360,11 +360,11 @@ func TestHandleNvidia_Responses_ReasoningEffortHigh_Injects(t *testing.T) {
 
 	// 真实 codex /v1/responses body:顶层 reasoning_effort + input[]
 	respReq := map[string]interface{}{
-		"model":             "gpt-5",
-		"reasoning_effort":  "high",
-		"stream":            false,
-		"instructions":      "You are a coding agent.",
-		"input":             []map[string]interface{}{{"type": "message", "role": "user", "content": "hi"}},
+		"model":            "gpt-5",
+		"reasoning_effort": "high",
+		"stream":           false,
+		"instructions":     "You are a coding agent.",
+		"input":            []map[string]interface{}{{"type": "message", "role": "user", "content": "hi"}},
 	}
 	body, _ := json.Marshal(respReq)
 	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/responses", bytes.NewReader(body))

@@ -29,11 +29,15 @@ type GlobalStats struct {
 	TotalCachedTokens int `json:"totalCachedTokens"`
 	// TotalCacheEligibleInputTokens 是“缓存命中率”分母专用累加器: 仅在 TrackRequest
 	// (gemini/claude 直连链路, 上游响应携带真实 cachedTokens) 时累加 inputTokens,
-	// 刻意不含 TrackRequestForModel 走的 NVIDIA 号池链路——NVIDIA 上游(OpenAI Chat 协议)
-	// 无 cache 概念, cachedTokens 恒为 0, 若其 input 计入分母会永久稀释命中率。
-	// TotalInputTokens(口径不变, 含 NVIDIA) 仍用于总 Token / 成本 / 模型表 / 综合趋势,
-	// 二者各司其职: 前者是命中率分母, 后者是“含 NVIDIA 的全部输入”分母。
+	// 刻意不含 TrackRequestForModel 走的 NVIDIA 号池链路，且刻意不含 TAB 代码补全模型 (IsTabModel)。
 	TotalCacheEligibleInputTokens int                    `json:"totalCacheEligibleInputTokens"`
+	TabExcludedFromEligible       bool                   `json:"tabExcludedFromEligible,omitempty"`
+	// BackfillForcedDone 是「Pools["antigravity"] 强制全量回填」一次性迁移标志。
+	// 修正 8/8 上线后老 stats.json 已带零散 Pools["antigravity"](reqs=121 而非 Models 全量
+	// 几千 M cached)的历史脏态: 首次 LoadFromDisk 检测到该标志缺失时, 调
+	// BackfillPoolFromModelsForce 用 Models 表 Google 族全量覆盖式重算桶标量, 置 true 落盘,
+	// 再次启动即跳过该段重算(避免每次启动都从 Models 重算覆盖正在增长的真实增量)。
+	BackfillForcedDone            bool                   `json:"backfillForcedDone,omitempty"`
 	TotalCost                     float64                `json:"totalCost"`
 	TotalRetries                  int                    `json:"totalRetries"`
 	TotalErrors                   int                    `json:"totalErrors"`
@@ -229,9 +233,11 @@ func (t *Tracker) TrackRequest(modelName string, inTokens, outTokens, cachedToke
 	t.stats.TotalInputTokens += inTokens
 	t.stats.TotalOutputTokens += outTokens
 	t.stats.TotalCachedTokens += cachedTokens
-	// 命中率分母: 仅 gemini/claude 直连链路(本方法)累加, NVIDIA 经 TrackRequestForModel
-	// 走专属方法不触达此行, 故其 input 不会稀释缓存命中率(详见 TotalCacheEligibleInputTokens 注释)。
-	t.stats.TotalCacheEligibleInputTokens += inTokens
+	// 命中率分母: 仅 gemini/claude 直连链路(本方法)且非 TAB 补全模型累加, NVIDIA 经 TrackRequestForModel
+	// 走专属方法不触达此行, TAB 经 IsTabModel 过滤不触达此行, 均不会稀释缓存命中率。
+	if !IsTabModel(modelName) {
+		t.stats.TotalCacheEligibleInputTokens += inTokens
+	}
 	t.stats.TotalCost = math.Round((t.stats.TotalCost+cost)*1000000.0) / 1000000.0
 
 	// 2. Update model specific stats
@@ -422,6 +428,7 @@ func (t *Tracker) GetRecentRequestCacheStatus() string {
 // 在手工组装 stats-updated payload 时携带本地 nvidiaTrends (该分支走 remote query 不
 // 调 GetPayload, 故需单独取)。线程安全: 读锁内值拷贝每个 HourlyTrend, 与 GetPayload 的
 // trendsCopy 同口径, 避免返回内部切片别名导致的并发写竞争。
+
 func (t *Tracker) GetNvidiaTrends() []*HourlyTrend {
 	t.RLock()
 	defer t.RUnlock()
@@ -925,6 +932,35 @@ func (t *Tracker) LoadFromDisk() {
 
 	for _, req := range t.requests {
 		req.RequestBody = TruncateRequestBody(req.RequestBody)
+	}
+
+	// 存量按池口径回填: 老 stats.json 的 Pools 只有 TrackRequestForPool 上线后的零散增量,
+	// antigravity 号池真实历史(自 6/12 的 gemini/claude/v1internal 直连与 daily-cloudcode-pa
+	// 翻译链)一直只累计在 Models/trends/全局标量。此处用完 Models 表一次性反推归并进
+	// Pools["antigravity"], 命中率卡片按池筛选才能反映用户真实的几千 M 缓存, 否则与
+	// NVIDIA/Other 桶(各自有完整中继记账)口径严重不对齐。只写 Pools 子聚合, 全局标量 / Models /
+	// trends 零回归。
+	//
+	// 双轨回填(关键, 适配两种历史状态):
+	//   - 空白起点(Pools["antigravity"] 不存在或 reqs=0): backfillPoolFromModelsLocked 叠加合并, 幂等。
+	//   - 脏态起点(Pools["antigravity"] 已有 8/8 上线后零散增量 reqs=121 但 Models 全量未并入):
+	//     backfillPoolFromModelsLocked 的幂等守卫(reqs>0 跳过)会错误拦截, 导致全量永不入桶。
+	//     一次性迁移标志 BackfillForcedDone 缺失时, 改走 backfillPoolFromModelsForceLocked 用
+	//     Models 全量覆盖式重算桶标量, 完成后置 BackfillForcedDone=true 落盘, 下次启动不再重算。
+	t.backfillPoolFromModelsLocked()
+	if !t.stats.BackfillForcedDone {
+		t.backfillPoolFromModelsForceLocked()
+		t.stats.BackfillForcedDone = true
+		t.scheduleSave()
+	}
+
+	// 历史 TAB 分母一次性重算修复: 若从未执行过 TAB 剔除迁移, 依据 Models 模型表重新精算出非 TAB 分母, 仅触发 1 次。
+	// 仅重算「全局」TotalCacheEligibleInputTokens, 刻意不覆盖 Pools["antigravity"].CacheEligibleInputTokens
+	// (池分母由 TrackRequestForPool/Force 各自按池累加, 全局与池分母两套独立口径, 串扰会让池命中率暴跌到 0)。
+	if !t.stats.TabExcludedFromEligible {
+		t.RecalculateCacheEligibleTokensLocked()
+		t.stats.TabExcludedFromEligible = true
+		t.scheduleSave()
 	}
 
 	if len(t.trends) <= 6 {

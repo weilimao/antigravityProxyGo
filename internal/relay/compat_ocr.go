@@ -15,7 +15,8 @@ import (
 // ocrOwnerKey 返回 OCR 缓存键的首维隔离键:会话级 sessionKey 优先,空则回退 UserKey。
 // 抽出便于 OCRService.OcrImage / OcrImageCacheOnlyLookup 共享一致的取键口径。
 // 设计:sessionKey 非空 → 按会话隔离(同用户多会话不共享缓存,语义更准且与日志会话 ID 对齐);
-//      sessionKey 空 → 回退 UserKey(单测与未传 sessionKey 的旧调用,行为不变)。
+//
+//	sessionKey 空 → 回退 UserKey(单测与未传 sessionKey 的旧调用,行为不变)。
 func ocrOwnerKey(userSession *RelaySession) string {
 	if userSession == nil {
 		return ""

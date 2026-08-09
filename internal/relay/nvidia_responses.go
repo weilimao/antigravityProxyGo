@@ -111,26 +111,26 @@ func ResponsesToOpenAIChat(bodyBytes []byte, upstreamModel string) (*OpenAIChatR
 
 // ResponsesResponse 是回译给 codex 的 Responses 顶层对象。
 type ResponsesResponse struct {
-	ID        string                 `json:"id"`
-	Object    string                 `json:"object"` // 固定 "response"
-	CreatedAt int64                  `json:"created_at"`
-	Status    string                 `json:"status"` // 固定 "completed"
-	Model     string                 `json:"model,omitempty"`
-	Output    []ResponsesOutputItem  `json:"output"`
-	Usage     ResponsesUsage         `json:"usage"`
+	ID        string                `json:"id"`
+	Object    string                `json:"object"` // 固定 "response"
+	CreatedAt int64                 `json:"created_at"`
+	Status    string                `json:"status"` // 固定 "completed"
+	Model     string                `json:"model,omitempty"`
+	Output    []ResponsesOutputItem `json:"output"`
+	Usage     ResponsesUsage        `json:"usage"`
 }
 
 // ResponsesOutputItem 是 Responses output[] 的统一条目。
 // 文本条目用 Type="message" + Content；工具调用条目用 Type="function_call" + Name/CallID/Arguments。
 type ResponsesOutputItem struct {
-	Type      string                   `json:"type"`
-	ID        string                   `json:"id,omitempty"`
-	Role      string                   `json:"role,omitempty"`
-	Status    string                   `json:"status,omitempty"`
-	Content   []ResponsesContentPart   `json:"content,omitempty"`
-	CallID    string                   `json:"call_id,omitempty"`
-	Name      string                   `json:"name,omitempty"`
-	Arguments string                   `json:"arguments,omitempty"`
+	Type      string                 `json:"type"`
+	ID        string                 `json:"id,omitempty"`
+	Role      string                 `json:"role,omitempty"`
+	Status    string                 `json:"status,omitempty"`
+	Content   []ResponsesContentPart `json:"content,omitempty"`
+	CallID    string                 `json:"call_id,omitempty"`
+	Name      string                 `json:"name,omitempty"`
+	Arguments string                 `json:"arguments,omitempty"`
 }
 
 // ResponsesContentPart 是 message 条目里的内容块（类型 output_text）。
@@ -167,10 +167,10 @@ func OpenAIChatToResponses(resp *OpenAIChatResponse, displayModel string) *Respo
 	if len(resp.Choices) == 0 {
 		// 上游无 choice：给一个空 message 兜底，避免 codex 收到空 output 报错
 		out.Output = []ResponsesOutputItem{{
-			Type:   "message",
-			ID:     "msg_nvidia_0",
-			Role:   "assistant",
-			Status: "completed",
+			Type:    "message",
+			ID:      "msg_nvidia_0",
+			Role:    "assistant",
+			Status:  "completed",
 			Content: []ResponsesContentPart{{Type: "output_text", Text: ""}},
 		}}
 		return out

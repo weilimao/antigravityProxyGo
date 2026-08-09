@@ -156,11 +156,11 @@ func executeActiveCompression(
 
 	newContents := []GeminiContent{
 		{
-			Role: "user",
+			Role:  "user",
 			Parts: []GeminiPart{{Text: fmt.Sprintf("[System notification: The following is a summary of the past conversation background to save token context. Please base your knowledge on it but focus on the subsequent messages]\n\nBackground Summary:\n%s", summaryText)}},
 		},
 		{
-			Role: "model",
+			Role:  "model",
 			Parts: []GeminiPart{{Text: "Understood. I have memorized this background summary and will assist you based on it."}},
 		},
 	}

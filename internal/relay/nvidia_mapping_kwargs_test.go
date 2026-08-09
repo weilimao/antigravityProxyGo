@@ -160,11 +160,11 @@ func TestAnthropicToOpenAIChat_OtherPool_ReasoningEffortGrades(t *testing.T) {
 
 	cases := map[string]string{
 		// thinking.type=enabled + budget_tokens 分档(resolveReasoningEffort 内部档→官方映射)
-		`{"type":"enabled","budget_tokens":1024}`:  "low",  // <4000 → low
+		`{"type":"enabled","budget_tokens":1024}`:  "low", // <4000 → low
 		`{"type":"enabled","budget_tokens":8000}`:  "medium",
 		`{"type":"enabled","budget_tokens":32000}`: "high",
-		`{"type":"adaptive"}`:                       "high", // adaptive→max→官方 high(无 max)
-		`{"type":"disabled"}`:                       "",     // 显式关闭 → 不注入
+		`{"type":"adaptive"}`:                      "high", // adaptive→max→官方 high(无 max)
+		`{"type":"disabled"}`:                      "",     // 显式关闭 → 不注入
 	}
 	for tk, want := range cases {
 		req := makeAnthReq(t, "other/openai/gpt-4o", tk, "")

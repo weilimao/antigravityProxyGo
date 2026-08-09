@@ -8,8 +8,10 @@ import (
 
 // TestResponsesToolAdjacency_CodexRepro 锁定 Codex /v1/responses 走 antigravity 号池 claude 路径的
 // tool_use / tool_result 邻接问题根因(线上 400:
-//   messages.2: `tool_use` ids were found without `tool_result` blocks immediately after:
-//   call_1785597050575167700_144
+//
+//	messages.2: `tool_use` ids were found without `tool_result` blocks immediately after:
+//	call_1785597050575167700_144
+//
 // )。
 //
 // 线上日志角色序列: [user[TTTT] model[FC(shell_command)T] user[FR(shell_command)]] (3 条)。
@@ -18,9 +20,10 @@ import (
 //
 // 本测试复刻 parseResponsesInput → TranslateOpenAIToGemini → mergeConsecutiveRoles 全链,
 // 打印最终 Gemini Contents 结构(id / parts 顺序 / 角色序列),定位是否存在:
-//   (a) FunctionCall.ID ≠ FunctionResponse.ID 的 id 失配;
-//   (b) mergeConsecutiveRoles 把 user[FR] 合入前一条 user 破坏紧邻;
-//   (c) 占位 model "OK." 插在 FR 之后导致 model[FC] 与 user[FR] 不再紧邻。
+//
+//	(a) FunctionCall.ID ≠ FunctionResponse.ID 的 id 失配;
+//	(b) mergeConsecutiveRoles 把 user[FR] 合入前一条 user 破坏紧邻;
+//	(c) 占位 model "OK." 插在 FR 之后导致 model[FC] 与 user[FR] 不再紧邻。
 func TestResponsesToolAdjacency_CodexRepro(t *testing.T) {
 	SetGlobalEnableThinkingMode(true)
 	defer SetGlobalEnableThinkingMode(true)

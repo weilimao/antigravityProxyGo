@@ -22,10 +22,11 @@ import (
 	"antigravity-proxy/internal/session"
 	"antigravity-proxy/internal/settings"
 	"antigravity-proxy/internal/stats"
+	"bytes"
 	"fmt"
-	"sync"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -84,6 +85,20 @@ type APICompatHandler struct {
 	// DowngradeOpenAIChatImagesToText)挂在 OCRService 上,各号池入口只调 L2。
 	// nil 时降级为无 OCR 能力(号池入口应在用前判空),保持单测与未注入场景兼容。
 	ocr *OCRService
+	// finalRequester 是 handleV1Internal 直连出站的实际 HTTP 执行器, 默认实现走 h.client/h.streamClient
+	// 按流式属性选择; 测试可替换为「返回伪造 200 响应」的假上游闭包, 避免单测真实出网到
+	// daily-cloudcode-pa.googleapis.com(host 由 Provider 写死, 无法注入 httptest 地址)。
+	// 不共享状态, 每次调用独立执行 httpClient.Do(req) 后返回 *http.Response。
+	finalRequester func(acc *account.Account, method, url string, reqBody []byte) (*http.Response, error)
+	// fixtureRequest 是单测夹具(仅测试设置非 nil): 在成功直连后记录 HTTP 元信息
+	// (targetURL / poolProvider) 供断言, 生产路径恒 nil, 无任何运行时行为影响。
+	fixtureRequest *directFixtures
+}
+
+// directFixtures 是 handleV1Internal 直连出站单测的请求元信息捕获(生产恒 nil,只在测试设置)。
+type directFixtures struct {
+	targetURL    string
+	poolProvider string
 }
 
 func NewAPICompatHandler(
@@ -95,7 +110,7 @@ func NewAPICompatHandler(
 	settingsMgr settings.ManagerInterface,
 	logFn func(string),
 ) *APICompatHandler {
-	return &APICompatHandler{
+	h := &APICompatHandler{
 		authMgr:               authMgr,
 		accountMgr:            accountMgr,
 		sessionRouter:         sessionRouter,
@@ -114,8 +129,25 @@ func NewAPICompatHandler(
 		// 并承接 settingsMgr / client / logFn,使 L1 与号池入口解耦。
 		ocr: NewOCRService(settingsMgr, netutil.NewClient(5*time.Minute), logFn),
 	}
+	// finalRequester 默认实现: 按目标 URL 判流式属性选 client/streamClient, 复刻既有
+	// handleV1Internal 直连出站的 Header 装配(Content-Type / Bearer / UA)。测试可替换为
+	// 返回伪造 200 响应的假上游闭包, 避免单测真实出网到写死的 daily-cloudcode-pa.googleapis.com。
+	h.finalRequester = func(acc *account.Account, method, targetURL string, reqBody []byte) (*http.Response, error) {
+		req, err := http.NewRequest(method, targetURL, bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+acc.GetAccessToken())
+		req.Header.Set("User-Agent", "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)")
+		httpClient := h.client
+		if strings.Contains(targetURL, "alt=sse") || strings.Contains(targetURL, "streamGenerateContent") {
+			httpClient = h.streamClient
+		}
+		return httpClient.Do(req)
+	}
+	return h
 }
-
 // WireOcrRouteResolver 把 OCR 引擎的跨号池路由解析闭包绑定到 APICompatHandler.
 // 注入后 OCRService 能按带前缀模型名(如 nvidia/xxx、other/openai/xxx)解析目标号池,
 // 从而把 OCR 出站从纯 Google 家族(18443)扩展到其它号池多模态模型(18444 /route)。

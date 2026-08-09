@@ -411,4 +411,3 @@ func TestEnableThinkingMode_AutoPersistToDisk(t *testing.T) {
 		t.Errorf("Expected disk config.json to contain \"enableThinkingMode\": true, got:\n%s", diskStr)
 	}
 }
-

@@ -885,7 +885,13 @@ func (h *APICompatHandler) handleStreamResponse(
 				"stop_reason":   stopReason,
 				"stop_sequence": nil,
 			},
-			"usage": map[string]interface{}{"output_tokens": outTokens},
+			// usage 双填 input/output：官方 cumulative 语义与 NVIDIA 链(openAIChatSSEToAnthropicSSEInto)
+			// 对齐。inTokens/outTokens 取自 Gemini usageMetadata(逐帧更新,末帧权威)，
+			// 让 Claude Code 客户端上下文台账拿到上游真实消耗量,而非仅 message_start 估算值。
+			"usage": map[string]interface{}{
+				"output_tokens": outTokens,
+				"input_tokens":  inTokens,
+			},
 		}
 		msgDeltaBytes, _ := json.Marshal(msgDelta)
 		fmt.Fprintf(w, "event: message_delta\ndata: %s\n\n", string(msgDeltaBytes))
@@ -897,5 +903,3 @@ func (h *APICompatHandler) handleStreamResponse(
 	// 记录用量统计
 
 }
-
-

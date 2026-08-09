@@ -469,7 +469,7 @@ func TestDowngradeOpenAIChatImagesToText_PassthroughForwardE2E(t *testing.T) {
 
 	mgr := account.NewManager()
 	mgr.AddAccount(&account.Account{
-		ID:          "ds-1", Email: "ds-1@pool", Provider: "deepseek",
+		ID: "ds-1", Email: "ds-1@pool", Provider: "deepseek",
 		AccessToken: "test-key-1", BaseURL: upstream.URL,
 		Enabled: true, Cooldowns: map[string]int64{},
 	})

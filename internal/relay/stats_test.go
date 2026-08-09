@@ -20,23 +20,23 @@ func TestRecordUsage_TotalCacheEligibleInputTokens_NvidiaExcluded(t *testing.T) 
 
 	// gemini 链路: input=200, cached=10 → 分母累加 200
 	st.RecordUsage(RelaySample{
-		ReqID:       "gemini-1",
-		UserID:      "u-gemini",
-		ModelName:   "gemini-3.5-flash",
-		InTokens:    200,
-		OutTokens:   100,
+		ReqID:        "gemini-1",
+		UserID:       "u-gemini",
+		ModelName:    "gemini-3.5-flash",
+		InTokens:     200,
+		OutTokens:    100,
 		CachedTokens: 10,
-		StatusCode:  200,
+		StatusCode:   200,
 	})
 	// NVIDIA 链路(带 nvidia/ 前缀): input=500, cached=0 → 分母不应累加
 	st.RecordUsage(RelaySample{
-		ReqID:       "nv-1",
-		UserID:      "u-nvidia",
-		ModelName:   "nvidia/z-ai/glm-5.2",
-		InTokens:    500,
-		OutTokens:   250,
+		ReqID:        "nv-1",
+		UserID:       "u-nvidia",
+		ModelName:    "nvidia/z-ai/glm-5.2",
+		InTokens:     500,
+		OutTokens:    250,
 		CachedTokens: 0,
-		StatusCode:  200,
+		StatusCode:   200,
 	})
 
 	st.RLock()

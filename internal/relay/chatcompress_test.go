@@ -11,7 +11,7 @@ import (
 func TestEstimateChatTokens(t *testing.T) {
 	// 已知文本断言:每 4 字节约 1 token,总和 ×4/3 填充
 	msgs := []ChatMessage{
-		{Role: "user", Content: strings.Repeat("a", 40)},   // 40/4 = 10
+		{Role: "user", Content: strings.Repeat("a", 40)},     // 40/4 = 10
 		{Role: "assistant", Content: strings.Repeat("b", 0)}, // 0
 	}
 	// role "user"(4/4=1) + content(40/4=10) + assistant role(9/4=2) = 13 ; ×4/3 = 17

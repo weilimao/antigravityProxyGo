@@ -36,7 +36,7 @@ import (
 // 两者块内取 url 的形态不同(Chat 的 image_url 是 {url:"..."} 对象,Responses 的
 // image_url 也可能是字符串),由 extractOpenAIImageUrl 统一兼容。
 const (
-	openAIImgBlockTypeChat     = "image_url"
+	openAIImgBlockTypeChat      = "image_url"
 	openAIImgBlockTypeResponses = "input_image"
 )
 
@@ -138,10 +138,10 @@ func (s *OCRService) DowngradeOpenAIChatImagesToText(bodyBytes []byte, userSessi
 		// 严格保持 content 数组原顺序(只对"产生输出"的块建段:非空文本块 / 图片块),
 		// 与原实现的跳过空文本、跳过非图非文本块的体感逐行一致。
 		type openAISeg struct {
-			text  string
+			text   string
 			defer_ bool // true=第二遍回填(窗内 miss 候选),text 字段此时为空待填
-			b64   string
-			mime  string
+			b64    string
+			mime   string
 		}
 		segs := make([]openAISeg, 0, len(blocks))
 		// 第一遍:逐块走文本直拼 / 图片解析。文本与窗外/失败图片当场定稿(写进 segs),

@@ -25,10 +25,10 @@ import (
 // client 指向 upstream,带超时避免测试卡死。
 func newOtherConcurrencyHandler(mgr *account.Manager, mappings []settings.ModelMappingEntry, ts *httptest.Server) *APICompatHandler {
 	h := &APICompatHandler{
-		accountMgr:  mgr,
-		settingsMgr: &stubPassThroughSettingsModelMapping{mappings: mappings},
-		logFn:       func(string) {},
-		client:      &http.Client{Timeout: 5 * time.Second},
+		accountMgr:   mgr,
+		settingsMgr:  &stubPassThroughSettingsModelMapping{mappings: mappings},
+		logFn:        func(string) {},
+		client:       &http.Client{Timeout: 5 * time.Second},
 		streamClient: &http.Client{Timeout: 0},
 	}
 	h.streamClient = &http.Client{Transport: h.client.Transport, Timeout: 0}

@@ -26,8 +26,8 @@ func TestRelayModelRoutes_Retention(t *testing.T) {
 	// 2. Set 自定义规则 → Get 一致;残项(空 Pattern / 空 Provider)被剔除。
 	want := []ModelRouteRule{
 		{Pattern: "deepseek-*", TargetProvider: "deepseek", TargetModel: "", Priority: 100, Enabled: true},
-		{Pattern: "", TargetProvider: "deepseek", Enabled: true},           // 空 Pattern → 被剔
-		{Pattern: "gpt-*", TargetProvider: "", Enabled: true},              // 空 Provider → 被剔
+		{Pattern: "", TargetProvider: "deepseek", Enabled: true}, // 空 Pattern → 被剔
+		{Pattern: "gpt-*", TargetProvider: "", Enabled: true},    // 空 Provider → 被剔
 		{Pattern: "nvidia/*", TargetProvider: "nvidia", Priority: 50, Enabled: true},
 	}
 	if err := mgr.SetRelayModelRoutes(want); err != nil {

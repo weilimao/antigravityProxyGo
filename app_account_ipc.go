@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +11,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/modelfetch"
 )
 
 // handleAccountIPC 处理账号相关的自定义 IPC 呼叫，如批量触发测试回复。
@@ -620,68 +618,14 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 // 兼容 {data:[{id}]} 与 {models:[{id}]} 两种响应形态,去重排序后返回。
 // baseURL 留空时使用 account.DefaultNvidiaBaseURL;apiKey 可为空(部分上游匿名可列模型)。
 // 抽自原 nvidia:fetch-models case,供账号级与全局专属模型清单两路复用。
+//
+// 实际探测委托 internal/modelfetch:对 Base URL 生成候选端点列表并按序尝试,
+// 命中已知「Anthropic 协议兼容子路径」(如 /anthropic、/api/coding)时剥离后缀兜底到
+// 根域 /v1/models,404/405 续试直至命中。使 DeepSeek/Kimi/智谱等把 Anthropic 挂在
+// 兼容子路径上的官方供应商也能自动取到模型,而非直接 404 落入手填兜底。
 func fetchRemoteNvidiaModels(baseURL, apiKey string) ([]string, error) {
 	if baseURL == "" {
 		baseURL = account.DefaultNvidiaBaseURL
 	}
-	baseURL = strings.TrimSpace(strings.TrimRight(baseURL, "/"))
-
-	endpoint := baseURL + "/v1/models"
-	if strings.HasSuffix(baseURL, "/v1") {
-		endpoint = baseURL + "/models"
-	}
-
-	req, err := http.NewRequestWithContext(context.Background(), "GET", endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("创建模型获取请求失败: %v", err)
-	}
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("网络请求失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var parseRes struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-		Models []struct {
-			ID string `json:"id"`
-		} `json:"models"`
-	}
-	if err := json.Unmarshal(bodyBytes, &parseRes); err != nil {
-		return nil, fmt.Errorf("解析模型数据失败: %v", err)
-	}
-
-	modelSet := make(map[string]bool)
-	for _, item := range parseRes.Data {
-		if item.ID != "" {
-			modelSet[item.ID] = true
-		}
-	}
-	for _, item := range parseRes.Models {
-		if item.ID != "" {
-			modelSet[item.ID] = true
-		}
-	}
-	models := make([]string, 0, len(modelSet))
-	for m := range modelSet {
-		models = append(models, m)
-	}
-	sort.Strings(models)
-	return models, nil
+	return modelfetch.FetchModels(baseURL, apiKey)
 }

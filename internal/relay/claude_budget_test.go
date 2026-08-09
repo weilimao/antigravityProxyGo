@@ -17,56 +17,56 @@ func TestCalcClaudeGuaranteedMaxOutput(t *testing.T) {
 		{
 			name: "claude_user_unset_max", committedBudget: 8192, maxOutputTokens: 0, isClaudeModel: true,
 			want: 8192 + ClaudeBudgetMargin,
-			desc:  "Codex/Claude Code 未设最大输出上限,守护补 budget+128 满足 max_tokens>budget",
+			desc: "Codex/Claude Code 未设最大输出上限,守护补 budget+128 满足 max_tokens>budget",
 		},
 		{
 			name: "claude_max_below_budget", committedBudget: 10000, maxOutputTokens: 3000, isClaudeModel: true,
 			want: 10000 + ClaudeBudgetMargin,
-			desc:  "客户端 max_tokens(3000) < budget(10000),必触发 Vertex 400;守护抬升到 10128",
+			desc: "客户端 max_tokens(3000) < budget(10000),必触发 Vertex 400;守护抬升到 10128",
 		},
 		{
 			name: "claude_max_equal_budget", committedBudget: 8192, maxOutputTokens: 8192, isClaudeModel: true,
 			want: 8192 + ClaudeBudgetMargin,
-			desc:  "max_tokens == budget 仍违反严格大于;守护抬升",
+			desc: "max_tokens == budget 仍违反严格大于;守护抬升",
 		},
 		{
 			name: "claude_max_just_above_budget_no_margin", committedBudget: 8192, maxOutputTokens: 8193, isClaudeModel: true,
 			want: 8192 + ClaudeBudgetMargin,
-			desc:  "max_tokens 仅比 budget 大 1,小于 budget+128 安全余量,守护仍抬升避免重译舍入踩线",
+			desc: "max_tokens 仅比 budget 大 1,小于 budget+128 安全余量,守护仍抬升避免重译舍入踩线",
 		},
 		{
 			name: "claude_max_above_margin_preserved", committedBudget: 8192, maxOutputTokens: 20000, isClaudeModel: true,
 			want: 20000,
-			desc:  "max_tokens 已 >= budget+128,不动,保留用户显式上限",
+			desc: "max_tokens 已 >= budget+128,不动,保留用户显式上限",
 		},
 		{
 			name: "claude_max_equals_required_boundary", committedBudget: 8192, maxOutputTokens: 8192 + ClaudeBudgetMargin, isClaudeModel: true,
 			want: 8192 + ClaudeBudgetMargin,
-			desc:  "max_tokens 恰 == budget+128,边界值已满足不变式,原样保留",
+			desc: "max_tokens 恰 == budget+128,边界值已满足不变式,原样保留",
 		},
 
 		// ===== 非 claude 路径:守护不动作(committedBudget>0 但 isClaudeModel=false)=====
 		{
 			name: "gemini_flash_budget_ignored", committedBudget: 8192, maxOutputTokens: 2048, isClaudeModel: false,
 			want: 2048,
-			desc:  "gemini-3.5-flash 路径 TranslateOpenAIToGemini 的 budget:8192 注入不走 Vertex Anthropic,守护不抬升",
+			desc: "gemini-3.5-flash 路径 TranslateOpenAIToGemini 的 budget:8192 注入不走 Vertex Anthropic,守护不抬升",
 		},
 		{
 			name: "gemini_pro_user_unset_ignored", committedBudget: 8192, maxOutputTokens: 0, isClaudeModel: false,
 			want: 0,
-			desc:  "gemini pro + 用户未设 max,非 claude 不触发守护,原样 0(由下游 gemini 默认处理)",
+			desc: "gemini pro + 用户未设 max,非 claude 不触发守护,原样 0(由下游 gemini 默认处理)",
 		},
 
 		// ===== claude 路径但 committedBudget<=0(includeThoughts-only / disabled / -1 自适应)=====
 		{
 			name: "claude_no_budget_ignored", committedBudget: 0, maxOutputTokens: 4096, isClaudeModel: true,
 			want: 4096,
-			desc:  "claude 但 thinking 仅 includeThoughts 无 budget 字段,不写 thinkingBudget,守护不动作",
+			desc: "claude 但 thinking 仅 includeThoughts 无 budget 字段,不写 thinkingBudget,守护不动作",
 		},
 		{
 			name: "claude_budget_negative_ignored", committedBudget: -1, maxOutputTokens: 4096, isClaudeModel: true,
 			want: 4096,
-			desc:  "-1 自适应预算不写 thinkingBudget 字段,守护对负值视为无 budget 不动作",
+			desc: "-1 自适应预算不写 thinkingBudget 字段,守护对负值视为无 budget 不动作",
 		},
 	}
 	for _, c := range cases {
@@ -158,9 +158,9 @@ func TestTranslateOpenAIToGemini_ClaudeThinkingBudgetGuard(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			openReq := &OpenAIRequest{
-				Model:    c.model,
+				Model:     c.model,
 				MaxTokens: c.maxTokens,
-				Messages: []OpenAIMessage{{Role: "user", Content: "hi"}},
+				Messages:  []OpenAIMessage{{Role: "user", Content: "hi"}},
 			}
 			gem := TranslateOpenAIToGemini(openReq)
 
@@ -260,8 +260,8 @@ func TestTranslateAnthropicToGemini_ClaudeBudgetGuard(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			anth := &AnthropicRequest{
-				Model:    c.model,
-				Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+				Model:     c.model,
+				Messages:  []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 				MaxTokens: c.maxTokens,
 			}
 			if c.thinkingType != "" {

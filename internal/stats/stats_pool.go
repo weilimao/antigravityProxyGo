@@ -130,7 +130,9 @@ func (t *Tracker) TrackRequestForPool(modelName string, inTokens, outTokens, cac
 	ps.InTokens += inTokens
 	ps.OutTokens += outTokens
 	ps.CachedTokens += cachedTokens
-	ps.CacheEligibleInputTokens += inTokens // 各池/组第一档分母累加, 与原全局口径一致
+	if !IsTabModel(modelName) {
+		ps.CacheEligibleInputTokens += inTokens // 各池/组分母累积，剔除 TAB 补全模型
+	}
 	cost := t.pricingMgr.CalculateCost(modelName, inTokens, outTokens, cachedTokens)
 	ps.Cost = math.Round((ps.Cost+cost)*1000000.0) / 1000000.0
 
@@ -175,4 +177,204 @@ func (t *Tracker) GetPoolStatsCopy() map[string]*PoolStats {
 	t.RLock()
 	defer t.RUnlock()
 	return copyPools(t.stats.Pools)
+}
+
+// BackfillPoolFromModels 一次性迁移式回填 Pools 子聚合(幂等, 仅首次生效)。
+// 公开方法: 自身上锁, 供外部(测试/运维链路)在未持锁上下文调用。
+// 内部调用方(如 LoadFromDisk 已持有 t.Lock)必须改调 backfillPoolFromModelsLocked,
+// 避免同一 goroutine 对 sync.Mutex 二次加锁自死锁(Go 的 Mutex 不可重入)。
+//
+// 设计目的: TrackRequestForPool 是 8/8 才随按池筛选引入, 老 stats.json 的 Pools 只有零散增量,
+// antigravity 号池真实全量历史(自 6/12 的 gemini/claude/v1internal 直连全部累计)只躺在
+// Models/trends/全局标量, 从未录入池桶。回填一次性把 Google 号池族模型反推归并进
+// Pools["antigravity"], 使按池卡片不再显示残缺快照(截图 76.9%/$0.49/1.57M 仅 8/8 增量)。
+//
+// 幂等守卫: 桶已有真实增量(reqs>0 || inTokens>0)即跳过。该守卫在「8/8 上线前无 Pools」的空白
+// 起点上正确; 但若老 stats.json 已带 8/8 上线后零散的 Pools["antigravity"](reqs=121 而非 Models 全量),
+// 守卫会错误地把它当成「回填已完成」而跳过, 导致存量 Models 全量(几千 M cached)永不入桶 → 池命中率
+// 用 121 reqs 的残缺快照作分子, 直到该进程再次 scheduleSave 落盘覆盖旧值。BackfillPoolFromModelsForce
+// 专用于修正这种「桶非空但全量未并入」的历史脏态。
+func (t *Tracker) BackfillPoolFromModels() {
+	t.Lock()
+	defer t.Unlock()
+	t.backfillPoolFromModelsLocked()
+}
+
+// BackfillPoolFromModelsForce 强制重算 Pools["antigravity"] 为 Models 表的 Google 号池族全量,
+// 忽略幂等守卫(已有 reqs/inTokens 也照算), 专用于修正 8/8 上线后老 stats.json 已带零散池桶、
+// 但 Models 全量历史从未并入的脏态。幂等保证: 重复调用结果一致(每次都用 Models 全量重算并覆盖,
+// 桶的真实增量在 Models 表里也有对应行, 用 Models 全量覆盖不会丢真实增量, 只补齐历史缺口)。
+//
+// 一次性迁移标志 BackfillForcedDone 由 LoadFromDisk 在首次本地迁移后置 true 落盘, 再次启动
+// 即跳过该段重算, 避免每次启动都从 Models 重算覆盖正在增长的 Pools["antigravity"] 真实增量。
+func (t *Tracker) BackfillPoolFromModelsForce() {
+	t.Lock()
+	defer t.Unlock()
+	t.backfillPoolFromModelsForceLocked()
+}
+
+// Reset
+func (t *Tracker) backfillPoolFromModelsForceLocked() {
+	if t.stats.Pools == nil {
+		t.stats.Pools = make(map[string]*PoolStats)
+	}
+
+	var agReqs, agIn, agOut, agCached, agEligibleIn int
+	var agCost float64
+	found := false
+	for mKey, m := range t.stats.Models {
+		if m == nil {
+			continue
+		}
+		if !modelIsGooglePoolFamily(mKey) {
+			continue
+		}
+		found = true
+		agReqs += m.Reqs
+		agIn += m.InTokens
+		agOut += m.OutTokens
+		agCached += m.CachedTokens
+		if !IsTabModel(mKey) {
+			agEligibleIn += m.InTokens
+		}
+		agCost += m.Cost
+	}
+	if !found {
+		// 存量里没有 Google 族模型累积(全新启动/极早版本), 不制造空桶。
+		return
+	}
+
+	ag := t.stats.Pools["antigravity"]
+	if ag == nil {
+		ag = &PoolStats{}
+		t.stats.Pools["antigravity"] = ag
+	}
+	// 强制覆盖式: 用 Models 表 Google 族全量重设桶标量, 不受「桶已有零散增量」幂等守卫拦截。
+	// 这与普通 backfill 的「叠加 +=」语义不同(普通版假设桶为空白起, 叠加等价于覆盖);
+	// force 版针对脏态桶非空但未含全量的场景, 必须覆盖而非叠加, 否则零散增量会与全量重复计数。
+	ag.Requests = agReqs
+	ag.InTokens = agIn
+	ag.OutTokens = agOut
+	ag.CachedTokens = agCached
+	ag.CacheEligibleInputTokens = agEligibleIn
+	ag.Cost = math.Round(agCost*1000000.0) / 1000000.0
+}
+
+// backfillPoolFromModelsLocked 是实际回填逻辑, 调用方必须已持有 t.Lock。
+// 见 BackfillPoolFromModels 的语义注释。仅用于空白起点的幂等首次回填; 历史脏态(桶非空但含不全)
+// 走 backfillPoolFromModelsForceLocked 修正。
+func (t *Tracker) backfillPoolFromModelsLocked() {
+	if t.stats.Pools == nil {
+		t.stats.Pools = make(map[string]*PoolStats)
+	}
+	ag := t.stats.Pools["antigravity"]
+	if ag != nil && (ag.Requests > 0 || ag.InTokens > 0) {
+		// antigravity 桶已有真实增量(存量回填已完成), 直接跳过, 幂等。
+		return
+	}
+
+	var agReqs, agIn, agOut, agCached, agEligibleIn int
+	var agCost float64
+	found := false
+	for mKey, m := range t.stats.Models {
+		if m == nil {
+			continue
+		}
+		if !modelIsGooglePoolFamily(mKey) {
+			continue
+		}
+		found = true
+		agReqs += m.Reqs
+		agIn += m.InTokens
+		agOut += m.OutTokens
+		agCached += m.CachedTokens
+		if !IsTabModel(mKey) {
+			agEligibleIn += m.InTokens
+		}
+		agCost += m.Cost
+	}
+	if !found {
+		// 存量里没有 Google 族模型累积(全新启动/极早版本), 不制造空桶。
+		return
+	}
+
+	if ag == nil {
+		ag = &PoolStats{}
+		t.stats.Pools["antigravity"] = ag
+	}
+	// 只叠加一次: 若桶已被真实增量(少数 generatecontent-200 路径)累积, 存量仍合并进同一桶。
+	ag.Requests += agReqs
+	ag.InTokens += agIn
+	ag.OutTokens += agOut
+	ag.CachedTokens += agCached
+	ag.CacheEligibleInputTokens += agEligibleIn
+	ag.Cost = math.Round((ag.Cost+agCost)*1000000.0) / 1000000.0
+}
+
+// IsTabModel 判定模型名称是否属于 TAB 代码补全模型 (如 tab_flash_lite_preview, tab_jump_flash_lite_preview 等)。
+// TAB 补全模型高频短小且绝大部分 cachedTokens 为 0, 不累加至“缓存命中率”分母 (TotalCacheEligibleInputTokens),
+// 避免稀释控制台展示的真实上下文缓存命中率。
+func IsTabModel(modelName string) bool {
+	m := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(modelName, "models/")))
+	return strings.HasPrefix(m, "tab")
+}
+
+// RecalculateCacheEligibleTokensLocked 依据 Models 模型表重新求和非 TAB 模型的输入 Token,
+// 一次性修正全局 TotalCacheEligibleInputTokens,
+// 消除历史保存的 stats.json 中被 TAB 补全请求稀释的分母。调用方必须已持有 t.Lock。
+//
+// 分母口径隔离(关键约束, bug 修复): 本方法只重算「全局」TotalCacheEligibleInputTokens,
+// 刻意不再覆盖 Pools["antigravity"].CacheEligibleInputTokens。
+//   - 全局分母 = Models 表里所有 Google 族且非 TAB 模型的 inTokens 之和
+//     (历史上 NVIDIA/Other 池也含在 Google 族里——这是历史口径, 不动);
+//   - 池分母 = 各池各自累加, 与全局分母是两套独立口径(详见 stats_pool.go 顶部注释)。
+//
+// 旧实现把全局分母直接塞进 antigravity 池桶, 等于把 NVIDIA 池的 inTokens 也算进 antigravity
+// 的命中率分母 → antigravity 池命中率 = antigravityCached / (antigravityIn + nvidiaIn + otherIn),
+// 分母被严重放大, 命中率暴跌到接近 0(截图 0.0% 的两大根因之一)。
+// 修复后池分母只由 TrackRequestForPool 按各自池累加, 本方法只管全局分母, 二者物理隔离。
+func (t *Tracker) RecalculateCacheEligibleTokensLocked() {
+	var eligibleSum int
+	for mKey, m := range t.stats.Models {
+		if m == nil {
+			continue
+		}
+		if modelIsGooglePoolFamily(mKey) && !IsTabModel(mKey) {
+			eligibleSum += m.InTokens
+		}
+	}
+
+	t.stats.TotalCacheEligibleInputTokens = eligibleSum
+
+	// 刻意不再覆盖 Pools["antigravity"].CacheEligibleInputTokens:
+	// 池分母由 TrackRequestForPool 与 backfillPoolFromModelsForce 各自按池累加,
+	// 全局分母与池分母是两套独立口径, 在此串扰会让 antigravity 池命中率被全量分母稀释到 0。
+}
+
+// modelIsGooglePoolFamily 判定模型名主键是否属于 antigravity 号池族。
+// Google 号池族包括 gemini 全系、claude 全系(经 daily-cloudcode-pa 重译为 Vertex Anthropic)、
+// agent 模型、tab 补全(tab_flash/tab_jump)、antigravity-core 及空/unknown 兜底名。
+// 显式排除第三方号池族: "nvidia/" 前缀、以及 openai/deepseek/qwen/moonshot/kimi/z-ai/glm/gpt
+// 等 OpenAI 兼容上游(这些经 recordNvidiaUsage/recordOtherUsage 各自记账, 不该并入 antigravity)。
+// 仅用于 BackfillPoolFromModels 一次性存量回填的归并口径, 不影响新请求的 PoolKeyForProvider。
+func modelIsGooglePoolFamily(modelKey string) bool {
+	m := strings.ToLower(modelKey)
+	if strings.HasPrefix(m, "nvidia/") {
+		return false
+	}
+	thirdParty := []string{"openai/", "deepseek", "qwen", "moonshot", "kimi", "z-ai/", "glm", "gpt-", "o1-", "o3-", "o4-", "o5-"}
+	for _, p := range thirdParty {
+		if strings.Contains(m, p) {
+			return false
+		}
+	}
+	if m == "" || m == "unknown" || m == "antigravity-core" {
+		return true
+	}
+	for _, p := range []string{"gemini", "claude", "tab_f", "tab-jump", "grok", "gpt-oss", "mistral", "llama", "phi", "command-r"} {
+		if strings.Contains(m, p) {
+			return true
+		}
+	}
+	return false
 }

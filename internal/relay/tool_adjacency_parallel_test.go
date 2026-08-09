@@ -7,11 +7,13 @@ import (
 )
 
 // TestResponsesToolAdjacency_ParallelEightRepro 复刻线上 messages.4 400:
-//   messages.4: `tool_use` ids were found without `tool_result` blocks immediately after:
-//   call_1785650561662060100_27, call_..._635, ... 8 个 id。
+//
+//	messages.4: `tool_use` ids were found without `tool_result` blocks immediately after:
+//	call_1785650561662060100_27, call_..._635, ... 8 个 id。
 //
 // 线上日志角色序列(5 条):
-//   [user[TTTT] model[TFC] user[FR TT] model[T FC×8] user[FR×8]]
+//
+//	[user[TTTT] model[TFC] user[FR TT] model[T FC×8] user[FR×8]]
 //
 // 关键: 第 3 条 user[FR TT] —— 上一轮的 1 个 tool_result 后跟 2 个 text。
 // 第 4 条 model[T FC×8] —— 本轮助手回合含 text + 8 个并行 functionCall。
@@ -19,10 +21,11 @@ import (
 //
 // Anthropic(Vertex 重译)要求 messages.4(user[FR×8])里的 8 个 tool_result 各自 id
 // 能匹配 messages.3(model[T FC×8])里的 8 个 tool_use id。本测试锁:
-//   (a) 每条 FC.ID 与对应 FR.ID 是否相等(id 透传链路完整性);
-//   (b) 8 个 FC id 互不相同、8 个 FR id 互不相同(防 id 退化成空串或重复);
-//   (c) 跨消息邻接不变式仍成立;
-//   (d) model[T FC×8] 经规整后 tool_use 仍处于末尾(典范顺序)。
+//
+//	(a) 每条 FC.ID 与对应 FR.ID 是否相等(id 透传链路完整性);
+//	(b) 8 个 FC id 互不相同、8 个 FR id 互不相同(防 id 退化成空串或重复);
+//	(c) 跨消息邻接不变式仍成立;
+//	(d) model[T FC×8] 经规整后 tool_use 仍处于末尾(典范顺序)。
 func TestResponsesToolAdjacency_ParallelEightRepro(t *testing.T) {
 	SetGlobalEnableThinkingMode(true)
 	defer SetGlobalEnableThinkingMode(true)

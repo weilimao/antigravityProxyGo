@@ -208,7 +208,7 @@ func (f *flushWriter) flush() {
 // 帧与帧之间不复用 bufio,直接写 bytes.Buffer;所有写操作加锁,防止并发乱序
 // (虽然当前转译链路单协程顺序写,加锁为防御性,与 flushWriter 对齐)。
 type replayWriter struct {
-	mu sync.Mutex
+	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
@@ -560,10 +560,10 @@ func contentBlockIndex(data string) int {
 //
 // replayOnly=true 时一律只写 replay:用于上游断流后的重试轮(由 resumeSink 接管,tee 在重试轮不用)。
 type teeSink struct {
-	replay      *replayWriter
-	live        *flushWriter
-	toolSeen    bool // 已见 tool_use 块:此后所有块只 replay 不推 live(防错误工具调用)
-	replayOnly  bool // 重试轮:全部只写 replay(压住思考重复外发)
+	replay     *replayWriter
+	live       *flushWriter
+	toolSeen   bool // 已见 tool_use 块:此后所有块只 replay 不推 live(防错误工具调用)
+	replayOnly bool // 重试轮:全部只写 replay(压住思考重复外发)
 	// liveThinkingOpen 跟踪 live 上思考块是否仍处开块未闭合状态,供本轮断流判定与 resumeSink 补闭合。
 	liveThinkingOpen bool
 	// liveBodyOpenIdx 跟踪 live 上是否有未闭合的正文 text 块,记录其 index;-1 表已闭合或未开。
@@ -724,16 +724,16 @@ type resumeSink struct {
 	liveThinkingPushed bool
 
 	// 本轮运行期态(reset 每轮清零):
-	closedDangling   bool        // 惰性补闭合标志:首个正文 start/tool_use 前补一次;reset 复位
-	toolSeen         bool        // 见过 tool_use:此后所有帧只 replay 不推 live
+	closedDangling   bool // 惰性补闭合标志:首个正文 start/tool_use 前补一次;reset 复位
+	toolSeen         bool // 见过 tool_use:此后所有帧只 replay 不推 live
 	messageStartSeen bool
 	stopSent         bool
-	indexMap         map[int]int // 本轮"上游 idx → 客户端 idx"重映射(成功快照回传给 replayFollowingInto)
+	indexMap         map[int]int  // 本轮"上游 idx → 客户端 idx"重映射(成功快照回传给 replayFollowingInto)
 	pending          bytes.Buffer // 本轮待提交给 live 的字节(补闭合帧 + 重映射正文 start/delta/stop);断流轮 reset 丢弃
 	// pend* 是跨轮持久态的本轮镜像:轮内分配/补闭合改写 pend*,提交时回填到 liveMaxUsedIdx 等。
 	// 失败轮 reset 后 pend* 重新从持久态初始化,故失败轮的 index 分配/块开闭全被丢弃,客户端态零变更。
-	pendMaxIdx     int  // 本轮已分配的最大 index(从 liveMaxUsedIdx 起步)
-	pendBodyOpenIdx int // 本轮 pending 中当前未闭合正文块 index(-1 表无)
+	pendMaxIdx       int  // 本轮已分配的最大 index(从 liveMaxUsedIdx 起步)
+	pendBodyOpenIdx  int  // 本轮 pending 中当前未闭合正文块 index(-1 表无)
 	pendThinkingOpen bool // 本轮提交后 liveThinkingOpen 的目标值
 }
 
@@ -953,4 +953,3 @@ func deltaTextForContentBlockDelta(data string) string {
 	s, _ := delta["text"].(string)
 	return s
 }
-

@@ -15,7 +15,7 @@ func GetActiveWindow(userID string, familyKeyword string, quotaType string, peri
 	now := time.Now()
 
 	windowStartStr, _ := db.GetQuotaWindowStart(userID, quotaType)
-	
+
 	// Fallback/Migration: If windowStartStr is empty, try to find the oldest request in the last periodDuration
 	if windowStartStr == "" {
 		fallbackSince := now.Add(-periodDuration).Format(time.RFC3339)
@@ -25,17 +25,17 @@ func GetActiveWindow(userID string, familyKeyword string, quotaType string, peri
 			_ = db.SetQuotaWindowStart(userID, quotaType, windowStartStr)
 		}
 	}
-	
+
 	var windowStart time.Time
 	var resetAt time.Time
-	
+
 	if windowStartStr != "" {
 		if parsedStart, err := time.Parse(time.RFC3339, windowStartStr); err == nil {
 			windowStart = parsedStart
 			resetAt = windowStart.Add(periodDuration)
 		}
 	}
-	
+
 	// If there's no valid window_start, or the reset_at has already passed, the window has expired.
 	if windowStart.IsZero() || !now.Before(resetAt) {
 		if !isRequest {
@@ -47,12 +47,12 @@ func GetActiveWindow(userID string, familyKeyword string, quotaType string, peri
 		resetAt = windowStart.Add(periodDuration)
 		_ = db.SetQuotaWindowStart(userID, quotaType, windowStart.Format(time.RFC3339))
 	}
-	
+
 	since := windowStart.Format(time.RFC3339)
 	usedTokens, err := db.GetTokensForUserModelFamilySince(userID, familyKeyword, since)
 	if err != nil {
 		return 0, "", err
 	}
-	
+
 	return usedTokens, resetAt.Format(time.RFC3339), nil
 }

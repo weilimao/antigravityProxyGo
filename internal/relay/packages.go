@@ -33,24 +33,24 @@ func (m *PackageManager) Init(dataDir string) {
 	m.persistPath = filepath.Join(dataDir, "relay_packages.json")
 	m.Unlock()
 	m.LoadFromDisk()
-	
+
 	// Seed default packages if empty
 	if len(m.GetPackages()) == 0 {
 		m.AddPackage("Pro", UserQuotas{
-			Gemini: ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 50000, EnableDaily: true, DailyDays: 7, DailyTokens: 500000},
-			Claude: ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 50000, EnableDaily: true, DailyDays: 7, DailyTokens: 500000},
+			Gemini:        ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 50000, EnableDaily: true, DailyDays: 7, DailyTokens: 500000},
+			Claude:        ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 50000, EnableDaily: true, DailyDays: 7, DailyTokens: 500000},
 			ValidDuration: 1, ValidUnit: "months",
 			RateLimit: 30,
 		})
 		m.AddPackage("Pro 5x", UserQuotas{
-			Gemini: ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 250000, EnableDaily: true, DailyDays: 7, DailyTokens: 2500000},
-			Claude: ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 250000, EnableDaily: true, DailyDays: 7, DailyTokens: 2500000},
+			Gemini:        ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 250000, EnableDaily: true, DailyDays: 7, DailyTokens: 2500000},
+			Claude:        ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 250000, EnableDaily: true, DailyDays: 7, DailyTokens: 2500000},
 			ValidDuration: 1, ValidUnit: "months",
 			RateLimit: 30,
 		})
 		m.AddPackage("Pro 20x", UserQuotas{
-			Gemini: ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 1000000, EnableDaily: true, DailyDays: 7, DailyTokens: 10000000},
-			Claude: ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 1000000, EnableDaily: true, DailyDays: 7, DailyTokens: 10000000},
+			Gemini:        ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 1000000, EnableDaily: true, DailyDays: 7, DailyTokens: 10000000},
+			Claude:        ModelQuota{EnableHourly: true, HourlyHours: 5, HourlyTokens: 1000000, EnableDaily: true, DailyDays: 7, DailyTokens: 10000000},
 			ValidDuration: 1, ValidUnit: "months",
 			RateLimit: 30,
 		})

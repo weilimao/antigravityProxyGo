@@ -130,8 +130,8 @@ func TestRecordOtherUsage_SkipsOnZeroUsage(t *testing.T) {
 func TestPassthroughHostFromBaseURL(t *testing.T) {
 	cases := map[string]string{
 		"https://token-plan.cn-beijing.maas.aliyuncs.com/v1": "token-plan.cn-beijing.maas.aliyuncs.com",
-		"https://api.deepseek.com":                            "api.deepseek.com",
-		"":                                                    "other",
+		"https://api.deepseek.com":                           "api.deepseek.com",
+		"":                                                   "other",
 	}
 	for in, want := range cases {
 		if got := passthroughHostFromBaseURL(in); got != want {

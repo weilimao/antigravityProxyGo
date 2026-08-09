@@ -1,9 +1,10 @@
 //go:build windows
+
 package settings
 
 import (
-	"os"
 	"golang.org/x/sys/windows/registry"
+	"os"
 )
 
 const registryKey = `Software\Microsoft\Windows\CurrentVersion\Run`

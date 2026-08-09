@@ -26,10 +26,10 @@ import (
 // teeTestHarness 构造一个 live(接 flushBuffer,可断言 live 实时输出) + replay(蓄流),
 // 并复用 runAnthropicSSE 路径的转译主循环,把上游 OpenAI Chat SSE 喂进 tee。
 type teeTestHarness struct {
-	live    *flushBuffer
-	liveFW  *flushWriter
-	replay  *replayWriter
-	tee     *teeSink
+	live   *flushBuffer
+	liveFW *flushWriter
+	replay *replayWriter
+	tee    *teeSink
 }
 
 func newTeeTestHarness() *teeTestHarness {
@@ -477,14 +477,14 @@ func TestThinkingRealtimeThenBodyReplay_E2E(t *testing.T) {
 	// 顺序:message_start → thinking 块整段(start/delta*/signature_delta/stop) → 正文块整段(start/delta/stop) → message_delta/stop
 	want := []string{
 		"message_start",
-		"content_block_start",  // thinking
-		"content_block_delta",  // thinking_delta 1
-		"content_block_delta",  // thinking_delta 2
-		"content_block_delta",  // signature_delta
-		"content_block_stop",   // thinking
-		"content_block_start",  // text
-		"content_block_delta",  // text_delta
-		"content_block_stop",   // text
+		"content_block_start", // thinking
+		"content_block_delta", // thinking_delta 1
+		"content_block_delta", // thinking_delta 2
+		"content_block_delta", // signature_delta
+		"content_block_stop",  // thinking
+		"content_block_start", // text
+		"content_block_delta", // text_delta
+		"content_block_stop",  // text
 		"message_delta",
 		"message_stop",
 	}

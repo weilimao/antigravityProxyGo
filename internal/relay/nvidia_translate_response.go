@@ -1,10 +1,10 @@
 package relay
 
 import (
+	"antigravity-proxy/internal/account"
 	"encoding/json"
 	"fmt"
 	"strings"
-	"antigravity-proxy/internal/account"
 )
 
 // nvidia_translate_response.go: OpenAI Chat -> Anthropic 非流式响应方向转换。
@@ -112,4 +112,3 @@ func OpenAIFinishToAnthropicStop(finishReason string) string {
 func MapNvidiaModel(inModel string, acc *account.Account) string {
 	return mapNvidiaModel(inModel, acc)
 }
-

@@ -27,8 +27,8 @@ const nvidiaStatsWindowMs int64 = 60 * 1000
 type nvidiaReqStats struct {
 	mu       sync.Mutex
 	windows  map[string][]int64 // accountID -> 已发生的请求时间戳(UnixMilli), 升序追加
-	windowMs int64             // 窗口长度(毫秒), 默认 nvidiaStatsWindowMs, 测试可注入
-	now      func() int64      // 当前时间戳(UnixMilli), 默认 time.Now().UnixMilli, 测试可注入
+	windowMs int64              // 窗口长度(毫秒), 默认 nvidiaStatsWindowMs, 测试可注入
+	now      func() int64       // 当前时间戳(UnixMilli), 默认 time.Now().UnixMilli, 测试可注入
 }
 
 // newNvidiaReqStats 构造一个使用生产默认窗口与时钟的 NVIDIA 请求计数盘。

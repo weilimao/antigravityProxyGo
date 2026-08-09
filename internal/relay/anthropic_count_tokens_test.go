@@ -60,15 +60,15 @@ func TestWeightedTokenEstimate_CeilRounding(t *testing.T) {
 
 func TestIsCJKRune_Coverage(t *testing.T) {
 	cases := map[rune]bool{
-		'中':  true,  // CJK 统一表意
-		'あ':  true,  // 平假名
-		'ア':  true,  // 片假名
-		'가':  true,  // 谚文音节
-		'。':  true,  // CJK 标点(全角句号 U+3002)
-		' ':   false, // 半角空格
-		'a':   false, // 半角英文
-		'1':   false, // 半角数字
-		'Ａ':  true,  // 全角字母
+		'中': true,  // CJK 统一表意
+		'あ': true,  // 平假名
+		'ア': true,  // 片假名
+		'가': true,  // 谚文音节
+		'。': true,  // CJK 标点(全角句号 U+3002)
+		' ': false, // 半角空格
+		'a': false, // 半角英文
+		'1': false, // 半角数字
+		'Ａ': true,  // 全角字母
 	}
 	for r, want := range cases {
 		if got := isCJKRune(r); got != want {
@@ -91,7 +91,7 @@ func TestEstimateInputTokens_SystemString(t *testing.T) {
 	// system 为字符串 "You are helpful."(20 字符,全英文)
 	// 估算至少 20/4 = 5 token,且因 messages 空保底 1,实际取 system 估算值
 	req := &AnthropicRequest{
-		System:  "You are very helpful.",
+		System:   "You are very helpful.",
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
 	}
 	got := estimateInputTokens(req)
@@ -134,7 +134,7 @@ func TestEstimateInputTokens_ContentStringFormat(t *testing.T) {
 func TestEstimateInputTokens_WithTools(t *testing.T) {
 	// tools 的 name + description + input_schema 应计入
 	req := &AnthropicRequest{
-		Model:   "claude-sonnet-4-5",
+		Model:    "claude-sonnet-4-5",
 		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "use the tool"}}}},
 		Tools: []AnthropicTool{{
 			Name:        "get_weather",
