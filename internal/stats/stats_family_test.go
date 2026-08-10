@@ -93,7 +93,7 @@ func TestTrackRequestForModel_DoesNotPolluteNvidiaTrends(t *testing.T) {
 func TestTrackRequestForModel_WithTrackNvidiaRequest_NoDoubleCounting(t *testing.T) {
 	tracker := newTestTracker()
 
-	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 100, 50)        // 落点3: 仅 nvidiaTrends
+	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 100, 50, 0)        // 落点3: 仅 nvidiaTrends
 	tracker.TrackRequestForModel("z-ai/glm-5.2", 100, 50, 0) // 落点4: 仅综合桶
 
 	tracker.RLock()

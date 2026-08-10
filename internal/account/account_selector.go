@@ -35,6 +35,9 @@ func (m *Manager) GetModelCategoryByProvider(provider, modelName string) string 
 	if p == "other" {
 		return "other"
 	}
+	if p == "grok" {
+		return "grok"
+	}
 	return m.GetModelCategory(modelName)
 }
 
@@ -48,6 +51,7 @@ func (m *Manager) SetPoolMode(enabled bool) {
 		m.nvidiaPoolMode = false
 		m.geminiCliPoolMode = false
 		m.otherPoolMode = false
+		m.grokPoolMode = false
 		m.activeChannel = "antigravity"
 	}
 	m.Unlock()
@@ -68,6 +72,7 @@ func (m *Manager) SetProjectPoolMode(enabled bool) {
 		m.nvidiaPoolMode = false
 		m.geminiCliPoolMode = false
 		m.otherPoolMode = false
+		m.grokPoolMode = false
 		m.activeChannel = "project"
 	}
 	m.Unlock()
@@ -99,13 +104,15 @@ func (m *Manager) IsPoolModeForActiveChannel() bool {
 		return m.nvidiaPoolMode
 	case "other":
 		return m.otherPoolMode
+	case "grok":
+		return m.grokPoolMode
 	}
 	return false
 }
 
 func (m *Manager) SetActiveChannel(channel string) {
 	m.Lock()
-	if channel == "antigravity" || channel == "project" || channel == "nvidia" || channel == "other" {
+	if channel == "antigravity" || channel == "project" || channel == "nvidia" || channel == "other" || channel == "grok" {
 		if channel == "project" && m.poolMode {
 			m.Unlock()
 			return
@@ -694,6 +701,7 @@ func (m *Manager) SetNvidiaPoolMode(enabled bool) {
 		m.projectPoolMode = false
 		m.geminiCliPoolMode = false
 		m.otherPoolMode = false
+		m.grokPoolMode = false
 		m.activeChannel = "nvidia"
 	}
 	m.Unlock()
@@ -717,6 +725,7 @@ func (m *Manager) SetOtherPoolMode(enabled bool) {
 		m.projectPoolMode = false
 		m.nvidiaPoolMode = false
 		m.geminiCliPoolMode = false
+		m.grokPoolMode = false
 		m.activeChannel = "other"
 	}
 	m.Unlock()
@@ -735,6 +744,103 @@ func (m *Manager) GetEnabledNvidiaAccounts() []*Account {
 		}
 	}
 	return result
+}
+
+// GetEnabledGrokAccounts 返回所有已启用且配置有效的 Grok 账号(不受 CooldownUntil 过滤影响)。
+// 专供模型列表拉取等不消耗 Token 的只读探针接口使用,与 GetEnabledNvidiaAccounts 同口径。
+func (m *Manager) GetEnabledGrokAccounts() []*Account {
+	m.RLock()
+	defer m.RUnlock()
+	var result []*Account
+	for _, acc := range m.accounts {
+		if acc != nil && acc.Provider == "grok" && acc.Enabled && acc.AccessToken != "" && acc.BaseURL != "" {
+			result = append(result, acc)
+		}
+	}
+	return result
+}
+
+// ============ Grok 专属(LB 模式 + 号池模式 + 单账号并发上限) ============
+// 与 NVIDIA 同构:单池单值 LB 模式 + 单池单值并发上限 + 总开关 poolMode(与其它号池互斥)。
+
+func (m *Manager) GetGrokLBMode() string {
+	m.RLock()
+	defer m.RUnlock()
+	if m.grokLBMode == "" {
+		return "round-robin"
+	}
+	return m.grokLBMode
+}
+
+func (m *Manager) SetGrokLBMode(mode string) {
+	m.Lock()
+	m.grokLBMode = mode
+	m.Unlock()
+	_ = m.SaveAccounts(false)
+}
+
+func (m *Manager) GetGrokMaxConcurrency() int {
+	m.RLock()
+	v := m.grokMaxConcurrency
+	m.RUnlock()
+	if v <= 0 {
+		return defaultMaxConcurrency
+	}
+	return v
+}
+
+func (m *Manager) SetGrokMaxConcurrency(v int) {
+	if v < 0 {
+		v = 0
+	}
+	m.Lock()
+	m.grokMaxConcurrency = v
+	m.Unlock()
+	_ = m.SaveAccounts(false)
+}
+
+// GetGrokCliVersion 返回 Grok 号池全局 CLI 客户端版本号(单池单值,对仗 GrokMaxConcurrency)。
+// 空串=未配置, 回退默认 DefaultGrokCliVersion("1.0.0")。用于发往 cli-chat-proxy.grok.com 上游的
+// x-grok-client-version 身份头(规避 426 版本闸门)。与 GetGrokLBMode 空串回退 "round-robin" 同范式。
+func (m *Manager) GetGrokCliVersion() string {
+	m.RLock()
+	defer m.RUnlock()
+	if strings.TrimSpace(m.grokCliVersion) == "" {
+		return DefaultGrokCliVersion
+	}
+	return m.grokCliVersion
+}
+
+// SetGrokCliVersion 设置 Grok 号池全局 CLI 客户端版本号并持久化(对仗 SetGrokMaxConcurrency)。
+// 入参做 TrimSpace 空白规整; 传入空串等同「未配置」, GetGrokCliVersion 会回退默认 1.0.0
+// (与 MaxConcurrency 负数钳 0 回退默认同口径, 避免用户清空导致重新触发 426)。
+func (m *Manager) SetGrokCliVersion(v string) {
+	m.Lock()
+	m.grokCliVersion = strings.TrimSpace(v)
+	m.Unlock()
+	_ = m.SaveAccounts(false)
+}
+
+// GetGrokPoolMode / SetGrokPoolMode 是 Grok 号池的负载均衡总开关,与 NVIDIA/Other 同构互斥。
+func (m *Manager) GetGrokPoolMode() bool {
+	m.RLock()
+	defer m.RUnlock()
+	return m.grokPoolMode
+}
+
+func (m *Manager) SetGrokPoolMode(enabled bool) {
+	m.Lock()
+	m.grokPoolMode = enabled
+	if enabled {
+		m.poolMode = false
+		m.projectPoolMode = false
+		m.nvidiaPoolMode = false
+		m.geminiCliPoolMode = false
+		m.otherPoolMode = false
+		m.activeChannel = "grok"
+	}
+	m.Unlock()
+	_ = m.SaveAccounts(false)
 }
 
 // GetRawAccountsByProvider 按 provider 过滤返回账号(空/"all" 返回全量副本)。

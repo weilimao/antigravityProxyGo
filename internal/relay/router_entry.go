@@ -79,6 +79,12 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 	}
 	r.Body.Close()
 
+	// 会话级隔离键注入(与 handleNvidia/handleGrok 同款口径, 见 relay.session_key.ensureSessionKey):
+	// 客户端原生会话头(Claude/Codex UUID)优先 → ExtractSessionKey 兜底, 供 Other 号池组内
+	// sticky 选号(pickOtherAccount)按客户端会话粘性 + OCR 缓存按会话隔离。Other 号池此前
+	// 完全未注入会话键,sticky 用 UserID(按用户);本步首次让 Codex Session-Id 进入 Other 池。
+	h.ensureSessionKey(userSession, r, bodyBytes)
+
 	// 抽取入站 model 与 stream 字段(三协议取同名字段)。
 	inModel, isStreaming, perr := extractRoutedModelStream(path, bodyBytes)
 	if perr != nil {
@@ -114,6 +120,18 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		h.handleNvidia(w, r, userSession)
 		return
 	}
+
+	// 命中 grok 号池(xAI) → 复用 handleGrok 链路(OpenAI Chat/Anthropic 入站 → Grok 上游 chat/completions,
+	// 含 grok_thinking.go 的 reasoning_effort 三态注入与 Anthropic↔OpenAI 回译)。
+	// 与 nvidia 分支同构:把 body model 改写为 upstreamModel 后塞回 r.Body,交 handleGrok 二次读 body选号注入。
+	if provider == "grok" {
+		newBody := patchRoutedBodyModel(bodyBytes, upstreamModel)
+		r.Body = io.NopCloser(strings.NewReader(newBody))
+		r.ContentLength = int64(len(newBody))
+		h.handleGrok(w, r, userSession)
+		return
+	}
+
 
 	// 命中 antigravity / google / gcp 等 Google 族号池 → 复用既有 handleAnthropicMessages / handleOpenAIChat 核心链路(含 Gemini 官方/v1internal 动态调度与 OAuth 鉴权)。
 	if isGoogleProvider(provider) {
@@ -168,6 +186,13 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		// 对齐: 由下方各回写路径在首帧写出时 MarkFirstByte() 打点; 未打点时
 		// recordOtherUsage 兜底以 DurationMs 填充, 避免恒 0。
 		FirstByteRec: stats.NewFirstByteRecorder(start),
+		// ReqBody/ReqHeaders: 入站请求头/请求体原貌落库, 供前端「请求参数详情」弹窗
+		// 按需经 GetRequestDetails 拉取展示, 而非恒落入「无请求头数据 / 无请求参数」兜底。
+		// bodyBytes 为入站原始请求体(上方 readBodyWithTimeout 读出, 与 goctx 含义一致);
+		// r.Header 经 collectInboundHeadersForLog 对 Authorization / x-api-key 等敏感头脱敏,
+		// 杜绝把客户端凭证写进仪表盘与 SQLite。超长字段后续由 stats.TruncateRequestBody 截断。
+		ReqBody:     parseInboundBodyForLog(bodyBytes),
+		ReqHeaders:  collectInboundHeadersForLog(r.Header),
 	}
 	if res.usedAccPtr != nil {
 		res.logCtx.Host = passthroughHostFromBaseURL(res.usedAccPtr.BaseURL)

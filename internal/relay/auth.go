@@ -10,6 +10,19 @@ import (
 	"time"
 )
 
+// APIKeyIDOfficialBypass / APIKeyIDDefaultBypass 是 ValidateToken 里官方 key 前缀
+// 兜底分支给 RelaySession.APIKeyID 赋的标记值,标识"本地 IDE 拿官方 key 直连 18444"
+// 的请求来源指纹。抽成命名常量消除 magic string 漂移,供 ocr_localpath.go 的
+// isLocalDirectSession 闸按来源放行本地路径读图能力(LFI 堵死外部中继用户)。
+const (
+	APIKeyIDOfficialBypass = "official_bypass"
+	APIKeyIDDefaultBypass  = "default_bypass"
+)
+
+// defaultLocalAdminUserID 是"无任何启用中继用户"兜底分支给 RelaySession.UserID 赋的
+// 默认本地管理员 ID,仅用于日志与(已不推荐的)UserID 判来源场景。
+const defaultLocalAdminUserID = "default_local_admin"
+
 type RelaySession struct {
 	Token    string
 	UserID   string
@@ -83,15 +96,15 @@ func (a *AuthManager) ValidateToken(token string) (*RelaySession, error) {
 					return &RelaySession{
 						UserID:    u.ID,
 						UserKey:   u.Key,
-						APIKeyID:  "official_bypass",
+						APIKeyID:  APIKeyIDOfficialBypass,
 						ExpiresAt: time.Now().Add(5 * time.Minute),
 					}, nil
 				}
 			}
 			return &RelaySession{
-				UserID:    "default_local_admin",
+				UserID:    defaultLocalAdminUserID,
 				UserKey:   "admin",
-				APIKeyID:  "default_bypass",
+				APIKeyID:  APIKeyIDDefaultBypass,
 				ExpiresAt: time.Now().Add(5 * time.Minute),
 			}, nil
 		}

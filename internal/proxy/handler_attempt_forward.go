@@ -52,11 +52,13 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 	ro.customHeaders.Del("X-Antigravity-Original-Path")
 	ro.customHeaders.Del("X-Antigravity-Original-Method")
 	ro.customHeaders.Del("X-Antigravity-Req-ID")
+	ro.customHeaders.Del("X-Antigravity-Client-Session")
 	ro.customHeaders.Del("x-relay-user-id")
 	ro.customHeaders.Del("x-relay-api-key-id")
 	ro.customHeaders.Del("x-antigravity-original-path")
 	ro.customHeaders.Del("x-antigravity-original-method")
 	ro.customHeaders.Del("x-antigravity-req-id")
+	ro.customHeaders.Del("x-antigravity-client-session")
 
 	// 剥离多余的 Content-Length 与 Host 标头，使 Header 集合与图一 100% 精准一致
 	ro.customHeaders.Del("Content-Length")

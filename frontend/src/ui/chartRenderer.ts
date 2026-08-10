@@ -321,9 +321,10 @@ export function drawTrendChartSVG(trends: any[], range = '7d', animate = true) {
     // 2. Draw X Labels in HTML using absolute percentages with element reuse
     let isSingleDay = range === 'today';
     if (range === 'custom' && trends.length > 0) {
+        // 抽稀 slot 与后端桶命中点均为 "MM/DD HH:00" (无年), 首末日 key 同形可直接比较。
         const firstDay = trends[0].time.split(' ')[0];
         const lastDay = trends[trends.length - 1].time.split(' ')[0];
-        if (firstDay === lastDay) {
+        if (firstDay && firstDay === lastDay) {
             isSingleDay = true;
         }
     }
@@ -576,15 +577,39 @@ function generateTodaySlots(): string[] {
 }
 
 // Helper: generate custom slots
+// 生成自定义区间 [startObj, endObj] 的小时级 slot。
+// 背景: 后端 appendTrendBucket (stats_trends.go) 对每个趋势桶硬性保留最近 720 小时
+// (超过即 `(*target)[1:]` 丢弃最旧), 故 stats.json 里 trends 最早只到约 30 天前。
+// 原实现 `Math.min(720, hoursDiff)` 直接把长区间截断成只画最后 720 小时, 5/1~8/9 这种
+// 3 个多月区间会把前段整段丢弃, X 轴也只显示末段日期 —— 用户看到"开始时间 5/1"却只画出
+// 6 月以后的曲线, 体验割裂(对应截图里 X 轴只到 05/31、折线平铺在 0 处的现象)。
+// 新方案: 区间超 720 小时时不再截断时间轴, 改为等间隔抽稀成 720 个点, x 轴按真实起止日期
+// 完整覆盖; 前段无数据的 slot 由 getFilteredTrends 的补零逻辑填 0 平铺 —— 即"那天没数据当 0
+// 处理", 而不是"查不到不显示"。slot 取 floor 到整点并以 "MM/DD HH:00" 输出, 与后端桶 key
+// 同形可直接命中; 月日同形不同年的桶在长跨度下冲突概率极低(后端桶保留窗口仅 30 天), 故
+// 抽稀 slot 无需注入年份, parseTrendsTime 仍按当前年解析(x 轴位置由数组索引决定, 非日期)。
 function generateCustomSlots(startObj: Date, endObj: Date): string[] {
-    const slots: string[] = [];
+    // 与后端桶保留上限对齐 (stats_trends.go LIMIT 720), 超过才抽稀, 未超过原样枚举。
+    const MAX_HOURS = 720;
     const startMs = new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate(), startObj.getHours(), 0, 0, 0).getTime();
     const endMs = new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate(), endObj.getHours(), 0, 0, 0).getTime();
-    
-    const hoursDiff = Math.min(720, Math.ceil((endMs - startMs) / (3600 * 1000)));
-    for (let i = 0; i <= hoursDiff; i++) {
-        const t = new Date(startMs + i * 3600 * 1000);
-        slots.push(formatTrendsTime(t));
+
+    const rawHours = Math.ceil((endMs - startMs) / (3600 * 1000));
+    if (rawHours <= MAX_HOURS) {
+        const slots: string[] = [];
+        for (let i = 0; i <= rawHours; i++) {
+            slots.push(formatTrendsTime(new Date(startMs + i * 3600 * 1000)));
+        }
+        return slots;
+    }
+
+    // 长区间抽稀: 首尾两点固定包含, 中间按等间隔取 MAX_HOURS-2 个点, 保证时间标尺均匀。
+    // slot 仍为 "MM/DD HH:00" (formatTrendsTime 取 floor 到 hour), 与后端桶 key 同形可直接命中。
+    const slots: string[] = [];
+    for (let i = 0; i < MAX_HOURS; i++) {
+        const frac = i / (MAX_HOURS - 1);
+        const ts = Math.round(startMs + frac * (endMs - startMs));
+        slots.push(formatTrendsTime(new Date(ts)));
     }
     return slots;
 }
@@ -617,6 +642,8 @@ export function getFilteredTrends(trends: any[], range: string): any[] {
     // Index trends by their time key once (O(n)) so each slot lookup is O(1).
     // The previous slots.map(slot => trends.find(...)) was O(slots * trends),
     // i.e. up to 720 * 720 comparisons on the 30d range, every chart redraw.
+    // generateCustomSlots 的抽稀 slot 已 floor 到 hour 并以 "MM/DD HH:00" 格式输出,
+    // 与后端桶 key 同形, 可直接命中, 无需做年份前缀剥离。
     const trendsByTime = new Map<string, any>();
     for (const item of trends) {
         trendsByTime.set(item.time, item);

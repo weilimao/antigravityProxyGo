@@ -100,9 +100,13 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 	// 与顶部指标卡口径完全不变(零回归), 「NVIDIA」Tab 单独反映号池时间曲线。
 	// globalStatsTracker 未注入(relay 单测场景)时为 nil, 安全跳过, 不影响既有两路统计。
 	// displayModel 已去 "nvidia/" 前缀, 满足 TrackNvidiaRequest 对上游展示名的约定;
-	// nvidiaTrends 桶按 NVIDIA 专属口径计成本与曲线, 不计入 cached(与 cachedCost 仍 0 一致对齐)。
+	// nvidiaTrends 桶按 NVIDIA 专属口径计成本与曲线, cached 透传上游真实缓存命中
+	// (prompt_cache_hit_tokens / prompt_tokens_details.cached_tokens, 经 OpenAIChatUsage.CachedTokens()
+	// 解析): 当前 NVIDIA 官方 NIM 不回报 cache, cached 恒 0, 与旧行为等价; 一旦上游/兼容端点
+	// 回报 cache 字段, 此处即如实累加到 nvidiaTrends 桶的 Cached/CachedCost, 使前端 NVIDIA Tab
+	// 的「缓存命中」曲线与卡片出数(修复「日志显示命中但趋势/卡片为 0」的口径断层)。
 	if h.globalStatsTracker != nil {
-		h.globalStatsTracker.TrackNvidiaRequest(displayModel, input, output)
+		h.globalStatsTracker.TrackNvidiaRequest(displayModel, input, output, cached)
 
 		// 4) 全局综合统计 (stats.Tracker.TrackRequestForModel): 把同一笔 NVIDIA 请求首次计入
 		// 顶部指标卡 + stats.Models 模型表 + trends 综合趋势桶, 使其与 gemini/claude 直连链路
@@ -141,22 +145,24 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 		}
 		firstByteMs := logCtx.FirstByteRec.FirstByteMs(endToEndMs)
 		reqLog := &stats.RequestLog{
-			ID:           fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
-			Timestamp:    time.Now().Format("01/02 15:04:05"),
-			Method:       logCtx.Method,
-			Host:         logCtx.Host,
-			Path:         logCtx.Path,
-			Model:        displayModel,
-			InTokens:     input,
-			OutTokens:    output,
-			CachedTokens: cached,
-			CacheStatus:  cacheStatus,
-			StatusCode:   logCtx.StatusCode,
-			Account:      logCtx.Account,
-			SessionID:    logCtx.SessionID,
-			DurationMs:   durationMs,
-			FirstByteMs:  firstByteMs,
-			Family:       "nvidia",
+			ID:             fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
+			Timestamp:      time.Now().Format("01/02 15:04:05"),
+			Method:         logCtx.Method,
+			Host:           logCtx.Host,
+			Path:           logCtx.Path,
+			Model:          displayModel,
+			InTokens:       input,
+			OutTokens:      output,
+			CachedTokens:   cached,
+			CacheStatus:    cacheStatus,
+			StatusCode:     logCtx.StatusCode,
+			Account:        logCtx.Account,
+			RequestBody:    logCtx.ReqBody,
+			RequestHeaders: logCtx.ReqHeaders,
+			SessionID:      logCtx.SessionID,
+			DurationMs:     durationMs,
+			FirstByteMs:    firstByteMs,
+			Family:         "nvidia",
 		}
 		h.globalStatsTracker.AddRequestLogForFamily(reqLog)
 	}

@@ -32,6 +32,7 @@ type UserQuotas struct {
 	Gemini        ModelQuota `json:"gemini"`
 	Claude        ModelQuota `json:"claude"`
 	Nvidia        ModelQuota `json:"nvidia"`
+	Grok          ModelQuota `json:"grok"`
 	ValidDuration int        `json:"validDuration"`
 	ValidUnit     string     `json:"validUnit"` // "days", "months", "years"
 	ExpireAt      int64      `json:"expireAt"`
@@ -46,9 +47,11 @@ type UserAPIKey struct {
 	LimitGeminiTokens int64     `json:"limitGeminiTokens"`
 	LimitClaudeTokens int64     `json:"limitClaudeTokens"`
 	LimitNvidiaTokens int64     `json:"limitNvidiaTokens"`
+	LimitGrokTokens   int64     `json:"limitGrokTokens"`
 	UsedGeminiTokens  int64     `json:"usedGeminiTokens"`
 	UsedClaudeTokens  int64     `json:"usedClaudeTokens"`
 	UsedNvidiaTokens  int64     `json:"usedNvidiaTokens"`
+	UsedGrokTokens    int64     `json:"usedGrokTokens"`
 }
 
 type RelayUser struct {
@@ -163,6 +166,11 @@ func (m *UserManager) UpdateUserQuota(id string, quotas UserQuotas, resetLimit b
 				_ = db.SetQuotaWindowStart(id, "gemini_daily", resetTimeStr)
 				_ = db.SetQuotaWindowStart(id, "claude_hourly", resetTimeStr)
 				_ = db.SetQuotaWindowStart(id, "claude_daily", resetTimeStr)
+				// Grok 配额窗口与 gemini/claude 同口径重置(grok_quota.go 用的 quotaType)。
+				// NVIDIA 历史上未纳入重置列表(其 ResetAt 不重置), 这里 Grok 与 gemini/claude 对齐,
+				// 使前端「重置限额」按钮对 Grok 池同样生效。
+				_ = db.SetQuotaWindowStart(id, "grok_hourly", resetTimeStr)
+				_ = db.SetQuotaWindowStart(id, "grok_daily", resetTimeStr)
 			} else {
 				// Retain existing ResetAt values
 				quotas.Gemini.ResetAt = u.Quotas.Gemini.ResetAt
@@ -308,6 +316,42 @@ func (m *UserManager) RecordAPIKeyUsage(userID string, apiKeyID string, isClaude
 					if isClaude {
 						u.APIKeys[i].UsedClaudeTokens += tokens
 					} else {
+						u.APIKeys[i].UsedGeminiTokens += tokens
+					}
+					m.saveToDiskLocked()
+					return
+				}
+			}
+			return
+		}
+	}
+}
+
+// RecordAPIKeyUsageForFamily 是 RecordAPIKeyUsage 的 family-aware 后继: 按 APIKeyFamily
+// 四态(gemini/claude/nvidia/grok)累加到对应 Used* 桶。与方案 A 一致, 保持 RecordAPIKeyUsage
+// 原签名与既有 7 处调用点零回归(NVIDIA/Other 历史落进 Gemini 桶的口径不动); Grok 链路
+// (recordGrokUsage)改调本方法, 把 Grok 用量计入独立 UsedGrokTokens 桶, 使 APIKey 级限额
+// 校验(app_lifecycle.go 的 LimitGrokTokens 分支)能正确命中。
+//
+// family==FamilyGrok → UsedGrokTokens; FamilyClaude → UsedClaudeTokens;
+// FamilyNvidia → UsedNvidiaTokens; 其余/未识别(FamilyGemini) → UsedGeminiTokens 兜底
+// (与 RecordAPIKeyUsage(false,...) 等价, 保持既有"非 claude 即 Gemini"兜底口径)。
+func (m *UserManager) RecordAPIKeyUsageForFamily(userID string, apiKeyID string, family APIKeyFamily, tokens int64) {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.ID == userID {
+			for i, k := range u.APIKeys {
+				if k.ID == apiKeyID {
+					switch family {
+					case FamilyClaude:
+						u.APIKeys[i].UsedClaudeTokens += tokens
+					case FamilyNvidia:
+						u.APIKeys[i].UsedNvidiaTokens += tokens
+					case FamilyGrok:
+						u.APIKeys[i].UsedGrokTokens += tokens
+					default: // FamilyGemini / 未识别
 						u.APIKeys[i].UsedGeminiTokens += tokens
 					}
 					m.saveToDiskLocked()

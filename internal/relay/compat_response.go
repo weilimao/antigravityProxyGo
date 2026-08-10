@@ -17,12 +17,20 @@ func (h *APICompatHandler) handleNormalResponse(
 	w http.ResponseWriter,
 	respBody io.Reader,
 	userSession *RelaySession,
+	clientModel string,
 	geminiModel string,
 	apiFormat string,
 	startTime time.Time,
 	path string,
 	reqID string,
 ) {
+	// displayModel 与流式路径保持一致:优先透传客户端原始模型 ID,避免严格客户端
+	// (Claude Code/Codex)校验响应 model 与请求 model 不一致而告警/断开。
+	displayModel := clientModel
+	if displayModel == "" {
+		displayModel = geminiModel
+	}
+
 	data, err := io.ReadAll(respBody)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "failed to read google response"})
@@ -34,6 +42,7 @@ func (h *APICompatHandler) handleNormalResponse(
 		// 可能是被强制转换成了 SSE 流式响应 (如 antigravity 强制路由至 streamGenerateContent)
 		if strings.Contains(string(data), "data: ") {
 			var fullText string
+			var lastFinish string
 			lines := strings.Split(string(data), "\n")
 			for _, line := range lines {
 				line = strings.TrimSpace(line)
@@ -47,17 +56,27 @@ func (h *APICompatHandler) handleNormalResponse(
 						if len(chunk.Candidates) > 0 && len(chunk.Candidates[0].Content.Parts) > 0 {
 							fullText += chunk.Candidates[0].Content.Parts[0].Text
 						}
+						// 被强制转成 SSE 的非流式路径同样记录末帧 finishReason,一并参与映射
+						if len(chunk.Candidates) > 0 && chunk.Candidates[0].FinishReason != "" {
+							lastFinish = chunk.Candidates[0].FinishReason
+						}
 						if chunk.UsageMetadata.PromptTokenCount > 0 {
 							gemResp.UsageMetadata.PromptTokenCount = chunk.UsageMetadata.PromptTokenCount
 						}
 						if chunk.UsageMetadata.CandidatesTokenCount > 0 {
 							gemResp.UsageMetadata.CandidatesTokenCount = chunk.UsageMetadata.CandidatesTokenCount
 						}
+						if chunk.UsageMetadata.ThoughtsTokenCount > 0 {
+							gemResp.UsageMetadata.ThoughtsTokenCount = chunk.UsageMetadata.ThoughtsTokenCount
+						}
 					}
 				}
 			}
 			gemResp.Candidates = []GeminiCandidate{
-				{Content: GeminiCandidateContent{Parts: []GeminiPart{{Text: fullText}}, Role: "model"}},
+				{
+					Content:      GeminiCandidateContent{Parts: []GeminiPart{{Text: fullText}}, Role: "model"},
+					FinishReason: lastFinish,
+				},
 			}
 		} else {
 			writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "failed to parse google response: " + string(data)})
@@ -99,6 +118,14 @@ func (h *APICompatHandler) handleNormalResponse(
 
 	inTokens := gemResp.UsageMetadata.PromptTokenCount
 	outTokens := gemResp.UsageMetadata.CandidatesTokenCount
+	thoughtTokens := gemResp.UsageMetadata.ThoughtsTokenCount
+
+	// 末帧 finishReason 经 Gemini->OpenAI 映射,不再硬编码 stop/tool_calls;
+	// 映射尊重 length(MAX_TOKENS 截断)/content_filter(安全拦截)等终端态。
+	finishReason := mapGeminiFinishToOpenAI("", hasFunctionCall)
+	if len(gemResp.Candidates) > 0 {
+		finishReason = mapGeminiFinishToOpenAI(gemResp.Candidates[0].FinishReason, hasFunctionCall)
+	}
 
 	// 根据要求的 API 格式，翻译响应包
 	if apiFormat == "openai" {
@@ -119,31 +146,24 @@ func (h *APICompatHandler) handleNormalResponse(
 				})
 			}
 		}
-		finishReason := "stop"
-		if len(toolCalls) > 0 {
-			finishReason = "tool_calls"
-		}
 		openResp := OpenAIResponse{
 			ID:      fmt.Sprintf("chatcmpl-%d", rand.Int63()),
 			Object:  "chat.completion",
 			Created: time.Now().Unix(),
-			Model:   geminiModel,
+			Model:   displayModel,
 			Choices: []OpenAIResponseChoice{
 				{
 					Index: 0,
 					Message: OpenAIMessage{
-						Role:      "assistant",
-						Content:   replyText,
-						ToolCalls: toolCalls,
+						Role:             "assistant",
+						Content:          replyText,
+						ReasoningContent: thinkingText.String(),
+						ToolCalls:        toolCalls,
 					},
 					FinishReason: finishReason,
 				},
 			},
-			Usage: OpenAIResponseUsage{
-				PromptTokens:     inTokens,
-				CompletionTokens: outTokens,
-				TotalTokens:      inTokens + outTokens,
-			},
+			Usage: buildOpenAIUsage(inTokens, outTokens, thoughtTokens),
 		}
 		writeJSON(w, http.StatusOK, &openResp)
 	} else if apiFormat == "responses" {
@@ -214,7 +234,7 @@ func (h *APICompatHandler) handleNormalResponse(
 			Type:         "message",
 			Role:         "assistant",
 			Content:      finalBlocks,
-			Model:        geminiModel,
+			Model:        displayModel,
 			StopReason:   stopReason,
 			StopSequence: nil,
 			Usage: AnthropicResponseUsage{

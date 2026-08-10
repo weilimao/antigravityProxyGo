@@ -58,6 +58,7 @@ func runGeminiAnthropicStreamWithInput(t *testing.T, upstream string, inboundInp
 		"gemini-2.5-flash",
 		"anthropic",
 		inboundInputTokens,
+		false,
 		time.Unix(1700000000, 0),
 		"/v1internal:streamGenerateContent",
 		"req-test",
@@ -396,6 +397,7 @@ func geminiFunctionCallSSE(name string, args map[string]interface{}) string {
 // 这是 Claude Code 反编译出的 "Content block not found" 触发条件的逆向断言:
 //   - content_block_delta 时 cr[index] 必须已由一个 content_block_start 建过(index 已被 start);
 //   - content_block_stop 时同理。
+//
 // 若出现孤儿 delta/stop(index 未被任何 start 开过),对应 Claude Code 客户端必抛 "Content block not found"。
 func assertNoOrphanBlockStopDelta(t *testing.T, events []sseEvent) {
 	t.Helper()
@@ -678,6 +680,7 @@ func runGeminiResponsesStream(t *testing.T, upstream string) string {
 		"gemini-2.5-flash",
 		"responses",
 		0,
+		false,
 		time.Unix(1700000000, 0),
 		"/v1internal:streamGenerateContent",
 		"req-test-resp",
@@ -821,6 +824,7 @@ func TestGeminiNormalResponse_ThoughtSeparatedAnthropic(t *testing.T) {
 		strings.NewReader(upstream),
 		&RelaySession{},
 		"gemini-2.5-flash",
+		"gemini-2.5-flash",
 		"anthropic",
 		time.Unix(1700000000, 0),
 		"/v1internal:generateContent",
@@ -872,6 +876,7 @@ func TestGeminiNormalResponse_ThoughtSeparatedResponses(t *testing.T) {
 		fc,
 		strings.NewReader(upstream),
 		&RelaySession{},
+		"gemini-2.5-flash",
 		"gemini-2.5-flash",
 		"responses",
 		time.Unix(1700000000, 0),

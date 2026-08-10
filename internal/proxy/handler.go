@@ -419,7 +419,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawSessionKey := h.sessionRouter.ExtractSessionKey(r, bodyBytes)
+	rawSessionKey := strings.TrimSpace(r.Header.Get("X-Antigravity-Client-Session"))
+	if rawSessionKey == "" {
+		// 客户端会话头未注入(非 Codex/Claude 客户端), 回退 ExtractSessionKey 兜底(auth/sock/body)。
+		rawSessionKey = h.sessionRouter.ExtractSessionKey(r, bodyBytes)
+	}
+	// 注:经 relay 侧 dispatchToGemini 透传的 X-Antigravity-Client-Session 命中时其值为
+	// "claude:UUID"/"codex:UUID"(不以 auth:/sock: 开头),下方会落到 else 分支套 acc:/prj: 前缀,
+	// 形成 "acc:codex:UUID" / "prj:codex:UUID" 的稳定粘性键。
 
 	// 根据负载均衡通道类型，将项目负载均衡会话与账号负载均衡会话区分开，防止因账号池不同而交替覆盖会话绑定
 	isPoolReq := isRealModelRequest(targetPath) || isAgentRequest(targetPath) || targetHost == "aiplatform.googleapis.com"

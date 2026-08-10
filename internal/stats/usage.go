@@ -255,9 +255,86 @@ func (u *UsageTracker) RecordUsage(sample UsageSample) {
 	u.scheduleSave()
 }
 
-func (u *UsageTracker) GetPayload() interface{} {
+// RenameAccountByID 就地更新某账号在用量聚合里缓存的展示名(Email),
+// 供账号池「编辑改名」即时同步到「使用详情」页,无需等该账号再次产生流量。
+//
+// 背景:账号池改名只改 accounts.json;usage.json 的 Accounts 桶按账号 ID 归集,
+// 每个桶持有一份独立的 Email 展示名副本,常态由 RecordUsage 在每次请求时
+// 覆写(accBucket.Email = accLabel)。故改名后若该账号不再出请求,
+// 使用详情页会一直停留在旧名(如「账号1」)。
+//
+// 契约:
+//   - 仅改展示名副本,绝不触碰任何 Token/成本数值,历史用量数字零漂移;
+//   - accountID 指向的桶不存在(该账号从未产生用量)时静默 no-op;
+//   - accountID 或 newLabel 为空时不做变更(调用方须传入 host 回退后的权威最终名)。
+func (u *UsageTracker) RenameAccountByID(accountID, newLabel string) {
+	accountID = strings.TrimSpace(accountID)
+	newLabel = strings.TrimSpace(newLabel)
+	if accountID == "" || newLabel == "" {
+		return
+	}
+
+	changed := false
+	u.Lock()
+	for key, bucket := range u.state.Accounts {
+		if key == accountID {
+			if bucket != nil && bucket.Email != newLabel {
+				bucket.Email = newLabel
+				changed = true
+			}
+			break
+		}
+	}
+	u.Unlock()
+
+	if changed {
+		u.scheduleSave()
+	}
+}
+
+// GetNvidiaModelAggregates 聚合全部 provider=="nvidia" 账号的 per-model 累计,
+// 返回去重无损的合计列表(跨账号同模型合并 sum)。供 NVIDIA 历史差量自愈合并
+// (stats_migrate_nvidia.go)在 LoadFromDisk 编排时作为权威全量数据源读用;
+// usage.json 自 recordNvidiaUsage 上线即连续记录, 是 NVIDIA 历史全量可信来源。
+// 非 nvidia 账号、无 Models 的账号一律排除。
+func (u *UsageTracker) GetNvidiaModelAggregates() []ModelAggregate {
 	u.RLock()
 	defer u.RUnlock()
+
+	agg := make(map[string]*ModelAggregate)
+	for _, acc := range u.state.Accounts {
+		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.Provider), "nvidia") {
+			continue
+		}
+		for mk, mu := range acc.Models {
+			if mu == nil || (mu.RequestCount <= 0 && mu.InputTokens <= 0) {
+				continue
+			}
+			key := strings.TrimSpace(mk)
+			if key == "" || key == "unknown" {
+				continue
+			}
+			b, exists := agg[key]
+			if !exists {
+				b = &ModelAggregate{Model: key}
+				agg[key] = b
+			}
+			b.Reqs += mu.RequestCount
+			b.InTokens += mu.InputTokens
+			b.OutTokens += mu.OutputTokens
+			b.CachedTokens += mu.CachedTokens
+			b.Cost = math.Round((b.Cost+mu.TotalCost)*1000000.0) / 1000000.0
+		}
+	}
+
+	out := make([]ModelAggregate, 0, len(agg))
+	for _, b := range agg {
+		out = append(out, *b)
+	}
+	return out
+}
+
+func (u *UsageTracker) GetPayload() interface{} {
 
 	mergeTokenStats := func(dest *TokenStats, src TokenStats) {
 		dest.RequestCount += src.RequestCount

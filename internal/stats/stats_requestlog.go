@@ -1,0 +1,171 @@
+package stats
+
+import (
+	"math"
+	"strings"
+	"time"
+
+	"antigravity-proxy/internal/db"
+	"antigravity-proxy/internal/pricing"
+)
+
+// 请求日志入库簇：AddRequestLog / AddRequestLogForFamily / AddRequestLogInMemoryOnly / ClearRetriesOrErrors。
+
+
+func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
+	// 只保留真正的模型对话/发送请求（即包含 generatecontent 或 predict 的 API 调用）
+	p := strings.ToLower(reqLog.Path)
+	isRealModel := strings.Contains(p, "generatecontent") || strings.Contains(p, "predict")
+	if !isRealModel {
+		return
+	}
+
+	if reqLog.Model == "" || reqLog.Model == "unknown" {
+		return
+	}
+
+	t.Lock()
+	reqLog.Cost = t.pricingMgr.CalculateCost(reqLog.Model, reqLog.InTokens, reqLog.OutTokens, reqLog.CachedTokens)
+	reqLog.RequestBody = TruncateRequestBody(reqLog.RequestBody)
+
+	t.requests = append([]*RequestLog{reqLog}, t.requests...)
+	if len(t.requests) > 50 {
+		t.requests = t.requests[:50]
+	}
+	t.Unlock()
+
+	go func(rl *RequestLog, prMgr *pricing.Manager) {
+		timestamp := time.Now().Format(time.RFC3339)
+		rate := prMgr.GetPricingForModel(rl.Model)
+		nonCachedIn := rl.InTokens - rl.CachedTokens
+		if nonCachedIn < 0 {
+			nonCachedIn = 0
+		}
+		inputCost := math.Round((float64(nonCachedIn)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+		outputCost := math.Round((float64(rl.OutTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
+		cachedCost := math.Round((float64(rl.CachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
+
+		dbItem := &db.RequestLog{
+			ReqID:        rl.ID,
+			Timestamp:    timestamp,
+			Mode:         "local",
+			UserID:       rl.Account,
+			ModelName:    rl.Model,
+			InTokens:     rl.InTokens,
+			OutTokens:    rl.OutTokens,
+			CachedTokens: rl.CachedTokens,
+			Cost:         rl.Cost,
+			InputCost:    inputCost,
+			OutputCost:   outputCost,
+			CachedCost:   cachedCost,
+			DurationMs:   rl.DurationMs,
+			StatusCode:   rl.StatusCode,
+			Method:       rl.Method,
+			Host:         rl.Host,
+			Path:         rl.Path,
+			SessionID:    rl.SessionID,
+		}
+		_ = db.InsertRequestLog(dbItem)
+	}(reqLog, t.pricingMgr)
+
+	t.scheduleSave()
+}
+
+// AddRequestLogForFamily 与 AddRequestLog 同构, 但跳过 isRealModel 过滤: NVIDIA 上游走 OpenAI Chat
+// 协议, 入站 Path 形如 /nvidia/v1/chat/completions, 不含 gemini 链路的 generatecontent/predict 关键词,
+// 既有 AddRequestLog 的过滤会把 NVIDIA 请求全丢弃(漏计根因之一)。本方法以显式 family 入库,
+// 供 NVIDIA 链路把成功请求写入「请求日志」列表, 与 gemini/claude 口径一致。
+//
+// 与 AddRequestLog 的其余差异: 仅保留 Model==""||"unknown" 跳过与 TruncateRequestBody 截断;
+// Cost 仍复用 pricingMgr.CalculateCost 重算; cachedTokens 由调用方填(NVIDIA 固定 0, CacheStatus="NONE")。
+// 落库 db.RequestLog 时写入 family 列, 使远程聚合查询可按族过滤。
+func (t *Tracker) AddRequestLogForFamily(reqLog *RequestLog) {
+	if reqLog.Model == "" || reqLog.Model == "unknown" {
+		return
+	}
+
+	t.Lock()
+	reqLog.Cost = t.pricingMgr.CalculateCost(reqLog.Model, reqLog.InTokens, reqLog.OutTokens, reqLog.CachedTokens)
+	reqLog.RequestBody = TruncateRequestBody(reqLog.RequestBody)
+
+	t.requests = append([]*RequestLog{reqLog}, t.requests...)
+	if len(t.requests) > 50 {
+		t.requests = t.requests[:50]
+	}
+	t.Unlock()
+
+	go func(rl *RequestLog, prMgr *pricing.Manager) {
+		timestamp := time.Now().Format(time.RFC3339)
+		rate := prMgr.GetPricingForModel(rl.Model)
+		nonCachedIn := rl.InTokens - rl.CachedTokens
+		if nonCachedIn < 0 {
+			nonCachedIn = 0
+		}
+		inputCost := math.Round((float64(nonCachedIn)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+		outputCost := math.Round((float64(rl.OutTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
+		cachedCost := math.Round((float64(rl.CachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
+
+		dbItem := &db.RequestLog{
+			ReqID:        rl.ID,
+			Timestamp:    timestamp,
+			Mode:         "local",
+			UserID:       rl.Account,
+			ModelName:    rl.Model,
+			InTokens:     rl.InTokens,
+			OutTokens:    rl.OutTokens,
+			CachedTokens: rl.CachedTokens,
+			Cost:         rl.Cost,
+			InputCost:    inputCost,
+			OutputCost:   outputCost,
+			CachedCost:   cachedCost,
+			DurationMs:   rl.DurationMs,
+			StatusCode:   rl.StatusCode,
+			Method:       rl.Method,
+			Host:         rl.Host,
+			Path:         rl.Path,
+			SessionID:    rl.SessionID,
+			Family:       rl.Family,
+		}
+		_ = db.InsertRequestLog(dbItem)
+	}(reqLog, t.pricingMgr)
+
+	t.scheduleSave()
+}
+
+func (t *Tracker) AddRequestLogInMemoryOnly(reqLog *RequestLog) {
+	// 只保留真正的模型对话/发送请求（即包含 generatecontent 或 predict 的 API 调用）
+	p := strings.ToLower(reqLog.Path)
+	isRealModel := strings.Contains(p, "generatecontent") || strings.Contains(p, "predict")
+	if !isRealModel {
+		return
+	}
+
+	if reqLog.Model == "" || reqLog.Model == "unknown" {
+		return
+	}
+
+	t.Lock()
+	reqLog.Cost = t.pricingMgr.CalculateCost(reqLog.Model, reqLog.InTokens, reqLog.OutTokens, reqLog.CachedTokens)
+	reqLog.RequestBody = TruncateRequestBody(reqLog.RequestBody)
+
+	t.requests = append([]*RequestLog{reqLog}, t.requests...)
+	if len(t.requests) > 50 {
+		t.requests = t.requests[:50]
+	}
+	t.Unlock()
+
+	t.scheduleSave()
+}
+
+func (t *Tracker) ClearRetriesOrErrors(logType string) {
+	t.Lock()
+	if logType == "RETRY" || logType == "ALL" {
+		t.stats.TotalRetries = 0
+	}
+	if logType == "ERROR" || logType == "ALL" {
+		t.stats.TotalErrors = 0
+	}
+	t.Unlock()
+
+	t.SaveToDisk()
+}

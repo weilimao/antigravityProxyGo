@@ -47,6 +47,11 @@ type GeminiUsageMetadata struct {
 	PromptTokenCount     int `json:"promptTokenCount"`
 	CandidatesTokenCount int `json:"candidatesTokenCount"`
 	TotalTokenCount      int `json:"totalTokenCount"`
+	// ThoughtsTokenCount 承载 Gemini 推理模型的思考 token 消耗(对应官方 usageMetadata.thoughtsTokenCount)。
+	// 思考 token 应回译为 OpenAI usage.completion_tokens_details.reasoning_tokens,让客户端
+	// 上下文台账区分正文 token 与推理 token;Gemini 的 totalTokenCount 通常已含思考 token,
+	// 故 reasoning_tokens 仅作明细透出,不额外加回 total(completion_tokens 仍取 candidatesTokenCount)。
+	ThoughtsTokenCount int `json:"thoughtsTokenCount,omitempty"`
 }
 
 type GeminiResponse struct {

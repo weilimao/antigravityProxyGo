@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/session"
 	"antigravity-proxy/internal/settings"
 )
 
@@ -578,5 +580,130 @@ func TestPassthroughForward_AnthropicUpstream_NonStreamPatchesInputTokens(t *tes
 	}
 	if resp.Usage.OutputTokens != 7 {
 		t.Errorf("non-stream usage.output_tokens must pass through intact (7), got %d", resp.Usage.OutputTokens)
+	}
+}
+
+// TestPassthroughForward_Other_CodexSessionHeader_Sticky 锁定 Other 号池组内 Codex `Session-Id` 头
+// 进入 sticky 选号键(pickOtherAccount 用 "other:{groupID}:{stickyKey}",stickyKey 取 userSession.SessionKey
+// 而非 UserID)。同一 Codex 会话多次请求锁定同一上游账号;开启新 `Session-Id` 后散到(可能)不同的号。
+// 这是本次改造的核心目标在 Other 号池的落地:sticky 粒度由「按用户(UserID)」细化到「按 Codex 会话」,
+// 同一 Codex 用户的不同会话不再全挤同一组内账号。
+//
+// 双号 Other 组(仅 ["openai"] 格式,入站 OpenAI Chat 直发):
+//   - 4 次同 Codex Session-Id 请求 → 同一上游账号(key 前缀相同);
+//   - 切第二个 Codex Session-Id → FNV 哈希到另一 index → 不同账号;
+//   - 回到第一个 Codex Session-Id → 仍命中原绑定账号(sticky 绑定持久,走 sessionRouter 已存在绑定快路径)。
+//
+// 经 /route/v1/chat/completions 入站 → resolveRoutedTarget 命中 RelayModelMapping(provider=other, group=aliyun)
+// → passthroughForward.run → pickOtherAccount(sticky 组) → 透传到 {BaseURL}/v1/chat/completions。
+// 上游镜像捕获 r.Header.Get("Authorization") 做断言(Bearer test-key-1 / test-key-2 区分账号)。
+func TestPassthroughForward_Other_CodexSessionHeader_Sticky(t *testing.T) {
+	var requestedKeys []string
+	var mu sync.Mutex
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("Authorization")
+		mu.Lock()
+		requestedKeys = append(requestedKeys, key)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}`))
+	}))
+	defer upstream.Close()
+
+	mgr := account.NewManager()
+	mgr.AddAccount(&account.Account{
+		ID: "ali-c1", Email: "c1@aliyun", Provider: "other",
+		AccessToken: "test-key-1", BaseURL: upstream.URL, Enabled: true,
+		GroupID: "aliyun", GroupName: "阿里云", Formats: []string{"openai"},
+		Cooldowns: map[string]int64{},
+	})
+	mgr.AddAccount(&account.Account{
+		ID: "ali-c2", Email: "c2@aliyun", Provider: "other",
+		AccessToken: "test-key-2", BaseURL: upstream.URL, Enabled: true,
+		GroupID: "aliyun", GroupName: "阿里云", Formats: []string{"openai"},
+		Cooldowns: map[string]int64{},
+	})
+	// 切到 sticky LB 模式(组级),并发上限放大避免过滤撼动已绑定账号。
+	mgr.SetOtherLBMode("aliyun", "sticky")
+	mgr.SetOtherMaxConcurrency("aliyun", 100)
+
+	router := session.NewRouter()
+	h := &APICompatHandler{
+		accountMgr:  mgr,
+		sessionRouter: router,
+		settingsMgr: &stubPassThroughSettingsModelMapping{mappings: []settings.ModelMappingEntry{{
+			ClientModel:    "other/aliyun/deepseek-v4-flash",
+			TargetModel:    "deepseek-v4-flash",
+			TargetProvider: "other",
+			TargetGroupID:  "aliyun",
+			Expose:         true,
+		}}},
+		logFn:        func(string) {},
+		client:       &http.Client{Timeout: 5 * time.Second},
+		streamClient: &http.Client{Timeout: 0},
+	}
+
+	const codexSession1 = "019fea2a-ebe0-7693-a323-14df0c53786c"
+	const codexSession2 = "119fea2a-ebe0-7693-a323-14df0c53786c"
+
+	makeReq := func(sessionID string) {
+		body := `{"model":"other/aliyun/deepseek-v4-flash","messages":[{"role":"user","content":"hi"}]}`
+		req := httptest.NewRequest(http.MethodPost, "/route/v1/chat/completions", strings.NewReader(body))
+		// 模拟 Codex TUI:Session-Id 头(整段 UUID),用 Authorization: Bearer 鉴权。
+		req.Header.Set("Authorization", "Bearer codex-bearer")
+		req.Header.Set("Session-Id", sessionID)
+		// 同一用户但两个不同 Codex 会话:验证 sticky 粒度细化到会话而非用户。
+		sess := &RelaySession{UserID: "u-codex", UserKey: "kcodex"}
+		rr := httptest.NewRecorder()
+		h.handleRoutedForward(rr, req, sess)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200 for codex session %s, got %d body=%s", sessionID, rr.Code, rr.Body.String())
+		}
+		// SessionKey 应被 ensureSessionKey 注入为 codex:<UUID>(识别 Session-Id 头)。
+		if sess.SessionKey != "codex:"+sessionID {
+			t.Fatalf("SessionKey should be codex:<UUID>, got %q (session %s)", sess.SessionKey, sessionID)
+		}
+	}
+
+	// 同一 Codex 会话 4 次请求 → sticky 锁定同一上游账号(同一 Bearer key)。
+	for i := 0; i < 4; i++ {
+		makeReq(codexSession1)
+	}
+	mu.Lock()
+	keysSess1 := append([]string(nil), requestedKeys...)
+	requestedKeys = nil
+	mu.Unlock()
+
+	if len(keysSess1) != 4 {
+		t.Fatalf("expected 4 requests for codex session 1, got %d", len(keysSess1))
+	}
+	for _, k := range keysSess1 {
+		if k != keysSess1[0] {
+			t.Fatalf("expected same upstream key across same codex session, got: %v", keysSess1)
+		}
+	}
+
+	// 切到第二个 Codex 会话 → 哈希到另一 index → 不同账号(Other 组双号两不同会话键散到不同号)。
+	makeReq(codexSession2)
+	mu.Lock()
+	keysSess2 := append([]string(nil), requestedKeys...)
+	requestedKeys = nil
+	mu.Unlock()
+
+	if len(keysSess2) != 1 {
+		t.Fatalf("expected 1 request for codex session 2, got %d", len(keysSess2))
+	}
+	if keysSess2[0] == keysSess1[0] {
+		t.Fatalf("expected different codex session to bind different account, both got %s", keysSess1[0])
+	}
+
+	// 回到第一个 Codex 会话 → 仍命中原绑定账号(sticky 绑定持久)。
+	makeReq(codexSession1)
+	mu.Lock()
+	last := requestedKeys[len(requestedKeys)-1]
+	mu.Unlock()
+	if last != keysSess1[0] {
+		t.Fatalf("expected codex session 1 to rebind to original account %s, got %s", keysSess1[0], last)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"antigravity-proxy/internal/netutil"
 	"antigravity-proxy/internal/relay"
 	"antigravity-proxy/internal/settings"
+
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -176,7 +177,7 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 			"customSocks5Enabled":  a.settingsMgr.GetCustomSocks5Enabled(),
 			"fallbackProxyAddress": a.settingsMgr.GetFallbackProxyAddress(),
 			"fallbackProxyEnabled": a.settingsMgr.GetFallbackProxyEnabled(),
-			"cachedLocalProxy":      fallbackURL,
+			"cachedLocalProxy":     fallbackURL,
 		})
 		return true
 
@@ -325,6 +326,38 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 			wailsRuntime.EventsEmit(a.ctx, "settings:debugger-log-path-res", dir)
 			a.AddLog(fmt.Sprintf("⚙️ Debugger 调试日志目录已选择: %s", dir))
 		}
+		return true
+
+	case "settings:set-system-log-enabled":
+		_ = a.settingsMgr.SetEnableSystemLog(getBoolArg(0))
+		return true
+
+	case "settings:set-packet-capture-enabled":
+		_ = a.settingsMgr.SetEnablePacketCapture(getBoolArg(0))
+		return true
+
+	case "settings:set-auto-start":
+		_ = a.settingsMgr.SetAutoStart(getBoolArg(0))
+		return true
+
+	case "settings:set-silent-start":
+		_ = a.settingsMgr.SetSilentStart(getBoolArg(0))
+		return true
+
+	case "settings:set-max-retries":
+		_ = a.settingsMgr.SetMaxRetries(getIntArg(0))
+		return true
+
+	case "settings:set-max-retry-delay":
+		_ = a.settingsMgr.SetMaxRetryDelay(getIntArg(0))
+		return true
+
+	case "settings:set-max-request-body-mb":
+		_ = a.settingsMgr.SetMaxRequestBodyMB(getIntArg(0))
+		return true
+
+	case "settings:set-request-timeout":
+		_ = a.settingsMgr.SetRequestTimeout(getIntArg(0))
 		return true
 	}
 	return false

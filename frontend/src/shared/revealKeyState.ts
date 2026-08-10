@@ -15,6 +15,7 @@ import { ipcRenderer } from './ipc';
 
 export const nvidiaRevealAccountId = ref<string | null>(null);
 export const otherRevealAccountId = ref<string | null>(null);
+export const grokRevealAccountId = ref<string | null>(null);
 
 export async function revealFromBackend(channel: string, provider: string, accountId: string, inputEl: HTMLInputElement): Promise<boolean> {
   try {

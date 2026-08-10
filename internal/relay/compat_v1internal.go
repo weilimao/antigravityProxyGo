@@ -26,6 +26,12 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 	}
 	r.Body.Close()
 
+	// 会话级隔离键注入(与 handleNvidia/handleGrok 同款口径, 见 relay.session_key.ensureSessionKey):
+	// 客户端原生会话头(Claude/Codex UUID)优先 → ExtractSessionKey 兜底, 供下方直连选号
+	// (sticky 选号键)与 OCR 缓存按会话隔离。v1Internal 此前完全未注入会话键, sticky 用 UserID;
+	// 本步首次让 Codex Session-Id 进入 v1Internal 池。
+	h.ensureSessionKey(userSession, r, bodyBytes)
+
 	// 自动补齐缺失的 project 和 requestId 字段，让客户端请求体最简
 	var rawPayload map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &rawPayload); err == nil {
@@ -171,7 +177,9 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			break
 		}
 
-		sessionKey := userSession.UserID
+		// sticky 选号键: 优先入口已注入的 userSession.SessionKey(按客户端会话粘性, 使同一
+		// Codex 用户的不同会话散到不同号), 空 → UserID(按用户粘性, 旧行为零回归)。
+		sessionKey := h.stickyKeyOf(userSession)
 		poolAccount := h.sessionRouter.GetOrAssignAccount(sessionKey, activeAvailable, h.logFn)
 		if poolAccount == nil {
 			finalErr = fmt.Errorf("no available account assigned from pool")
@@ -341,6 +349,13 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 		StatusCode:   finalResp.StatusCode,
 		StartTs:      startAt,
 		FirstByteRec: antigravityStats.NewFirstByteRecorder(startAt),
+		// ReqBody/ReqHeaders: 入站请求头/请求体原貌落库, 供前端「请求参数详情」弹窗
+		// 按需经 GetRequestDetails 拉取展示, 而非恒落入「无请求头数据 / 无请求参数」兜底。
+		// bodyBytes 为入站原始请求体(函数入口 io.ReadAll 读出, 已含上方补齐 project/requestId
+		// 之后的回写体); r.Header 经 collectInboundHeadersForLog 对 Authorization / x-goog-api-key
+		// 等敏感头脱敏, 杜绝把凭证写进仪表盘与 SQLite。超长字段后续由 stats.TruncateRequestBody 截断。
+		ReqBody:     parseInboundBodyForLog(bodyBytes),
+		ReqHeaders:  collectInboundHeadersForLog(r.Header),
 	}
 
 	// 流式传输响应体

@@ -174,6 +174,19 @@ func (m *Manager) GetPricingForModel(modelName string) ModelRate {
 		return rate
 	}
 
+	// 全名未命中: 逐级截取斜杠后缀(基名)降级匹配。
+	// 入站模型形如 z-ai/glm-5.2 / xxx/xxx/glm-5.2, 价格配置若只登记了基名 glm-5.2,
+	// 先按去掉最左段的子串再试, 若仍无命中最终走 unknown 兜底。
+	for idx := strings.IndexByte(name, '/'); idx >= 0; idx = strings.IndexByte(name, '/') {
+		name = name[idx+1:]
+		if strings.TrimSpace(name) == "" {
+			break
+		}
+		if rate, ok := m.currentPricing[name]; ok {
+			return rate
+		}
+	}
+
 	// 模糊匹配逻辑
 	if strings.Contains(name, "gemini 3.5 flash") || strings.Contains(name, "gemini-3.5-flash") {
 		if strings.Contains(name, "high") {
@@ -251,6 +264,24 @@ func (m *Manager) UpdateModelPricing(modelKey string, rate ModelRate) error {
 	m.EnsureInitialized()
 	m.Lock()
 	m.currentPricing[strings.ToLower(modelKey)] = rate
+	m.Unlock()
+	return m.savePricing()
+}
+
+// UpdatePricingBatch 一次性批量写入多条模型计费配置,只触发一次 savePricing 落盘。
+// 供前端「AI 一键生成计费」确认后把整张可编辑表格批量提交。键仍 Lower‐case 归一化,
+// 与 UpdateModelPricing 同存储路径,写入后既有 GetPricingForModel/CalculateCostBreakdown
+// 匹配引擎零改动即时生效。比循环调用 UpdateModelPricing N 次更省 IO 且避免 N 次
+// savePricing 的反复读写。空 map 直接返回不落盘。
+func (m *Manager) UpdatePricingBatch(rates map[string]ModelRate) error {
+	if len(rates) == 0 {
+		return nil
+	}
+	m.EnsureInitialized()
+	m.Lock()
+	for k, rate := range rates {
+		m.currentPricing[strings.ToLower(k)] = rate
+	}
 	m.Unlock()
 	return m.savePricing()
 }

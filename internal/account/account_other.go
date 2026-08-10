@@ -55,6 +55,7 @@ type OtherGroupInfo struct {
 var reserveOtherGroupIDs = map[string]bool{
 	"antigravity": true, "project": true, "nvidia": true, "google": true, "gcp": true,
 	"gemini-cli": true, "2fa": true, "": true, "all": true, "other": true,
+	"grok": true, // Grok(x.ai) 是独立一级号池,禁止用作 Other 组名,避免路由歧义
 }
 
 // ValidateOtherAccountInput 校验 Other 账号录入参数(新增表单,key 必填)。

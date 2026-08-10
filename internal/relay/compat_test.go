@@ -459,7 +459,7 @@ func TestOpenAIToolCallsCompat(t *testing.T) {
 
 	handler := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
 	rr := httptest.NewRecorder()
-	handler.handleNormalResponse(rr, bytes.NewReader(respBytes), nil, "gpt-4o", "openai", time.Now(), "/v1/chat/completions", "req_123")
+	handler.handleNormalResponse(rr, bytes.NewReader(respBytes), nil, "gpt-4o", "gemini-1.5-pro", "openai", time.Now(), "/v1/chat/completions", "req_123")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rr.Code)

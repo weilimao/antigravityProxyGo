@@ -199,3 +199,60 @@ func TestIPCAccountRevealKey_InvalidProvider(t *testing.T) {
 		t.Fatalf("expected rejection for non-revealable provider, got %+v", res)
 	}
 }
+
+// TestIPCGrokRemoveAndToggle_InvokeChannel 回归锁定:grok:remove / grok:toggle-enabled
+// 只注册在 IPCInvoke(invoke)通道(handleAccountIPC),前端必须用 ipcRenderer.invoke 调用,
+// 不得用 ipcRenderer.send——send 通道(handleAccountsSendIPC)无 grok:remove/toggle-branch,
+// 用 send 会静默无响应(曾导致「移除账号移除不掉」)。
+func TestIPCGrokRemoveAndToggle_InvokeChannel(t *testing.T) {
+	a := newRevealKeyTestApp(t)
+	id, err := a.accountMgr.AddGrokAccount(account.GrokAccountInput{
+		BaseURL: "https://cli-chat-proxy.grok.com/v1",
+		APIKey:  "xai-test-key",
+		Label:   "Grok OAuth 账号",
+	})
+	if err != nil {
+		t.Fatalf("AddGrokAccount: %v", err)
+	}
+
+	// 1) send 通道必须不处理 grok 通道(handleAccountsSendIPC 返回 false)。
+	//    这锁住根因:前端若用 send('grok:remove') 会静默无响应。
+	if a.handleAccountsSendIPC("grok:remove", []interface{}{id}) {
+		t.Fatalf("handleAccountsSendIPC must NOT handle grok:remove (it lives in invoke only)")
+	}
+	if a.handleAccountsSendIPC("grok:toggle-enabled", []interface{}{id, true}) {
+		t.Fatalf("handleAccountsSendIPC must NOT handle grok:toggle-enabled (it lives in invoke only)")
+	}
+
+	// 2) toggle-enabled 经 invoke 通道应正常生效。
+	raw, err := a.IPCInvoke("grok:toggle-enabled", `["`+id+`",true]`)
+	if err != nil {
+		t.Fatalf("IPCInvoke grok:toggle-enabled err: %v", err)
+	}
+	var toggleRes map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &toggleRes); err != nil {
+		t.Fatalf("unmarshal toggle resp: %v", err)
+	}
+	if ok, _ := toggleRes["success"].(bool); !ok {
+		t.Fatalf("expected toggle success, got %+v", toggleRes)
+	}
+	if acc := a.accountMgr.GetAccountByID(id); acc == nil || !acc.Enabled {
+		t.Fatalf("expected grok account enabled after toggle, got nil=%v enabled=%v", acc == nil, acc != nil && acc.Enabled)
+	}
+
+	// 3) remove 经 invoke 通道应移除账号并广播。
+	raw, err = a.IPCInvoke("grok:remove", `["`+id+`"]`)
+	if err != nil {
+		t.Fatalf("IPCInvoke grok:remove err: %v", err)
+	}
+	var rmRes map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &rmRes); err != nil {
+		t.Fatalf("unmarshal remove resp: %v", err)
+	}
+	if ok, _ := rmRes["success"].(bool); !ok {
+		t.Fatalf("expected remove success, got %+v", rmRes)
+	}
+	if acc := a.accountMgr.GetAccountByID(id); acc != nil {
+		t.Fatalf("expected grok account removed, still present: %+v", acc)
+	}
+}

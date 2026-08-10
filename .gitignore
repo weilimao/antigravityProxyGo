@@ -14,3 +14,6 @@ logs/
 scripts/.secret_token
 scripts/.secret_token copy
 *.secret
+
+# 代码拆分提取器(split_*.py / extract_*.py)dry-run 预览产物,非产物代码,不纳入版本控制
+*.preview

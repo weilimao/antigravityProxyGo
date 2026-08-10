@@ -40,6 +40,7 @@ type App struct {
 	sessionRouter     *session.Router
 	pricingMgr        *pricing.Manager
 	statsTracker      *stats.Tracker
+	aiPricingGen      *pricing.AIPriceGenerator
 	usageTracker      *stats.UsageTracker
 	errLogger         *stats.RetryErrorLogger
 	packetCap         *stats.PacketCapturer

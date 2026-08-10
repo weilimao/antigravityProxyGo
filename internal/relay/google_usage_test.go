@@ -261,6 +261,9 @@ func TestHandleV1Internal_DirectSuccess_RecordsUsage(t *testing.T) {
 
 	body := `{"request":{"model":"gemini-2.5-flash","contents":[{"role":"user","parts":[{"text":"hi"}]}]},"project":"fav-syn-001","requestId":"chat/1-1"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1internal:generateContent", strings.NewReader(body))
+	// 入站请求头(含鉴权凭证, 验证 recordGoogleUsage 经 collectInboundHeadersForLog 脱敏后落库)。
+	req.Header.Set("Authorization", "Bearer gaia-secret-e2e")
+	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler.handleV1Internal(rr, req, &RelaySession{Token: "tok-e2e", UserID: "u-e2e"})
 
@@ -287,5 +290,25 @@ func TestHandleV1Internal_DirectSuccess_RecordsUsage(t *testing.T) {
 	}
 	if last := gt.GetRecentRequestCacheStatus(); last != "HIT" {
 		t.Errorf("端到端 CacheStatus = %q, want \"HIT\" (cached=150)", last)
+	}
+	// 入站请求头/请求体端到端落库:handleV1Internal 装配 logCtx 时注入 ReqBody/ReqHeaders,
+	// 经 recordGoogleUsage 落到 stats.RequestLog, 使前端「请求参数详情」弹窗能展示入站
+	// 请求体/请求头而非「无请求参数 / 无请求头数据」兜底(截图现象)。鉴权头 Authorization
+	// 需脱敏为 "<redacted>"(避免凭证写进 SQLite), 非敏感头 Content-Type 原样保留。
+	if gotBody := gt.GetRecentRequestBody(); gotBody == nil {
+		t.Errorf("端到端 RequestBody = nil, want 入站结构化 body; 详情弹窗恒落「无请求参数」(截图现象未修)")
+	} else if bodyMap, ok := gotBody.(map[string]interface{}); !ok || bodyMap["project"] != "fav-syn-001" {
+		t.Errorf("端到端 RequestBody.project 未透传, got %v", gotBody)
+	}
+	gotHeaders := gt.GetRecentRequestHeaders()
+	if gotHeaders == nil {
+		t.Fatalf("端到端 RequestHeaders = nil, want 非空映射; 详情弹窗恒落「无请求头数据」(截图现象未修)")
+	}
+	headersMap, ok := gotHeaders.(map[string]interface{})
+	if !ok {
+		t.Fatalf("端到端 RequestHeaders 类型 = %T, want map[string]interface{}", gotHeaders)
+	}
+	if got := headersMap["Authorization"]; got != "<redacted>" {
+		t.Errorf("端到端 Authorization = %v, want \"<redacted>\"(鉴权凭证脱敏)", got)
 	}
 }

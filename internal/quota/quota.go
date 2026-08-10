@@ -604,6 +604,7 @@ func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]accou
 //   - Group: "NVIDIA 第三方 API Key"（前端气泡主标题）
 //   - ModelID: "可用模型数 N 个"（前端气泡副文案，由前端直接渲染）
 //   - RemainingFraction=1 / RemainPercent=100（语义：可用，非配额度量）
+//
 // 失败时返回带 error 的 QuotaResult，error 文案带上游失败原因供前端红泡展示。
 //
 // 模型列表探测委托 internal/modelfetch:与 app_account_ipc.go 的 fetchRemoteNvidiaModels
@@ -638,6 +639,44 @@ func fetchNvidiaQuota(acc *account.Account) (*account.QuotaResult, error) {
 	}, nil
 }
 
+// fetchGrokQuota 通过真实请求上游 /v1/models 验证 Grok(x.ai) API Key 是否可用,
+// 并返回账号当前可调用的模型数量。与 fetchNvidiaQuota 同构(复用 internal/modelfetch),
+// 仅替换族文案为 Grok, 前端配额气泡据此显示该 Key 的可用模型清单:
+//   - Group: "Grok (xAI) API Key"(前端气泡主标题, 与 NVIDIA 的 "NVIDIA 第三方 API Key" 并列);
+//   - ModelID: "可用模型数 N 个 / N models"(前端气泡副文案);
+//   - RemainingFraction=1 / RemainPercent=100(语义: 可用, 非配额度量);
+//   - Tier: "Grok", Credits: 可用模型数(供前端"可用模型数 N 个"展示)。
+//
+// 失败时返回带 error 的 QuotaResult, error 文案带上游失败原因供前端红泡展示。
+// BaseURL 留空回退 account.DefaultGrokBaseURL(https://api.x.ai/v1), 与 AddGrokAccount 同口径。
+func fetchGrokQuota(acc *account.Account) (*account.QuotaResult, error) {
+	baseURL := strings.TrimSpace(acc.BaseURL)
+	if baseURL == "" {
+		baseURL = account.DefaultGrokBaseURL
+	}
+
+	models, err := modelfetch.FetchModels(baseURL, acc.AccessToken)
+	if err != nil {
+		return nil, fmt.Errorf("配额请求失败: %w", err)
+	}
+	count := len(models)
+
+	credits := float64(count)
+	return &account.QuotaResult{
+		Tier: "Grok",
+		Buckets: []account.QuotaBucket{
+			{
+				Group: "Grok (xAI) API Key",
+				// 前端按 Group 渲染气泡主标题, ModelID 作为数量副文案直接展示(与 NVIDIA 同构)。
+				ModelID:           fmt.Sprintf("可用模型数 %d 个 / %d models", count, count),
+				RemainingFraction: 1,
+				RemainPercent:     100,
+			},
+		},
+		Credits: &credits,
+	}, nil
+}
+
 func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*account.Account) (string, error), updateTokenCallback func(string, string)) (*account.QuotaResult, error) {
 	if acc.Provider == "nvidia" {
 		return fetchNvidiaQuota(acc)
@@ -656,6 +695,12 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 			Tier:    "Other 自定义上游",
 			Buckets: []account.QuotaBucket{},
 		}, nil
+	}
+	// Grok(x.ai)号池:与 NVIDIA 同构, 通过真实请求上游 /v1/models 验证 API Key 可用性,
+	// 并把可用模型数编码进一个语义 QuotaBucket, 前端气泡据此显示该 Key 的可用模型清单。
+	// 复用 fetchNvidiaQuota 的语义 bucket 组装口径, 仅替换族文案(Tier/Group/ModelID 前缀为 Grok)。
+	if acc.Provider == "grok" {
+		return fetchGrokQuota(acc)
 	}
 
 	token := acc.AccessToken

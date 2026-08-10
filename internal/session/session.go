@@ -73,16 +73,42 @@ func (r *Router) UpdatePath(newDataDir string) {
 	r.LoadFromDisk()
 }
 
-// ExtractSessionKey 提取会话 Key。优先级：Authorization Token > Socket 远程端口
+// authKeyHash 把接入凭证 token 压成 "auth:<SHA256[:16hex]>" 形式的会话 baseKey。
+// 供 ExtractSessionKey 的 Authorization Bearer 与各凭证头分支复用,保证同一凭证 token 在任意
+// 承载形态(Bearer / X-Api-Key / ...)产生同一 auth:<hash>,使 sticky 选号键对凭证粒度稳定。
+func authKeyHash(token string) string {
+	hasher := sha256.New()
+	hasher.Write([]byte(token))
+	return "auth:" + hex.EncodeToString(hasher.Sum(nil))[:16]
+}
+
+// firstNonShortCredential 按 extractToken(见 relay.compat_translate_helpers)同口径但不含 URL ?key=,
+// 依次取承载接入凭证的请求头,返回首个非空且 trim 后长度 >10 的凭证原始值;全空/过短返回 ""。
+//
+// 取头顺序: X-Api-Key(Anthropic 原生) → X-Goog-Api-Key(Google 风格) → ANTHROPIC_API_KEY / API_KEY
+// (分发客户端自定义头)。刻意不含 URL ?key=:会话键按 query 取值会引入"同 URL 不同请求体"的误聚合,
+// 与 extractToken 的取值边界在此点刻意分离。长度阈值 >10 为独立门控,过滤极短占位噪声。
+// http.Header.Get 大小写不敏感,无需列两种大小写变体(x-goog-api-key 与 X-Goog-Api-Key 同摄)。
+func firstNonShortCredential(req *http.Request) string {
+	for _, h := range []string{"X-Api-Key", "X-Goog-Api-Key", "ANTHROPIC_API_KEY", "API_KEY"} {
+		if tok := strings.TrimSpace(req.Header.Get(h)); len(tok) > 10 {
+			return tok
+		}
+	}
+	return ""
+}
+
+// ExtractSessionKey 提取会话 Key。优先级: Authorization Bearer > 凭证头(X-Api-Key 等) > Socket 远程端口
 func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 	baseKey := ""
 	authHeader := req.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") && len(authHeader) > 10 {
-		token := authHeader[7:]
-		hasher := sha256.New()
-		hasher.Write([]byte(token))
-		hashHex := hex.EncodeToString(hasher.Sum(nil))
-		baseKey = "auth:" + hashHex[:16]
+		baseKey = authKeyHash(authHeader[7:])
+	} else if tok := firstNonShortCredential(req); tok != "" {
+		// Anthropic SDK / Google 风格 / 分发客户端自定义凭证头兜底:杜绝 X-Api-Key 等凭证鉴权的
+		// 客户端被降级到 "sock:<IP>" 兜底,致使 sticky 选号在同一来源 IP 下跨 API Key/用户全部
+		// 聚到同一上游账号。产物 "auth:<hash>" 与 Bearer 路径同形态,下游 auth:acc:<hex> 套壳零改动。
+		baseKey = authKeyHash(tok)
 	} else {
 		remoteAddr := req.RemoteAddr
 		if remoteAddr == "" {
@@ -185,6 +211,35 @@ func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 	}
 
 	return baseKey
+}
+
+// ExtractClientSessionHeader 从入站请求头识别「客户端原生会话标识」,供全链路四号池统一
+// sticky 选号键与 OCR 缓存隔离键复用。与 ExtractSessionKey 互补:后者只看 Authorization/
+// sock/body,前者专看客户端在请求头里显式携带的会话 UUID。两者并列,由调用方决定优先级
+// (见 relay.session_key.ensureSessionKey:本方法命中优先,未命中再回退 ExtractSessionKey)。
+//
+// 识别优先级(整段 UUID 落地,跨进程重启稳定可对照,与 X-Claude-Code-Session-Id 同口径):
+//  1. X-Claude-Code-Session-Id  → "claude:<UUID>"  (Claude Code CLI/VSCode 原生会话头)
+//  2. Session-Id                → "codex:<UUID>"   (Codex TUI 原生会话头,与 Thread-Id 等值)
+//  3. Thread-Id                 → "codex:<UUID>"   (Codex 会话线程头,兜底同 Session-Id)
+// 任一命中即返回对应前缀的整段值;全部缺失/纯空白返回空串,调用方据此回退 ExtractSessionKey。
+//
+// 不改 ExtractSessionKey 主体:其 auth/sock/body 兜底口径为既有非客户端头路径(脚本/SDK 直调)
+// 的稳定契约,本方法为纯加法,仅在客户端显式携带会话头时短路到更细粒度的会话键。
+func (r *Router) ExtractClientSessionHeader(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	if sid := strings.TrimSpace(req.Header.Get("X-Claude-Code-Session-Id")); sid != "" {
+		return "claude:" + sid
+	}
+	if sid := strings.TrimSpace(req.Header.Get("Session-Id")); sid != "" {
+		return "codex:" + sid
+	}
+	if tid := strings.TrimSpace(req.Header.Get("Thread-Id")); tid != "" {
+		return "codex:" + tid
+	}
+	return ""
 }
 
 func (r *Router) GetOrAssignAccount(sessionKey string, availableAccounts []*account.Account, logFn func(string)) *account.Account {

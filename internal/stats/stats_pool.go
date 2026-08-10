@@ -15,6 +15,7 @@ package stats
 // key 命名规范:
 //   "antigravity"          —— Provider ∈ {antigravity, project, google, gcp, gemini-cli, ""} 的直连请求;
 //   "nvidia"               —— Provider == "nvidia"(NIM 上游 OpenAI Chat 协议无 cache, cached 恒 0);
+//   "grok"                 —— Provider == "grok"(xAI Grok 号池, 上游 chat/completions);
 //   "other:<groupIdLowerTrim>" —— Provider == "other", 拼 groupId; 缺失兜底 "other:__unknown__"。
 //
 // 各池/组分子分母独立累加, 互不串扰, 与原全局第一档口径一致(剔除恒 0 缓存的池时各池独立剔除)。
@@ -56,6 +57,7 @@ const otherKeyPrefix = "other:"
 //
 // 映射规则:
 //   - "nvidia" → "nvidia"
+//   - "grok"  → "grok"
 //   - "other"  → "other:<groupIDLowerTrim>", groupID 空(经规整)兜底 "other:__unknown__"
 //   - 其余("antigravity"/"project"/"google"/"gcp"/"gemini-cli"/"") → "antigravity"
 //     (直连链路口径等价于官方账号; 直连无 poolAccount 时空 provider 亦归此, 即默认链路)
@@ -68,6 +70,8 @@ func PoolKeyForProvider(provider, groupID string) string {
 	switch p {
 	case "nvidia":
 		return "nvidia"
+	case "grok":
+		return "grok"
 	case "other":
 		gid := strings.ToLower(strings.TrimSpace(groupID))
 		if gid == "" {
@@ -354,15 +358,18 @@ func (t *Tracker) RecalculateCacheEligibleTokensLocked() {
 // modelIsGooglePoolFamily 判定模型名主键是否属于 antigravity 号池族。
 // Google 号池族包括 gemini 全系、claude 全系(经 daily-cloudcode-pa 重译为 Vertex Anthropic)、
 // agent 模型、tab 补全(tab_flash/tab_jump)、antigravity-core 及空/unknown 兜底名。
-// 显式排除第三方号池族: "nvidia/" 前缀、以及 openai/deepseek/qwen/moonshot/kimi/z-ai/glm/gpt
-// 等 OpenAI 兼容上游(这些经 recordNvidiaUsage/recordOtherUsage 各自记账, 不该并入 antigravity)。
+// 显式排除第三方号池族: "nvidia/"、"grok"(及 "grok/" 前缀模型名)、以及 openai/deepseek/qwen/moonshot/kimi/z-ai/glm/gpt
+// 等 OpenAI 兼容上游(这些经 recordNvidiaUsage/recordGrokUsage/recordOtherUsage 各自记账, 不该并入 antigravity)。
 // 仅用于 BackfillPoolFromModels 一次性存量回填的归并口径, 不影响新请求的 PoolKeyForProvider。
 func modelIsGooglePoolFamily(modelKey string) bool {
 	m := strings.ToLower(modelKey)
 	if strings.HasPrefix(m, "nvidia/") {
 		return false
 	}
-	thirdParty := []string{"openai/", "deepseek", "qwen", "moonshot", "kimi", "z-ai/", "glm", "gpt-", "o1-", "o3-", "o4-", "o5-"}
+	if strings.HasPrefix(m, "grok/") || m == "grok" {
+		return false
+	}
+	thirdParty := []string{"openai/", "deepseek", "qwen", "moonshot", "kimi", "z-ai/", "glm", "gpt-", "o1-", "o3-", "o4-", "o5-", "grok-"}
 	for _, p := range thirdParty {
 		if strings.Contains(m, p) {
 			return false
@@ -371,7 +378,7 @@ func modelIsGooglePoolFamily(modelKey string) bool {
 	if m == "" || m == "unknown" || m == "antigravity-core" {
 		return true
 	}
-	for _, p := range []string{"gemini", "claude", "tab_f", "tab-jump", "grok", "gpt-oss", "mistral", "llama", "phi", "command-r"} {
+	for _, p := range []string{"gemini", "claude", "tab_f", "tab-jump", "gpt-oss", "mistral", "llama", "phi", "command-r"} {
 		if strings.Contains(m, p) {
 			return true
 		}

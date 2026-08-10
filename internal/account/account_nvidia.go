@@ -242,7 +242,7 @@ func maskedKeyForAccount(a *Account) string {
 		return ""
 	}
 	switch strings.ToLower(a.Provider) {
-	case "nvidia", "other":
+	case "nvidia", "other", "grok":
 		return maskAPIKey(a.GetAccessToken())
 	}
 	return ""

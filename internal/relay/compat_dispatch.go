@@ -181,7 +181,13 @@ func (h *APICompatHandler) handleOpenAIChat(w http.ResponseWriter, r *http.Reque
 
 	// OpenAI Chat/Responses 入站不回译为 Anthropic 流(上游为 Gemini,响应仅 openai/responses 形态),
 	// message_start 不出现,故 inboundInputTokens 传 0(无消费方读取)。
-	h.dispatchToGemini(w, r, userSession, openReq.Model, geminiModel, geminiReq, openReq.Stream, apiFormat, 0)
+	// 第三个返回值 streamIncludeUsage 来自 openReq.StreamOptions.include_usage:请求式经
+	// dispatchToGemini 透传到 handleStreamResponse,决定是否在流末尾补吐 OpenAI usage chunk。
+	streamIncludeUsage := false
+	if openReq.StreamOptions != nil && openReq.StreamOptions.IncludeUsage {
+		streamIncludeUsage = true
+	}
+	h.dispatchToGemini(w, r, userSession, openReq.Model, geminiModel, geminiReq, openReq.Stream, apiFormat, 0, streamIncludeUsage)
 }
 
 func (h *APICompatHandler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request, userSession *RelaySession) {
@@ -208,7 +214,7 @@ func (h *APICompatHandler) handleAnthropicMessages(w http.ResponseWriter, r *htt
 	// 此处已解析出 AnthropicRequest,直接复用 estimateInputTokens;真实累计值仍由末帧 message_delta 覆盖。
 	inboundInputTokens := estimateInputTokens(&anthReq)
 
-	h.dispatchToGemini(w, r, userSession, anthReq.Model, geminiModel, geminiReq, anthReq.Stream, "anthropic", inboundInputTokens)
+	h.dispatchToGemini(w, r, userSession, anthReq.Model, geminiModel, geminiReq, anthReq.Stream, "anthropic", inboundInputTokens, false)
 }
 
 func (h *APICompatHandler) dispatchToGemini(
@@ -221,6 +227,7 @@ func (h *APICompatHandler) dispatchToGemini(
 	stream bool,
 	apiFormat string,
 	inboundInputTokens int,
+	streamIncludeUsage bool,
 ) {
 	startTime := time.Now()
 
@@ -245,6 +252,15 @@ func (h *APICompatHandler) dispatchToGemini(
 	)
 	if compressed {
 		h.log("✅ [Relay Compat] 会话压缩成功，请求体已优化")
+	}
+
+	// 本地图片路径自愈(L2.5 预处理):Claude Code 等客户端对未识别模型会剔除 image 块,本地截图
+	// 路径作为纯 text 块发来。先扫 text 块裸路径读图 OCR 注入,再交下方 DowngradeGeminiImagesToText
+	// 做结构化 InlineData 降级。ocrSelf 自递归守卫与下方 image 降级共用同一头部判断。静默 miss 不报错。
+	if r.Header.Get("X-Antigravity-OCR-Self") != "1" {
+		if enriched := h.ocr.EnrichLocalImagePathsInGemini(geminiReq, userSession); enriched > 0 {
+			h.log("✅ [Relay Compat] Gemini 检测到 %d 个本地图片路径,已读图 OCR 注入 text 块(会话 %s)", enriched, ocrSessionDisplay(userSession))
+		}
 	}
 
 	// 假多模态转换自愈逻辑：检测当非 Gemini 模型遇到多模态图片时，自动调用本地多模态模型执行 OCR 转换
@@ -337,6 +353,17 @@ func (h *APICompatHandler) dispatchToGemini(
 	}
 	req.Header.Set("X-Antigravity-Original-Path", r.URL.Path)
 	req.Header.Set("X-Antigravity-Original-Method", r.Method)
+	// 客户端会话头透传:dispatchToGemini 上面不拷贝入站头(仅显式 Set 固定头),故 Antigravity
+	// 池经 18443 代理选号时,Codex Session-Id / Claude X-Claude-Code-Session-Id 头会在此丢失 →
+	// 18443 的 ExtractSessionKey 拿不到客户端会话键,全本地 Codex 会话共一个 auth:acc:<hex>。
+	// 这里显式把 ExtractClientSessionHeader 结果(命中返回 claude:UUID/codex:UUID)透传给 18443,
+	// 由 18443 优先读取作为 sticky 键,使 Antigravity 池也具备客户端会话级粘性。未命中(返回空串)
+	// 不注入该头,18443 行为与旧行为一致(回退 ExtractSessionKey)。该头在上游剥离清单内,不外泄。
+	if h.sessionRouter != nil {
+		if clientSessHdr := h.sessionRouter.ExtractClientSessionHeader(r); clientSessHdr != "" {
+			req.Header.Set("X-Antigravity-Client-Session", clientSessHdr)
+		}
+	}
 	h.log("Forwarding translated request to local proxy (18443) | Model: %s | Stream: %v", targetModelToQuery, stream)
 
 	// 流式请求使用无超时 Client，避免长时间生成（>5min）被 http.Client.Timeout 截断
@@ -365,10 +392,10 @@ func (h *APICompatHandler) dispatchToGemini(
 
 	// 4. 流式传输（SSE）处理
 	if stream {
-		h.handleStreamResponse(r.Context(), w, resp.Body, userSession, clientModel, geminiModel, apiFormat, inboundInputTokens, startTime, r.URL.Path, reqID)
+		h.handleStreamResponse(r.Context(), w, resp.Body, userSession, clientModel, geminiModel, apiFormat, inboundInputTokens, streamIncludeUsage, startTime, r.URL.Path, reqID)
 	} else {
 		// 5. 非流式传输处理
-		h.handleNormalResponse(w, resp.Body, userSession, geminiModel, apiFormat, startTime, r.URL.Path, reqID)
+		h.handleNormalResponse(w, resp.Body, userSession, clientModel, geminiModel, apiFormat, startTime, r.URL.Path, reqID)
 	}
 }
 

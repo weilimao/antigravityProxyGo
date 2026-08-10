@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -123,6 +124,101 @@ func TestRecordOtherUsage_SkipsOnZeroUsage(t *testing.T) {
 	}
 	if got := gt.GetRequestLogCount(); got != beforeLogs {
 		t.Errorf("zero-usage should not fire 落点4: log count = %d, want %d", got, beforeLogs)
+	}
+}
+
+// TestRecordOtherUsage_PersistsBodyAndHeaders 验证 Other 号池链路入站请求体/请求头落库:
+// recordOtherUsage 把 logCtx.ReqBody / logCtx.ReqHeaders 落到 stats.RequestLog.RequestBody /
+// RequestHeaders, 使前端「请求参数详情」弹窗能展示入站请求体/请求头而非兜底文案。敏感头脱敏。
+func TestRecordOtherUsage_PersistsBodyAndHeaders(t *testing.T) {
+	handler, _, _, _ := newNvidiaTestHandler(t, nil)
+	gt := makeInjectedGlobalTracker(t)
+	handler.SetGlobalStatsTracker(gt)
+
+	userSession := &RelaySession{Token: "tok-other-bh", UserID: "u-other-bh", SessionKey: "auth:acc:otherbh000000001"}
+	logCtx := passthroughLogCtx{
+		Method:       "POST",
+		Host:         "token-plan.cn-beijing.maas.aliyuncs.com",
+		Path:         "/route/v1/chat/completions",
+		SessionID:    "auth:acc:otherbh000000001",
+		Account:      "u-other-bh",
+		StatusCode:   200,
+		StartTs:      time.Now(),
+		FirstByteRec: stats.NewFirstByteRecorder(time.Now()),
+		ReqBody:      parseInboundBodyForLog([]byte(`{"model":"deepseek-v4-flash-0731","messages":[{"role":"user","content":"hi"}]}`)),
+		ReqHeaders:   collectInboundHeadersForLog(http.Header{"Authorization": {"Bearer ds-secret"}, "Content-Type": {"application/json"}}),
+	}
+	handler.recordOtherUsage(userSession, "deepseek-v4-flash-0731", 100, 50, 0, nil, logCtx)
+
+	body := gt.GetRecentRequestBody()
+	if body == nil {
+		t.Fatalf("RequestBody = nil, want 入站结构化 body; 详情弹窗将恒落「无请求参数」兜底")
+	}
+	if bodyMap, ok := body.(map[string]interface{}); !ok || bodyMap["model"] != "deepseek-v4-flash-0731" {
+		t.Errorf("RequestBody.model 未透传, got %v", body)
+	}
+	headers := gt.GetRecentRequestHeaders()
+	if headers == nil {
+		t.Fatalf("RequestHeaders = nil, want 非空映射; 详情弹窗将恒落「无请求头数据」兜底")
+	}
+	headersMap, ok := headers.(map[string]interface{})
+	if !ok {
+		t.Fatalf("RequestHeaders 类型 = %T, want map[string]interface{}", headers)
+	}
+	if got := headersMap["Authorization"]; got != "<redacted>" {
+		t.Errorf("RequestHeaders[Authorization] = %v, want \"<redacted>\"", got)
+	}
+	if got := headersMap["Content-Type"]; got != "application/json" {
+		t.Errorf("RequestHeaders[Content-Type] = %v, want application/json", got)
+	}
+}
+
+// TestRecordGoogleUsage_PersistsBodyAndHeaders 验证 Antigravity 直连链路入站请求体/请求头落库
+// (对偶 TestRecordOtherUsage_PersistsBodyAndHeaders), 鉴权头脱敏、协议头原样。
+func TestRecordGoogleUsage_PersistsBodyAndHeaders(t *testing.T) {
+	handler, _, _, _ := newNvidiaTestHandler(t, nil)
+	gt := makeInjectedGlobalTracker(t)
+	handler.SetGlobalStatsTracker(gt)
+
+	userSession := &RelaySession{Token: "tok-ag-bh", UserID: "u-ag-bh", SessionKey: "auth:acc:googlebh"}
+	acc := mkGoogleAccount("ag-bh", "ag-bh@example.com")
+	logCtx := googleLogCtx{
+		Method:       http.MethodPost,
+		Host:         "daily-cloudcode-pa.googleapis.com",
+		Path:         "/v1internal:generateContent",
+		SessionID:    "auth:acc:googlebh",
+		Account:      "ag-bh",
+		StatusCode:   200,
+		StartTs:      time.Now(),
+		FirstByteRec: stats.NewFirstByteRecorder(time.Now()),
+		ReqBody:      parseInboundBodyForLog([]byte(`{"project":"fav-syn-001","contents":[{"role":"user"}]}`)),
+		ReqHeaders:   collectInboundHeadersForLog(http.Header{"Authorization": {"Bearer gaia-secret"}, "X-Goog-Api-Key": {"goog-key"}, "Content-Type": {"application/json"}}),
+	}
+	handler.recordGoogleUsage(userSession, "gemini-3-flash-agent", 100, 30, 0, acc, logCtx)
+
+	body := gt.GetRecentRequestBody()
+	if body == nil {
+		t.Fatalf("RequestBody = nil, want 入站结构化 body; 详情弹窗将恒落「无请求参数」兜底")
+	}
+	if bodyMap, ok := body.(map[string]interface{}); !ok || bodyMap["project"] != "fav-syn-001" {
+		t.Errorf("RequestBody.project 未透传, got %v", body)
+	}
+	headers := gt.GetRecentRequestHeaders()
+	if headers == nil {
+		t.Fatalf("RequestHeaders = nil, want 非空映射; 详情弹窗将恒落「无请求头数据」兜底")
+	}
+	headersMap, ok := headers.(map[string]interface{})
+	if !ok {
+		t.Fatalf("RequestHeaders 类型 = %T, want map[string]interface{}", headers)
+	}
+	if got := headersMap["Authorization"]; got != "<redacted>" {
+		t.Errorf("RequestHeaders[Authorization] = %v, want \"<redacted>\"", got)
+	}
+	if got := headersMap["X-Goog-Api-Key"]; got != "<redacted>" {
+		t.Errorf("RequestHeaders[X-Goog-Api-Key] = %v, want \"<redacted>\"", got)
+	}
+	if got := headersMap["Content-Type"]; got != "application/json" {
+		t.Errorf("RequestHeaders[Content-Type] = %v, want application/json", got)
 	}
 }
 

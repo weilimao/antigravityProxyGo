@@ -536,6 +536,106 @@ func TestHandleNvidia_LBMode_RoundRobinAndSticky(t *testing.T) {
 	}
 }
 
+// TestHandleNvidia_CodexSessionHeader_Sticky 锁定:Codex TUI 的 Session-Id 头被全链路 sticky
+// 选号消费 —— 同一会话(Session-Id 不变)多次请求锁定同一上游账号;开启新 Session-Id 后散到
+// (可能)不同的号。这是本次改造的核心目标:sticky 粒度由「按用户(userSession.UserID)」细化到
+// 「按 Codex 会话(codex:<UUID>)」,使同一 Codex 用户的多会话不再全挤同一号。
+//
+// 双号池:4 次同 Session-Id 请求 → 同一 key;切第二个 Session-Id → 哈希后落到另一个 key。
+// (双号时 FNV 哈希对两个不同会话键必散到不同 index,因 len=2 取模必二选一且不同键极不可能同余。)
+func TestHandleNvidia_CodexSessionHeader_Sticky(t *testing.T) {
+	var requestedKeys []string
+	var mu sync.Mutex
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("Authorization")
+		mu.Lock()
+		requestedKeys = append(requestedKeys, key)
+		mu.Unlock()
+		resp := &OpenAIChatResponse{
+			ID: "chatcmpl-codex", Model: "moonshotai/kimi-k2.5",
+			Choices: []OpenAIChatChoice{{Index: 0, Message: ChatMessage{Role: "assistant", Content: "OK"}}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer upstream.Close()
+
+	acc1 := mkNvidiaAccount("nv-c1", "c1@test.com", "key-c1", upstream.URL, "moonshotai/kimi-k2.5")
+	acc2 := mkNvidiaAccount("nv-c2", "c2@test.com", "key-c2", upstream.URL, "moonshotai/kimi-k2.5")
+	handler, accMgr, _, _ := newNvidiaTestHandler(t, []*account.Account{acc1, acc2})
+	accMgr.SetNvidiaLBMode("sticky")
+	accMgr.SetNvidiaMaxConcurrency(100) // 放大并发上限,保证 sticky 不被并发过滤撼动绑定的号
+
+	const codexSession1 = "019fea2a-ebe0-7693-a323-14df0c53786c"
+	const codexSession2 = "119fea2a-ebe0-7693-a323-14df0c53786c"
+
+	makeReq := func(sessionID string) {
+		anthReq := &AnthropicRequest{
+			Model:    "claude-sonnet-4-5",
+			MaxTokens: func() *int { v := 50; return &v }(),
+			Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+		}
+		body, _ := json.Marshal(anthReq)
+		req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+		// 模拟 Codex TUI:Session-Id 头(整段 UUID),用 Authorization: Bearer 鉴权。
+		req.Header.Set("Authorization", "Bearer codex-bearer")
+		req.Header.Set("Session-Id", sessionID)
+		// 同一用户但两个不同 Codex 会话:验证 sticky 粒度细化到会话而非用户。
+		sess := &RelaySession{UserID: "u-codex", UserKey: "kcodex"}
+		rr := httptest.NewRecorder()
+		handler.handleNvidia(rr, req, sess)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200 for codex session %s, got %d body=%s", sessionID, rr.Code, rr.Body.String())
+		}
+		// SessionKey 应被注入为 codex:<UUID>(ensureSessionKey 识别 Session-Id 头)。
+		if sess.SessionKey != "codex:"+sessionID {
+			t.Fatalf("SessionKey should be codex:<UUID>, got %q (session %s)", sess.SessionKey, sessionID)
+		}
+	}
+
+	// 同一 Codex 会话 4 次请求 → sticky 锁定同一 key。
+	for i := 0; i < 4; i++ {
+		makeReq(codexSession1)
+	}
+	mu.Lock()
+	keysSess1 := append([]string(nil), requestedKeys...)
+	requestedKeys = nil
+	mu.Unlock()
+
+	if len(keysSess1) != 4 {
+		t.Fatalf("expected 4 requests for codex session 1, got %d", len(keysSess1))
+	}
+	for _, k := range keysSess1 {
+		if k != keysSess1[0] {
+			t.Fatalf("expected same upstream key across same codex session, got: %v", keysSess1)
+		}
+	}
+
+	// 切到第二个 Codex 会话 → 哈希到另一 index → 不同 key(双号池两个不同会话键散到不同号)。
+	makeReq(codexSession2)
+	mu.Lock()
+	keysSess2 := append([]string(nil), requestedKeys...)
+	requestedKeys = nil
+	mu.Unlock()
+
+	if len(keysSess2) != 1 {
+		t.Fatalf("expected 1 request for codex session 2, got %d", len(keysSess2))
+	}
+	if keysSess2[0] == keysSess1[0] {
+		t.Fatalf("expected different codex session to bind different account, both got %s", keysSess1[0])
+	}
+
+	// 回到第一个 Codex 会话 → 仍命中原绑定号(sticky 绑定持久)。
+	makeReq(codexSession1)
+	mu.Lock()
+	last := requestedKeys[len(requestedKeys)-1]
+	mu.Unlock()
+	if last != keysSess1[0] {
+		t.Fatalf("expected codex session 1 to rebind to original account %s, got %s", keysSess1[0], last)
+	}
+}
+
 // bytesReader 包一层避免在测试文件顶部多引一个 import（bytes 已通过 nvidia.go 间接可用，这里独立引用）。
 func bytesReader(b []byte) *bytesReaderImpl {
 	return &bytesReaderImpl{data: b}

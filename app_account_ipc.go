@@ -227,15 +227,16 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": uerr.Error()})
 			return data, true, nil
 		}
-		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":          a.accountMgr.GetAccounts(),
-			"poolMode":          a.accountMgr.GetPoolMode(),
-			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
-			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
-			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
-			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
-			"activeChannel":     a.accountMgr.GetActiveChannel(),
-		})
+		// 改名联动使用详情:把 usage.json 中该账号桶缓存的展示名同步为新名,
+		// 使「使用详情」页无需等该账号再次出请求即可即时刷新(只改展示名副本,不动 Token/成本数值)。
+		if updatedAcc := a.accountMgr.GetAccountByID(idU); updatedAcc != nil {
+			a.usageTracker.RenameAccountByID(updatedAcc.ID, updatedAcc.Email)
+		}
+		// 与 grok:update 同走 emitAccountsRes(广播完整号池快照,含 Other/Grok 字段),
+		// 替代此前缺失这些字段的局部 accounts-res,避免改名后切号池 tab 时状态丢失。
+		a.emitAccountsRes()
+		// 主动下发一次含 usage 的完整统计载荷,让前端「使用详情」即时重渲染新名。
+		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 		a.AddLog(fmt.Sprintf("✅ [NVIDIA] 更新账号成功 id=%s", idU))
 		data, _ := marshalResponse(map[string]interface{}{"success": true})
 		return data, true, nil
@@ -461,7 +462,13 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": uerr.Error()})
 			return data, true, nil
 		}
+		// 改名联动使用详情:同步该账号桶展示名(只改展示名副本,不动 Token/成本数值)。
+		if updatedAcc := a.accountMgr.GetAccountByID(upObj.AccountID); updatedAcc != nil {
+			a.usageTracker.RenameAccountByID(updatedAcc.ID, updatedAcc.Email)
+		}
 		a.emitAccountsRes()
+		// 主动下发一次含 usage 的完整统计载荷,让前端「使用详情」即时重渲染新名。
+		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 		a.AddLog(fmt.Sprintf("✅ [Other] 更新账号成功 id=%s group=%s", upObj.AccountID, inU.GroupID))
 		data, _ := marshalResponse(map[string]interface{}{"success": true})
 		return data, true, nil
@@ -569,9 +576,190 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		data, _ := marshalResponse(map[string]interface{}{"success": true, "models": models})
 		return data, true, nil
 
+	// ========== Grok 号池 CRUD(xAI OpenAI Chat 兼容上游, 单池无组) ==========
+
+	case "grok:add":
+		// args: [baseURL, apiKey, label?, defaultModel?, sonnet?, opus?, haiku?, fable?]
+		// 前端按顺序传参(与 nvidia:add 位置参数对齐);label/模型字段可留空。
+		if len(args) < 2 {
+			data, err := marshalResponse(map[string]interface{}{"success": false, "error": "参数不足:至少需要 baseURL 与 apiKey"})
+			return data, true, err
+		}
+		strAt := func(i int) string {
+			if i < len(args) {
+				if s, ok := args[i].(string); ok {
+					return s
+				}
+			}
+			return ""
+		}
+		in := account.GrokAccountInput{
+			BaseURL:      strAt(0),
+			APIKey:       strAt(1),
+			Label:        strAt(2),
+			DefaultModel: strAt(3),
+			ModelSonnet:  strAt(4),
+			ModelOpus:    strAt(5),
+			ModelHaiku:   strAt(6),
+			ModelFable:   strAt(7),
+		}
+		id, err := a.accountMgr.AddGrokAccount(in)
+		if err != nil {
+			a.AddLog(fmt.Sprintf("❌ [Grok] 添加账号失败: %v", err))
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+			return data, true, nil
+		}
+		a.emitAccountsRes()
+		a.AddLog(fmt.Sprintf("✅ [Grok] 添加账号成功: %s (id=%s)", in.BaseURL, id))
+		data, _ := marshalResponse(map[string]interface{}{"success": true, "id": id})
+		return data, true, nil
+
+	case "grok:update":
+		// args: [accountId, baseURL, apiKey, label?, defaultModel?, sonnet?, opus?, haiku?, fable?]
+		// 与 grok:add 位置参数对齐;apiKey 留空表示保持不变(与 nvidia:update 同口径)。
+		if len(args) < 2 {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "参数不足:至少需要 accountId、baseURL"})
+			return data, true, nil
+		}
+		strAtU := func(i int) string {
+			if i < len(args) {
+				if s, ok := args[i].(string); ok {
+					return s
+				}
+			}
+			return ""
+		}
+		idU := strAtU(0)
+		if idU == "" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "缺少 accountId"})
+			return data, true, nil
+		}
+		inU := account.GrokAccountInput{
+			BaseURL:      strAtU(1),
+			APIKey:       strAtU(2),
+			Label:        strAtU(3),
+			DefaultModel: strAtU(4),
+			ModelSonnet:  strAtU(5),
+			ModelOpus:    strAtU(6),
+			ModelHaiku:   strAtU(7),
+			ModelFable:   strAtU(8),
+		}
+		_, uerr := a.accountMgr.UpdateGrokAccount(idU, inU)
+		if uerr != nil {
+			a.AddLog(fmt.Sprintf("❌ [Grok] 更新账号失败: %v", uerr))
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": uerr.Error()})
+			return data, true, nil
+		}
+		// 改名联动使用详情:同步该账号桶展示名(只改展示名副本,不动 Token/成本数值)。
+		if updatedAcc := a.accountMgr.GetAccountByID(idU); updatedAcc != nil {
+			a.usageTracker.RenameAccountByID(updatedAcc.ID, updatedAcc.Email)
+		}
+		a.emitAccountsRes()
+		// 主动下发一次含 usage 的完整统计载荷,让前端「使用详情」即时重渲染新名。
+		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
+		a.AddLog(fmt.Sprintf("✅ [Grok] 更新账号成功 id=%s", idU))
+		data, _ := marshalResponse(map[string]interface{}{"success": true})
+		return data, true, nil
+
+	case "grok:remove":
+		// args: [accountId]
+		// 与 other:remove 同口径: 精确校验 Provider=="grok" 后删除, 避免误删其它池账号。
+		id := ""
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				id = s
+			}
+		}
+		if id == "" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "缺少 accountId"})
+			return data, true, nil
+		}
+		acc := a.accountMgr.GetAccountByID(id)
+		if acc == nil || acc.Provider != "grok" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "账号不存在或非 Grok 类型"})
+			return data, true, nil
+		}
+		a.accountMgr.RemoveAccount(id)
+		a.emitAccountsRes()
+		a.AddLog(fmt.Sprintf("🗑️ [Grok] 已移除账号 id=%s", id))
+		data, _ := marshalResponse(map[string]interface{}{"success": true})
+		return data, true, nil
+
+	case "grok:toggle-enabled":
+		// args: [accountId, enabled]
+		id := ""
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				id = s
+			}
+		}
+		enabled := false
+		if len(args) > 1 {
+			if b, ok := args[1].(bool); ok {
+				enabled = b
+			}
+		}
+		if id == "" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "缺少 accountId"})
+			return data, true, nil
+		}
+		// 仅对 grok 账号生效,避免误操作其他 provider 账号(与 nvidia:toggle-enabled 同口径)。
+		acc := a.accountMgr.GetAccountByID(id)
+		if acc == nil || acc.Provider != "grok" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "账号不存在或非 Grok 类型"})
+			return data, true, nil
+		}
+		a.accountMgr.UpdateAccountEnabled(id, enabled)
+		a.emitAccountsRes()
+		status := "disabled"
+		if enabled {
+			status = "enabled"
+		}
+		a.AddLog(fmt.Sprintf("🔄 [Grok] 账号 %s is now %s.", acc.Email, status))
+		data, _ := marshalResponse(map[string]interface{}{"success": true})
+		return data, true, nil
+
+	case "grok:fetch-models":
+		// args: [baseURL, apiKey]
+		// 与 nvidia:fetch-models 同构: 复用通用 OpenAI list 探活(modelfetch.FetchModels 经 fetchRemoteNvidiaModels)。
+		// baseURL 留空时回退 account.DefaultGrokBaseURL(https://api.x.ai/v1), 与 AddGrokAccount 同口径。
+		baseURL := ""
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				baseURL = strings.TrimSpace(s)
+			}
+		}
+		apiKey := ""
+		if len(args) > 1 {
+			if s, ok := args[1].(string); ok {
+				apiKey = strings.TrimSpace(s)
+			}
+		}
+		if baseURL == "" {
+			baseURL = account.DefaultGrokBaseURL
+		}
+
+		models, ferr := fetchRemoteGrokModels(baseURL, apiKey)
+		if ferr != nil {
+			a.AddLog(fmt.Sprintf("❌ [Grok] 拉取模型列表失败: %v", ferr))
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": ferr.Error(), "allowManualInput": true})
+			return data, true, nil
+		}
+		if len(models) == 0 {
+			a.AddLog(fmt.Sprintf("⚠️ [Grok] 上游 [%s] 返回的模型列表为空,可手动填写模型名", baseURL))
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "上游返回的模型列表为空,请手动填写模型名", "allowManualInput": true})
+			return data, true, nil
+		}
+		a.AddLog(fmt.Sprintf("✅ [Grok] 成功获取到 %d 个模型 (baseURL=%s)", len(models), baseURL))
+		data, _ := marshalResponse(map[string]interface{}{
+			"success": true,
+			"models":  models,
+		})
+		return data, true, nil
+
 	case "account:reveal-key":
 		// 明文查看 API Key(编辑号池账号时眼睛切明文)。
-		// args: [accountId, provider] —— provider 限定可被查看明文的池类型(nvidia / other),
+		// args: [accountId, provider] —— provider 限定可被查看明文的池类型(nvidia / other / grok),
 		// 对齐 other:remove/toggle 的安全守卫:账号必须存在且 Provider 匹配,否则拒绝下发。
 		// 安全说明(用户已确认):这是唯一把明文 Key 下发给渲染层的通道,仅用于编辑态"看回 Key";
 		// GetAccounts()/renderAccounts 仍保持脱敏,不扩散明文到列表/抓包展示。
@@ -592,8 +780,8 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "缺少 accountId"})
 			return data, true, nil
 		}
-		if provider != "nvidia" && provider != "other" {
-			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "provider 仅支持 nvidia/other"})
+		if provider != "nvidia" && provider != "other" && provider != "grok" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "provider 仅支持 nvidia/other/grok"})
 			return data, true, nil
 		}
 		acc := a.accountMgr.GetAccountByID(accID)
@@ -626,6 +814,18 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 func fetchRemoteNvidiaModels(baseURL, apiKey string) ([]string, error) {
 	if baseURL == "" {
 		baseURL = account.DefaultNvidiaBaseURL
+	}
+	return modelfetch.FetchModels(baseURL, apiKey)
+}
+
+// fetchRemoteGrokModels 请求 Grok(xAI) 上游 /v1/models 模型列表端点,供 grok:fetch-models IPC 复用。
+// 与 fetchRemoteNvidiaModels 同构, 均委托 internal/modelfetch.FetchModels 兼容 {data:[{id}]} /
+// {models:[{id}]} 两种响应形态; baseURL 留空回退 account.DefaultGrokBaseURL(https://api.x.ai/v1),
+// 与 AddGrokAccount / fetchGrokQuota 同口径。xAI 官方端点即标准 OpenAI list 形态, 候选端点续试
+// 逻辑对 xAI 同样生效(未来若 xAI 改挂兼容子路径可自动兜底)。
+func fetchRemoteGrokModels(baseURL, apiKey string) ([]string, error) {
+	if baseURL == "" {
+		baseURL = account.DefaultGrokBaseURL
 	}
 	return modelfetch.FetchModels(baseURL, apiKey)
 }

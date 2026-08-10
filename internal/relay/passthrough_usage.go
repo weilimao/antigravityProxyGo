@@ -33,6 +33,16 @@ type passthroughLogCtx struct {
 	StatusCode   int
 	StartTs      time.Time
 	FirstByteRec *stats.FirstByteRecorder
+	// ReqBody 是入站请求体经 parseInboundBodyForLog 解析后的结构化值(空 → nil),供
+	// recordOtherUsage 落库为 stats.RequestLog.RequestBody,使前端「请求参数详情」弹窗
+	// 能展示入站请求体而非「无请求参数」兜底。由 handleRoutedForward 装配 logCtx 时
+	// 从入站 bodyBytes 注入;超长字段后续由 stats.TruncateRequestBody 统一截断防 OOM。
+	ReqBody interface{}
+	// ReqHeaders 是入站请求头经 collectInboundHeadersForLog 采集(含敏感头脱敏)后的
+	// {键: 值} 映射(空入站头 → nil 接口, 与 ReqBody 口径对称),供 recordOtherUsage 落库为
+	// stats.RequestLog.RequestHeaders,使前端「请求参数详情」弹窗能展示入站请求头而非
+	// 「无请求头数据」兜底。
+	ReqHeaders interface{}
 }
 
 // otherReqLogSeq 是 Other 号池请求日志(落点4)的全局原子递增序列, 用于生成稳定且无碰撞的
@@ -131,22 +141,24 @@ func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model str
 			cacheStatus = "HIT"
 		}
 		reqLog := &stats.RequestLog{
-			ID:           fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
-			Timestamp:    time.Now().Format("01/02 15:04:05"),
-			Method:       logCtx.Method,
-			Host:         logCtx.Host,
-			Path:         logCtx.Path,
-			Model:        model,
-			InTokens:     input,
-			OutTokens:    output,
-			CachedTokens: cached,
-			CacheStatus:  cacheStatus,
-			StatusCode:   logCtx.StatusCode,
-			Account:      logCtx.Account,
-			SessionID:    logCtx.SessionID,
-			DurationMs:   durationMs,
-			FirstByteMs:  firstByteMs,
-			Family:       "other",
+			ID:             fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
+			Timestamp:      time.Now().Format("01/02 15:04:05"),
+			Method:         logCtx.Method,
+			Host:           logCtx.Host,
+			Path:           logCtx.Path,
+			Model:          model,
+			InTokens:       input,
+			OutTokens:      output,
+			CachedTokens:   cached,
+			CacheStatus:    cacheStatus,
+			StatusCode:     logCtx.StatusCode,
+			Account:        logCtx.Account,
+			RequestBody:    logCtx.ReqBody,
+			RequestHeaders: logCtx.ReqHeaders,
+			SessionID:      logCtx.SessionID,
+			DurationMs:     durationMs,
+			FirstByteMs:    firstByteMs,
+			Family:         "other",
 		}
 		h.globalStatsTracker.AddRequestLogForFamily(reqLog)
 	}

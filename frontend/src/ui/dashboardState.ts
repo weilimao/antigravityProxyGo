@@ -79,6 +79,7 @@ export interface DashboardState {
         refreshPacketsList: () => void;
         updateAnalyzeAccountSelect: () => void;
         updateRemoteStatus: () => void;
+        updateBatchActionBarUI: () => void;
     };
 }
 
@@ -151,7 +152,8 @@ const state: DashboardState = {
         updateStatusLabel: () => {},
         refreshPacketsList: () => {},
         updateAnalyzeAccountSelect: () => {},
-        updateRemoteStatus: () => {}
+        updateRemoteStatus: () => {},
+        updateBatchActionBarUI: () => {}
     }
 };
 

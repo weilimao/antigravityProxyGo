@@ -304,6 +304,167 @@ func TestHandleNvidiaStream_TTFTReflectsFirstFrame(t *testing.T) {
 	}
 }
 
+// TestRecordNvidiaUsage_PersistsBodyAndHeaders 验证号池直连链路入站请求体/请求头落库链路:
+// recordNvidiaUsage 把 logCtx.ReqBody / logCtx.ReqHeaders 落到 stats.RequestLog.RequestBody /
+// RequestHeaders, 使前端「请求参数详情」弹窗按需经 GetRequestDetails 拉取时能如实展示入站请求体/
+// 请求头, 而非恒落入「无请求参数 / 无请求头数据」兜底文案(截图现象)。
+// 同时验证敏感头(Authorization)被脱敏为 "<redacted>", 非敏感头(Content-Type)原样保留。
+func TestRecordNvidiaUsage_PersistsBodyAndHeaders(t *testing.T) {
+	handler, _, _, _ := newNvidiaTestHandler(t, nil)
+	gt := makeInjectedGlobalTracker(t)
+	handler.SetGlobalStatsTracker(gt)
+
+	userSession := &RelaySession{Token: "tok-body", UserID: "u-body", SessionKey: "auth:acc:body1234567890ab"}
+	start := time.Now()
+	rec := stats.NewFirstByteRecorder(start)
+	rec.MarkFirstByte()
+	logCtx := nvidiaLogCtx{
+		Method:       "POST",
+		Host:         "integrate.api.nvidia.com",
+		Path:         "/nvidia/v1/messages",
+		SessionID:    "auth:acc:body1234567890ab",
+		Account:      "u-body",
+		StatusCode:   200,
+		StartTs:      start,
+		FirstByteRec: rec,
+		// 模拟 writeNvidiaResponse 装配: 入站 body 经 parseInboundBodyForLog 解析,
+		// 入站 header 经 collectInboundHeadersForLog 采集(含敏感头脱敏)。
+		ReqBody:    parseInboundBodyForLog([]byte(`{"model":"z-ai/glm-5.2","stream":true,"messages":[{"role":"user","content":"hi"}]}`)),
+		ReqHeaders: collectInboundHeadersForLog(http.Header{"Authorization": {"Bearer sk-secret"}, "Content-Type": {"application/json"}}),
+	}
+	handler.recordNvidiaUsage(userSession, "z-ai/glm-5.2", 100, 50, 0, nil, logCtx)
+
+	// 落库的 RequestBody 应为入站请求体解析后的结构化值(非 nil), 断言关键字段读回。
+	body := gt.GetRecentRequestBody()
+	if body == nil {
+		t.Fatalf("RequestBody = nil, want 入站结构化 body; 详情弹窗将恒落「无请求参数」兜底(截图现象)")
+	}
+	bodyMap, ok := body.(map[string]interface{})
+	if !ok {
+		t.Fatalf("RequestBody 类型 = %T, want map[string]interface{}(经 parseInboundBodyForLog 解析)", body)
+	}
+	if got := bodyMap["model"]; got != "z-ai/glm-5.2" {
+		t.Errorf("RequestBody.model = %v, want z-ai/glm-5.2", got)
+	}
+
+	// 落库的 RequestHeaders 应为非空映射, 敏感头 Authorization 被脱敏, 非敏感头 Content-Type 原样。
+	headers := gt.GetRecentRequestHeaders()
+	if headers == nil {
+		t.Fatalf("RequestHeaders = nil, want 非空映射; 详情弹窗将恒落「无请求头数据」兜底(截图现象)")
+	}
+	headersMap, ok := headers.(map[string]interface{})
+	if !ok {
+		t.Fatalf("RequestHeaders 类型 = %T, want map[string]interface{}", headers)
+	}
+	if got := headersMap["Authorization"]; got != "<redacted>" {
+		t.Errorf("RequestHeaders[Authorization] = %v, want \"<redacted>\"(敏感凭证脱敏, 避免写进仪表盘与 SQLite)", got)
+	}
+	if got := headersMap["Content-Type"]; got != "application/json" {
+		t.Errorf("RequestHeaders[Content-Type] = %v, want application/json(非敏感头应原样保留)", got)
+	}
+}
+
+// TestRecordNvidiaUsage_EmptyBodyAndHeadersStayNil 验证入站请求体/请求头为空时落库为 nil:
+// recordNvidiaUsage 不强行注入, 前端 formatRequestBody / formatRequestHeaders 仍走「无请求参数 /
+// 无请求头数据」兜底文案(与既有 proxy 直连链路对空请求的展示语义一致, 无回归)。
+func TestRecordNvidiaUsage_EmptyBodyAndHeadersStayNil(t *testing.T) {
+	handler, _, _, _ := newNvidiaTestHandler(t, nil)
+	gt := makeInjectedGlobalTracker(t)
+	handler.SetGlobalStatsTracker(gt)
+
+	userSession := &RelaySession{Token: "tok-empty", UserID: "u-empty", SessionKey: "auth:acc:empty0000000000"}
+	logCtx := nvidiaLogCtx{
+		Method:     "POST",
+		Host:       "integrate.api.nvidia.com",
+		Path:       "/nvidia/v1/chat/completions",
+		StartTs:    time.Now(),
+		ReqBody:    parseInboundBodyForLog(nil), // 空 body → nil
+		ReqHeaders: collectInboundHeadersForLog(nil),
+	}
+	handler.recordNvidiaUsage(userSession, "z-ai/glm-5.2", 100, 50, 0, nil, logCtx)
+
+	if got := gt.GetRecentRequestBody(); got != nil {
+		t.Errorf("空入站 body 期望 RequestBody=nil(前端落兜底文案无回归), 实际=%v", got)
+	}
+	if got := gt.GetRecentRequestHeaders(); got != nil {
+		t.Errorf("空入站 header 期望 RequestHeaders=nil(前端落兜底文案无回归), 实际=%v", got)
+	}
+}
+
+// TestHandleNvidiaStream_BodyHeadersPropagateEndToEnd 端到端实证 NVIDIA 号池流式 Anthropic 完整链路
+// (handleNvidia → 选号 → 上游 SSE → 回译 → recordNvidiaUsage 落请求日志)的入站请求体/请求头落库。
+//
+// 背景:旧实现 recordNvidiaUsage 构造 reqLog 时未填 RequestBody / RequestHeaders, 即使前端弹窗
+// 按需经 GetRequestDetails 拉取也只拿到 nil, 恒展示「无请求头数据 / 无请求参数」(截图现象)。
+// 修复(writeNvidiaResponse 装配 logCtx 时注入 ReqBody/ReqHeaders)后, 经 handleNvidia 端到端入站,
+// 落库的 RequestBody 应为入站请求体解析后的结构化值, RequestHeaders 应含入站请求头(敏感头脱敏)。
+func TestHandleNvidiaStream_BodyHeadersPropagateEndToEnd(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Accel-Buffering", "no")
+		f := w.(http.Flusher)
+		_, _ = w.Write([]byte(`data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"}}]}` + "\n\n"))
+		f.Flush()
+		_, _ = w.Write([]byte(`data: {"id":"1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}` + "\n\n"))
+		f.Flush()
+		_, _ = w.Write([]byte(`data: [DONE]` + "\n\n"))
+		f.Flush()
+	}))
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-bh", "bh@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
+	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
+	gt := makeInjectedGlobalTracker(t)
+	handler.SetGlobalStatsTracker(gt)
+
+	anthReq := &AnthropicRequest{
+		Model:    "z-ai/glm-5.2",
+		Stream:   true,
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hello-body-e2e"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", strings.NewReader(string(body)))
+	// 模拟 Claude Code 客户端携带的入站头(含鉴权凭证 + 协议头)。
+	req.Header.Set("Authorization", "Bearer sk-ant-secret-e2e")
+	req.Header.Set("X-Api-Key", "sk-ant-apikey-e2e")
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-bh"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	// 入站请求体应端到端落库为结构化值, 关键字段可读回。
+	gotBody := gt.GetRecentRequestBody()
+	if gotBody == nil {
+		t.Fatalf("端到端 RequestBody = nil, want 入站结构化 body; 详情弹窗恒落「无请求参数」(截图现象未修)")
+	}
+	if bodyMap, ok := gotBody.(map[string]interface{}); !ok || bodyMap["model"] != "z-ai/glm-5.2" {
+		t.Errorf("端到端 RequestBody.model 未透传, got %v", gotBody)
+	}
+
+	// 入站请求头应端到端落库, 鉴权凭证脱敏, 协议头原样。
+	gotHeaders := gt.GetRecentRequestHeaders()
+	if gotHeaders == nil {
+		t.Fatalf("端到端 RequestHeaders = nil, want 非空映射; 详情弹窗恒落「无请求头数据」(截图现象未修)")
+	}
+	headersMap, ok := gotHeaders.(map[string]interface{})
+	if !ok {
+		t.Fatalf("端到端 RequestHeaders 类型 = %T, want map[string]interface{}", gotHeaders)
+	}
+	if got := headersMap["Authorization"]; got != "<redacted>" {
+		t.Errorf("端到端 Authorization = %v, want \"<redacted>\"(鉴权凭证脱敏)", got)
+	}
+	if got := headersMap["X-Api-Key"]; got != "<redacted>" {
+		t.Errorf("端到端 X-Api-Key = %v, want \"<redacted>\"(API Key 脱敏)", got)
+	}
+	if got := headersMap["Anthropic-Version"]; got != "2023-06-01" {
+		t.Errorf("端到端 Anthropic-Version = %v, want 2023-06-01(协议头原样保留)", got)
+	}
+}
+
 // TestHandleNvidiaStream_CachedHitPropagatesEndToEnd 端到端实证 NVIDIA 号池流式 Anthropic 完整链路
 // (handleNvidia → 选号 → 上游 SSE 末帧带 cached → 回译 → recordNvidiaUsage 落请求日志)的 cached 透传。
 //
@@ -366,5 +527,19 @@ func TestHandleNvidiaStream_CachedHitPropagatesEndToEnd(t *testing.T) {
 	// 落点4:综合桶 TotalCachedTokens +600(缓存命中率分子真实写入)。
 	if got := gt.GetTotalCachedTokens(); got != beforeCached+600 {
 		t.Errorf("端到端 TotalCachedTokens = %d, want %d (delta +600, 上游末帧 cached 未透传到落点4)", got, beforeCached+600)
+	}
+	// 落点3:NVIDIA 专用趋势桶 nvidiaTrends 末桶 Cached +600(修复「日志显示命中但 NVIDIA Tab
+	// 趋势/卡片为 0」的口径断层)。cached 由 TrackNvidiaRequest 透传进 nvidiaTrends 桶,
+	// 前端「使用趋势-NVIDIA」Tab 的紫色缓存命中曲线与「缓存命中 Token」卡片据此出数。
+	nvTrends := gt.GetNvidiaTrends()
+	if len(nvTrends) == 0 {
+		t.Fatalf("nvidiaTrends bucket empty, want ≥1 bin (落点3 未写 nvidiaTrends)")
+	}
+	lastNv := nvTrends[len(nvTrends)-1]
+	if lastNv.Cached < 600 {
+		t.Errorf("端到端 nvidiaTrends 末桶 Cached = %d, want ≥600 (上游末帧 cached 未透传到落点3 nvidiaTrends 桶)", lastNv.Cached)
+	}
+	if lastNv.CachedCost <= 0 {
+		t.Errorf("端到端 nvidiaTrends 末桶 CachedCost = %v, want > 0 (cached=600 × rate.Cached 应产生缓存命中成本)", lastNv.CachedCost)
 	}
 }

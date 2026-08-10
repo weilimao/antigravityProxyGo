@@ -42,6 +42,8 @@ type AuthManager struct {
 	refreshPromises map[string]*refreshPromise // accountId -> active refresh
 	accountMgr      *account.Manager
 	activeLogin     *activeLogin
+	// xaiLoginStates 保存进行中的 xAI 设备码登录状态(state -> result),供前端轮询。
+	xaiLoginStates map[string]*xaiLoginState
 }
 
 type refreshPromise struct {
@@ -54,6 +56,7 @@ func NewAuthManager(accountMgr *account.Manager) *AuthManager {
 	return &AuthManager{
 		refreshPromises: make(map[string]*refreshPromise),
 		accountMgr:      accountMgr,
+		xaiLoginStates:  make(map[string]*xaiLoginState),
 	}
 }
 
@@ -74,6 +77,9 @@ func getCredentials(provider string) (string, string) {
 		// Project provider client credentials
 		return decodeSecret("moc.tnetnocresuelgoog.sppa.hlb5c862doc6vo23caiugt3bjj1crt63-250919453488"),
 			decodeSecret("XstZ0RwMKxY-jdTQ0CDWR7FpWQY9-XPSCOG")
+	} else if provider == "grok" {
+		// xAI (Grok) OAuth 设备码流:公开 client_id,无 client_secret。
+		return xaiClientID, ""
 	}
 	// Default: gemini-cli
 	return decodeSecret("moc.tnetnocresuelgoog.sppa.j531bidmh3va6fqa3e9pnrdrpo2tf8oo-593908552186"),
@@ -107,6 +113,26 @@ func (am *AuthManager) RefreshToken(acc *account.Account) (string, error) {
 	}()
 
 	clientID, clientSecret := getCredentials(acc.Provider)
+
+	// xAI (Grok) OAuth 刷新:走 xai 设备码流 RefreshTokens(无 client_secret),
+	// token_endpoint 取账号自带字段,回退默认 auth.x.ai 端点;其余 provider 走原 Google 路径。
+	if acc.Provider == "grok" {
+		tokenData, refErr := am.refreshXaiToken(acc)
+		if refErr != nil {
+			promise.err = refErr
+			return "", refErr
+		}
+		promise.token = tokenData.AccessToken
+		if am.accountMgr != nil {
+			am.accountMgr.UpdateAccessToken(acc.ID, promise.token)
+			// xai 刷新可能轮换 refresh_token,回写避免下次用旧 token 刷新失败。
+			if strings.TrimSpace(tokenData.RefreshToken) != "" && strings.TrimSpace(tokenData.RefreshToken) != strings.TrimSpace(acc.RefreshToken) {
+				am.accountMgr.UpdateAccountRefreshToken(acc.ID, tokenData.RefreshToken)
+			}
+		}
+		return promise.token, nil
+	}
+
 	form := url.Values{}
 	form.Set("client_id", clientID)
 	form.Set("client_secret", clientSecret)
@@ -451,5 +477,173 @@ func (am *AuthManager) CancelLogin() {
 	if am.activeLogin != nil {
 		am.activeLogin.cancel()
 		am.activeLogin = nil
+	}
+	// xai 设备码轮询的 ctx 复用 activeLogin,取消后 PollForToken 会退出;
+	// 同时清空状态条目,避免前端轮询到残留的旧会话。
+	for k := range am.xaiLoginStates {
+		delete(am.xaiLoginStates, k)
+	}
+}
+
+// ============ xAI (Grok) OAuth 设备码登录 ============
+
+// xaiLoginState 是进行中 xAI 设备码登录的状态条目。
+type xaiLoginState struct {
+	status  string // "pending" | "success" | "error"
+	error   string
+	data    *xaiLoginData
+	cancel  context.CancelFunc
+}
+
+// xaiLoginData 是登录成功后的凭证数据,供 IPC 落库。
+type xaiLoginData struct {
+	Email         string
+	AccessToken   string
+	RefreshToken  string
+	BaseURL       string
+	TokenEndpoint string
+}
+
+// refreshXaiToken 用 xAI 设备码流刷新 access token(grok provider 专用)。
+func (am *AuthManager) refreshXaiToken(acc *account.Account) (*XAITokenResult, error) {
+	if acc == nil {
+		return nil, errors.New("xai token refresh: account is nil")
+	}
+	tokenEndpoint := strings.TrimSpace(acc.TokenEndpoint)
+	if tokenEndpoint == "" {
+		tokenEndpoint = xaiDefaultTokenEP
+	}
+	auth := NewXAIAuth()
+	res, err := auth.RefreshTokens(context.Background(), acc.RefreshToken, tokenEndpoint)
+	if err != nil {
+		// 永久失败(如 invalid_grant)自动禁用账号,与 Google 分支同口径。
+		errMsg := strings.ToLower(err.Error())
+		isPermanent := strings.Contains(errMsg, "invalid_grant") ||
+			strings.Contains(errMsg, "unauthorized_client") ||
+			strings.Contains(errMsg, "invalid_client") ||
+			strings.Contains(errMsg, "invalid_request") ||
+			strings.Contains(errMsg, "bad request") ||
+			strings.Contains(errMsg, "access_denied")
+		if isPermanent && am.accountMgr != nil {
+			fmt.Printf("[AuthManager] Permanent xai token refresh failure for %s, disabling account.\n", acc.Email)
+			am.accountMgr.UpdateAccountEnabled(acc.ID, false)
+		}
+		return nil, err
+	}
+	return res, nil
+}
+
+// StartXaiLogin 启动 xAI 设备码授权登录:请求设备码、打开浏览器、后台轮询,立即返回状态句柄。
+// 复用 activeLogin 单槽取消基建:发起新登录前先取消旧登录。
+func (am *AuthManager) StartXaiLogin(openBrowser func(string)) (map[string]interface{}, error) {
+	am.Lock()
+	if am.activeLogin != nil {
+		am.activeLogin.cancel()
+	}
+	// 清空历史的 xai 登录状态,避免脏 state 残留。
+	for k := range am.xaiLoginStates {
+		delete(am.xaiLoginStates, k)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	currentActive := &activeLogin{cancel: cancel}
+	am.activeLogin = currentActive
+	am.Unlock()
+
+	xaiauth := NewXAIAuth()
+	dc, _, err := xaiauth.StartDeviceFlow(ctx)
+	if err != nil {
+		am.Lock()
+		if am.activeLogin == currentActive {
+			am.activeLogin = nil
+		}
+		am.Unlock()
+		cancel()
+		return nil, fmt.Errorf("启动 xAI 授权失败: %w", err)
+	}
+
+	state := fmt.Sprintf("xai-%d", time.Now().UnixNano())
+
+	am.Lock()
+	am.xaiLoginStates[state] = &xaiLoginState{
+		status: "pending",
+		cancel: cancel,
+	}
+	am.Unlock()
+
+	// 授权地址(优先 verification_uri_complete,自动带 user_code),下发给前端展示与复制。
+	// 不再在此自动调起系统浏览器:默认浏览器会复用已登录 xAI 的会话/Cookie,
+	// 导致直接授权成"当前账号"而非用户期望的新账号。
+	// 改由前端"复制授权链接"按钮,用户自行粘贴到无痕窗口/目标账号浏览器完成授权。
+	authURL := strings.TrimSpace(dc.VerificationURIComplete)
+	if authURL == "" {
+		authURL = strings.TrimSpace(dc.VerificationURI)
+	}
+
+	// 后台轮询 token_endpoint,结果写入状态条目。
+	// 防旧登录覆盖:新登录开始时会清空 xaiLoginStates 并 cancel 旧登录的 ctx,
+	// 旧 goroutine 退出时按自己的 state 查 map 得 entry==nil,自然跳过写入。
+	go func() {
+		res, pollErr := xaiauth.PollForToken(ctx, dc)
+		am.Lock()
+		entry := am.xaiLoginStates[state]
+		if pollErr == nil && res != nil {
+			if entry != nil {
+				entry.status = "success"
+				entry.data = &xaiLoginData{
+					Email:         res.Email,
+					AccessToken:   res.AccessToken,
+					RefreshToken:  res.RefreshToken,
+					BaseURL:       xaiCliProxyBaseURL,
+					TokenEndpoint: res.TokenEndpoint,
+				}
+			}
+		} else {
+			if entry != nil && entry.status == "pending" {
+				entry.status = "error"
+				if pollErr != nil {
+					entry.error = pollErr.Error()
+				} else {
+					entry.error = "授权失败"
+				}
+			}
+		}
+		am.Unlock()
+	}()
+
+	return map[string]interface{}{
+		"state":           state,
+		"user_code":         dc.UserCode,
+		"verification_url": authURL,
+		"expires_in":       dc.ExpiresIn,
+	}, nil
+}
+
+// GetXaiLoginStatus 查询进行中 xAI 登录的状态(供前端轮询)。
+func (am *AuthManager) GetXaiLoginStatus(state string) (map[string]interface{}, error) {
+	am.Lock()
+	defer am.Unlock()
+	entry, ok := am.xaiLoginStates[state]
+	if !ok {
+		return nil, errors.New("未知或已过期的授权会话")
+	}
+	switch entry.status {
+	case "pending":
+		return map[string]interface{}{"status": "pending"}, nil
+	case "success":
+		if entry.data == nil {
+			return nil, errors.New("授权成功但缺少凭证数据")
+		}
+		return map[string]interface{}{
+			"status":         "success",
+			"email":          entry.data.Email,
+			"access_token":   entry.data.AccessToken,
+			"refresh_token":  entry.data.RefreshToken,
+			"base_url":       entry.data.BaseURL,
+			"token_endpoint": entry.data.TokenEndpoint,
+		}, nil
+	case "error":
+		return map[string]interface{}{"status": "error", "error": entry.error}, nil
+	default:
+		return map[string]interface{}{"status": "pending"}, nil
 	}
 }

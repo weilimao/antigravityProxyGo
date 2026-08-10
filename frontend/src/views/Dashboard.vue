@@ -458,6 +458,10 @@
 <span class="material-symbols-outlined text-[14px]">add</span>
                                 <span data-i18n="btnAddPricing">新增模型</span>
                             </button>
+<button class="px-3 py-1.5 text-[11px] bg-gradient-to-r from-indigo-500 to-purple-500 text-white hover:from-indigo-600 hover:to-purple-600 rounded-md transition-colors flex items-center gap-1 shadow-sm font-bold" id="btnAiPricing" title="AI Auto Pricing">
+<span class="material-symbols-outlined text-[14px]">auto_awesome</span>
+                                <span data-i18n="btnAiPricing">AI 一键生成计费</span>
+                            </button>
 </div>
 </div>
 <table class="w-full text-left border-collapse" id="pricingTable">

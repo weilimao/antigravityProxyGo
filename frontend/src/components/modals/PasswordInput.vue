@@ -21,7 +21,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import { revealFromBackend, nvidiaRevealAccountId, otherRevealAccountId } from '../../shared/revealKeyState';
+import { revealFromBackend, nvidiaRevealAccountId, otherRevealAccountId, grokRevealAccountId } from '../../shared/revealKeyState';
 
 const props = defineProps<{
   inputId: string;
@@ -29,7 +29,7 @@ const props = defineProps<{
   dataI18nPlaceholder?: string;
   inputClass?: string;
   // 明文查看模式开关:
-  // - revealProvider: "nvidia" | "other"(对应后端 account:reveal-key 的 provider 校验);
+  // - revealProvider: "nvidia" | "other" | "grok"(对应后端 account:reveal-key 的 provider 校验);
   // - 添加态不传 provider → 眼睛退化为纯视觉切换(type 在 password/text 间切换),绝不发起 IPC。
   revealProvider?: string;
 }>();
@@ -40,7 +40,7 @@ let revealed = false;
 
 // 编辑账号 id 变化时(切账号/关闭重开/复位为添加态),需要重新取明文;
 // 旧的 revealed 标记与输入的明文对不上号时必须清零,避免眼睛不再发起 IPC。
-watch([nvidiaRevealAccountId, otherRevealAccountId], () => {
+watch([nvidiaRevealAccountId, otherRevealAccountId, grokRevealAccountId], () => {
   revealed = false;
   show.value = false;
 });
@@ -49,6 +49,7 @@ watch([nvidiaRevealAccountId, otherRevealAccountId], () => {
 function currentRevealAccountId(): string | null {
   if (props.revealProvider === 'nvidia') return nvidiaRevealAccountId.value;
   if (props.revealProvider === 'other') return otherRevealAccountId.value;
+  if (props.revealProvider === 'grok') return grokRevealAccountId.value;
   return null;
 }
 

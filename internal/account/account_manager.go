@@ -1,12 +1,15 @@
 package account
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -32,7 +35,23 @@ func NewManager() *Manager {
 		activeChannel: "antigravity",
 		errorCounts:   make(map[string]int),
 		concurrency:   NewConcurrency(),
+		idEpoch:       randEpochSeed(),
 	}
+}
+
+// randEpochSeed 用 crypto/rand 生成一个随机基数,作为 generateAccountID 的「进程隔离因子」。
+// 一次性生成,全进程共用;消除「同纳秒同取模 → 同 ID」的并发碰撞。
+func randEpochSeed() uint64 {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// crypto/rand 极少失败(Windows 上可用性等同于系统 CSP);真失败时回退到纳秒基数,仅退化为旧碰撞语义,不阻断流程。
+		return uint64(time.Now().UnixNano())
+	}
+	b := binary.BigEndian.Uint64(buf[:])
+	if b == 0 {
+		return uint64(time.Now().UnixNano())
+	}
+	return b
 }
 
 func (m *Manager) Init(userDataPath string) {
@@ -55,8 +74,22 @@ func (m *Manager) UpdatePath(newPath string) {
 	m.LoadAccounts()
 }
 
+// generateAccountID 生成进程内唯一的账号 ID。
+//
+// 旧实现 impaired
+// (两个 AddAccount 连调 / ImportAccountsList 批量导入同纳秒)下极具碰撞可能,
+// 致使多账号最终共用同一 ID。后果:前端 renderAccounts 以 acc.id 为 DOM 主键
+// (accountsRenderer.ts 的 querySelector(`[data-account-id="<id>"]`)),
+// 同 ID 多账号仅命中首张卡片,后续账号被静默丢弃 —— 表现为「导入多个账号界面只显示一个」。
+//
+// 新实现:纳秒时间戳 ⊕ 进程随机 epoch(提升跨实例隔离) ⊕ 进程内单调递增序号(消除同纳秒碰撞),
+// 用 atomic 自增序号,单增保证生成物在进程内严格两两不同,彻底消除碰撞。
+//
+// 调用方约定:需在持有 m.Lock()(写锁)的临界区内调用,以与经典同步模型一致;
+// 以 m.Lock + atomic 序号组合保证 ID 在并发写入路径下不重复。
 func (m *Manager) generateAccountID() string {
-	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().UnixNano()%100000)
+	seq := atomic.AddUint64(&m.idSeq, 1)
+	return fmt.Sprintf("%d-%d-%d", time.Now().UnixNano(), seq, m.idEpoch)
 }
 
 // ============ 磁盘加载/保存 ============
@@ -103,9 +136,14 @@ func (m *Manager) LoadAccounts() {
 		}
 	}
 	m.nvidiaLBMode = parsed.NvidiaLBMode
+	m.grokLBMode = parsed.GrokLBMode
 	// 单账号最大并发数限制载入(对齐 otherLBModes 范式;0/负数=未配置,Get 时回退默认 10)。
 	// Other map 持久化键规范化为小写 groupID,与 SetOtherMaxConcurrency 的 key 口径一致。
 	m.nvidiaMaxConcurrency = parsed.NvidiaMaxConcurrency
+	m.grokMaxConcurrency = parsed.GrokMaxConcurrency
+	// Grok 号池全局 CLI 客户端版本号载入(对仗 grokMaxConcurrency):空串=未配置,
+	// GetGrokCliVersion 时回退默认 DefaultGrokCliVersion("1.0.0")。TrimSpace 防御空白输入。
+	m.grokCliVersion = strings.TrimSpace(parsed.GrokCliVersion)
 	m.antigravityMaxConcurrency = parsed.AntigravityMaxConcurrency
 	m.projectMaxConcurrency = parsed.ProjectMaxConcurrency
 	if parsed.OtherMaxConcurrency != nil {
@@ -192,6 +230,68 @@ func (m *Manager) LoadAccounts() {
 			acc.BaseURL = DefaultNvidiaBaseURL
 		}
 	}
+
+	// 兜底修复：清除历史遗留的「重复 Account.ID」。
+	// 背景:旧版 generateAccountID 在同纳秒下会生成相同 ID;一旦 accounts.json 中已落库多个共用同一 ID 的账号,
+	// 前端 renderAccounts 以 acc.id 为 DOM 主键进行 querySelector 只会命中第一张,
+	// 后续同 ID 账号被静默丢弃 —— 表现为「导入多个账号界面只显示一个」。
+	// 此处遍历并给重复 ID 的账号重新分配唯一 ID(首遇保留),杜绝历史脏数据继续造成界面少号。
+	// 2FA 列表同理处理,避免 twofa 与 active 池间、或 twofa 内部仍残留同 ID。
+	m.ensureUniqueIDsLocked(m.accounts)
+	m.ensureUniqueIDsLocked(m.twofaAccounts)
+}
+
+// ensureUniqueIDsLocked 在已持有 m.Lock 的前提下,为列表内「除首次出现外」的重复 ID 账号重新生成唯一 ID。
+// 空 ID 的账号也在此一并由 generateAccountID 补全。调用方须已持有 m 写锁。
+func (m *Manager) ensureUniqueIDsLocked(list []*Account) {
+	seen := make(map[string]struct{}, len(list))
+	for _, acc := range list {
+		if acc == nil {
+			continue
+		}
+		if acc.ID == "" {
+			acc.ID = m.generateAccountID()
+			seen[acc.ID] = struct{}{}
+			continue
+		}
+		if _, dup := seen[acc.ID]; dup {
+			// 历史遗留同 ID:重新生成一个不与已有任何 ID 冲突的唯一值。
+			acc.ID = m.generateUniqueIDLocked(seen)
+		}
+		seen[acc.ID] = struct{}{}
+	}
+}
+
+// generateUniqueIDLocked 在已持锁前提下,反复生成 ID 直到与 seen 集合(以及全局现有 ID 池)都不重复。
+// 理论上限极低(纳秒+进程递增序号+随机 epoch),循环仅为防御性兜底。
+func (m *Manager) generateUniqueIDLocked(seen map[string]struct{}) string {
+	for i := 0; i < 32; i++ {
+		id := m.generateAccountID()
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		if m.idExistsLocked(id) {
+			continue
+		}
+		return id
+	}
+	// 32 次仍碰撞(概率近乎 0):退化为纳秒+序号+随机 epoch 后再拼一个计数尾巴,强制唯一。
+	return fmt.Sprintf("%d-%d-%d-x", time.Now().UnixNano(), atomic.AddUint64(&m.idSeq, 1), m.idEpoch)
+}
+
+// idExistsLocked 在已持锁前提下,检查某 ID 是否已存在于 active 池或 2FA 池。
+func (m *Manager) idExistsLocked(id string) bool {
+	for _, a := range m.accounts {
+		if a != nil && a.ID == id {
+			return true
+		}
+	}
+	for _, a := range m.twofaAccounts {
+		if a != nil && a.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) SaveAccounts(silent bool) error {
@@ -199,16 +299,19 @@ func (m *Manager) SaveAccounts(silent bool) error {
 	data := AccountsData{
 		Accounts:                  m.accounts,
 		TwoFAAccounts:             m.twofaAccounts,
-		PoolMode:                   m.poolMode,
+		PoolMode:                  m.poolMode,
 		ProjectPoolMode:           m.projectPoolMode,
 		GeminiCliPoolMode:         m.geminiCliPoolMode,
 		ActiveChannel:             m.activeChannel,
 		OtherLBModes:              m.otherLBModes,
-		NvidiaLBMode:               m.nvidiaLBMode,
-		NvidiaMaxConcurrency:       m.nvidiaMaxConcurrency,
+		NvidiaLBMode:              m.nvidiaLBMode,
+		GrokLBMode:                m.grokLBMode,
+		NvidiaMaxConcurrency:      m.nvidiaMaxConcurrency,
 		AntigravityMaxConcurrency: m.antigravityMaxConcurrency,
 		ProjectMaxConcurrency:     m.projectMaxConcurrency,
 		OtherMaxConcurrency:       m.otherMaxConcurrency,
+		GrokMaxConcurrency:        m.grokMaxConcurrency,
+		GrokCliVersion:            m.grokCliVersion,
 	}
 	m.RUnlock()
 
@@ -238,8 +341,9 @@ func (m *Manager) AddAccount(acc *Account) {
 	if acc.Email == "" {
 		acc.Email = "Unknown Account"
 	}
-	if acc.ID == "" {
-		acc.ID = m.generateAccountID()
+	// ID 唯一性保证:为空或与池内已有 ID 撞号时重新分配,避免「同 ID → 前端只渲染一张卡片」。
+	if acc.ID == "" || m.idExistsLocked(acc.ID) {
+		acc.ID = m.generateUniqueIDLocked(map[string]struct{}{})
 	}
 	if acc.Cooldowns == nil {
 		acc.Cooldowns = make(map[string]int64)
@@ -276,14 +380,22 @@ func (m *Manager) AddAccount(acc *Account) {
 
 func (m *Manager) ImportAccountsList(accountsList []*Account) int {
 	m.Lock()
+	// 本批次已分配 ID 集合,防止输入 JSON 自带非唯一 ID(或旧版残留)时多账号落入同一 ID。
+	batchSeen := make(map[string]struct{}, len(accountsList))
 	addedCount := 0
 	for _, acc := range accountsList {
 		if acc.Email == "" {
 			acc.Email = "Unknown Account"
 		}
-		if acc.ID == "" {
-			acc.ID = m.generateAccountID()
+		// ID 唯一性保证:传入 ID 为空、或与池内/批次内已有 ID 撞号时,重新分配唯一 ID。
+		// 修复「多个不同邮箱账号共用同一 ID → 前端 querySelector 只命中首张卡片」的渲染丢号问题。
+		if acc.ID == "" || m.idExistsLocked(acc.ID) {
+			acc.ID = m.generateUniqueIDLocked(batchSeen)
 		}
+		if _, dup := batchSeen[acc.ID]; dup {
+			acc.ID = m.generateUniqueIDLocked(batchSeen)
+		}
+		batchSeen[acc.ID] = struct{}{}
 		if acc.Cooldowns == nil {
 			acc.Cooldowns = make(map[string]int64)
 		}
@@ -359,6 +471,7 @@ func (m *Manager) GetAccounts() []*Account {
 			TokenRefreshedAt: a.GetTokenRefreshedAt(),
 			MaskedKey:        maskedKeyForAccount(a),
 			BaseURL:          a.BaseURL,
+			TokenEndpoint:    a.TokenEndpoint,
 			DefaultModel:     a.DefaultModel,
 			ModelSonnet:      a.ModelSonnet,
 			ModelOpus:        a.ModelOpus,
@@ -405,6 +518,25 @@ func (m *Manager) UpdateAccessToken(id, newToken string) {
 	// Use per-account token lock to update safely without holding the global Manager write lock
 	if target != nil {
 		target.SetAccessToken(newToken)
+		_ = m.SaveAccounts(true)
+	}
+}
+
+// UpdateAccountRefreshToken 更新账号的 RefreshToken(走 token 锁,与 UpdateAccessToken 同范式)。
+// 供 OAuth 刷新链路在 refresh_token 轮换时回写(xai 等刷新可能返回新 refresh_token)。
+func (m *Manager) UpdateAccountRefreshToken(id, newRefresh string) {
+	m.RLock()
+	var target *Account
+	for _, a := range m.accounts {
+		if a.ID == id {
+			target = a
+			break
+		}
+	}
+	m.RUnlock()
+
+	if target != nil {
+		target.SetRefreshToken(newRefresh)
 		_ = m.SaveAccounts(true)
 	}
 }
@@ -673,8 +805,9 @@ func (m *Manager) GetAllChannels() []string {
 		"gcp":         true,
 		"nvidia":      true,
 		"other":       true,
+		"grok":        true,
 	}
-	out := []string{"antigravity", "google", "gcp", "nvidia", "other"}
+	out := []string{"antigravity", "google", "gcp", "nvidia", "other", "grok"}
 
 	for _, acc := range m.accounts {
 		if acc != nil && acc.Provider != "" {

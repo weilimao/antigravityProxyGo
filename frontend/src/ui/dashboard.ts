@@ -1,7 +1,11 @@
 import { ipcRenderer } from '../shared/ipc';
+import { formatDuration } from './dashboardUtils';
+import { maybeDrawTrendChart, redrawTrendChartAnimated } from './dashboardTrends';
+import { LogsRowSlot, logsRowSlots, viewBtnLogMap, buildLogsRowSlot, updateLogsRowSlot, mergeRetryRows } from './dashboardLogs';
+import { initModalDom, showModal, hideModal } from './dashboardModal';
+import { initConsoleEvents } from './dashboardConsole';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
-import { saveText } from '../shared/fileService';
 import * as chartRenderer from './chartRenderer';
 import * as usageDetails from './usageDetails';
 import * as pricingController from './pricingController';
@@ -55,364 +59,25 @@ let modelsTableBody: HTMLElement | null;
 let logsTableBody: HTMLElement | null;
 let logSearchInput: HTMLInputElement | null;
 
-// Details Modal Elements
-let detailsModal: HTMLElement | null = null;
-let modalContainer: HTMLElement | null = null;
-let modalCloseBtn: HTMLElement | null = null;
-let modalCloseBtnSecondary: HTMLElement | null = null;
-let modalCopyBtn: HTMLElement | null = null;
-let modalCopyHeadersBtn: HTMLElement | null = null;
-
-let modalTime: HTMLElement | null = null;
-let modalSession: HTMLElement | null = null;
-let modalModel: HTMLElement | null = null;
-let modalPath: HTMLElement | null = null;
-let modalTokens: HTMLElement | null = null;
-let modalStatus: HTMLElement | null = null;
-let modalCost: HTMLElement | null = null;
-let modalAccount: HTMLElement | null = null;
-let modalAccountWrapper: HTMLElement | null = null;
-let modalFirstByte: HTMLElement | null = null;
-let modalDuration: HTMLElement | null = null;
-let modalJsonArea: HTMLElement | null = null;
-let modalHeaderArea: HTMLElement | null = null;
 
 // Pagination elements
 let valShowingText: HTMLElement | null;
 let paginationControls: HTMLElement | null;
 
-// Console Log Panel
-let consoleHeader: HTMLElement | null;
-let systemConsole: HTMLElement | null;
-let consoleBody: HTMLElement | null;
-let isConsoleScrollScheduled = false;
 let lastStatsUpdatedSig = '';
 
-// Console log ring buffer: a fixed pool of DOM nodes is reused instead of
-// creating/removing a <div> per log line. Under heavy concurrent traffic the
-// backend can flush hundreds of log lines per 1.5s tick; the old create+prune
-// loop caused WebView memory pools to inflate without ever being returned to
-// the OS. Reusing nodes caps the work at O(MAX_CONSOLE_ENTRIES) per tick.
-const MAX_CONSOLE_ENTRIES = 80;
-const consolePool: HTMLDivElement[] = [];
-let consolePoolIdx = 0;
 
-// Trend chart redraw throttle: the chart only needs to refresh every few
-// seconds, not on every 1s stats-updated tick. Avoids per-second path/string
-// rebuilds and onmousemove-closure reassignment.
-let lastTrendsSig = '';
-let lastChartRange = '';
-// lastChartScope: 上次重画时的趋势 scope (all/nvidia), 用于检测 scope 切换并触发动画重画。
-let lastChartScope = 'all';
-let lastChartDrawTs = 0;
-let chartRedrawTimer: any = null;
-const CHART_DRAW_MIN_INTERVAL = 3000;
 
-let consoleFloatBtn: HTMLElement | null = null;
-let consoleToggleBtn: HTMLElement | null = null;
-let consoleResizeHandle: HTMLElement | null = null;
-
-let isConsoleDragging = false;
-let consoleDragStartX = 0;
-let consoleDragStartY = 0;
-let consoleDragInitialLeft = 0;
-let consoleDragInitialTop = 0;
-
-let isConsoleResizing = false;
-let consoleResizeStartX = 0;
-let consoleResizeStartY = 0;
-let consoleResizeInitialWidth = 0;
-let consoleResizeInitialHeight = 0;
-
-let isMouseOverConsole = false;
 
 // Toggles in Header
 let toggleZH: HTMLElement | null;
 let toggleEN: HTMLElement | null;
 let toggleTheme: HTMLElement | null;
 let themeIcon: HTMLElement | null;
-let btnExportLogs: HTMLButtonElement | null;
 
-function formatDuration(ms: number | undefined): string {
-    if (ms === undefined || ms === null || ms === 0) return '-';
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(2)}s`;
-}
 
-// Apply emoji-based severity classes to a console entry (reset each reuse).
-function applyConsoleClasses(entry: HTMLElement, log: string) {
-    if (log.includes('⚠️')) entry.classList.add('warn');
-    if (log.includes('❌')) entry.classList.add('error');
-    if (log.includes('✅') || log.includes('🚀')) entry.classList.add('info');
-}
 
-// currentTrendsSource: 按 currentTrendScope 返回当前应喂给趋势图的数据序列。
-// 'all' = 综合全局桶 (state.trendsData, 口径零回归);
-// 'nvidia' = NVIDIA 号池专用桶 (state.nvidiaTrendsData)。两桶由后端物理隔离下发。
-function currentTrendsSource(): any[] {
-    return state.currentTrendScope === 'nvidia' ? state.nvidiaTrendsData : state.trendsData;
-}
 
-// Throttled trend-chart redraw: re-draw at most once per CHART_DRAW_MIN_INTERVAL,
-// with a trailing draw so the final state is always reflected. Range changes
-// draw immediately (with left-to-right animation); within-range polling updates
-// are coalesced and drawn SILENTLY (no animation) so staying on the page does
-// not cause the chart to animate every few seconds. Skips entirely when the
-// filtered trends signature has not changed.
-function maybeDrawTrendChart() {
-    const src = currentTrendsSource();
-    if (!src || src.length === 0) {
-        // 切到 scope 后该桶暂无数据 (如 NVIDIA 号池尚无请求): 清空残留曲线避免误读,
-        // 并清空 sig 使后续真实数据到来时必定重画。
-        chartRenderer.clearTrendChart();
-        lastTrendsSig = `scope=${state.currentTrendScope}:empty`;
-        return;
-    }
-    const filteredTrends = chartRenderer.getFilteredTrends(src, state.currentRange);
-    const last = filteredTrends[filteredTrends.length - 1];
-    // sig 含 scope: 切换 tab 即使数据签名碰巧相同也强制重画, 保证画面与 scope 一致。
-    const sig = `scope=${state.currentTrendScope}:${state.currentRange}:${filteredTrends.length}:${last ? `${last.time}_${last.requests}_${last.input}` : ''}`;
-    if (sig === lastTrendsSig) return;
-
-    const rangeChanged = state.currentRange !== lastChartRange;
-    // scope 切换视为"范围级"变化, 触发左到右动画重画, 给用户明确视觉反馈。
-    const scopeChanged = state.currentTrendScope !== lastChartScope;
-    const now = Date.now();
-    if (rangeChanged || scopeChanged || now - lastChartDrawTs >= CHART_DRAW_MIN_INTERVAL) {
-        // rangeChanged=true 或 scopeChanged=true：切范围/切 scope/首进 app → 播左到右动画；
-        // 仅 tick 到期但范围与 scope 均未变 → 轮询静默重画，不动画。
-        chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange, rangeChanged || scopeChanged);
-        lastTrendsSig = sig;
-        lastChartRange = state.currentRange;
-        lastChartScope = state.currentTrendScope;
-        lastChartDrawTs = now;
-        if (chartRedrawTimer) {
-            clearTimeout(chartRedrawTimer);
-            chartRedrawTimer = null;
-        }
-    } else if (!chartRedrawTimer) {
-        chartRedrawTimer = setTimeout(() => {
-            chartRedrawTimer = null;
-            maybeDrawTrendChart();
-        }, CHART_DRAW_MIN_INTERVAL - (now - lastChartDrawTs));
-    }
-}
-
-// 强制带动画重画趋势图：跳过 sig 短路与节流，供 switchView 切回 dashboard 时调用，
-// 保证每次切回仪表盘都看到一次左到右画线动画（即使 trends 签名未变也不会被短路）。
-export function redrawTrendChartAnimated() {
-    const src = currentTrendsSource();
-    if (!src || src.length === 0) {
-        chartRenderer.clearTrendChart();
-        lastTrendsSig = `scope=${state.currentTrendScope}:empty`;
-        lastChartScope = state.currentTrendScope;
-        return;
-    }
-    const filteredTrends = chartRenderer.getFilteredTrends(src, state.currentRange);
-    chartRenderer.drawTrendChartSVG(filteredTrends, state.currentRange, true);
-    const last = filteredTrends[filteredTrends.length - 1];
-    const sig = `scope=${state.currentTrendScope}:${state.currentRange}:${filteredTrends.length}:${last ? `${last.time}_${last.requests}_${last.input}` : ''}`;
-    lastTrendsSig = sig;
-    lastChartRange = state.currentRange;
-    lastChartScope = state.currentTrendScope;
-    lastChartDrawTs = Date.now();
-    if (chartRedrawTimer) {
-        clearTimeout(chartRedrawTimer);
-        chartRedrawTimer = null;
-    }
-}
-
-// --- Logs table row pool ---
-// A fixed pool of reusable <tr> nodes (grown up to itemsPerPage) is patched
-// in place instead of rebuilding the table via innerHTML on every stats tick.
-// Under heavy traffic the create+destroy churn of innerHTML caused Blink's DOM
-// node pools to inflate without returning memory to the OS.
-interface LogsRowSlot {
-    tr: HTMLTableRowElement;
-    timestamp: HTMLTableCellElement;
-    method: HTMLSpanElement;
-    host: HTMLSpanElement;
-    methodHostCell: HTMLTableCellElement;
-    path: HTMLTableCellElement;
-    sessionId: HTMLTableCellElement;
-    modelName: HTMLSpanElement;
-    account: HTMLSpanElement;
-    modelCell: HTMLTableCellElement;
-    // nvidiaBadge: NVIDIA 号池链路请求(family==="nvidia")的专属绿色标识, 在模型名行右侧显示。
-    // 预创建(初始 hidden)并在 updateLogsRowSlot 切换显隐, 避免在重流量下动态增删 DOM 节点
-    // 触发 Blink DOM 节点池膨胀(与项目 row-pool 内存优化口径一致)。
-    nvidiaBadge: HTMLSpanElement;
-    inTokens: HTMLSpanElement;
-    outTokens: HTMLSpanElement;
-    cost: HTMLTableCellElement;
-    responseTime: HTMLTableCellElement;
-    duration: HTMLTableCellElement;
-    hitRate: HTMLTableCellElement;
-    cacheBadge: HTMLSpanElement;
-    httpCode: HTMLSpanElement;
-    viewBtn: HTMLButtonElement;
-}
-
-const logsRowSlots: LogsRowSlot[] = [];
-
-// viewBtnLogMap: 渲染时把当前 lite 日志捕获到「查看」按钮 DOM 上(WeakMap, key=按钮元素),
-// 使点击不再依赖「该 id 点击时刻仍在 state.allRequests 里」这一脆弱前提——OCR 行等高频
-// 覆盖/已挤出 50 窗口/旧残留场景下 data-log-id 查表会落空,改用捕获对象直接开弹窗根治。
-// WeakMap:按钮 DOM 被回收时条目自动释放,驻留内存恒等于可见按钮数,无泄漏。
-const viewBtnLogMap = new WeakMap<HTMLButtonElement, any>();
-
-function buildLogsRowSlot(): LogsRowSlot {
-    const tr = document.createElement('tr');
-    tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors';
-
-    const makeTd = (className: string): HTMLTableCellElement => {
-        const td = document.createElement('td');
-        td.className = className;
-        return td;
-    };
-    const makeSpan = (className: string): HTMLSpanElement => {
-        const s = document.createElement('span');
-        s.className = className;
-        return s;
-    };
-
-    const timestamp = makeTd('p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] whitespace-nowrap');
-
-    const methodHostCell = makeTd('p-3 font-data-mono truncate');
-    const method = makeSpan('text-[#0ea5e9] font-bold mr-2');
-    const host = makeSpan('text-on-surface dark:text-white');
-    methodHostCell.appendChild(method);
-    methodHostCell.appendChild(host);
-
-    const path = makeTd('p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate');
-    const sessionId = makeTd('p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate');
-
-    const modelCell = makeTd('p-3 font-sans font-medium text-on-surface dark:text-white truncate');
-    const modelDiv = document.createElement('div');
-    modelDiv.className = 'flex flex-col min-w-0';
-    // 模型名行(横向): 模型名 + 可选 NVIDIA badge, badge 默认 hidden, 由 updateLogsRowSlot 切换。
-    const modelNameRow = document.createElement('div');
-    modelNameRow.className = 'flex items-center gap-1 min-w-0';
-    const modelName = makeSpan('font-semibold text-on-surface dark:text-white truncate');
-    const nvidiaBadge = makeSpan('inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/40 flex-none');
-    nvidiaBadge.style.display = 'none';
-    nvidiaBadge.textContent = 'NVIDIA';
-    modelNameRow.appendChild(modelName);
-    modelNameRow.appendChild(nvidiaBadge);
-    const account = makeSpan('text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5');
-    modelDiv.appendChild(modelNameRow);
-    modelDiv.appendChild(account);
-    modelCell.appendChild(modelDiv);
-
-    const tokensCell = makeTd('p-3 text-right font-data-mono');
-    const tokensDiv = document.createElement('div');
-    tokensDiv.className = 'flex flex-col items-end';
-    const inTokens = makeSpan('text-[10px] text-outline dark:text-outline-variant');
-    const outTokens = makeSpan('text-on-surface dark:text-white');
-    tokensDiv.appendChild(inTokens);
-    tokensDiv.appendChild(outTokens);
-    tokensCell.appendChild(tokensDiv);
-
-    const cost = makeTd('p-3 text-right font-data-mono text-emerald-600 dark:text-emerald-400 font-bold');
-    const responseTime = makeTd('p-3 text-right font-data-mono');
-    const duration = makeTd('p-3 text-right font-data-mono');
-    const hitRate = makeTd('p-3 text-center font-data-mono');
-
-    const statusCell = makeTd('p-3 text-center');
-    const cacheBadge = makeSpan('inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium');
-    const httpCode = makeSpan('block text-[10px] font-bold mt-1');
-    statusCell.appendChild(cacheBadge);
-    statusCell.appendChild(httpCode);
-
-    const btnCell = makeTd('p-3 text-center');
-    const viewBtn = document.createElement('button');
-    viewBtn.className = 'px-2 py-1 text-[11px] bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-fixed-dim rounded font-medium transition-all view-details-btn';
-    btnCell.appendChild(viewBtn);
-
-    tr.appendChild(timestamp);
-    tr.appendChild(methodHostCell);
-    tr.appendChild(path);
-    tr.appendChild(sessionId);
-    tr.appendChild(modelCell);
-    tr.appendChild(tokensCell);
-    tr.appendChild(cost);
-    tr.appendChild(responseTime);
-    tr.appendChild(duration);
-    tr.appendChild(hitRate);
-    tr.appendChild(statusCell);
-    tr.appendChild(btnCell);
-
-    return { tr, timestamp, method, host, methodHostCell, path, sessionId, modelName, account, modelCell, nvidiaBadge, inTokens, outTokens, cost, responseTime, duration, hitRate, cacheBadge, httpCode, viewBtn };
-}
-
-function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
-    slot.timestamp.textContent = log.timestamp;
-
-    slot.method.textContent = log.method;
-    slot.host.textContent = log.host;
-    slot.methodHostCell.setAttribute('title', `${log.method} ${log.host}`);
-
-    slot.path.textContent = log.path;
-    slot.path.setAttribute('title', log.path);
-
-    slot.sessionId.textContent = log.sessionId || '-';
-    slot.sessionId.setAttribute('title', log.sessionId || '-');
-
-    slot.modelName.textContent = log.model;
-    slot.modelCell.setAttribute('title', log.model);
-
-    // NVIDIA 号池链路请求(family==="nvidia")在模型名行右侧显示绿色 NVIDIA badge, 便于在
-    // 合并的请求日志列表里一眼区分英伟达号池来源(gemini/claude 直连日志无此 badge)。
-    // 仅切换显隐, 不增删 DOM 节点, 与 row-pool 内存优化口径一致。
-    if (log.family === 'nvidia') {
-        slot.nvidiaBadge.style.display = '';
-    } else {
-        slot.nvidiaBadge.style.display = 'none';
-    }
-
-    if (log.account) {
-        slot.account.textContent = log.account;
-        slot.account.setAttribute('title', log.account);
-        slot.account.className = 'text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5';
-    } else {
-        slot.account.textContent = state.currentLanguage === 'zh' ? '直连' : 'Direct';
-        slot.account.className = 'text-[10px] text-slate-400 dark:text-slate-500 font-data-mono truncate mt-0.5';
-    }
-
-    slot.inTokens.textContent = `${dict.input || '输入'}: ${log.inTokens.toLocaleString()}`;
-    slot.outTokens.textContent = `${dict.output || '输出'}: ${log.outTokens.toLocaleString()}`;
-
-    slot.cost.textContent = `$${(log.cost || 0).toFixed(6)}`;
-    slot.responseTime.textContent = formatDuration(log.firstByteMs);
-    slot.duration.textContent = formatDuration(log.durationMs);
-
-    const hitRateVal = log.inTokens > 0 ? (log.cachedTokens / log.inTokens * 100).toFixed(1) : '0.0';
-    const hitRateColor = log.cachedTokens > 0 ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400 dark:text-slate-500';
-    slot.hitRate.textContent = `${hitRateVal}%`;
-    slot.hitRate.className = `p-3 text-center font-data-mono ${hitRateColor}`;
-
-    let statusClass = 'bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-900/40 dark:text-slate-400 dark:border-slate-800';
-    let statusLabel = dict.statusMiss || 'MISS';
-    if (log.cacheStatus === 'HIT') {
-        statusClass = 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/30';
-        statusLabel = dict.statusHit || 'HIT';
-    } else if (log.cacheStatus === 'NONE') {
-        statusClass = 'bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/20 dark:text-purple-400 dark:border-purple-900/30';
-        statusLabel = dict.statusNone || 'NONE';
-    }
-    slot.cacheBadge.textContent = statusLabel;
-    slot.cacheBadge.className = `inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${statusClass}`;
-
-    const statusColor = log.statusCode >= 400 ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400';
-    slot.httpCode.textContent = `HTTP ${log.statusCode}`;
-    slot.httpCode.className = `block text-[10px] font-bold mt-1 ${statusColor}`;
-
-    slot.viewBtn.setAttribute('data-log-id', log.id);
-    // 渲染时把当前 lite 日志对象捕获到按钮上,点击委托优先用它直接开弹窗,
-    // 绕开「id 须在 state.allRequests 里」的脆弱前提(OCR 行等查表落空场景)。
-    viewBtnLogMap.set(slot.viewBtn, log);
-    slot.viewBtn.textContent = state.currentLanguage === 'zh' ? '查看' : 'View';
-}
 
 // Filter and render logs table with pagination
 export function renderLogsTable() {
@@ -429,15 +94,20 @@ export function renderLogsTable() {
             log.method.toLowerCase().includes(q);
     });
 
+    // 折叠成对 HIT/MISS 重试行(展示层去重,后端落库不动)。同指纹(sessionId+path+model+inTokens)
+    // 且 ±3s 时间窗口内的多次客户端重试合并为一行,徽章取 HIT、展示命中那次耗时,并标 ⟳N 角标。
+    // 统计/计费仍在后端单条 RequestLog 精确记账,此处不回写 state.allRequests。
+    const deduped = mergeRetryRows(filtered);
+
     // Pagination bounds
-    const totalItems = filtered.length;
+    const totalItems = deduped.length;
     const totalPages = Math.ceil(totalItems / state.itemsPerPage) || 1;
     if (state.currentPage > totalPages) state.currentPage = totalPages;
     if (state.currentPage < 1) state.currentPage = 1;
 
     const startIndex = (state.currentPage - 1) * state.itemsPerPage;
     const endIndex = Math.min(startIndex + state.itemsPerPage, totalItems);
-    const paginated = filtered.slice(startIndex, endIndex);
+    const paginated = deduped.slice(startIndex, endIndex);
 
     if (!logsTableBody) {
         logsTableBody = document.querySelector('#logsTable tbody');
@@ -765,53 +435,7 @@ export function switchView(viewName: string) {
 }
 
 export function initDashboardEvents() {
-    detailsModal = document.getElementById('detailsModal');
-    modalContainer = document.getElementById('modalContainer');
-    modalCloseBtn = document.getElementById('modalCloseBtn');
-    modalCloseBtnSecondary = document.getElementById('modalCloseBtnSecondary');
-    modalCopyBtn = document.getElementById('modalCopyBtn');
-    modalCopyHeadersBtn = document.getElementById('modalCopyHeadersBtn');
-
-    modalTime = document.getElementById('modalTime');
-    modalSession = document.getElementById('modalSession');
-    modalModel = document.getElementById('modalModel');
-    modalPath = document.getElementById('modalPath');
-    modalTokens = document.getElementById('modalTokens');
-    modalStatus = document.getElementById('modalStatus');
-    modalCost = document.getElementById('modalCost');
-    modalAccount = document.getElementById('modalAccount');
-    modalAccountWrapper = document.getElementById('modalAccountWrapper');
-    modalDuration = document.getElementById('modalDuration');
-    modalJsonArea = document.getElementById('modalJsonArea');
-    modalHeaderArea = document.getElementById('modalHeaderArea');
-
-    if (modalCloseBtn) modalCloseBtn.addEventListener('click', hideModal);
-    if (modalCloseBtnSecondary) modalCloseBtnSecondary.addEventListener('click', hideModal);
-    if (modalCopyHeadersBtn) {
-        modalCopyHeadersBtn.addEventListener('click', () => {
-            const textToCopy = modalHeaderArea?.textContent || '';
-            navigator.clipboard.writeText(textToCopy).then(() => {
-                const span = modalCopyHeadersBtn!.querySelector('span:not(.material-symbols-outlined)');
-                if (span) {
-                    span.textContent = state.currentLanguage === 'zh' ? '已复制！' : 'Copied!';
-                    setTimeout(() => { span.textContent = state.currentLanguage === 'zh' ? '复制' : 'Copy'; }, 1500);
-                }
-            });
-        });
-    }
-
-    if (modalCopyBtn) {
-        modalCopyBtn.addEventListener('click', () => {
-            const textToCopy = modalJsonArea?.textContent || '';
-            navigator.clipboard.writeText(textToCopy).then(() => {
-                const span = modalCopyBtn!.querySelector('span:not(.material-symbols-outlined)');
-                if (span) {
-                    span.textContent = state.currentLanguage === 'zh' ? '已复制！' : 'Copied!';
-                    setTimeout(() => { span.textContent = state.currentLanguage === 'zh' ? '复制 JSON' : 'Copy JSON'; }, 1500);
-                }
-            });
-        });
-    }
+    initModalDom();
 
     proxyToggle = document.getElementById('proxyToggle') as HTMLInputElement | null;
     btnInstallCert = document.getElementById('btnInstallCert') as HTMLButtonElement | null;
@@ -820,16 +444,10 @@ export function initDashboardEvents() {
     tabLogs = document.getElementById('tabLogs');
     tabPricing = document.getElementById('tabPricing');
     logSearchInput = document.getElementById('logSearchInput') as HTMLInputElement | null;
-    consoleHeader = document.getElementById('consoleHeader');
-    systemConsole = document.getElementById('systemConsole');
-    consoleBody = document.getElementById('consoleBody');
-    consoleFloatBtn = document.getElementById('consoleFloatBtn');
-    consoleToggleBtn = document.getElementById('consoleToggleBtn');
-    consoleResizeHandle = document.getElementById('consoleResizeHandle');
+    initConsoleEvents();
     toggleZH = document.getElementById('toggleZH');
     toggleEN = document.getElementById('toggleEN');
     toggleTheme = document.getElementById('toggleTheme');
-    btnExportLogs = document.getElementById('btnExportLogs') as HTMLButtonElement | null;
 
     valReqs = document.getElementById('valReqs');
     valTokens = document.getElementById('valTokens');
@@ -918,274 +536,6 @@ export function initDashboardEvents() {
     }
 
     // Collapsible console logs & Float/Dock window handlers
-    if (consoleHeader && systemConsole) {
-        // Track mouse hover state
-        systemConsole.addEventListener('mouseenter', () => {
-            isMouseOverConsole = true;
-        });
-        systemConsole.addEventListener('mouseleave', () => {
-            isMouseOverConsole = false;
-        });
-
-        // Toggle console log drawer (only when NOT floating)
-        const toggleConsole = () => {
-            if (systemConsole!.classList.contains('floating')) return;
-            const isExpanded = systemConsole!.classList.contains('expanded');
-            if (isExpanded) {
-                systemConsole!.classList.remove('expanded');
-                systemConsole!.style.height = '36px';
-                if (consoleBody) consoleBody.style.display = 'none';
-                if (consoleToggleBtn) consoleToggleBtn.textContent = 'keyboard_double_arrow_up';
-            } else {
-                systemConsole!.classList.add('expanded');
-                systemConsole!.style.height = '30vh';
-                if (consoleBody) consoleBody.style.display = 'block';
-                if (consoleToggleBtn) consoleToggleBtn.textContent = 'keyboard_double_arrow_down';
-                if (consoleBody) consoleBody.scrollTop = consoleBody.scrollHeight;
-            }
-        };
-
-        consoleHeader.addEventListener('click', (e: MouseEvent) => {
-            // Ignore click events on action buttons to prevent drawer folding/unfolding
-            if ((e.target as HTMLElement).closest('#consoleFloatBtn') || (e.target as HTMLElement).closest('#consoleToggleBtn')) {
-                return;
-            }
-            toggleConsole();
-        });
-
-        if (consoleToggleBtn) {
-            consoleToggleBtn.addEventListener('click', (e: MouseEvent) => {
-                e.stopPropagation();
-                toggleConsole();
-            });
-        }
-
-        // Handle Float/Dock mode switching
-        if (consoleFloatBtn) {
-            consoleFloatBtn.addEventListener('click', (e: MouseEvent) => {
-                e.stopPropagation();
-                const isFloating = systemConsole!.classList.contains('floating');
-                if (!isFloating) {
-                    // Switch to FLOAT mode
-                    systemConsole!.classList.add('floating');
-                    systemConsole!.classList.remove('expanded');
-
-                    // Show resize handle, hide toggle drawer button
-                    if (consoleResizeHandle) consoleResizeHandle.classList.remove('hidden');
-                    if (consoleToggleBtn) consoleToggleBtn.style.display = 'none';
-
-                    // Recover dimensions/position from localStorage, fallback to responsive viewport-based sizes
-                    const defaultWidth = Math.min(900, Math.max(400, window.innerWidth * 0.7));
-                    const defaultHeight = Math.min(600, Math.max(300, window.innerHeight * 0.6));
-                    const savedWidth = localStorage.getItem('console_float_width') || String(defaultWidth);
-                    const savedHeight = localStorage.getItem('console_float_height') || String(defaultHeight);
-
-                    systemConsole!.style.width = `${savedWidth}px`;
-                    systemConsole!.style.height = `${savedHeight}px`;
-
-                    const savedLeft = localStorage.getItem('console_float_left');
-                    const savedTop = localStorage.getItem('console_float_top');
-                    if (savedLeft && savedTop) {
-                        systemConsole!.style.left = `${savedLeft}px`;
-                        systemConsole!.style.top = `${savedTop}px`;
-                    } else {
-                        // Default position: center dynamically
-                        systemConsole!.style.left = `${(window.innerWidth - parseFloat(savedWidth)) / 2}px`;
-                        systemConsole!.style.top = `${(window.innerHeight - parseFloat(savedHeight)) / 2}px`;
-                    }
-                    systemConsole!.style.bottom = 'auto';
-                    systemConsole!.style.right = 'auto';
-
-                    if (consoleBody) {
-                        consoleBody.style.display = 'block';
-                        consoleBody.scrollTop = consoleBody.scrollHeight;
-                    }
-
-                    consoleFloatBtn!.textContent = 'vertical_align_bottom';
-                    consoleFloatBtn!.setAttribute('data-i18n-title', 'consoleDockTitle');
-                    consoleFloatBtn!.title = state.currentLanguage === 'zh' ? '贴回底部' : 'Dock to bottom';
-                } else {
-                    // Switch back to DOCKED mode
-                    systemConsole!.classList.remove('floating');
-
-                    // Hide resize handle, show toggle drawer button
-                    if (consoleResizeHandle) consoleResizeHandle.classList.add('hidden');
-                    if (consoleToggleBtn) {
-                        consoleToggleBtn.style.display = 'block';
-                        consoleToggleBtn.textContent = 'keyboard_double_arrow_down';
-                    }
-
-                    // Reset styling
-                    systemConsole!.style.width = '';
-                    systemConsole!.style.left = '';
-                    systemConsole!.style.top = '';
-                    systemConsole!.style.bottom = '';
-                    systemConsole!.style.right = '';
-
-                    // Auto-expand in docked mode
-                    systemConsole!.classList.add('expanded');
-                    systemConsole!.style.height = '30vh';
-                    if (consoleBody) {
-                        consoleBody.style.display = 'block';
-                        consoleBody.scrollTop = consoleBody.scrollHeight;
-                    }
-
-                    consoleFloatBtn!.textContent = 'open_in_new';
-                    consoleFloatBtn!.setAttribute('data-i18n-title', 'consoleFloatTitle');
-                    consoleFloatBtn!.title = state.currentLanguage === 'zh' ? '脱离为浮窗' : 'Detach to floating window';
-                }
-            });
-        }
-
-        // Dragging Logic
-        consoleHeader.addEventListener('mousedown', (e: MouseEvent) => {
-            if (!systemConsole!.classList.contains('floating')) return;
-            // Ignore button clicks
-            if ((e.target as HTMLElement).closest('.material-symbols-outlined')) return;
-
-            isConsoleDragging = true;
-            consoleDragStartX = e.clientX;
-            consoleDragStartY = e.clientY;
-
-            const rect = systemConsole!.getBoundingClientRect();
-            consoleDragInitialLeft = rect.left;
-            consoleDragInitialTop = rect.top;
-
-            document.body.style.userSelect = 'none';
-            systemConsole!.style.transition = 'none';
-        });
-
-        // Resizing Logic
-        if (consoleResizeHandle) {
-            consoleResizeHandle.addEventListener('mousedown', (e: MouseEvent) => {
-                e.stopPropagation();
-                e.preventDefault();
-                isConsoleResizing = true;
-                consoleResizeStartX = e.clientX;
-                consoleResizeStartY = e.clientY;
-
-                const rect = systemConsole!.getBoundingClientRect();
-                consoleResizeInitialWidth = rect.width;
-                consoleResizeInitialHeight = rect.height;
-
-                document.body.style.userSelect = 'none';
-                systemConsole!.style.transition = 'none';
-            });
-        }
-
-        // Document-level Mousemove & Mouseup
-        document.addEventListener('mousemove', (e: MouseEvent) => {
-            if (isConsoleDragging && systemConsole!.classList.contains('floating')) {
-                const dx = e.clientX - consoleDragStartX;
-                const dy = e.clientY - consoleDragStartY;
-
-                let newLeft = consoleDragInitialLeft + dx;
-                let newTop = consoleDragInitialTop + dy;
-
-                const rect = systemConsole!.getBoundingClientRect();
-                const maxLeft = window.innerWidth - rect.width;
-                const maxTop = window.innerHeight - rect.height;
-
-                // Boundary protection
-                newLeft = Math.max(0, Math.min(newLeft, maxLeft));
-                newTop = Math.max(0, Math.min(newTop, maxTop));
-
-                systemConsole!.style.left = `${newLeft}px`;
-                systemConsole!.style.top = `${newTop}px`;
-            }
-
-            if (isConsoleResizing && systemConsole!.classList.contains('floating')) {
-                const dx = e.clientX - consoleResizeStartX;
-                const dy = e.clientY - consoleResizeStartY;
-
-                let newWidth = consoleResizeInitialWidth + dx;
-                let newHeight = consoleResizeInitialHeight + dy;
-
-                // Limit minimum sizes
-                newWidth = Math.max(300, newWidth);
-                newHeight = Math.max(150, newHeight);
-
-                // Limit maximum sizes to screen
-                newWidth = Math.min(window.innerWidth - 20, newWidth);
-                newHeight = Math.min(window.innerHeight - 20, newHeight);
-
-                systemConsole!.style.width = `${newWidth}px`;
-                systemConsole!.style.height = `${newHeight}px`;
-            }
-        });
-
-        document.addEventListener('mouseup', () => {
-            if (isConsoleDragging) {
-                isConsoleDragging = false;
-                document.body.style.userSelect = '';
-                systemConsole!.style.transition = '';
-
-                // Persist coordinates
-                const rect = systemConsole!.getBoundingClientRect();
-                localStorage.setItem('console_float_left', String(rect.left));
-                localStorage.setItem('console_float_top', String(rect.top));
-            }
-
-            if (isConsoleResizing) {
-                isConsoleResizing = false;
-                document.body.style.userSelect = '';
-                systemConsole!.style.transition = '';
-
-                // Persist size
-                const rect = systemConsole!.getBoundingClientRect();
-                localStorage.setItem('console_float_width', String(rect.width));
-                localStorage.setItem('console_float_height', String(rect.height));
-            }
-        });
-
-        // Window resize boundary self-correction
-        window.addEventListener('resize', () => {
-            if (systemConsole!.classList.contains('floating')) {
-                const rect = systemConsole!.getBoundingClientRect();
-                let left = rect.left;
-                let top = rect.top;
-                let width = rect.width;
-                let height = rect.height;
-
-                let sizeChanged = false;
-                let posChanged = false;
-
-                if (width > window.innerWidth - 20) {
-                    width = window.innerWidth - 20;
-                    systemConsole!.style.width = `${width}px`;
-                    sizeChanged = true;
-                }
-                if (height > window.innerHeight - 20) {
-                    height = window.innerHeight - 20;
-                    systemConsole!.style.height = `${height}px`;
-                    sizeChanged = true;
-                }
-
-                const maxLeft = window.innerWidth - width;
-                const maxTop = window.innerHeight - height;
-
-                if (left > maxLeft) {
-                    left = Math.max(0, maxLeft);
-                    systemConsole!.style.left = `${left}px`;
-                    posChanged = true;
-                }
-                if (top > maxTop) {
-                    top = Math.max(0, maxTop);
-                    systemConsole!.style.top = `${top}px`;
-                    posChanged = true;
-                }
-
-                if (posChanged) {
-                    localStorage.setItem('console_float_left', String(left));
-                    localStorage.setItem('console_float_top', String(top));
-                }
-                if (sizeChanged) {
-                    localStorage.setItem('console_float_width', String(width));
-                    localStorage.setItem('console_float_height', String(height));
-                }
-            }
-        });
-    }
 
     // ZH / EN Translation clicks
     if (toggleZH) toggleZH.addEventListener('click', () => setLanguage('zh'));
@@ -1199,30 +549,6 @@ export function initDashboardEvents() {
         });
     }
 
-    // Export Logs Button
-    if (btnExportLogs) {
-        btnExportLogs.addEventListener('click', async () => {
-            try {
-                let text = '';
-                if (consoleBody) {
-                    text = Array.from(consoleBody.children)
-                        .map(child => child.textContent)
-                        .join('\n');
-                }
-                if (!text) {
-                    text = '暂无日志内容 / No logs available';
-                }
-                const saved = await saveText(
-                    { channel: 'settings:export-logs', args: [text] },
-                    state.currentLanguage === 'zh' ? '系统日志已成功导出！' : 'System logs exported successfully!',
-                    state.currentLanguage === 'zh' ? '导出失败: ' : 'Export failed: ',
-                );
-                void saved;
-            } catch (err) {
-                console.error('Failed to export logs:', err);
-            }
-        });
-    }
 
     // IPC listeners from main process
     ipcRenderer.on('state', (event: any, isInterceptMode: boolean) => {
@@ -1312,68 +638,6 @@ export function initDashboardEvents() {
         renderActiveView();
     });
 
-    // Appending raw logs batch to console tray to minimize DOM reflows
-    ipcRenderer.on('logs:batch', (event: any, logs: string[]) => {
-        if (!consoleBody) {
-            consoleBody = document.getElementById('consoleBody');
-        }
-        if (!consoleBody || !logs || logs.length === 0) return;
-
-        const fragment = document.createDocumentFragment();
-
-        if (consolePool.length < MAX_CONSOLE_ENTRIES) {
-            // Warmup: pool not yet full — create new nodes only (preserves order).
-            const capacity = MAX_CONSOLE_ENTRIES - consolePool.length;
-            const slice = logs.length > capacity ? logs.slice(logs.length - capacity) : logs;
-            for (const log of slice) {
-                const entry = document.createElement('div');
-                entry.className = 'console-entry';
-                applyConsoleClasses(entry, log);
-                entry.textContent = log;
-                consolePool.push(entry);
-                fragment.appendChild(entry);
-            }
-        } else {
-            // Steady state: reuse the oldest pooled node. appendChild relocates
-            // an existing node to the end, so a fixed pool naturally stays in
-            // newest-last order with zero create/remove churn. Only the last
-            // MAX_CONSOLE_ENTRIES lines of the batch are rendered; older ones
-            // would have been pruned anyway.
-            const slice = logs.length > MAX_CONSOLE_ENTRIES ? logs.slice(logs.length - MAX_CONSOLE_ENTRIES) : logs;
-            for (const log of slice) {
-                const entry = consolePool[consolePoolIdx];
-                consolePoolIdx = (consolePoolIdx + 1) % MAX_CONSOLE_ENTRIES;
-                entry.className = 'console-entry';
-                applyConsoleClasses(entry, log);
-                entry.textContent = log;
-                fragment.appendChild(entry);
-            }
-        }
-        consoleBody.appendChild(fragment);
-
-        // Safety prune (only relevant during warmup; steady state is exactly MAX)
-        if (consoleBody.children.length > MAX_CONSOLE_ENTRIES) {
-            while (consoleBody.children.length > MAX_CONSOLE_ENTRIES) {
-                if (consoleBody.firstChild) {
-                    consoleBody.removeChild(consoleBody.firstChild);
-                }
-            }
-        }
-
-        // Scroll to bottom only if console is expanded or floating, and mouse is NOT hovering over it
-        const isVisible = systemConsole && (systemConsole.classList.contains('expanded') || systemConsole.classList.contains('floating'));
-        if (isVisible && !isMouseOverConsole) {
-            if (!isConsoleScrollScheduled) {
-                isConsoleScrollScheduled = true;
-                requestAnimationFrame(() => {
-                    if (consoleBody) {
-                        consoleBody.scrollTop = consoleBody.scrollHeight;
-                    }
-                    isConsoleScrollScheduled = false;
-                });
-            }
-        }
-    });
 
     // CA status check
     ipcRenderer.on('cert-status-res', (event: any, isInstalled: boolean) => {
@@ -1495,124 +759,6 @@ export function renderActiveView() {
     }
 }
 
-export function hideModal() {
-    if (!detailsModal || !modalContainer) return;
-    detailsModal.classList.add('opacity-0', 'pointer-events-none');
-    modalContainer.classList.add('scale-95');
-    modalContainer.classList.remove('scale-100');
-
-    // Invalidate any in-flight on-demand details fetch and release the large
-    // API request/response text from the DOM tree immediately.
-    modalDetailsToken++;
-    if (modalJsonArea) modalJsonArea.textContent = '';
-    if (modalHeaderArea) modalHeaderArea.textContent = '';
-}
-
-// Bumped on every showModal/hideModal so stale on-demand details fetches
-// (for a previous entry, or after close) can be discarded.
-let modalDetailsToken = 0;
-
-function formatRequestBody(body: any): string {
-    if (!body) {
-        return state.currentLanguage === 'zh' ? '{\n  "message": "无请求参数"\n}' : '{\n  "message": "No request parameters"\n}';
-    }
-    try {
-        if (typeof body === 'object') {
-            return JSON.stringify(body, null, 2);
-        }
-        const parsed = JSON.parse(body);
-        return JSON.stringify(parsed, null, 2);
-    } catch (e) {
-        return String(body);
-    }
-}
-
-function formatRequestHeaders(headers: any): string {
-    if (!headers) {
-        return state.currentLanguage === 'zh' ? '{\n  "message": "无请求头数据"\n}' : '{\n  "message": "No request headers"\n}';
-    }
-    try {
-        return JSON.stringify(headers, null, 2);
-    } catch (e) {
-        return String(headers);
-    }
-}
-
-export function showModal(log: any) {
-    if (!detailsModal || !modalContainer) {
-        detailsModal = document.getElementById('detailsModal');
-        modalContainer = document.getElementById('modalContainer');
-        modalCloseBtn = document.getElementById('modalCloseBtn');
-        modalCloseBtnSecondary = document.getElementById('modalCloseBtnSecondary');
-        modalCopyBtn = document.getElementById('modalCopyBtn');
-        modalCopyHeadersBtn = document.getElementById('modalCopyHeadersBtn');
-
-        modalTime = document.getElementById('modalTime');
-        modalSession = document.getElementById('modalSession');
-        modalModel = document.getElementById('modalModel');
-        modalPath = document.getElementById('modalPath');
-        modalTokens = document.getElementById('modalTokens');
-        modalStatus = document.getElementById('modalStatus');
-        modalCost = document.getElementById('modalCost');
-        modalAccount = document.getElementById('modalAccount');
-        modalAccountWrapper = document.getElementById('modalAccountWrapper');
-        modalFirstByte = document.getElementById('modalFirstByte');
-        modalDuration = document.getElementById('modalDuration');
-        modalJsonArea = document.getElementById('modalJsonArea');
-        modalHeaderArea = document.getElementById('modalHeaderArea');
-    }
-    if (!detailsModal || !modalContainer) return;
-
-    // Header fields come from the lite log metadata (always present on the
-    // stats-updated hot path).
-    if (modalTime) modalTime.textContent = log.timestamp || '-';
-    if (modalSession) modalSession.textContent = log.sessionId || '-';
-    if (modalModel) modalModel.textContent = log.model || '-';
-    if (modalPath) modalPath.textContent = `${log.method || 'POST'} ${log.host || ''}${log.path || ''}`;
-    if (modalFirstByte) modalFirstByte.textContent = formatDuration(log.firstByteMs);
-    if (modalDuration) modalDuration.textContent = formatDuration(log.durationMs);
-    if (modalCost) modalCost.textContent = `$${(log.cost || 0).toFixed(6)}`;
-
-    if (log.account) {
-        if (modalAccountWrapper) modalAccountWrapper.classList.remove('hidden');
-        if (modalAccount) modalAccount.textContent = log.account;
-    } else {
-        if (modalAccountWrapper) modalAccountWrapper.classList.add('hidden');
-    }
-
-    const inT = log.inTokens || 0;
-    const outT = log.outTokens || 0;
-    const cachedT = log.cachedTokens || 0;
-    if (modalTokens) modalTokens.textContent = `In: ${inT.toLocaleString()} | Out: ${outT.toLocaleString()} | Cache: ${cachedT.toLocaleString()}`;
-
-    const cacheBadge = log.cacheStatus || 'NONE';
-    const statusColor = log.statusCode >= 400 ? 'text-rose-500' : 'text-emerald-500';
-    if (modalStatus) modalStatus.innerHTML = `<span class="text-primary dark:text-primary-fixed-dim mr-2">${cacheBadge}</span><span class="${statusColor}">HTTP ${log.statusCode}</span>`;
-
-    // Show the modal immediately with a loading placeholder; the heavy
-    // requestBody / requestHeaders are fetched on demand so they are not
-    // carried on every stats-updated tick.
-    const loadingText = state.currentLanguage === 'zh' ? '加载中…' : 'Loading…';
-    if (modalJsonArea) modalJsonArea.textContent = loadingText;
-    if (modalHeaderArea) modalHeaderArea.textContent = loadingText;
-
-    detailsModal.classList.remove('opacity-0', 'pointer-events-none');
-    modalContainer.classList.remove('scale-95');
-    modalContainer.classList.add('scale-100');
-
-    const token = ++modalDetailsToken;
-    ipcRenderer.invoke('request:get-details', log.id).then((details: any) => {
-        if (token !== modalDetailsToken) return; // superseded by a newer open/close
-        const body = details ? details.requestBody : null;
-        const headers = details ? details.requestHeaders : null;
-        if (modalJsonArea) modalJsonArea.textContent = formatRequestBody(body);
-        if (modalHeaderArea) modalHeaderArea.textContent = formatRequestHeaders(headers);
-    }).catch(() => {
-        if (token !== modalDetailsToken) return;
-        if (modalJsonArea) modalJsonArea.textContent = formatRequestBody(null);
-        if (modalHeaderArea) modalHeaderArea.textContent = formatRequestHeaders(null);
-    });
-}
 
 // Global hooks
 (window as any).switchView = switchView;

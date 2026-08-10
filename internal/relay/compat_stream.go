@@ -24,6 +24,7 @@ func (h *APICompatHandler) handleStreamResponse(
 	geminiModel string,
 	apiFormat string,
 	inboundInputTokens int,
+	streamIncludeUsage bool,
 	startTime time.Time,
 	path string,
 	reqID string,
@@ -70,6 +71,20 @@ func (h *APICompatHandler) handleStreamResponse(
 	thinkingEmittedAny := false // thinking 块是否已实际下发过 thinking_delta;关块前据此判断是否补 signature_delta
 	hasFunctionCall := false
 	openAIRoleSent := false
+	// lastFinishReason 记录 Gemini 末帧非空 finishReason,收尾时经 mapGeminiFinishToOpenAI 映射,
+	// 不再硬编码 stop/tool_calls,支持 length(MAX_TOKENS 截断)/content_filter(安全拦截)终端态。
+	lastFinishReason := ""
+	// hasOpenAIToolCall / openAIToolCallIdx 用于 OpenAI 流式:每个 functionCall part 独占递增 index,
+	// 替代旧硬编码 0,避免并行工具调用 index 撞车导致 arguments 归属错乱。
+	var hasOpenAIToolCall bool
+	openAIToolCallIdx := -1
+	// thoughtsTokens 累计 Gemini 推理模型思考 token(usageMetadata.thoughtsTokenCount),
+	// 末帧 usage 经 completion_tokens_details.reasoning_tokens 透出给客户端。
+	thoughtsTokens := 0
+	// includeUsage 标记客户端是否请求 stream_options.include_usage;为 true 时收尾发独立 usage chunk。
+	// antigravity 链上游恒为 Gemini,末帧 usageMetadata 自带用量,故无需向上游注入 include_usage,
+	// 仅决定是否在回译流末尾向客户端补吐 OpenAI 格式 usage chunk。
+	includeUsage := streamIncludeUsage
 
 	startInputTokens := inboundInputTokens
 	if startInputTokens < 1 {
@@ -114,7 +129,6 @@ func (h *APICompatHandler) handleStreamResponse(
 	responsesMsgID := fmt.Sprintf("msg_%s_0", streamID)
 	responsesMsgOutIdx := 0 // 正文 message item 占用的 output_index,首次开块时由 responsesOutIdx 分配
 	var responsesTextBuf strings.Builder
-	hasOpenAIToolCall := false
 
 	// ===== Responses 协议 reasoning(思考)独立 item 状态机 =====
 	// thought 与正文必须拆成各自独立的 output_item,不能共用一个 message 条目:
@@ -244,9 +258,18 @@ func (h *APICompatHandler) handleStreamResponse(
 		if gemResp.UsageMetadata.CandidatesTokenCount > 0 {
 			outTokens = gemResp.UsageMetadata.CandidatesTokenCount
 		}
+		if gemResp.UsageMetadata.ThoughtsTokenCount > 0 {
+			thoughtsTokens = gemResp.UsageMetadata.ThoughtsTokenCount
+		}
 
 		if len(gemResp.Candidates) == 0 {
 			continue
+		}
+
+		// 记录 Gemini 末帧非空 finishReason,收尾时经 mapGeminiFinishToOpenAI 映射为 OpenAI finish_reason。
+		// Gemini 通常在最后一帧 candidates[0].finishReason 下发终止态(MAX_TOKENS/SAFETY/STOP 等)。
+		if len(gemResp.Candidates) > 0 && gemResp.Candidates[0].FinishReason != "" {
+			lastFinishReason = gemResp.Candidates[0].FinishReason
 		}
 
 		// 只要拿到上游 Candidate 响应，第一时间发射 OpenAI role: "assistant" 声明首包（对齐 Antigravity-Manager 逻辑）
@@ -304,13 +327,16 @@ func (h *APICompatHandler) handleStreamResponse(
 						fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(deltaBytes))
 						thinkingEmittedAny = true
 					} else if apiFormat == "openai" {
+						// OpenAI 流式思考走官方独立 reasoning_content 字段,不混入 delta.content,
+						// 与 NVIDIA 链 (nvidia_translate_types.go ReasoningContent) 口径对齐。
+						// 旧实现把思考当正文 content 推送,客户端会把思考当模型正文显示。
 						chunk := OpenAIStreamChunk{
 							ID:      streamID,
 							Object:  "chat.completion.chunk",
 							Created: createdAt,
 							Model:   displayModel,
 							Choices: []OpenAIStreamChoice{
-								{Index: 0, Delta: OpenAIDelta{Content: cleanText}, FinishReason: nil},
+								{Index: 0, Delta: OpenAIDelta{ReasoningContent: cleanText}, FinishReason: nil},
 							},
 						}
 						chunkBytes, _ := json.Marshal(chunk)
@@ -490,6 +516,12 @@ func (h *APICompatHandler) handleStreamResponse(
 			if part.FunctionCall != nil {
 				if apiFormat == "openai" {
 					hasOpenAIToolCall = true
+					// 每个 functionCall part 独占递增 index,替代旧硬编码 0。
+					// OpenAI 官方要求同一流内每个 tool_call 按递增 index 累积 name/arguments,
+					// 旧实现两个并行的 functionCall 同用 index=0 会导致第二个覆盖第一个的 name
+					// 或 arguments 归属错乱。
+					openAIToolCallIdx++
+					toolCallIndex := openAIToolCallIdx
 					callID := fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), rand.Int63n(1000))
 					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
 					if len(argsJSON) == 0 || string(argsJSON) == "null" {
@@ -499,14 +531,14 @@ func (h *APICompatHandler) handleStreamResponse(
 						ID:      streamID,
 						Object:  "chat.completion.chunk",
 						Created: createdAt,
-						Model:   geminiModel,
+						Model:   displayModel,
 						Choices: []OpenAIStreamChoice{
 							{
 								Index: 0,
 								Delta: OpenAIDelta{
 									ToolCalls: []OpenAIToolCall{
 										{
-											Index: 0,
+											Index: toolCallIndex,
 											ID:    callID,
 											Type:  "function",
 											Function: OpenAIToolCallFunction{
@@ -527,14 +559,14 @@ func (h *APICompatHandler) handleStreamResponse(
 						ID:      streamID,
 						Object:  "chat.completion.chunk",
 						Created: createdAt,
-						Model:   geminiModel,
+						Model:   displayModel,
 						Choices: []OpenAIStreamChoice{
 							{
 								Index: 0,
 								Delta: OpenAIDelta{
 									ToolCalls: []OpenAIToolCall{
 										{
-											Index: 0,
+											Index: toolCallIndex,
 											Function: OpenAIToolCallFunction{
 												Arguments: string(argsJSON),
 											},
@@ -736,10 +768,10 @@ func (h *APICompatHandler) handleStreamResponse(
 			flusher.Flush()
 		}
 
-		var finishReason interface{} = "stop"
-		if hasOpenAIToolCall {
-			finishReason = "tool_calls"
-		}
+		// finishReason 经 Gemini->OpenAI 映射,不再硬编码 stop/tool_calls;
+		// 支持 length(MAX_TOKENS 截断)/content_filter(安全拦截)等终端态,
+		// 让 Claude Code/Codex 正确识别截断而非当成正常 stop。
+		finishReason := mapGeminiFinishToOpenAI(lastFinishReason, hasOpenAIToolCall)
 		finalChunk := OpenAIStreamChunk{
 			ID:      streamID,
 			Object:  "chat.completion.chunk",
@@ -751,6 +783,24 @@ func (h *APICompatHandler) handleStreamResponse(
 		}
 		finalBytes, _ := json.Marshal(finalChunk)
 		fmt.Fprintf(w, "data: %s\n\n", string(finalBytes))
+
+		// stream_options.include_usage:客户端显式请求时,在 finish_reason chunk 之后、[DONE] 之前,
+		// 按 OpenAI 官方规范补发一个 choices 为空 + 带 usage 的独立 chunk(与 NVIDIA 链
+		// nvidia_responses.go 的 include_usage 末帧语义对齐)。上游 Gemini 末帧 usageMetadata
+		// 已在主循环中累计到 inTokens/outTokens/thoughtsTokens,这里直接回吐 OpenAI 格式。
+		if includeUsage {
+			usageChunk := OpenAIStreamChunk{
+				ID:      streamID,
+				Object:  "chat.completion.chunk",
+				Created: createdAt,
+				Model:   displayModel,
+				Choices: []OpenAIStreamChoice{},
+				Usage:   buildOpenAIUsagePtr(inTokens, outTokens, thoughtsTokens),
+			}
+			usageBytes, _ := json.Marshal(usageChunk)
+			fmt.Fprintf(w, "data: %s\n\n", string(usageBytes))
+		}
+
 		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	} else if apiFormat == "responses" {

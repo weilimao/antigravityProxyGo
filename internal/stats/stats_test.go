@@ -114,7 +114,7 @@ func TestTrackNvidiaRequest_IndependentBucket(t *testing.T) {
 	tracker.persistPath = "" // Prevent file serialization during testing
 
 	// 一次 NVIDIA 号池请求 + 一次综合链路请求, 都落当前小时桶。
-	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 100, 50)
+	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 100, 50, 0)
 	tracker.TrackRequest("gemini-3.5-flash", 200, 100, 10)
 
 	tracker.RLock()
@@ -138,7 +138,7 @@ func TestTrackNvidiaRequest_IndependentBucket(t *testing.T) {
 		t.Errorf("global bin mismatch: reqs=%d in=%d out=%d cached=%d", gBin.Requests, gBin.Input, gBin.Output, gBin.Cached)
 	}
 
-	// NVIDIA 趋势桶 nvidiaTrends: 只应含 TrackNvidiaRequest 那一次 100/50 + 1 request, cached=0。
+	// NVIDIA 趋势桶 nvidiaTrends: 只应含 TrackNvidiaRequest 那一次 100/50 + 1 request, cached=0(本用例传 0)。
 	if len(tracker.nvidiaTrends) != 1 {
 		t.Fatalf("expected 1 nvidia trends bin, got %d", len(tracker.nvidiaTrends))
 	}
@@ -146,10 +146,49 @@ func TestTrackNvidiaRequest_IndependentBucket(t *testing.T) {
 	if nBin.Requests != 1 || nBin.Input != 100 || nBin.Output != 50 || nBin.Cached != 0 {
 		t.Errorf("nvidia bin mismatch: reqs=%d in=%d out=%d cached=%d", nBin.Requests, nBin.Input, nBin.Output, nBin.Cached)
 	}
-	// NVIDIA 成本应非负 (rate 回退到 unknown 也应非负)。
+	// NVIDIA 成本应非负 (rate 回退到 unknown 也应非负); cached=0 → cachedCost 必为 0。
 	if nBin.Cost < 0 || nBin.InputCost < 0 || nBin.OutputCost < 0 || nBin.CachedCost != 0 {
 		t.Errorf("nvidia cost should be non-negative with zero cached cost: cost=%v in=%v out=%v cached=%v",
 			nBin.Cost, nBin.InputCost, nBin.OutputCost, nBin.CachedCost)
+	}
+}
+
+// TestTrackNvidiaRequest_AccruesCached 验证 TrackNvidiaRequest 透传 cached 后, nvidiaTrends 桶
+// 的 Cached/CachedCost 被如实累加(修复「日志显示命中但 NVIDIA Tab 趋势/卡片为 0」的口径断层),
+// 同时确认全局 stats 标量(TotalCachedTokens)仍不被 nvidiaTrends 桶污染(物理隔离不变式)。
+func TestTrackNvidiaRequest_AccruesCached(t *testing.T) {
+	pm := pricing.NewManager()
+	tracker := NewTracker(pm)
+	tracker.persistPath = ""
+
+	// 一次 NVIDIA 号池请求, 上游末帧 cached_tokens=600(模拟 DeepSeek/兼容上游回报缓存命中)。
+	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 1000, 50, 600)
+
+	tracker.RLock()
+	defer tracker.RUnlock()
+
+	if len(tracker.nvidiaTrends) != 1 {
+		t.Fatalf("expected 1 nvidia trends bin, got %d", len(tracker.nvidiaTrends))
+	}
+	nBin := tracker.nvidiaTrends[0]
+	if nBin.Cached != 600 {
+		t.Errorf("nvidia bin Cached = %d, want 600 (cached 未透传到 nvidiaTrends 桶)", nBin.Cached)
+	}
+	// CachedCost 按 rate.Cached 计价后非负; cached>0 且 rate.Cached>0 时应 > 0。
+	// z-ai/glm-5.2 在 pricing 表未显式登记 → 回退 unknown 的 Cached=0.25, 故 CachedCost 应 > 0。
+	if nBin.CachedCost <= 0 {
+		t.Errorf("nvidia bin CachedCost = %v, want > 0 (cached=600 × rate.Cached 应产生缓存命中成本)", nBin.CachedCost)
+	}
+
+	// 物理隔离不变式: nvidiaTrends 桶累加 cached 不应污染全局 stats 标量。
+	// TotalCachedTokens 仍由落点4 TrackRequestForModel 单独累加, 本用例未调它, 故必为 0。
+	if tracker.stats.TotalCachedTokens != 0 {
+		t.Errorf("global TotalCachedTokens = %d, want 0 (nvidiaTrends 桶累加 cached 不得污染全局标量)",
+			tracker.stats.TotalCachedTokens)
+	}
+	// 综合桶摩擦不变式: nvidiaTrends 写入不进 trends。
+	if len(tracker.trends) != 0 {
+		t.Errorf("global trends should stay empty, got %d bins (nvidiaTrends 不得污染综合桶)", len(tracker.trends))
 	}
 }
 
@@ -160,8 +199,8 @@ func TestTrackNvidiaRequest_SameHourAccumulation(t *testing.T) {
 	tracker := NewTracker(pm)
 	tracker.persistPath = ""
 
-	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 100, 50)
-	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 30, 70)
+	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 100, 50, 0)
+	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 30, 70, 0)
 
 	tracker.RLock()
 	defer tracker.RUnlock()
@@ -193,7 +232,7 @@ func TestGetPayload_IncludesNvidiaTrends(t *testing.T) {
 	tracker.persistPath = ""
 
 	tracker.TrackRequest("gemini-3.5-flash", 200, 100, 10)
-	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 100, 50)
+	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 100, 50, 0)
 
 	payload := tracker.GetPayload(nil)
 
@@ -238,7 +277,7 @@ func TestCacheEligibleInputTokens_GeminiOnlyNvidiaExcluded(t *testing.T) {
 	// NVIDIA 号池(经 TrackRequestForModel): input=500, cached=0 → 分母不应累加
 	tracker.TrackRequestForModel("z-ai/glm-5.2", 500, 250, 0)
 	// NVIDIA 趋势桶(经 TrackNvidiaRequest): 仅写 nvidiaTrends, 不动全局 stats
-	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 300, 150)
+	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 300, 150, 0)
 
 	tracker.RLock()
 	defer tracker.RUnlock()

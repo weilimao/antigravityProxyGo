@@ -170,6 +170,27 @@ func (a *App) startup(ctx context.Context) {
 	)
 	a.packetCap.Init(activeDir)
 
+	// 6. Initialize AI 计费生成器(AI 一键生成计费配置后端)。与 packetCap 同款
+	// getAccountTokens/refreshAccount 闭包注入(架构与 NewPacketCapturer 逐字对齐),
+	// 直连 daily-cloudcode-pa 经 gemini-2.5-flash-lite 给候选模型生成单价。
+	a.aiPricingGen = pricing.NewAIPriceGenerator(
+		func(id string) (string, string, string, error) {
+			acc := a.accountMgr.GetAccountByID(id)
+			if acc == nil {
+				return "", "", "", fmt.Errorf("账号不存在")
+			}
+			return acc.AccessToken, acc.RefreshToken, acc.ProjectID, nil
+		},
+		func(id string) (string, error) {
+			acc := a.accountMgr.GetAccountByID(id)
+			if acc == nil {
+				return "", fmt.Errorf("账号不存在")
+			}
+			return a.authMgr.RefreshToken(acc)
+		},
+		a.AddLog,
+	)
+
 	// Bind UI update callbacks with concurrent-safe throttling to prevent UI rendering freeze
 	var lastEmitTime time.Time
 	var emitMu sync.Mutex
@@ -246,43 +267,43 @@ func (a *App) startup(ctx context.Context) {
 
 				dbItem := &db.RequestLog{
 					ReqID:        reqID,
-					Timestamp:   time.Now().Format(time.RFC3339),
-					Mode:        "remote_relay",
-					UserID:      userID,
-					ModelName:   modelName,
-					InTokens:    inTokens,
-					OutTokens:   outTokens,
+					Timestamp:    time.Now().Format(time.RFC3339),
+					Mode:         "remote_relay",
+					UserID:       userID,
+					ModelName:    modelName,
+					InTokens:     inTokens,
+					OutTokens:    outTokens,
 					CachedTokens: cachedTokens,
-					Cost:        totalCost,
-					InputCost:   inputCost,
-					OutputCost:  outputCost,
-					CachedCost:  cachedCost,
-					DurationMs:  durationMs,
-					FirstByteMs: firstByteMs,
-					StatusCode:  statusCode,
-					Method:      method,
-					Host:        host,
-					Path:        path,
-					SessionID:   sessionID,
+					Cost:         totalCost,
+					InputCost:    inputCost,
+					OutputCost:   outputCost,
+					CachedCost:   cachedCost,
+					DurationMs:   durationMs,
+					FirstByteMs:  firstByteMs,
+					StatusCode:   statusCode,
+					Method:       method,
+					Host:         host,
+					Path:         path,
+					SessionID:    sessionID,
 				}
 				_ = db.InsertRequestLog(dbItem)
 
 				a.statsTracker.AddRequestLogInMemoryOnly(&stats.RequestLog{
-					ID:          reqID,
-					Timestamp:   time.Now().Format("01/02 15:04:05"),
-					Method:      method,
-					Host:        host,
-					Path:        path,
-					Model:       modelName,
-					Account:     allocatedAccount,
-					InTokens:    inTokens,
-					OutTokens:   outTokens,
+					ID:           reqID,
+					Timestamp:    time.Now().Format("01/02 15:04:05"),
+					Method:       method,
+					Host:         host,
+					Path:         path,
+					Model:        modelName,
+					Account:      allocatedAccount,
+					InTokens:     inTokens,
+					OutTokens:    outTokens,
 					CachedTokens: cachedTokens,
-					Cost:        totalCost,
-					StatusCode:  statusCode,
-					SessionID:   sessionID,
-					DurationMs:  durationMs,
-					FirstByteMs: firstByteMs,
+					Cost:         totalCost,
+					StatusCode:   statusCode,
+					SessionID:    sessionID,
+					DurationMs:   durationMs,
+					FirstByteMs:  firstByteMs,
 				})
 
 				a.relayStatsMgr.RecordUsage(relay.RelaySample{
@@ -333,6 +354,10 @@ func (a *App) startup(ctx context.Context) {
 							if key.LimitNvidiaTokens > 0 && key.UsedNvidiaTokens >= key.LimitNvidiaTokens {
 								return fmt.Errorf("API Key NVIDIA token limit exceeded (%d / %d)", key.UsedNvidiaTokens, key.LimitNvidiaTokens)
 							}
+						case relay.FamilyGrok:
+							if key.LimitGrokTokens > 0 && key.UsedGrokTokens >= key.LimitGrokTokens {
+								return fmt.Errorf("API Key Grok token limit exceeded (%d / %d)", key.UsedGrokTokens, key.LimitGrokTokens)
+							}
 						default:
 							if key.LimitGeminiTokens > 0 && key.UsedGeminiTokens >= key.LimitGeminiTokens {
 								return fmt.Errorf("API Key Gemini token limit exceeded (%d / %d)", key.UsedGeminiTokens, key.LimitGeminiTokens)
@@ -353,6 +378,9 @@ func (a *App) startup(ctx context.Context) {
 			case relay.FamilyNvidia:
 				quota = user.Quotas.Nvidia
 				familyKeyword = relay.NvidiaQuotaFamily
+			case relay.FamilyGrok:
+				quota = user.Quotas.Grok
+				familyKeyword = relay.GrokQuotaFamily
 			default:
 				quota = user.Quotas.Gemini
 				familyKeyword = "gemini"
@@ -665,7 +693,7 @@ func (a *App) domReady(ctx context.Context) {
 		"settings:get-prompt-prefix":                    a.settingsMgr.GetPromptPrefix(),
 		"settings:get-custom-model-override-enabled":    a.settingsMgr.GetCustomModelOverrideEnabled(),
 		"settings:get-custom-model-override-id":         a.settingsMgr.GetCustomModelOverrideID(),
-		"settings:get-bypass-override-prefixes":        a.settingsMgr.GetBypassOverridePrefixes(),
+		"settings:get-bypass-override-prefixes":         a.settingsMgr.GetBypassOverridePrefixes(),
 		"settings:get-custom-thinking-override-enabled": a.settingsMgr.GetCustomThinkingOverrideEnabled(),
 		"settings:get-custom-thinking-supports":         a.settingsMgr.GetCustomThinkingSupports(),
 		"settings:get-custom-thinking-budget":           a.settingsMgr.GetCustomThinkingBudget(),

@@ -152,6 +152,7 @@
 
     <DetailsModal />
     <PricingModal />
+    <AiPricingModal />
     <RetryErrorLogsModal />
     <UpdateModal />
     <SessionBindingsModal />
@@ -165,6 +166,7 @@
     <AutoTriggerModal />
     <NvidiaAccountModal />
     <NvidiaPreferredModelsModal />
+    <GrokAccountModal />
     <OtherAccountModal />
   </div>
 </template>
@@ -180,6 +182,7 @@ import Packets from './views/Packets.vue';
 import Settings from './views/Settings.vue';
 import DetailsModal from './components/modals/DetailsModal.vue';
 import PricingModal from './components/modals/PricingModal.vue';
+import AiPricingModal from './components/modals/AiPricingModal.vue';
 import RetryErrorLogsModal from './components/modals/RetryErrorLogsModal.vue';
 import UpdateModal from './components/modals/UpdateModal.vue';
 import SessionBindingsModal from './components/modals/SessionBindingsModal.vue';
@@ -193,12 +196,14 @@ import TriggerTestModal from './components/modals/TriggerTestModal.vue';
 import AutoTriggerModal from './components/modals/AutoTriggerModal.vue';
 import NvidiaAccountModal from './components/modals/NvidiaAccountModal.vue';
 import NvidiaPreferredModelsModal from './components/modals/NvidiaPreferredModelsModal.vue';
+import GrokAccountModal from './components/modals/GrokAccountModal.vue';
 import OtherAccountModal from './components/modals/OtherAccountModal.vue';
 import { initRemoteEvents } from './ui/remoteController';
 import { setLanguage, switchView, initDashboardEvents } from './ui/dashboard';
 import { ipcRenderer } from './shared/ipc';
 import { initAutotriggerHistoryEvents } from './ui/autotriggerHistoryController';
 import { initPricingEvents } from './ui/pricingController';
+import { initAiPricingEvents } from './ui/aiPricingController';
 import { initChartFilters } from './ui/chartRenderer';
 import { initMigrationEvents } from './ui/migrationController';
 import { initUpdaterEvents } from './ui/updaterController';
@@ -376,6 +381,7 @@ onMounted(() => {
     initRemoteEvents();
     initRetryErrorLogsEvents();
     initPricingEvents();
+    initAiPricingEvents();
     initAutotriggerHistoryEvents();
     initAccountsGlobalEvents();
     

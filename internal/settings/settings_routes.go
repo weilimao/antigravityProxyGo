@@ -14,6 +14,10 @@ func GetDefaultModelRoutes() []ModelRouteRule {
 	return []ModelRouteRule{
 		// NVIDIA 号池兜底:所有 nvidia/* 命名空间上游模型走 nvidia 号池。
 		{Pattern: "nvidia/*", TargetProvider: "nvidia", Priority: 50, Enabled: true},
+		// Grok 号池(xAI):grok/* 与 xai/* 命名空间上游模型走 grok 号池。
+		// 与 nvidia/* 同优先级 50, 命中优于顶层兜底通配 "*"。
+		{Pattern: "grok/*", TargetProvider: "grok", Priority: 50, Enabled: true},
+		{Pattern: "xai/*", TargetProvider: "grok", Priority: 50, Enabled: true},
 		// 顶层兜底:未命中其它规则的模型统一丢给 nvidia 号池(向后兼容,与原 /nvidia 行为对齐)。
 		{Pattern: "*", TargetProvider: "nvidia", Priority: 0, Enabled: true},
 	}

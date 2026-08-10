@@ -36,6 +36,17 @@ type nvidiaLogCtx struct {
 	StatusCode   int
 	StartTs      time.Time
 	FirstByteRec *stats.FirstByteRecorder
+	// ReqBody 是入站请求体经 parseInboundBodyForLog 解析后的结构化值(空 → nil,
+	// 合法 JSON → interface{},非 JSON → 原始字符串),供 recordNvidiaUsage 落库为
+	// stats.RequestLog.RequestBody,使前端「请求参数详情」弹窗能展示入站请求体而非
+	// 「无请求参数」兜底。由 writeNvidiaResponse 在装配 logCtx 时从入站 bodyBytes 注入;
+	// 超长字段后续由 stats.TruncateRequestBody 统一截断防 OOM。
+	ReqBody interface{}
+	// ReqHeaders 是入站请求头经 collectInboundHeadersForLog 采集(含敏感头脱敏)后的
+	// {键: 值} 映射(空入站头 → nil 接口, 与 ReqBody 口径对称),供 recordNvidiaUsage 落库为
+	// stats.RequestLog.RequestHeaders,使前端「请求参数详情」弹窗能展示入站请求头而非
+	// 「无请求头数据」兜底。同样由 writeNvidiaResponse 在装配 logCtx 时从入站 r.Header 注入。
+	ReqHeaders interface{}
 }
 
 // nvidiaHostFromBaseURL 从上游账号 BaseURL(如 https://integrate.api.nvidia.com/v1)
@@ -127,29 +138,11 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 	// 会话级隔离键注入:供 OCR 缓存等按会话隔离的特性共享同一会话 ID(同用户不同会话不共享
 	// 缓存槽),并贯穿下方日志让"哪个会话在打"可观测。
 	//
-	// 取键优先级(与 antigravity 号池链路 handler.go:422 同款口径,但补上 Claude Code 原生会话头):
-	//   1. X-Claude-Code-Session-Id 头(Claude Code CLI/VSCode 客户端原生携带的会话 UUID):
-	//      Claude Code 用 X-Api-Key 鉴权(不带 Authorization: Bearer),原 ExtractSessionKey 兜底走
-	//      sock 分支 → 全部本地 Claude Code 会话共一个 "sock:acc:127.0.0.1",会话级隔离失效。
-	//      优先取该头并以 "claude:" 前缀落地,日志一眼可辨来源,且 UUID 跨进程重启稳定可对照。
-	//      空串/纯空白视为未携带,回退第 2 优先级。
-	//   2. ExtractSessionKey + auth:acc:/sock:acc:/acc: 前缀(antigravity 链路同款口径作兜底):
-	//      适用于用 Authorization: Bearer 的非 Claude Code 客户端(脚本/SDK 直调 /nvidia/*)。
-	// sessionRouter==nil(单测未注入)且无 Claude Code 头时跳过注入,OCR 缓存回退 UserKey 隔离。
-	if userSession != nil && strings.TrimSpace(userSession.SessionKey) == "" {
-		if sid := strings.TrimSpace(r.Header.Get("X-Claude-Code-Session-Id")); sid != "" {
-			userSession.SessionKey = "claude:" + sid
-		} else if h.sessionRouter != nil {
-			rawKey := h.sessionRouter.ExtractSessionKey(r, bodyBytes)
-			if strings.HasPrefix(rawKey, "auth:") {
-				userSession.SessionKey = "auth:acc:" + strings.TrimPrefix(rawKey, "auth:")
-			} else if strings.HasPrefix(rawKey, "sock:") {
-				userSession.SessionKey = "sock:acc:" + strings.TrimPrefix(rawKey, "sock:")
-			} else if rawKey != "" {
-				userSession.SessionKey = "acc:" + rawKey
-			}
-		}
-	}
+	// 取键优先级与 Claude/Codex 客户端头识别见 relay.session_key.ensureSessionInfo 的统一注入器:
+	//   1. 客户端原生会话头(X-Claude-Code-Session-Id / Codex Session-Id / Thread-Id)→ "claude:UUID"/"codex:UUID";
+	//   2. ExtractSessionKey + auth:acc:/sock:acc:/acc: 前缀(脚本/SDK 直调兜底)。
+	// sessionRouter==nil(单测未注入)且无客户端头时跳过注入,OCR 缓存回退 UserKey 隔离。
+	h.ensureSessionKey(userSession, r, bodyBytes)
 
 	// 入站协议判定：按路径决定（三选一）
 	inboundAnthropic := strings.HasSuffix(path, "/v1/messages")
@@ -249,7 +242,10 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		maxAttempts = 1
 	}
 
-	sessionKey := userSession.UserID
+	// sticky 选号键:优先已注入的 userSession.SessionKey(按客户端会话粘性,使同一 Codex 用户
+	// 的不同会话散到不同号),空则回退 UserID(按用户粘性,脚本/SDK 直调旧行为)。
+	// 注入在入口 h.ensureSessionKey 完成(客户端头优先 → ExtractSessionKey 兜底)。
+	sessionKey := h.stickyKeyOf(userSession)
 	lbMode := "round-robin"
 	if h.accountMgr != nil {
 		lbMode = h.accountMgr.GetNvidiaLBMode()
@@ -339,6 +335,16 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			}
 			anthReq.Model = upstreamModel
 
+			// 本地图片路径自愈(L2.5 预处理):Claude Code 等客户端对未识别模型(如 nvidia/z-ai/glm-4.9)
+			// 会在发送前剔除 image 块,本地截图路径作为纯 text 块发来。此处先扫 text 块裸路径,
+			// 命中本机真实图片文件则读→base64→OCR→descHeader 原地注入,再交下游 image 降级与转发。
+			// 仅本地自用直连(ocrSelf=false 且来源=official_bypass/default_bypass)放行;静默 miss 不报错。
+			if !ocrSelf {
+				if enriched := h.ocr.EnrichLocalImagePathsInAnthropic(&anthReq, userSession); enriched > 0 {
+					h.log("✅ [NVIDIA 中继] 检测到 %d 个本地图片路径,已读图 OCR 注入 text 块(账号 %s | 会话 %s)", enriched, poolAccount.Email, ocrSessionDisplay(userSession))
+				}
+			}
+
 			// image 自愈降级:仅当上游模型不原生支持多模态时才把入站 Anthropic 的 image
 			// content block 先用本地 Gemini(gemini-2.5-flash)OCR 降级为纯文本(避免直送触发 400 /
 			// 内容丢失),上游段永远只见 text、零负担。判据由 h.ocr.modelSupportsImage 统一承载
@@ -402,6 +408,13 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			// 多模态判据由 h.ocr.modelSupportsImage 统一承载:NIM 上游若为 qwen-vl / gpt-4o / glm-4v 等
 			// 多模态模型会自动跳过降级、图块原样透传(保留原生视觉理解);非多模态则照旧降级。
 			if !ocrSelf && !h.ocr.modelSupportsImage(upstreamModel) {
+				// 本地图片路径自愈(L2.5 预处理):同 inboundAnthropic 分支,先扫 text 块裸路径注入再走 image 降级。
+				// EnrichLocalImagePathsInOpenAIChat 返回 newBody(命中时为新 bytes,未命中时原样返回入参),
+				// 此处用其结果替换 bodyBytes 再交 DowngradeOpenAIChatImagesToText 做结构化 image 块降级。
+				if nb, enriched := h.ocr.EnrichLocalImagePathsInOpenAIChat(bodyBytes, userSession); enriched > 0 {
+					bodyBytes = nb
+					h.log("✅ [NVIDIA 中继] OpenAI Chat 检测到 %d 个本地图片路径,已读图 OCR 注入 text 块(账号 %s | 会话 %s)", enriched, poolAccount.Email, ocrSessionDisplay(userSession))
+				}
 				downBody, replacedDown, errDown, ocrHitsDown, ocrMissesDown, ocrSkippedDown := h.ocr.DowngradeOpenAIChatImagesToText(bodyBytes, userSession)
 				if errDown != nil {
 					h.log("⚠️ [NVIDIA 中继] OpenAI Chat image 自愈降级出错(账号 %s | 会话 %s): %v,继续原始请求", poolAccount.Email, ocrSessionDisplay(userSession), errDown)
@@ -658,7 +671,10 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			if inboundAnthropic {
 				inboundInputTokens = estimateInputTokensFromBody(bodyBytes)
 			}
-			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, targetURL, upstreamBody, inboundInputTokens, start, firstByteRec)
+			// inboundBody 透传入站原始请求体(bodyBytes, 非协议转换后的 upstreamBody),
+			// 供 writeNvidiaResponse 两侧消费:Anthropic 流式回译在上游断流时以完整上游请求体重连;
+			// 同时作为入站请求体原貌注入 logCtx.ReqBody 落库(前端详情弹窗展示「入站时」请求体)。
+			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, targetURL, upstreamBody, bodyBytes, inboundInputTokens, start, firstByteRec)
 			// 蓄流重试(pullAnthropicStreamWithRetry)全程占账号槽,writeNvidiaResponse 返回即响应流结束,
 			// 本次请求结束,释放并发槽。release 必须在 writeNvidiaResponse 返回之后(见方案 §4)。
 			h.accountMgr.ReleaseAccount(poolAccount.ID)

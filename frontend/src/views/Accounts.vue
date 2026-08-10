@@ -27,6 +27,9 @@
                 <button class="px-3 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 whitespace-nowrap" id="btnChannelNvidia" type="button">
                     <span data-i18n="nvidiaPool">NVIDIA 号池</span>
                 </button>
+                <button class="px-3 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 whitespace-nowrap" id="btnChannelGrok" type="button">
+                    <span data-i18n="grokPool">Grok 号池</span>
+                </button>
                 <button class="px-3 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 whitespace-nowrap" id="btnChannelOther" type="button">
                     <span data-i18n="otherPool">Other 号池</span>
                 </button>
@@ -58,6 +61,26 @@
                 <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20">
                     <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="maxConcurrencyLabel">并发上限</span>
                     <input type="number" min="0" max="1000" id="nvidiaMaxConcurrency" class="w-14 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="maxConcurrencyTip" title="0=未配置(默认10);超过自动换号" />
+                </div>
+            </div>
+            <!-- Grok 池负载均衡方式(仅 Grok 通道显示,与 nvidiaLBModeContainer 同构):轮询算法 select + 单账号在途并发上限 input。无 pool 总开关 toggle(与 nvidia 现状对称)。 -->
+            <div class="flex items-center gap-2 bg-slate-50/50 dark:bg-white/5 px-3 py-1.5 rounded-lg border border-outline-variant/30 flex-shrink-0 hidden" id="grokLBModeContainer">
+                <span class="text-[13px] font-medium text-on-surface dark:text-white">轮询算法</span>
+                <select class="bg-transparent text-[13px] font-medium text-on-surface dark:text-white border border-outline-variant/40 rounded px-1.5 py-0.5 focus:outline-none cursor-pointer" id="grokLBModeSelect">
+                    <option value="round-robin" class="dark:bg-[#1a1f30] text-slate-800 dark:text-white" data-i18n="lbRoundRobin">游标轮询 (默认)</option>
+                    <option value="sticky" class="dark:bg-[#1a1f30] text-slate-800 dark:text-white" data-i18n="lbSticky">粘性会话</option>
+                </select>
+                <!-- Grok 池单账号在途并发上限:0=未配置回退默认 10;超过自动换号。 -->
+                <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20">
+                    <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="maxConcurrencyLabel">并发上限</span>
+                    <input type="number" min="0" max="1000" id="grokMaxConcurrency" class="w-14 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="maxConcurrencyTip" title="0=未配置(默认10);超过自动换号" />
+                </div>
+                <!-- Grok 池全局 CLI 客户端版本号(号池单值,对仗并发上限):用于发往 cli-chat-proxy.grok.com 上游的
+                     x-grok-client-version 身份头,规避 426 版本闸门(Outdated 报错)。留空回退默认 1.0.0。
+                     对齐 CLIProxyAPI2 xai_executor.go:69 常量(官方实测 0.2.93);此处号池全局可配。 -->
+                <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20">
+                    <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="grokCliVersionLabel">CLI版本</span>
+                    <input type="text" id="grokCliVersion" placeholder="1.0.0" class="w-20 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="grokCliVersionTip" title="CLI 版本号(发往 cli-chat-proxy 上游的身份头);默认 1.0.0,留空回退默认" />
                 </div>
             </div>
             <button type="button" id="btnNvidiaPreferredModels" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg text-[13px] font-medium text-amber-600 dark:text-amber-400 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer" data-i18n-title="nvidiaPreferredModelsBtn">
@@ -93,6 +116,13 @@
                         <div>
                             <div class="font-bold" data-i18n="nvidiaItemTitle">NVIDIA (API Key)</div>
                             <div class="text-[10px] text-outline" data-i18n="nvidiaItemDesc">填写上游端点与 API Key 接入</div>
+                        </div>
+                    </button>
+                    <button class="w-full text-left px-4 py-2 text-[13px] text-on-surface dark:text-white hover:bg-slate-50 dark:hover:bg-white/5 transition-colors flex items-center gap-2" id="btnAddGrokAccount">
+                        <span class="material-symbols-outlined text-sky-500 text-[16px]">smart_toy</span>
+                        <div>
+                            <div class="font-bold" data-i18n="grokItemTitle">Grok (xAI API Key)</div>
+                            <div class="text-[10px] text-outline" data-i18n="grokItemDesc">填写 xAI 端点与 API Key 接入</div>
                         </div>
                     </button>
                     <button class="w-full text-left px-4 py-2 text-[13px] text-on-surface dark:text-white hover:bg-slate-50 dark:hover:bg-white/5 transition-colors flex items-center gap-2 border-t border-outline-variant/10 mt-1 pt-3" id="btnAddOtherAccount">

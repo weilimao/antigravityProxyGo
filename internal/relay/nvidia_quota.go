@@ -16,6 +16,7 @@ const (
 	FamilyGemini APIKeyFamily = "gemini"
 	FamilyClaude APIKeyFamily = "claude"
 	FamilyNvidia APIKeyFamily = "nvidia"
+	FamilyGrok   APIKeyFamily = "grok"
 )
 
 func QuotaTypeHourly(family APIKeyFamily) string {
@@ -29,6 +30,13 @@ func QuotaTypeDaily(family APIKeyFamily) string {
 // DetectAPIKeyFamily 根据模型 ID 判定所属 API Key 家族。
 func DetectAPIKeyFamily(model string) APIKeyFamily {
 	m := strings.ToLower(strings.TrimSpace(model))
+	// Grok 族: 带 "grok/" 池前缀(relay_stats.json 落点1 口径, 如 "grok/grok-4.3")
+	// 或裸 "grok-" 前缀(上游真实模型名, 如 "grok-4.3")。前者优先判定, 与
+	// recordGrokUsage 的前缀口径一致, 使 APIKey 限额校验(app_lifecycle.go)与
+	// 用量回填(RecordAPIKeyUsageForFamily)能正确命中 FamilyGrok。
+	if strings.HasPrefix(m, "grok/") || strings.HasPrefix(m, "grok-") {
+		return FamilyGrok
+	}
 	if strings.HasPrefix(m, "claude") {
 		return FamilyClaude
 	}

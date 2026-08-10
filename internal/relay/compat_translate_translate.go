@@ -74,15 +74,18 @@ func MapClientModelToGemini(clientModel string, customMapping []settings.ModelMa
 // ParseUnifiedOpenAIRequest 统一解析 Chat Completions 与 Responses 报文格式
 func ParseUnifiedOpenAIRequest(bodyBytes []byte) (*OpenAIRequest, error) {
 	type TempReq struct {
-		Model        string               `json:"model"`
-		Messages     []OpenAIMessage      `json:"messages"`
-		Input        []ResponsesInputItem `json:"input"`
-		Tools        []ResponsesToolDef   `json:"tools,omitempty"`
-		Instructions string               `json:"instructions"`
-		Temperature  *float64             `json:"temperature,omitempty"`
-		MaxTokens    *int                 `json:"max_tokens,omitempty"`
-		Stream       bool                 `json:"stream,omitempty"`
-		Request      *TempReq             `json:"request,omitempty"`
+		Model               string               `json:"model"`
+		Messages            []OpenAIMessage      `json:"messages"`
+		Input               []ResponsesInputItem `json:"input"`
+		Tools               []ResponsesToolDef   `json:"tools,omitempty"`
+		Instructions        string               `json:"instructions"`
+		Temperature         *float64             `json:"temperature,omitempty"`
+		MaxTokens           *int                 `json:"max_tokens,omitempty"`
+		MaxCompletionTokens *int                 `json:"max_completion_tokens,omitempty"`
+		Stream              bool                 `json:"stream,omitempty"`
+		ToolChoice          interface{}          `json:"tool_choice,omitempty"`
+		StreamOptions       *OpenAIStreamOpts    `json:"stream_options,omitempty"`
+		Request             *TempReq             `json:"request,omitempty"`
 	}
 
 	var temp TempReq
@@ -112,16 +115,35 @@ func ParseUnifiedOpenAIRequest(bodyBytes []byte) (*OpenAIRequest, error) {
 		if temp.MaxTokens == nil && temp.Request.MaxTokens != nil {
 			temp.MaxTokens = temp.Request.MaxTokens
 		}
+		if temp.MaxCompletionTokens == nil && temp.Request.MaxCompletionTokens != nil {
+			temp.MaxCompletionTokens = temp.Request.MaxCompletionTokens
+		}
 		if !temp.Stream && temp.Request.Stream {
 			temp.Stream = temp.Request.Stream
 		}
+		if temp.ToolChoice == nil && temp.Request.ToolChoice != nil {
+			temp.ToolChoice = temp.Request.ToolChoice
+		}
+		if temp.StreamOptions == nil && temp.Request.StreamOptions != nil {
+			temp.StreamOptions = temp.Request.StreamOptions
+		}
+	}
+
+	// max_completion_tokens(o1/o3/gpt-5 系官方新字段)兜底为 max_tokens:
+	// 下游 TranslateOpenAIToGemini 只读 MaxTokens,这里归一,缺 max_tokens 时由 max_completion_tokens 顶上。
+	effectiveMaxTokens := temp.MaxTokens
+	if effectiveMaxTokens == nil && temp.MaxCompletionTokens != nil {
+		effectiveMaxTokens = temp.MaxCompletionTokens
 	}
 
 	req := &OpenAIRequest{
-		Model:       temp.Model,
-		Temperature: temp.Temperature,
-		MaxTokens:   temp.MaxTokens,
-		Stream:      temp.Stream,
+		Model:               temp.Model,
+		Temperature:         temp.Temperature,
+		MaxTokens:           effectiveMaxTokens,
+		MaxCompletionTokens: temp.MaxCompletionTokens,
+		Stream:              temp.Stream,
+		ToolChoice:          temp.ToolChoice,
+		StreamOptions:       temp.StreamOptions,
 	}
 
 	// 1. 如果是标准的 Chat Completions，直接返回
@@ -233,6 +255,16 @@ func TranslateOpenAIToGemini(openReq *OpenAIRequest) *GeminiRequest {
 	if len(gemReq.Tools) > 0 {
 		gemReq.ToolConfig = &GeminiToolConfig{
 			FunctionCallingConfig: &GeminiFCConfig{Mode: "VALIDATED"},
+		}
+	}
+
+	// 入站 OpenAI Chat / Responses 的 tool_choice 翻译为 Gemini toolConfig。
+	// 仅在有工具定义时生效(无工具强写 toolConfig 上游会报错)。若客户端显式指定
+	// "none"/required/指定函数,merge 进 gemReq.ToolConfig,覆盖默认 VALIDATED。
+	// 与 Anthropic 链(translateToolChoiceToGemini + 上方 VALIDATED 强置)语义对齐。
+	if len(gemReq.Tools) > 0 && openReq.ToolChoice != nil {
+		if tc := openAIToolChoiceToGemini(openReq.ToolChoice); tc != nil {
+			gemReq.ToolConfig = tc
 		}
 	}
 

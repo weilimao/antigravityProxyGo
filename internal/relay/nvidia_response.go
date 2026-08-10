@@ -24,12 +24,16 @@ import (
 
 // writeNvidiaResponse 把上游 OpenAI Chat 响应回译成入站协议并写回客户端。
 // inboundKind: "openai_chat"（透传）| "anthropic"（回译为 Messages）| "responses"（回译为 Responses API）。
-// r 为入站请求,供流式分支透传 r.Context() 到 watchCancel,实现客户端取消即断 + 尾帧补发。
-// writeNvidiaResponse 把上游响应按入站协议类型回写客户端。targetURL/upstreamBody 仅对 Anthropic 流式
-// 入站有意义(供蓄流回放链路原账号重建上游请求实现断流重试);其余链路忽略这两个参数,不参与重试。
+// r 为入站请求,供流式分支透传 r.Context() 到 watchCancel,实现客户端取消即断 + 尾帧补发;
+// 同时 r.Header 在本函数装配 logCtx 时经 collectInboundHeadersForLog 采集为 ReqHeaders 落库。
+// targetURL/upstreamBody 仅对 Anthropic 流式入站有意义(供蓄流回放链路原账号重建上游请求实现断流重试);
+// 其余链路忽略这两个参数,不参与重试。
+// inboundBody 为入站原始请求体字节(handleNvidia 在入口读出并全链路透传,非协议转换后的 upstreamBody):
+// 一方面供 Anthropic 流式回译在上游断流时以完整上游请求体重连;另一方面作为入站请求体原貌经
+// parseInboundBodyForLog 注入 logCtx.ReqBody 落库,使前端详情弹窗能展示「入站时」的请求体。
 // inboundInputTokens 为入站请求本地估算的输入 token 数(保底 1),仅 anthropic 流式分支透传给
 // writeNvidiaAnthropicStream → message_start.usage.input_tokens,让客户端流首即显示 ↑。
-func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte, inboundInputTokens int, startTs time.Time, firstByteRec *stats.FirstByteRecorder) {
+func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte, inboundBody []byte, inboundInputTokens int, startTs time.Time, firstByteRec *stats.FirstByteRecorder) {
 	defer resp.Body.Close()
 
 	// logCtx: 在分发出站协议前统一组装请求日志上下文, 共享给四个下行函数的 recordNvidiaUsage 调用点。
@@ -64,6 +68,18 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Re
 			logCtx.Account = userSession.UserID
 		}
 	}
+
+	// 入站请求头/请求体落库注入:供 recordNvidiaUsage 把同一笔请求的 RequestBody / RequestHeaders
+	// 落到 stats.RequestLog,使前端「请求参数详情」弹窗按需经 GetRequestDetails 拉取时能如实展示
+	// 入站请求头/请求体,而非恒落入「无请求头数据 / 无请求参数」兜底文案。
+	//   - inboundBody(hostApp)为入站原始请求体字节(handleNvidia 在入口 readBodyWithTimeout 读出并
+	//     全链路透传,非上游经协议转换后的 upstreamBody),与前端「入站时」展示语义一致。
+	//   - r.Header 为入站请求头;collectInboundHeadersForLog 内部对 Authorization / x-api-key 等敏感头
+	//     以 "<redacted>" 占位,杜绝把客户端凭证写进仪表盘与 SQLite。
+	//   - parseInboundBodyForLog 仅做"能否结构化"决策(空 → nil,合法 JSON → interface{},非 JSON → 字符串),
+	//     超长字段后续由 stats.TruncateRequestBody 在 AddRequestLogForFamily 内统一截断防 OOM。
+	logCtx.ReqBody = parseInboundBodyForLog(inboundBody)
+	logCtx.ReqHeaders = collectInboundHeadersForLog(r.Header)
 
 	switch inboundKind {
 	case "anthropic":

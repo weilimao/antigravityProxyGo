@@ -1,0 +1,216 @@
+/**
+ * settingsProxy.ts: 自定义 SOCKS5 + NVIDIA 断流兜底出站代理的表单绑定(SET)与回填(GET)。
+ *
+ * 从 settingsController.ts initSettings(L322-439)/ refreshSettingsUI(L705-786) 闭包体抽离,
+ * 两簇字面镜像同一套 DOM id 与 settings:set-/get- 系列 IPC 通道,唯一外部依赖 ipcRenderer。
+ * 各整体减 4 空格基缩进(函数体基缩进 8→4),无 let 可变状态,幂等重绑/重读,无跨 mount 残留。
+ */
+import { ipcRenderer } from '../shared/ipc';
+
+// 自定义 SOCKS5 + NVIDIA 兜底代理:逐字段绑 change → ipcRenderer.send('settings:set-*')。
+export function bindProxySettings(): void {
+    const chkCustomSocks5Enabled = document.getElementById('chkCustomSocks5Enabled') as HTMLInputElement | null;
+    const txtCustomSocks5Address = document.getElementById('txtCustomSocks5Address') as HTMLInputElement | null;
+    const txtCustomSocks5Username = document.getElementById('txtCustomSocks5Username') as HTMLInputElement | null;
+    const txtCustomSocks5Password = document.getElementById('txtCustomSocks5Password') as HTMLInputElement | null;
+    const divCustomSocks5Address = document.getElementById('divCustomSocks5Address');
+    const txtFallbackProxyPorts = document.getElementById('txtFallbackProxyPorts') as HTMLInputElement | null;
+
+    if (chkCustomSocks5Enabled) {
+        chkCustomSocks5Enabled.addEventListener('change', (e: any) => {
+            const enabled = e.target.checked;
+            try {
+                ipcRenderer.send('settings:set-custom-socks5-enabled', enabled);
+                if (divCustomSocks5Address) {
+                    divCustomSocks5Address.style.display = enabled ? 'flex' : 'none';
+                }
+            } catch (err) {
+                console.error('[SettingsController] Failed to save custom socks5 enabled:', err);
+            }
+        });
+    }
+
+    if (txtCustomSocks5Address) {
+        txtCustomSocks5Address.addEventListener('change', (e: any) => {
+            const val = e.target.value.trim();
+            try {
+                ipcRenderer.send('settings:set-custom-socks5-address', val);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save custom socks5 address:', err);
+            }
+        });
+    }
+
+    if (txtCustomSocks5Username) {
+        txtCustomSocks5Username.addEventListener('change', (e: any) => {
+            const val = e.target.value.trim();
+            try {
+                ipcRenderer.send('settings:set-custom-socks5-username', val);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save custom socks5 username:', err);
+            }
+        });
+    }
+
+    if (txtCustomSocks5Password) {
+        txtCustomSocks5Password.addEventListener('change', (e: any) => {
+            const val = e.target.value.trim();
+            try {
+                ipcRenderer.send('settings:set-custom-socks5-password', val);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save custom socks5 password:', err);
+            }
+        });
+    }
+
+    // ===== NVIDIA 断流兜底出站代理:与上方专属 SOCKS5 配置独立,镜像其 wiring =====
+    const chkFallbackProxyEnabled = document.getElementById('chkFallbackProxyEnabled') as HTMLInputElement | null;
+    const txtFallbackProxyAddress = document.getElementById('txtFallbackProxyAddress') as HTMLInputElement | null;
+    const txtFallbackProxyUsername = document.getElementById('txtFallbackProxyUsername') as HTMLInputElement | null;
+    const txtFallbackProxyPassword = document.getElementById('txtFallbackProxyPassword') as HTMLInputElement | null;
+    const divFallbackProxyAddress = document.getElementById('divFallbackProxyAddress');
+
+    if (chkFallbackProxyEnabled) {
+        chkFallbackProxyEnabled.addEventListener('change', (e: any) => {
+            const enabled = e.target.checked;
+            try {
+                ipcRenderer.send('settings:set-fallback-proxy-enabled', enabled);
+                if (divFallbackProxyAddress) {
+                    divFallbackProxyAddress.style.display = enabled ? 'flex' : 'none';
+                }
+            } catch (err) {
+                console.error('[SettingsController] Failed to save fallback proxy enabled:', err);
+            }
+        });
+    }
+
+    if (txtFallbackProxyAddress) {
+        txtFallbackProxyAddress.addEventListener('change', (e: any) => {
+            const val = e.target.value.trim();
+            try {
+                ipcRenderer.send('settings:set-fallback-proxy-address', val);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save fallback proxy address:', err);
+            }
+        });
+    }
+
+    if (txtFallbackProxyUsername) {
+        txtFallbackProxyUsername.addEventListener('change', (e: any) => {
+            const val = e.target.value.trim();
+            try {
+                ipcRenderer.send('settings:set-fallback-proxy-username', val);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save fallback proxy username:', err);
+            }
+        });
+    }
+
+    if (txtFallbackProxyPassword) {
+        txtFallbackProxyPassword.addEventListener('change', (e: any) => {
+            const val = e.target.value.trim();
+            try {
+                ipcRenderer.send('settings:set-fallback-proxy-password', val);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save fallback proxy password:', err);
+            }
+        });
+    }
+
+    if (txtFallbackProxyPorts) {
+        txtFallbackProxyPorts.addEventListener('change', (e: any) => {
+            const val = e.target.value.trim();
+            try {
+                ipcRenderer.send('settings:set-fallback-proxy-ports', val);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save fallback proxy ports:', err);
+            }
+        });
+    }
+}
+
+// 自定义 SOCKS5 + NVIDIA 兜底代理:逐字段 ipcRenderer.sendSync('settings:get-*') 回填。
+export function loadProxyState(): void {
+    const chkCustomSocks5Enabled = document.getElementById('chkCustomSocks5Enabled') as HTMLInputElement | null;
+    const txtCustomSocks5Address = document.getElementById('txtCustomSocks5Address') as HTMLInputElement | null;
+    const txtCustomSocks5Username = document.getElementById('txtCustomSocks5Username') as HTMLInputElement | null;
+    const txtCustomSocks5Password = document.getElementById('txtCustomSocks5Password') as HTMLInputElement | null;
+    const divCustomSocks5Address = document.getElementById('divCustomSocks5Address');
+    const txtFallbackProxyPorts = document.getElementById('txtFallbackProxyPorts') as HTMLInputElement | null;
+
+    if (chkCustomSocks5Enabled) {
+        const enabled = ipcRenderer.sendSync('settings:get-custom-socks5-enabled');
+        if (enabled !== null && enabled !== undefined) {
+            chkCustomSocks5Enabled.checked = !!enabled;
+            if (divCustomSocks5Address) {
+                divCustomSocks5Address.style.display = enabled ? 'flex' : 'none';
+            }
+        }
+    }
+
+    if (txtCustomSocks5Address) {
+        const addr = ipcRenderer.sendSync('settings:get-custom-socks5-address');
+        if (addr !== null && addr !== undefined) {
+            txtCustomSocks5Address.value = String(addr);
+        }
+    }
+
+    if (txtCustomSocks5Username) {
+        const username = ipcRenderer.sendSync('settings:get-custom-socks5-username');
+        if (username !== null && username !== undefined) {
+            txtCustomSocks5Username.value = String(username);
+        }
+    }
+
+    if (txtCustomSocks5Password) {
+        const password = ipcRenderer.sendSync('settings:get-custom-socks5-password');
+        if (password !== null && password !== undefined) {
+            txtCustomSocks5Password.value = String(password);
+        }
+    }
+
+    // ===== NVIDIA 断流兜底出站代理:加载已保存配置,镜像上方专属 SOCKS5 取值范式 =====
+    const chkFallbackProxyEnabled = document.getElementById('chkFallbackProxyEnabled') as HTMLInputElement | null;
+    const txtFallbackProxyAddress = document.getElementById('txtFallbackProxyAddress') as HTMLInputElement | null;
+    const txtFallbackProxyUsername = document.getElementById('txtFallbackProxyUsername') as HTMLInputElement | null;
+    const txtFallbackProxyPassword = document.getElementById('txtFallbackProxyPassword') as HTMLInputElement | null;
+    const divFallbackProxyAddress = document.getElementById('divFallbackProxyAddress');
+
+    if (chkFallbackProxyEnabled) {
+        const enabled = ipcRenderer.sendSync('settings:get-fallback-proxy-enabled');
+        if (enabled !== null && enabled !== undefined) {
+            chkFallbackProxyEnabled.checked = !!enabled;
+            if (divFallbackProxyAddress) {
+                divFallbackProxyAddress.style.display = enabled ? 'flex' : 'none';
+            }
+        }
+    }
+
+    if (txtFallbackProxyAddress) {
+        const addr = ipcRenderer.sendSync('settings:get-fallback-proxy-address');
+        if (addr !== null && addr !== undefined) {
+            txtFallbackProxyAddress.value = String(addr);
+        }
+    }
+
+    if (txtFallbackProxyUsername) {
+        const username = ipcRenderer.sendSync('settings:get-fallback-proxy-username');
+        if (username !== null && username !== undefined) {
+            txtFallbackProxyUsername.value = String(username);
+        }
+    }
+
+    if (txtFallbackProxyPassword) {
+        const password = ipcRenderer.sendSync('settings:get-fallback-proxy-password');
+        if (password !== null && password !== undefined) {
+            txtFallbackProxyPassword.value = String(password);
+        }
+    }
+
+    if (txtFallbackProxyPorts) {
+        const ports = ipcRenderer.sendSync('settings:get-fallback-proxy-ports');
+        if (ports !== null && ports !== undefined) {
+            txtFallbackProxyPorts.value = String(ports);
+        }
+    }
+}
