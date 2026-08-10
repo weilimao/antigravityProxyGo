@@ -126,6 +126,10 @@ type AccountsData struct {
 	// 用于发往 cli-chat-proxy.grok.com 上游的 x-grok-client-version 身份头(规避 426 版本闸门)。
 	// 空串=未配置, GetGrokCliVersion 回退默认 DefaultGrokCliVersion("1.0.0")。
 	GrokCliVersion string `json:"grokCliVersion,omitempty"`
+	// GrokQuotaCooldownHours 持久化 Grok 号池「额度超限后冷却时长」(单池单值, 对仗 GrokCliVersion,
+	// 单位小时)。仅在单账号 429/403 原地等 5s 重试 1 次仍失败时挂该冷却(默认 24h=1 天)。
+	// 0/负数=未配置, GetGrokQuotaCooldownHours 回退默认 DefaultGrokQuotaCooldownHours(24)。
+	GrokQuotaCooldownHours int `json:"grokQuotaCooldownHours,omitempty"`
 }
 
 type Manager struct {
@@ -163,6 +167,10 @@ type Manager struct {
 	// 空串=未配置, GetGrokCliVersion 回退默认 DefaultGrokCliVersion("1.0.0")。用于发往
 	// cli-chat-proxy.grok.com 上游的 x-grok-client-version 身份头(规避 426 版本闸门)。
 	grokCliVersion string
+	// grokQuotaCooldownHours 持久化 Grok 号池「额度超限后冷却时长」(单池单值, 对仗 grokCliVersion,
+	// 单位小时)。仅在单账号 429/403 原地等 5s 重试 1 次仍失败时挂该冷却(默认 24h=1 天)。
+	// 0/负数=未配置, GetGrokQuotaCooldownHours 回退默认 DefaultGrokQuotaCooldownHours(24)。
+	grokQuotaCooldownHours int
 	// concurrency 是单账号在途并发计数器(纯内存易失),由 Manager 单实例持有,
 	// relay 的 APICompatHandler.accountMgr 与 proxy 的 ProxyHandler.accountMgr 同一引用,
 	// 天然共享同一份在途计数。NewManager 初始化非 nil。详见 concurrency.go。

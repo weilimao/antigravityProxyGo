@@ -26,6 +26,7 @@ func (a *App) emitAccountsRes() {
 		"grokLBMode":                a.accountMgr.GetGrokLBMode(),
 		"grokMaxConcurrency":        a.accountMgr.GetGrokMaxConcurrency(),
 		"grokCliVersion":            a.accountMgr.GetGrokCliVersion(),
+		"grokQuotaCooldownHours":    a.accountMgr.GetGrokQuotaCooldownHours(),
 		"activeChannel":             a.accountMgr.GetActiveChannel(),
 		"nvidiaMaxConcurrency":      a.accountMgr.GetNvidiaMaxConcurrency(),
 		"antigravityMaxConcurrency": a.accountMgr.GetAntigravityMaxConcurrency(),

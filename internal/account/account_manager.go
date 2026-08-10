@@ -144,6 +144,12 @@ func (m *Manager) LoadAccounts() {
 	// Grok 号池全局 CLI 客户端版本号载入(对仗 grokMaxConcurrency):空串=未配置,
 	// GetGrokCliVersion 时回退默认 DefaultGrokCliVersion("1.0.0")。TrimSpace 防御空白输入。
 	m.grokCliVersion = strings.TrimSpace(parsed.GrokCliVersion)
+	// Grok 号池「额度超限后冷却时长」载入(对仗 grokCliVersion, 单位小时):0/负数=未配置,
+	// GetGrokQuotaCooldownHours 回退默认 DefaultGrokQuotaCooldownHours(24)。负数非法钳 0(规整范式)。
+	m.grokQuotaCooldownHours = parsed.GrokQuotaCooldownHours
+	if m.grokQuotaCooldownHours < 0 {
+		m.grokQuotaCooldownHours = 0
+	}
 	m.antigravityMaxConcurrency = parsed.AntigravityMaxConcurrency
 	m.projectMaxConcurrency = parsed.ProjectMaxConcurrency
 	if parsed.OtherMaxConcurrency != nil {
@@ -312,6 +318,7 @@ func (m *Manager) SaveAccounts(silent bool) error {
 		OtherMaxConcurrency:       m.otherMaxConcurrency,
 		GrokMaxConcurrency:        m.grokMaxConcurrency,
 		GrokCliVersion:            m.grokCliVersion,
+		GrokQuotaCooldownHours:    m.grokQuotaCooldownHours,
 	}
 	m.RUnlock()
 

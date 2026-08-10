@@ -210,6 +210,15 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		a.AddLog("🔄 Grok CLI Version → " + a.accountMgr.GetGrokCliVersion())
 		a.emitAccountsRes()
 
+	case "grok:set-quota-cooldown-hours":
+		// Grok 号池「额度超限后冷却时长」(单池单值, 单位小时, 对仗 grok:set-cli-version)。
+		// 仅在单账号 429/403 原地等 5s 重试 1 次仍失败时挂该冷却; 0/负数=未配置,
+		// GetGrokQuotaCooldownHours 回退默认 DefaultGrokQuotaCooldownHours(24, =1 天)。
+		v := getIntArg(0)
+		a.accountMgr.SetGrokQuotaCooldownHours(v)
+		a.AddLog(fmt.Sprintf("🔄 Grok Quota Cooldown → %dh", a.accountMgr.GetGrokQuotaCooldownHours()))
+		a.emitAccountsRes()
+
 		/* case "pool:toggle-gemini-cli":
 		a.accountMgr.SetGeminiCliPoolMode(getBoolArg(0))
 		if getBoolArg(0) {

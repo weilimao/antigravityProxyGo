@@ -8,12 +8,12 @@ import (
 	"antigravity-proxy/internal/stats"
 )
 
-// TestRecordOtherUsage_FiresLandings4_WhenTrackerInjected 验证: globalStatsTracker 注入时,
-// recordOtherUsage 的
+// TestRecordOtherUsage_FiresLandings4_WhenTrackerInjected 验证: globalStatsTracker 注入?
+// recordOtherUsage ?
 //   - 落点3 (TrackRequestForModel): 全局综合统计 TotalRequests +1, Model 走展示名;
-//   - 落点4 (AddRequestLogForFamily): 内存请求日志 +1, family=other 写入 (经 GetRequestLogCount 断言)。
+//   - 落点4 (AddRequestLogForFamily): 内存请求日志 +1, family=other 写入 (?GetRequestLogCount 断言)?
 //
-// 与 recordNvidiaUsage 对偶, 证 Other 号池请求现在能进仪表盘「请求日志」+「模型统计」+「综合趋势」。
+// ?recordNvidiaUsage 对偶, ?Other 号池请求现在能进仪表盘「请求日志?「模型统计?「综合趋势」?
 func TestRecordOtherUsage_FiresLandings34_WhenTrackerInjected(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
@@ -46,18 +46,18 @@ func TestRecordOtherUsage_FiresLandings34_WhenTrackerInjected(t *testing.T) {
 		t.Errorf("落点4 not fired: request log count = %d, want %d (delta +1)", got, beforeLogs+1)
 	}
 
-	// 端到端断言: 打点后落点4 请求日志 FirstByteMs 应 > 0, 验证 TTFT 链路 (FirstByteRecorder → RequestLog.FirstByteMs)。
+	// 端到端断言: 打点后落? 请求日志 FirstByteMs ?> 0, 验证 TTFT 链路 (FirstByteRecorder ?RequestLog.FirstByteMs)?
 	lastFirstByte := gt.GetRecentRequestFirstByteMs()
 	if lastFirstByte <= 0 {
 		t.Errorf("expected last request FirstByteMs > 0 after MarkFirstByte, got %d", lastFirstByte)
 	}
 }
 
-// TestRecordOtherUsage_SkipsLanding34_WhenTrackerNil 验证 globalStatsTracker==nil 时 recordOtherUsage
-// 的落点3/4 全安全跳过, 不 panic (与 recordNvidiaUsage 降级语义一致)。
+// TestRecordOtherUsage_SkipsLanding34_WhenTrackerNil 验证 globalStatsTracker==nil ?recordOtherUsage
+// 的落?/4 全安全跳? ?panic (?recordNvidiaUsage 降级语义一??
 func TestRecordOtherUsage_SkipsLanding34_WhenTrackerNil(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
-	// 不调 SetGlobalStatsTracker → globalStatsTracker 保持 nil
+	// 不调 SetGlobalStatsTracker ?globalStatsTracker 保持 nil
 
 	userSession := &RelaySession{Token: "tok-other-2", UserID: "u-other-2", SessionKey: "auth:acc:otherfailbeef0123"}
 	logCtx := passthroughLogCtx{
@@ -73,12 +73,12 @@ func TestRecordOtherUsage_SkipsLanding34_WhenTrackerNil(t *testing.T) {
 	handler.recordOtherUsage(userSession, "deepseek-v4-flash-0731", 100, 50, 0, nil, logCtx)
 }
 
-// TestRecordOtherUsage_CacheHit_PropagatesCached 验证 cached>0 时:
-//   - 落点3 TrackRequestForModel 的 cached 透传 (缓存命中率分母/分子口径);
-//   - 落点4 RequestLog.CachedTokens 写入 + CacheStatus="HIT" (而非恒 "NONE")。
+// TestRecordOtherUsage_CacheHit_PropagatesCached 验证 cached>0 ?
+//   - 落点3 TrackRequestForModel ?cached 透传 (缓存命中率分?分子口径);
+//   - 落点4 RequestLog.CachedTokens 写入 + CacheStatus="HIT" (而非?"NONE")?
 //
-// 这是缓存命中率修复的核心回归: 之前 recordOtherUsage 硬编码 CachedTokens:0/CacheStatus:"NONE",
-// 导致 Other 号池 (如 AliYun DeepSeek 返回 prompt_cache_hit_tokens) 命中率恒 0%。
+// 这是缓存命中率修复的核心回归: 之前 recordOtherUsage 硬编?CachedTokens:0/CacheStatus:"NONE",
+// 导致 Other 号池 (?AliYun DeepSeek 返回 prompt_cache_hit_tokens) 命中率恒 0%?
 func TestRecordOtherUsage_CacheHit_PropagatesCached(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
@@ -101,15 +101,15 @@ func TestRecordOtherUsage_CacheHit_PropagatesCached(t *testing.T) {
 		t.Errorf("cached>0 期望 CacheStatus=HIT, 实际=%q", got)
 	}
 
-	// 落点3 cached 透传口径: TotalCachedTokens 累加 = 2000 (经 TrackRequestForModel 第4参)。
+	// 落点3 cached 透传口径: TotalCachedTokens 累加 = 2000 (?TrackRequestForModel ???
 	if got := gt.GetTotalCachedTokens(); got != 2000 {
 		t.Errorf("cached>0 期望全局缓存 token=2000, 实际=%d", got)
 	}
 }
 
 // TestRecordOtherUsage_SkipsOnZeroUsage 验证 (input==0 && output==0) 时整函数早退,
-// 不触发落点3/4 (与 recordNvidiaUsage 保护同口径, 避免空桶/噪声日志)。
-func TestRecordOtherUsage_SkipsOnZeroUsage(t *testing.T) {
+// 不触发落?/4 (?recordNvidiaUsage 保护同口? 避免空桶/噪声日志)?
+func TestRecordOtherUsage_FiresLogOnZeroUsage(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
 	handler.SetGlobalStatsTracker(gt)
@@ -119,17 +119,20 @@ func TestRecordOtherUsage_SkipsOnZeroUsage(t *testing.T) {
 
 	handler.recordOtherUsage(&RelaySession{UserID: "u-other-3"}, "deepseek-v4-flash-0731", 0, 0, 0, nil, passthroughLogCtx{StartTs: time.Now()})
 
-	if got := gt.GetTotalRequests(); got != beforeReqs {
-		t.Errorf("zero-usage should not fire 落点3: TotalRequests = %d, want %d", got, beforeReqs)
+	// Fix: zero-usage (upstream omitted usage) must still record points 3/4 so the
+	// completed 200 request appears in the request log. Only points 1/2 (token accounting)
+	// are skipped on zero-usage; points 3/4 fire unconditionally.
+	if got := gt.GetTotalRequests(); got != beforeReqs+1 {
+		t.Errorf("zero-usage should still fire point3: TotalRequests = %d, want %d", got, beforeReqs+1)
 	}
-	if got := gt.GetRequestLogCount(); got != beforeLogs {
-		t.Errorf("zero-usage should not fire 落点4: log count = %d, want %d", got, beforeLogs)
+	if got := gt.GetRequestLogCount(); got != beforeLogs+1 {
+		t.Errorf("zero-usage should still fire point4: log count = %d, want %d", got, beforeLogs+1)
 	}
 }
 
-// TestRecordOtherUsage_PersistsBodyAndHeaders 验证 Other 号池链路入站请求体/请求头落库:
-// recordOtherUsage 把 logCtx.ReqBody / logCtx.ReqHeaders 落到 stats.RequestLog.RequestBody /
-// RequestHeaders, 使前端「请求参数详情」弹窗能展示入站请求体/请求头而非兜底文案。敏感头脱敏。
+// TestRecordOtherUsage_PersistsBodyAndHeaders 验证 Other 号池链路入站请求?请求头落?
+// recordOtherUsage ?logCtx.ReqBody / logCtx.ReqHeaders 落到 stats.RequestLog.RequestBody /
+// RequestHeaders, 使前端「请求参数详情」弹窗能展示入站请求?请求头而非兜底文案。敏感头脱敏?
 func TestRecordOtherUsage_PersistsBodyAndHeaders(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
@@ -173,8 +176,8 @@ func TestRecordOtherUsage_PersistsBodyAndHeaders(t *testing.T) {
 	}
 }
 
-// TestRecordGoogleUsage_PersistsBodyAndHeaders 验证 Antigravity 直连链路入站请求体/请求头落库
-// (对偶 TestRecordOtherUsage_PersistsBodyAndHeaders), 鉴权头脱敏、协议头原样。
+// TestRecordGoogleUsage_PersistsBodyAndHeaders 验证 Antigravity 直连链路入站请求?请求头落?
+// (对偶 TestRecordOtherUsage_PersistsBodyAndHeaders), 鉴权头脱敏、协议头原样?
 func TestRecordGoogleUsage_PersistsBodyAndHeaders(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
@@ -222,7 +225,7 @@ func TestRecordGoogleUsage_PersistsBodyAndHeaders(t *testing.T) {
 	}
 }
 
-// TestPassthroughHostFromBaseURL 验证上游账号 BaseURL 到裸 host 的提取, 回退占位 "other"。
+// TestPassthroughHostFromBaseURL 验证上游账号 BaseURL 到裸 host 的提? 回退占位 "other"?
 func TestPassthroughHostFromBaseURL(t *testing.T) {
 	cases := map[string]string{
 		"https://token-plan.cn-beijing.maas.aliyuncs.com/v1": "token-plan.cn-beijing.maas.aliyuncs.com",
@@ -234,15 +237,15 @@ func TestPassthroughHostFromBaseURL(t *testing.T) {
 			t.Errorf("passthroughHostFromBaseURL(%q) = %q, want %q", in, got, want)
 		}
 	}
-	// 非法 URL 兜底也须非空且不 panic(与 nvidiaHostFromBaseURL 相同容忍度)。
+	// 非法 URL 兜底也须非空且不 panic(?nvidiaHostFromBaseURL 相同容忍??
 	if h := passthroughHostFromBaseURL("://bad-url"); h == "" {
 		t.Error("passthroughHostFromBaseURL fallback should return non-empty for malformed input")
 	}
 }
 
-// TestRecordOtherUsage_CachedZeroFallsBackToNone 验证 cached==0 时 CacheStatus="NONE"
-// (前端 badge 渲染「直通 (NONE)」的口径), 与 cached>0 走 HIT 互补, 锁定开/关边界。
-// 这是缓存命中率修复后 "缺值不报错" 的回归保护: 上游未命中缓存时仍正常落库, 命中率 0。
+// TestRecordOtherUsage_CachedZeroFallsBackToNone 验证 cached==0 ?CacheStatus="NONE"
+// (前端 badge 渲染「直?(NONE)」的口径), ?cached>0 ?HIT 互补, 锁定开/关边界?
+// 这是缓存命中率修复后 "缺值不报错" 的回归保? 上游未命中缓存时仍正常落? 命中?0?
 func TestRecordOtherUsage_CachedZeroFallsBackToNone(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
@@ -258,7 +261,7 @@ func TestRecordOtherUsage_CachedZeroFallsBackToNone(t *testing.T) {
 		StatusCode: 200,
 		StartTs:    time.Now(),
 	}
-	// cached=0 未命中缓存(上游无 cache_read/prompt_cache_hit 字段)
+	// cached=0 未命中缓?上游?cache_read/prompt_cache_hit 字段)
 	handler.recordOtherUsage(userSession, "deepseek-v4-flash-0731", 53263, 108, 0, nil, logCtx)
 
 	if got := gt.GetRecentRequestCacheStatus(); got != "NONE" {

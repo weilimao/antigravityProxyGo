@@ -13,10 +13,10 @@ import (
 	"antigravity-proxy/internal/stats"
 )
 
-// makeInjectedGlobalTracker 构造一个真实 stats.Tracker 并以临时目录 Init, 避免落盘污染
-// 工作目录(relay 包无法直设私有 persistPath="", 故用 t.TempDir 通过公开 Init 让其安全写盘)。
-// 落点5 的 DB 落库 goroutine 在单测环境因 db.GlobalDB==nil 走 error 吞分支, 不 panic;
-// 内存 requests 段由 AddRequestLogForFamily 同步更新, 用 GetRequestLogCount 公开 getter 断言。
+// makeInjectedGlobalTracker 构造一个真?stats.Tracker 并以临时目录 Init, 避免落盘污染
+// 工作目录(relay 包无法直设私?persistPath="", 故用 t.TempDir 通过公开 Init 让其安全写盘)?
+// 落点5 ?DB 落库 goroutine 在单测环境因 db.GlobalDB==nil ?error 吞分? ?panic;
+// 内存 requests 段由 AddRequestLogForFamily 同步更新, ?GetRequestLogCount 公开 getter 断言?
 func makeInjectedGlobalTracker(t *testing.T) *stats.Tracker {
 	t.Helper()
 	gt := stats.NewTracker(pricing.NewManager())
@@ -24,12 +24,12 @@ func makeInjectedGlobalTracker(t *testing.T) *stats.Tracker {
 	return gt
 }
 
-// TestRecordNvidiaUsage_FiresLandings4And5_WhenTrackerInjected 验证: globalStatsTracker 注入时,
-// recordNvidiaUsage 的
-//   - 落点4 (TrackRequestForFamily): 全局综合统计 TotalRequests +1, Model 走去前缀展示名;
-//   - 落点5 (AddRequestLogForFamily): 内存请求日志 +1, family=nvidia 写入 (经 GetRequestLogCount 断言);
-// 同时 recordNvidiaUsage 的既有落点 (relay/usage/nvidiaTrends) 因 userSession==nil 在本用例被安全跳过,
-// 不影响对落点4/5 的聚焦断言。
+// TestRecordNvidiaUsage_FiresLandings4And5_WhenTrackerInjected 验证: globalStatsTracker 注入?
+// recordNvidiaUsage ?
+//   - 落点4 (TrackRequestForFamily): 全局综合统计 TotalRequests +1, Model 走去前缀展示?
+//   - 落点5 (AddRequestLogForFamily): 内存请求日志 +1, family=nvidia 写入 (?GetRequestLogCount 断言);
+// 同时 recordNvidiaUsage 的既有落?(relay/usage/nvidiaTrends) ?userSession==nil 在本用例被安全跳?
+// 不影响对落点4/5 的聚焦断言?
 func TestRecordNvidiaUsage_FiresLandings4And5_WhenTrackerInjected(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
@@ -38,15 +38,15 @@ func TestRecordNvidiaUsage_FiresLandings4And5_WhenTrackerInjected(t *testing.T) 
 	beforeReqs := gt.GetTotalRequests()
 	beforeLogs := gt.GetRequestLogCount()
 
-	// userSession 必须非 nil: recordNvidiaUsage 落点2(usageTracker)有 `userSession==nil → return`,
-	// 若传 nil 会提前 return 而跳过落点3/4/5。本用例落点1(relay StatsTracker)因 newNvidiaTestHandler
-	// 把 h.statsTracker 装成 nil 而自动跳过, 不影响对落点4/5 的聚焦断言。
-	// SessionKey 注入模拟正式生产口径:handleNvidia 入口经 ExtractSessionKey + auth:acc: 前缀算出后
-	// 注入,recordNvidiaUsage 经 ocrSessionDisplay 取它填 logCtx.SessionID → 请求日志会话 ID 列。
+	// userSession 必须?nil: recordNvidiaUsage 落点2(usageTracker)?`userSession==nil ?return`,
+	// 若传 nil 会提?return 而跳过落?/4/5。本用例落点1(relay StatsTracker)?newNvidiaTestHandler
+	// ?h.statsTracker 装成 nil 而自动跳? 不影响对落点4/5 的聚焦断言?
+	// SessionKey 注入模拟正式生产口径:handleNvidia 入口?ExtractSessionKey + auth:acc: 前缀算出?
+	// 注入,recordNvidiaUsage ?ocrSessionDisplay 取它?logCtx.SessionID ?请求日志会话 ID 列?
 	userSession := &RelaySession{Token: "tok-1", UserID: "u-1", SessionKey: "auth:acc:abc123def4567890"}
 	start := time.Now()
 	rec := stats.NewFirstByteRecorder(start)
-	// 等待 > 1ms 再打点,避免 start 与 MarkFirstByte 同毫秒导致 Milliseconds() 截断为 0。
+	// 等待 > 1ms 再打?避免 start ?MarkFirstByte 同毫秒导?Milliseconds() 截断?0?
 	time.Sleep(5 * time.Millisecond)
 	rec.MarkFirstByte()
 	logCtx := nvidiaLogCtx{
@@ -68,21 +68,21 @@ func TestRecordNvidiaUsage_FiresLandings4And5_WhenTrackerInjected(t *testing.T) 
 		t.Errorf("落点5 not fired: request log count = %d, want %d (delta +1)", got, beforeLogs+1)
 	}
 
-	// 端到端断言:打点后落点5 的请求日志 FirstByteMs 应 > 0 且 ≤ durationMs,
-	// 验证 FirstByteRecorder → nvidiaLogCtx.FirstByteRec → stats.RequestLog.FirstByteMs
-	// 这条 TTFT 链路在 NVIDIA 号池入口真实闭环(不再恒为 0)。
+	// 端到端断言:打点后落? 的请求日?FirstByteMs ?> 0 ??durationMs,
+	// 验证 FirstByteRecorder ?nvidiaLogCtx.FirstByteRec ?stats.RequestLog.FirstByteMs
+	// 这条 TTFT 链路?NVIDIA 号池入口真实闭环(不再恒为 0)?
 	lastFirstByte := gt.GetRecentRequestFirstByteMs()
 	if lastFirstByte <= 0 {
 		t.Errorf("expected last request FirstByteMs > 0 after MarkFirstByte, got %d", lastFirstByte)
 	}
 }
 
-// TestRecordNvidiaUsage_SkipsLandings4And5_WhenTrackerNil 验证 globalStatsTracker==nil (relay 单测默认装配、
-// 以及未注入场景) 时, recordNvidiaUsage 的落点3/4/5 全安全跳过, 不 panic; 这是既有"降级跳过"语义
-// 在新增落点4/5 后仍成立的回归保证。
+// TestRecordNvidiaUsage_SkipsLandings4And5_WhenTrackerNil 验证 globalStatsTracker==nil (relay 单测默认装配?
+// 以及未注入场? ? recordNvidiaUsage 的落?/4/5 全安全跳? ?panic; 这是既有"降级跳过"语义
+// 在新增落?/5 后仍成立的回归保证?
 func TestRecordNvidiaUsage_SkipsLandings4And5_WhenTrackerNil(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
-	// 不调 SetGlobalStatsTracker → globalStatsTracker 保持 nil
+	// 不调 SetGlobalStatsTracker ?globalStatsTracker 保持 nil
 
 	userSession := &RelaySession{Token: "tok-2", UserID: "u-2", SessionKey: "auth:acc:failbeef01234567"}
 	logCtx := nvidiaLogCtx{
@@ -99,8 +99,8 @@ func TestRecordNvidiaUsage_SkipsLandings4And5_WhenTrackerNil(t *testing.T) {
 }
 
 // TestRecordNvidiaUsage_SkipsOnZeroUsage 验证 (input==0 && output==0) 时整函数早退,
-// 既不触发落点4也不触发落点5 (与既有保护同口径, 避免制造空桶/噪声日志)。
-func TestRecordNvidiaUsage_SkipsOnZeroUsage(t *testing.T) {
+// 既不触发落点4也不触发落点5 (与既有保护同口径, 避免制造空?噪声日志)?
+func TestRecordNvidiaUsage_FiresLogOnZeroUsage(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
 	handler.SetGlobalStatsTracker(gt)
@@ -110,20 +110,23 @@ func TestRecordNvidiaUsage_SkipsOnZeroUsage(t *testing.T) {
 
 	handler.recordNvidiaUsage(&RelaySession{UserID: "u-3"}, "z-ai/glm-5.2", 0, 0, 0, nil, nvidiaLogCtx{StartTs: time.Now()})
 
-	if got := gt.GetTotalRequests(); got != beforeReqs {
-		t.Errorf("zero-usage should not fire 落点4: TotalRequests = %d, want %d", got, beforeReqs)
+	// Fix: zero-usage (upstream omitted usage) must still record points 4/5 so the
+	// completed 200 request appears in the request log. Only points 1/2 (token accounting)
+	// are skipped on zero-usage; points 4/5 fire unconditionally.
+	if got := gt.GetTotalRequests(); got != beforeReqs+1 {
+		t.Errorf("zero-usage should still fire point4: TotalRequests = %d, want %d", got, beforeReqs+1)
 	}
-	if got := gt.GetRequestLogCount(); got != beforeLogs {
-		t.Errorf("zero-usage should not fire 落点5: log count = %d, want %d", got, beforeLogs)
+	if got := gt.GetRequestLogCount(); got != beforeLogs+1 {
+		t.Errorf("zero-usage should still fire point5: log count = %d, want %d", got, beforeLogs+1)
 	}
 }
 
 // TestRecordNvidiaUsage_CachedHitSetsHITStatus 验证 cached>0 透传链路:
-// recordNvidiaUsage 收到 cached=40000 时,落点5 请求日志的 CacheStatus 应为 "HIT"(而非旧硬编码 "NONE"),
-// CachedTokens 应为 40000;落点4 综合桶 TotalCachedTokens 应 +40000(缓存命中率分子真实写入);
-// 落点2 号池账号维度 usageTracker 的 CachedTokens 也应为 40000。
-// 当前 NVIDIA 官方 NIM 不回报 cache,cached 恒 0,本用例用 cached>0 模拟"未来/兼容上游回报 cache"场景,
-// 保证 cached 透传链路(recordNvidiaUsage 新签名 → 落点2/4/5)真实闭环而非恒 0/"NONE"。
+// recordNvidiaUsage 收到 cached=40000 ?落点5 请求日志?CacheStatus 应为 "HIT"(而非旧硬编码 "NONE"),
+// CachedTokens 应为 40000;落点4 综合?TotalCachedTokens ?+40000(缓存命中率分子真实写?;
+// 落点2 号池账号维度 usageTracker ?CachedTokens 也应?40000?
+// 当前 NVIDIA 官方 NIM 不回?cache,cached ?0,本用例用 cached>0 模拟"未来/兼容上游回报 cache"场景,
+// 保证 cached 透传链路(recordNvidiaUsage 新签??落点2/4/5)真实闭环而非?0/"NONE"?
 func TestRecordNvidiaUsage_CachedHitSetsHITStatus(t *testing.T) {
 	handler, _, _, uTracker := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
@@ -132,7 +135,7 @@ func TestRecordNvidiaUsage_CachedHitSetsHITStatus(t *testing.T) {
 	beforeCached := gt.GetTotalCachedTokens()
 	beforeLogs := gt.GetRequestLogCount()
 
-	// userSession 非 nil 以穿过落点2(usageTracker)的 userSession==nil 早退。
+	// userSession ?nil 以穿过落?(usageTracker)?userSession==nil 早退?
 	userSession := &RelaySession{Token: "tok-hit", UserID: "u-hit", SessionKey: "auth:acc:abc123def4567890"}
 	start := time.Now()
 	rec := stats.NewFirstByteRecorder(start)
@@ -148,24 +151,24 @@ func TestRecordNvidiaUsage_CachedHitSetsHITStatus(t *testing.T) {
 		StartTs:      start,
 		FirstByteRec: rec,
 	}
-	// cached=40000 模拟上游回报缓存命中(NVIDIA 官方 NIM 当前不回报,此处验证透传链路而非上游行为)。
+	// cached=40000 模拟上游回报缓存命中(NVIDIA 官方 NIM 当前不回?此处验证透传链路而非上游行为)?
 	handler.recordNvidiaUsage(userSession, "z-ai/glm-5.2", 53263, 108, 40000, nil, logCtx)
 
-	// 落点5:请求日志 CacheStatus=="HIT"。
+	// 落点5:请求日志 CacheStatus=="HIT"?
 	if got := gt.GetRecentRequestCacheStatus(); got != "HIT" {
-		t.Errorf("落点5 CacheStatus = %q, want \"HIT\" (cached>0 应映射 HIT 而非旧硬编码 NONE)", got)
+		t.Errorf("落点5 CacheStatus = %q, want \"HIT\" (cached>0 应映?HIT 而非旧硬编码 NONE)", got)
 	}
-	// 落点5:请求日志条数 +1。
+	// 落点5:请求日志条数 +1?
 	if got := gt.GetRequestLogCount(); got != beforeLogs+1 {
 		t.Errorf("落点5 not fired: request log count = %d, want %d (delta +1)", got, beforeLogs+1)
 	}
-	// 落点4:综合桶 TotalCachedTokens +40000(缓存命中率分子真实写入)。
+	// 落点4:综合?TotalCachedTokens +40000(缓存命中率分子真实写??
 	if got := gt.GetTotalCachedTokens(); got != beforeCached+40000 {
 		t.Errorf("落点4 TotalCachedTokens = %d, want %d (delta +40000)", got, beforeCached+40000)
 	}
-	// 落点2:usageTracker 号池账号维度聚合 Totals.CachedTokens 应为 40000。
-	// 经 GetPayload 取 UsageState(无 poolAccount 时 AccountMeta 为 nil,RecordUsage 仍把 cached
-	// 累加到 state.Totails 聚合,见 stats/usage.go RecordUsage 的 Totals 分支)。
+	// 落点2:usageTracker 号池账号维度聚合 Totals.CachedTokens 应为 40000?
+	// ?GetPayload ?UsageState(?poolAccount ?AccountMeta ?nil,RecordUsage 仍把 cached
+	// 累加?state.Totails 聚合,?stats/usage.go RecordUsage ?Totals 分支)?
 	payload, ok := uTracker.GetPayload().(stats.UsageState)
 	if !ok {
 		t.Fatalf("落点2 GetPayload 类型断言失败, got %T", uTracker.GetPayload())
@@ -175,8 +178,8 @@ func TestRecordNvidiaUsage_CachedHitSetsHITStatus(t *testing.T) {
 	}
 }
 
-// TestRecordNvidiaUsage_ZeroCachedStaysNONE 验证 cached==0 时 CacheStatus 仍为 "NONE",
-// 即旧行为(前端紫色 NONE badge)无回归。当前 NVIDIA 官方 NIM 不回报 cache,真实链路恒走此分支。
+// TestRecordNvidiaUsage_ZeroCachedStaysNONE 验证 cached==0 ?CacheStatus 仍为 "NONE",
+// 即旧行为(前端紫色 NONE badge)无回归。当?NVIDIA 官方 NIM 不回?cache,真实链路恒走此分支?
 func TestRecordNvidiaUsage_ZeroCachedStaysNONE(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
@@ -200,12 +203,12 @@ func TestRecordNvidiaUsage_ZeroCachedStaysNONE(t *testing.T) {
 	handler.recordNvidiaUsage(userSession, "z-ai/glm-5.2", 500, 10, 0, nil, logCtx)
 
 	if got := gt.GetRecentRequestCacheStatus(); got != "NONE" {
-		t.Errorf("cached==0 时 CacheStatus = %q, want \"NONE\" (旧行为无回归)", got)
+		t.Errorf("cached==0 ?CacheStatus = %q, want \"NONE\" (旧行为无回归)", got)
 	}
 }
 
-// TestNvidiaHostFromBaseURL 验证上游账号 BaseURL 到裸 host 的提取, 与 gemini/claude 直连链路
-// RequestLog.Host 只存裸 host 的口径一致。覆盖含/不含路径、带端口、空串、非法 URL 兜底分支。
+// TestNvidiaHostFromBaseURL 验证上游账号 BaseURL 到裸 host 的提? ?gemini/claude 直连链路
+// RequestLog.Host 只存?host 的口径一致。覆盖含/不含路径、带端口、空串、非?URL 兜底分支?
 func TestNvidiaHostFromBaseURL(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -213,51 +216,51 @@ func TestNvidiaHostFromBaseURL(t *testing.T) {
 		{"https://integrate.api.nvidia.com/v1", "integrate.api.nvidia.com"},
 		{"https://integrate.api.nvidia.com", "integrate.api.nvidia.com"},
 		{"http://localhost:8080/v1", "localhost:8080"},
-		{"integrate.api.nvidia.com/v1", "integrate.api.nvidia.com"}, // 无协议 — 兜底分支
-		{"", "nvidia"}, // 空串 — 回退占位
+		{"integrate.api.nvidia.com/v1", "integrate.api.nvidia.com"}, // 无协??兜底分支
+		{"", "nvidia"}, // 空串 ?回退占位
 		{"   https://api.x.com/v1  ", "api.x.com"}, // 前后空白
-		{"://bad-url", ""},                         // url.Parse 解析不出 Host → 回退去前缀; 检查不 panic 即可
+		{"://bad-url", ""},                         // url.Parse 解析不出 Host ?回退去前缀; 检查不 panic 即可
 	}
 	for _, c := range cases {
 		got := nvidiaHostFromBaseURL(c.in)
-		// 对非法 ://bad-url 仅要求不 panic 且非空(兜底返回非空 host 或原样), 其余精确匹配
+		// 对非?://bad-url 仅要求不 panic 且非?兜底返回非空 host 或原?, 其余精确匹配
 		if c.want != "" && got != c.want {
 			t.Errorf("nvidiaHostFromBaseURL(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
-	// 单独确认非法输入兜底仍非空且不 panic
+	// 单独确认非法输入兜底仍非空且?panic
 	if h := nvidiaHostFromBaseURL("://bad-url"); h == "" {
 		t.Error("nvidiaHostFromBaseURL fallback should return non-empty for malformed input")
 	}
 }
 
-// TestHandleNvidiaStream_TTFTReflectsFirstFrame 端到端实证 NVIDIA 号池流式 Anthropic 完整链路
-// (handleNvidia → 选号 → 上游 SSE → 回译 → recordNvidiaUsage 落请求日志)的 TTFT 打点。
+// TestHandleNvidiaStream_TTFTReflectsFirstFrame 端到端实?NVIDIA 号池流式 Anthropic 完整链路
+// (handleNvidia ?选号 ?上游 SSE ?回译 ?recordNvidiaUsage 落请求日??TTFT 打点?
 //
-// 背景:handleNvidia 在用 bufio.Peek(1024) 嗅探首帧是否含上游 error 时(见 nvidia.go:511),
-// 若上游首帧 <1024 字节(短回答/思考分隔等常见 LLM 输出形态),Peek 会阻塞等待足够的字节累积,
-// 导致 writeNvidiaAnthropicStream 的 TTFT 打点(firstUpstreamByteHook)被推迟到「上游累积吐够
-// 1024 字节」之后 → 落库 FirstByteMs 兜底≈DurationMs → 前端「响应时间==耗时」异常(截图现象)。
+// 背景:handleNvidia 在用 bufio.Peek(1024) 嗅探首帧是否含上?error ??nvidia.go:511),
+// 若上游首?<1024 字节(短回?思考分隔等常见 LLM 输出形?,Peek 会阻塞等待足够的字节累积,
+// 导致 writeNvidiaAnthropicStream ?TTFT 打点(firstUpstreamByteHook)被推迟到「上游累积吐?
+// 1024 字节」之??落库 FirstByteMs 兜底≈DurationMs ?前端「响应时?=耗时」异?截图现象)?
 //
-// 本用例用小首帧(<1024 字节)复现该 Bug:修复(把 TTFT 打点提前到上游响应头到达,即 writeNvidiaResponse
-// 入口,绕开 Peek(1024) 阻塞)后,FirstByteMs 应反映上游响应头到达时刻(≈firstDelay),且显著小于
+// 本用例用小首?<1024 字节)复现?Bug:修复(?TTFT 打点提前到上游响应头到达,?writeNvidiaResponse
+// 入口,绕开 Peek(1024) 阻塞)?FirstByteMs 应反映上游响应头到达时刻(≈firstDelay),且显著小?
 // DurationMs(请求结束时刻 = firstDelay + 尾帧间隔 gap)。修复前 Peek 阻塞把打点推迟到请求末尾,
-// FirstByteMs 兜底≈DurationMs,本用例 FAIL,精确复现截图「响应时间==耗时」异常。
+// FirstByteMs 兜底≈DurationMs,本用?FAIL,精确复现截图「响应时?=耗时」异常?
 func TestHandleNvidiaStream_TTFTReflectsFirstFrame(t *testing.T) {
-	// 上游首字延迟:响应头到达前空等时长。
+	// 上游首字延迟:响应头到达前空等时长?
 	firstDelay := 400 * time.Millisecond
-	// 首帧之后到尾帧的额外间隔:让 DurationMs 明显大于 TTFT,便于区分「打点生效」与「打点失效兜底」。
+	// 首帧之后到尾帧的额外间隔:?DurationMs 明显大于 TTFT,便于区分「打点生效」与「打点失效兜底」?
 	gap := 300 * time.Millisecond
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("X-Accel-Buffering", "no")
 		f := w.(http.Flusher)
-		// 先空等 firstDelay 再吐首帧(模拟上游慢首字——响应头也在此刻才到达)。
+		// 先空?firstDelay 再吐首帧(模拟上游慢首字——响应头也在此刻才到??
 		time.Sleep(firstDelay)
-		// 首帧小(<1024 字节),复现 Peek(1024) 阻塞场景。
+		// 首帧?<1024 字节),复现 Peek(1024) 阻塞场景?
 		_, _ = w.Write([]byte(`data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"}}]}` + "\n\n"))
 		f.Flush()
-		// 首帧后gap 再吐尾帧,使 DurationMs 明显大于 TTFT。
+		// 首帧后gap 再吐尾帧,?DurationMs 明显大于 TTFT?
 		time.Sleep(gap)
 		_, _ = w.Write([]byte(`data: {"id":"1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}` + "\n\n"))
 		f.Flush()
@@ -286,29 +289,29 @@ func TestHandleNvidiaStream_TTFTReflectsFirstFrame(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 
-	// 请求日志应新增一条
+	// 请求日志应新增一?
 	if got := gt.GetRequestLogCount(); got != beforeLogs+1 {
 		t.Fatalf("request log count = %d, want %d (delta +1)", got, beforeLogs+1)
 	}
 	last := gt.GetRecentRequestFirstByteMs()
 	if last < 0 {
-		t.Fatalf("FirstByteMs = %d, 期望 ≥ 0", last)
+		t.Fatalf("FirstByteMs = %d, 期望 ?0", last)
 	}
-	// 决定性断言:TTFT 应反映上游响应头到达时刻(≈firstDelay),而非被推迟到请求末尾。
-	// 端到端总耗时 ≈ firstDelay+gap=700ms;若 TTFT 打点失效兜底为端到端(700ms),会 ≥ 阈值 580ms,
-	// 说明「响应时间==耗时」异常复现。修复后 TTFT≈400ms << 580ms,打点生效。
-	// (注:改造后 DurationMs 为「第一帧→流结束」的流式耗时,本场景下 TTFT=400ms 可 > 流式耗时=300ms,
-	// 属正常边界——首帧慢、生成快,故此处不直接把 TTFT 与 DurationMs 比较,而用 fixed 阈值判定打点失效。)
+	// 决定性断言:TTFT 应反映上游响应头到达时刻(≈firstDelay),而非被推迟到请求末尾?
+	// 端到端总耗时 ?firstDelay+gap=700ms;?TTFT 打点失效兜底为端到端(700ms),??阈?580ms,
+	// 说明「响应时?=耗时」异常复现。修复后 TTFT?00ms << 580ms,打点生效?
+	// (?改造后 DurationMs 为「第一帧→流结束」的流式耗时,本场景下 TTFT=400ms ?> 流式耗时=300ms,
+	// 属正常边界——首帧慢、生成快,故此处不直接?TTFT ?DurationMs 比较,而用 fixed 阈值判定打点失效?
 	if int64(last) >= int64(firstDelay.Milliseconds())+int64(gap.Milliseconds())*6/10 {
-		t.Errorf("FirstByteMs = %dms, 期望 ≈ 上游首字延迟 %dms: TTFT 打点被 Peek(1024) 阻塞推迟,兜底成端到端耗时,前端「响应时间==耗时」异常复现", last, firstDelay.Milliseconds())
+		t.Errorf("FirstByteMs = %dms, 期望 = 上游首字延迟 %dms: TTFT 打点被 Peek(1024) 阻塞推迟,兜底成端到端耗时,前端「响应时间=耗时」异常复现", last, firstDelay.Milliseconds())
 	}
 }
 
-// TestRecordNvidiaUsage_PersistsBodyAndHeaders 验证号池直连链路入站请求体/请求头落库链路:
-// recordNvidiaUsage 把 logCtx.ReqBody / logCtx.ReqHeaders 落到 stats.RequestLog.RequestBody /
-// RequestHeaders, 使前端「请求参数详情」弹窗按需经 GetRequestDetails 拉取时能如实展示入站请求体/
-// 请求头, 而非恒落入「无请求参数 / 无请求头数据」兜底文案(截图现象)。
-// 同时验证敏感头(Authorization)被脱敏为 "<redacted>", 非敏感头(Content-Type)原样保留。
+// TestRecordNvidiaUsage_PersistsBodyAndHeaders 验证号池直连链路入站请求?请求头落库链?
+// recordNvidiaUsage ?logCtx.ReqBody / logCtx.ReqHeaders 落到 stats.RequestLog.RequestBody /
+// RequestHeaders, 使前端「请求参数详情」弹窗按需?GetRequestDetails 拉取时能如实展示入站请求?
+// 请求? 而非恒落入「无请求参数 / 无请求头数据」兜底文?截图现象)?
+// 同时验证敏感?Authorization)被脱敏为 "<redacted>", 非敏感头(Content-Type)原样保留?
 func TestRecordNvidiaUsage_PersistsBodyAndHeaders(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
@@ -327,30 +330,30 @@ func TestRecordNvidiaUsage_PersistsBodyAndHeaders(t *testing.T) {
 		StatusCode:   200,
 		StartTs:      start,
 		FirstByteRec: rec,
-		// 模拟 writeNvidiaResponse 装配: 入站 body 经 parseInboundBodyForLog 解析,
-		// 入站 header 经 collectInboundHeadersForLog 采集(含敏感头脱敏)。
+		// 模拟 writeNvidiaResponse 装配: 入站 body ?parseInboundBodyForLog 解析,
+		// 入站 header ?collectInboundHeadersForLog 采集(含敏感头脱敏)?
 		ReqBody:    parseInboundBodyForLog([]byte(`{"model":"z-ai/glm-5.2","stream":true,"messages":[{"role":"user","content":"hi"}]}`)),
 		ReqHeaders: collectInboundHeadersForLog(http.Header{"Authorization": {"Bearer sk-secret"}, "Content-Type": {"application/json"}}),
 	}
 	handler.recordNvidiaUsage(userSession, "z-ai/glm-5.2", 100, 50, 0, nil, logCtx)
 
-	// 落库的 RequestBody 应为入站请求体解析后的结构化值(非 nil), 断言关键字段读回。
+	// 落库?RequestBody 应为入站请求体解析后的结构化??nil), 断言关键字段读回?
 	body := gt.GetRecentRequestBody()
 	if body == nil {
-		t.Fatalf("RequestBody = nil, want 入站结构化 body; 详情弹窗将恒落「无请求参数」兜底(截图现象)")
+		t.Fatalf("RequestBody = nil, want 入站结构?body; 详情弹窗将恒落「无请求参数」兜?截图现象)")
 	}
 	bodyMap, ok := body.(map[string]interface{})
 	if !ok {
-		t.Fatalf("RequestBody 类型 = %T, want map[string]interface{}(经 parseInboundBodyForLog 解析)", body)
+		t.Fatalf("RequestBody 类型 = %T, want map[string]interface{}(?parseInboundBodyForLog 解析)", body)
 	}
 	if got := bodyMap["model"]; got != "z-ai/glm-5.2" {
 		t.Errorf("RequestBody.model = %v, want z-ai/glm-5.2", got)
 	}
 
-	// 落库的 RequestHeaders 应为非空映射, 敏感头 Authorization 被脱敏, 非敏感头 Content-Type 原样。
+	// 落库?RequestHeaders 应为非空映射, 敏感?Authorization 被脱? 非敏感头 Content-Type 原样?
 	headers := gt.GetRecentRequestHeaders()
 	if headers == nil {
-		t.Fatalf("RequestHeaders = nil, want 非空映射; 详情弹窗将恒落「无请求头数据」兜底(截图现象)")
+		t.Fatalf("RequestHeaders = nil, want 非空映射; 详情弹窗将恒落「无请求头数据」兜底，截图现象)")
 	}
 	headersMap, ok := headers.(map[string]interface{})
 	if !ok {
@@ -360,13 +363,13 @@ func TestRecordNvidiaUsage_PersistsBodyAndHeaders(t *testing.T) {
 		t.Errorf("RequestHeaders[Authorization] = %v, want \"<redacted>\"(敏感凭证脱敏, 避免写进仪表盘与 SQLite)", got)
 	}
 	if got := headersMap["Content-Type"]; got != "application/json" {
-		t.Errorf("RequestHeaders[Content-Type] = %v, want application/json(非敏感头应原样保留)", got)
+		t.Errorf("RequestHeaders[Content-Type] = %v, want application/json(非敏感头应原样保?", got)
 	}
 }
 
-// TestRecordNvidiaUsage_EmptyBodyAndHeadersStayNil 验证入站请求体/请求头为空时落库为 nil:
-// recordNvidiaUsage 不强行注入, 前端 formatRequestBody / formatRequestHeaders 仍走「无请求参数 /
-// 无请求头数据」兜底文案(与既有 proxy 直连链路对空请求的展示语义一致, 无回归)。
+// TestRecordNvidiaUsage_EmptyBodyAndHeadersStayNil 验证入站请求?请求头为空时落库?nil:
+// recordNvidiaUsage 不强行注? 前端 formatRequestBody / formatRequestHeaders 仍走「无请求参数 /
+// 无请求头数据」兜底文?与既?proxy 直连链路对空请求的展示语义一? 无回??
 func TestRecordNvidiaUsage_EmptyBodyAndHeadersStayNil(t *testing.T) {
 	handler, _, _, _ := newNvidiaTestHandler(t, nil)
 	gt := makeInjectedGlobalTracker(t)
@@ -378,26 +381,26 @@ func TestRecordNvidiaUsage_EmptyBodyAndHeadersStayNil(t *testing.T) {
 		Host:       "integrate.api.nvidia.com",
 		Path:       "/nvidia/v1/chat/completions",
 		StartTs:    time.Now(),
-		ReqBody:    parseInboundBodyForLog(nil), // 空 body → nil
+		ReqBody:    parseInboundBodyForLog(nil), // ?body ?nil
 		ReqHeaders: collectInboundHeadersForLog(nil),
 	}
 	handler.recordNvidiaUsage(userSession, "z-ai/glm-5.2", 100, 50, 0, nil, logCtx)
 
 	if got := gt.GetRecentRequestBody(); got != nil {
-		t.Errorf("空入站 body 期望 RequestBody=nil(前端落兜底文案无回归), 实际=%v", got)
+		t.Errorf("空入?body 期望 RequestBody=nil(前端落兜底文案无回归), 实际=%v", got)
 	}
 	if got := gt.GetRecentRequestHeaders(); got != nil {
-		t.Errorf("空入站 header 期望 RequestHeaders=nil(前端落兜底文案无回归), 实际=%v", got)
+		t.Errorf("空入?header 期望 RequestHeaders=nil(前端落兜底文案无回归), 实际=%v", got)
 	}
 }
 
-// TestHandleNvidiaStream_BodyHeadersPropagateEndToEnd 端到端实证 NVIDIA 号池流式 Anthropic 完整链路
-// (handleNvidia → 选号 → 上游 SSE → 回译 → recordNvidiaUsage 落请求日志)的入站请求体/请求头落库。
+// TestHandleNvidiaStream_BodyHeadersPropagateEndToEnd 端到端实?NVIDIA 号池流式 Anthropic 完整链路
+// (handleNvidia ?选号 ?上游 SSE ?回译 ?recordNvidiaUsage 落请求日?的入站请求体/请求头落库?
 //
-// 背景:旧实现 recordNvidiaUsage 构造 reqLog 时未填 RequestBody / RequestHeaders, 即使前端弹窗
-// 按需经 GetRequestDetails 拉取也只拿到 nil, 恒展示「无请求头数据 / 无请求参数」(截图现象)。
-// 修复(writeNvidiaResponse 装配 logCtx 时注入 ReqBody/ReqHeaders)后, 经 handleNvidia 端到端入站,
-// 落库的 RequestBody 应为入站请求体解析后的结构化值, RequestHeaders 应含入站请求头(敏感头脱敏)。
+// 背景:旧实?recordNvidiaUsage 构?reqLog 时未?RequestBody / RequestHeaders, 即使前端弹窗
+// 按需?GetRequestDetails 拉取也只拿到 nil, 恒展示「无请求头数?/ 无请求参数?截图现象)?
+// 修复(writeNvidiaResponse 装配 logCtx 时注?ReqBody/ReqHeaders)? ?handleNvidia 端到端入?
+// 落库?RequestBody 应为入站请求体解析后的结构化? RequestHeaders 应含入站请求?敏感头脱??
 func TestHandleNvidiaStream_BodyHeadersPropagateEndToEnd(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -424,7 +427,7 @@ func TestHandleNvidiaStream_BodyHeadersPropagateEndToEnd(t *testing.T) {
 	}
 	body, _ := json.Marshal(anthReq)
 	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", strings.NewReader(string(body)))
-	// 模拟 Claude Code 客户端携带的入站头(含鉴权凭证 + 协议头)。
+	// 模拟 Claude Code 客户端携带的入站?含鉴权凭?+ 协议??
 	req.Header.Set("Authorization", "Bearer sk-ant-secret-e2e")
 	req.Header.Set("X-Api-Key", "sk-ant-apikey-e2e")
 	req.Header.Set("Anthropic-Version", "2023-06-01")
@@ -436,59 +439,59 @@ func TestHandleNvidiaStream_BodyHeadersPropagateEndToEnd(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
 	}
 
-	// 入站请求体应端到端落库为结构化值, 关键字段可读回。
+	// 入站请求体应端到端落库为结构化? 关键字段可读回?
 	gotBody := gt.GetRecentRequestBody()
 	if gotBody == nil {
-		t.Fatalf("端到端 RequestBody = nil, want 入站结构化 body; 详情弹窗恒落「无请求参数」(截图现象未修)")
+		t.Fatalf("端到?RequestBody = nil, want 入站结构?body; 详情弹窗恒落「无请求参数?截图现象未修)")
 	}
 	if bodyMap, ok := gotBody.(map[string]interface{}); !ok || bodyMap["model"] != "z-ai/glm-5.2" {
-		t.Errorf("端到端 RequestBody.model 未透传, got %v", gotBody)
+		t.Errorf("端到?RequestBody.model 未透传, got %v", gotBody)
 	}
 
-	// 入站请求头应端到端落库, 鉴权凭证脱敏, 协议头原样。
+	// 入站请求头应端到端落? 鉴权凭证脱敏, 协议头原样?
 	gotHeaders := gt.GetRecentRequestHeaders()
 	if gotHeaders == nil {
-		t.Fatalf("端到端 RequestHeaders = nil, want 非空映射; 详情弹窗恒落「无请求头数据」(截图现象未修)")
+		t.Fatalf("端到?RequestHeaders = nil, want 非空映射; 详情弹窗恒落「无请求头数据?截图现象未修)")
 	}
 	headersMap, ok := gotHeaders.(map[string]interface{})
 	if !ok {
-		t.Fatalf("端到端 RequestHeaders 类型 = %T, want map[string]interface{}", gotHeaders)
+		t.Fatalf("端到?RequestHeaders 类型 = %T, want map[string]interface{}", gotHeaders)
 	}
 	if got := headersMap["Authorization"]; got != "<redacted>" {
-		t.Errorf("端到端 Authorization = %v, want \"<redacted>\"(鉴权凭证脱敏)", got)
+		t.Errorf("端到?Authorization = %v, want \"<redacted>\"(鉴权凭证脱敏)", got)
 	}
 	if got := headersMap["X-Api-Key"]; got != "<redacted>" {
-		t.Errorf("端到端 X-Api-Key = %v, want \"<redacted>\"(API Key 脱敏)", got)
+		t.Errorf("端到?X-Api-Key = %v, want \"<redacted>\"(API Key 脱敏)", got)
 	}
 	if got := headersMap["Anthropic-Version"]; got != "2023-06-01" {
-		t.Errorf("端到端 Anthropic-Version = %v, want 2023-06-01(协议头原样保留)", got)
+		t.Errorf("端到?Anthropic-Version = %v, want 2023-06-01(协议头原样保?", got)
 	}
 }
 
-// TestHandleNvidiaStream_CachedHitPropagatesEndToEnd 端到端实证 NVIDIA 号池流式 Anthropic 完整链路
-// (handleNvidia → 选号 → 上游 SSE 末帧带 cached → 回译 → recordNvidiaUsage 落请求日志)的 cached 透传。
+// TestHandleNvidiaStream_CachedHitPropagatesEndToEnd 端到端实?NVIDIA 号池流式 Anthropic 完整链路
+// (handleNvidia ?选号 ?上游 SSE 末帧?cached ?回译 ?recordNvidiaUsage 落请求日??cached 透传?
 //
-// 背景:旧实现 recordNvidiaUsage 硬编码 cached=0/CacheStatus="NONE",即使上游某天在末帧 usage
-// 里回报 prompt_tokens_details.cached_tokens(或 prompt_cache_hit_tokens),代理也会把它压成 0,
-// 体现在前端就是「缓存命中率 0.0% / 直通 (NONE)」永不变化。
+// 背景:旧实?recordNvidiaUsage 硬编?cached=0/CacheStatus="NONE",即使上游某天在末?usage
+// 里回?prompt_tokens_details.cached_tokens(?prompt_cache_hit_tokens),代理也会把它压成 0,
+// 体现在前端就是「缓存命中率 0.0% / 直?(NONE)」永不变化?
 //
-// 本用例构造一个 mock 上游,其末帧 usage 带 prompt_tokens_details.cached_tokens=600,验证:
-//   - 上游末帧 usage 的 cached 字段经 openAIChatSSEToAnthropicSSEInto 解析(nvidia_translate_sse.go:126);
-//   - 经 pullAnthropicStreamWithRetry 的 cached 返回值透传(nvidia_stream.go);
-//   - 经 writeNvidiaAnthropicStream 传给 recordNvidiaUsage(nvidia_stream.go:192);
-//   - 落点5 请求日志 CacheStatus=="HIT"、落点4 综合桶 TotalCachedTokens +600。
+// 本用例构造一?mock 上游,其末?usage ?prompt_tokens_details.cached_tokens=600,验证:
+//   - 上游末帧 usage ?cached 字段?openAIChatSSEToAnthropicSSEInto 解析(nvidia_translate_sse.go:126);
+//   - ?pullAnthropicStreamWithRetry ?cached 返回值透传(nvidia_stream.go);
+//   - ?writeNvidiaAnthropicStream 传给 recordNvidiaUsage(nvidia_stream.go:192);
+//   - 落点5 请求日志 CacheStatus=="HIT"、落? 综合?TotalCachedTokens +600?
 //
-// 当前 NVIDIA 官方 NIM 不回报 cache,本用例用 mock 上游模拟"未来/兼容上游回报 cache"场景,
-// 保证整条 cached 透传链路真实闭环。真实 NIM 调用走 cached==0 分支(见 TestRecordNvidiaUsage_ZeroCachedStaysNONE)。
+// 当前 NVIDIA 官方 NIM 不回?cache,本用例用 mock 上游模拟"未来/兼容上游回报 cache"场景,
+// 保证整条 cached 透传链路真实闭环。真?NIM 调用?cached==0 分支(?TestRecordNvidiaUsage_ZeroCachedStaysNONE)?
 func TestHandleNvidiaStream_CachedHitPropagatesEndToEnd(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("X-Accel-Buffering", "no")
 		f := w.(http.Flusher)
-		// 首帧带正文 delta。
+		// 首帧带正?delta?
 		_, _ = w.Write([]byte(`data: {"id":"1","model":"z-ai/glm-5.2","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"}}]}` + "\n\n"))
 		f.Flush()
-		// 末帧带 usage + cached_tokens(模拟上游回报缓存命中)。
+		// 末帧?usage + cached_tokens(模拟上游回报缓存命中)?
 		_, _ = w.Write([]byte(`data: {"id":"1","choices":[],"usage":{"prompt_tokens":800,"completion_tokens":2,"total_tokens":802,"prompt_tokens_details":{"cached_tokens":600}}}` + "\n\n"))
 		f.Flush()
 		_, _ = w.Write([]byte(`data: [DONE]` + "\n\n"))
@@ -517,29 +520,29 @@ func TestHandleNvidiaStream_CachedHitPropagatesEndToEnd(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
 	}
 
-	// 落点5:请求日志 +1,CacheStatus=="HIT"。
+	// 落点5:请求日志 +1,CacheStatus=="HIT"?
 	if got := gt.GetRequestLogCount(); got != beforeLogs+1 {
 		t.Fatalf("request log count = %d, want %d (delta +1)", got, beforeLogs+1)
 	}
 	if got := gt.GetRecentRequestCacheStatus(); got != "HIT" {
-		t.Errorf("端到端 CacheStatus = %q, want \"HIT\" (上游末帧 cached_tokens=600 未透传到落点5)", got)
+		t.Errorf("端到?CacheStatus = %q, want \"HIT\" (上游末帧 cached_tokens=600 未透传到落?)", got)
 	}
-	// 落点4:综合桶 TotalCachedTokens +600(缓存命中率分子真实写入)。
+	// 落点4:综合?TotalCachedTokens +600(缓存命中率分子真实写??
 	if got := gt.GetTotalCachedTokens(); got != beforeCached+600 {
-		t.Errorf("端到端 TotalCachedTokens = %d, want %d (delta +600, 上游末帧 cached 未透传到落点4)", got, beforeCached+600)
+		t.Errorf("端到?TotalCachedTokens = %d, want %d (delta +600, 上游末帧 cached 未透传到落?)", got, beforeCached+600)
 	}
-	// 落点3:NVIDIA 专用趋势桶 nvidiaTrends 末桶 Cached +600(修复「日志显示命中但 NVIDIA Tab
-	// 趋势/卡片为 0」的口径断层)。cached 由 TrackNvidiaRequest 透传进 nvidiaTrends 桶,
-	// 前端「使用趋势-NVIDIA」Tab 的紫色缓存命中曲线与「缓存命中 Token」卡片据此出数。
+	// 落点3:NVIDIA 专用趋势?nvidiaTrends 末桶 Cached +600(修复「日志显示命中但 NVIDIA Tab
+	// 趋势/卡片?0」的口径断层)。cached ?TrackNvidiaRequest 透传?nvidiaTrends ?
+	// 前端「使用趋?NVIDIA」Tab 的紫色缓存命中曲线与「缓存命?Token」卡片据此出数?
 	nvTrends := gt.GetNvidiaTrends()
 	if len(nvTrends) == 0 {
-		t.Fatalf("nvidiaTrends bucket empty, want ≥1 bin (落点3 未写 nvidiaTrends)")
+		t.Fatalf("nvidiaTrends bucket empty, want ? bin (落点3 未写 nvidiaTrends)")
 	}
 	lastNv := nvTrends[len(nvTrends)-1]
 	if lastNv.Cached < 600 {
-		t.Errorf("端到端 nvidiaTrends 末桶 Cached = %d, want ≥600 (上游末帧 cached 未透传到落点3 nvidiaTrends 桶)", lastNv.Cached)
+		t.Errorf("端到?nvidiaTrends 末桶 Cached = %d, want ?00 (上游末帧 cached 未透传到落? nvidiaTrends ?", lastNv.Cached)
 	}
 	if lastNv.CachedCost <= 0 {
-		t.Errorf("端到端 nvidiaTrends 末桶 CachedCost = %v, want > 0 (cached=600 × rate.Cached 应产生缓存命中成本)", lastNv.CachedCost)
+		t.Errorf("端到?nvidiaTrends 末桶 CachedCost = %v, want > 0 (cached=600 × rate.Cached 应产生缓存命中成?", lastNv.CachedCost)
 	}
 }

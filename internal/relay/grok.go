@@ -43,14 +43,17 @@ import (
 // 避免单请求拖垮整池。Grok 池账号通常少, 若可用号 <5 则按池实际数量轮一遍。
 const grokMaxAttemptsCap = 5
 
-// grokSingleAcc429Retries 是单账号遇 429 时的原地退避重试上限(与 handleNvidia/passthrough 同口径)。
-const grokSingleAcc429Retries = 5
+// grokSingleAcc429Retries 是单账号应对 429/403 的原地重试上限(首次 + 1 次重试 = 2)。
+// 与 handleNvidia/passthrough 的「5 次退避」不同: 用户语义要求「等几秒再试一次, 仍报错就冷却一天换号」,
+// 故此值为 2 —— 首次失败后等 grokQuotaRetryWaitMs(5s) 原地再打 1 次, 第二次仍失败即挂可配置长冷却换号。
+const grokSingleAcc429Retries = 2
 
-// grokCooldownMs 是 429/5xx 换号时该号的冷却时长(60s), 与 passthroughCooldownShortMs 一致。
+// grokQuotaRetryWaitMs 是单账号遇 429/403 首失败后, 原地再次重试前的等待时长(5 秒)。
+// 用户语义「等五秒再试一次」, 仅此一次等待; 仍失败即挂号池可配置冷却(默认 24h)换号。
+const grokQuotaRetryWaitMs = 5 * 1000
+
+// grokCooldownMs 是网络错误时该号的冷却时长(60s), 与 passthroughCooldownShortMs 一致。
 const grokCooldownShortMs = 60 * 1000
-
-// grokCooldownLongMs 是 401/403 鉴权失败时该号的冷却时长(5min), 与 passthroughCooldownLongMs 一致。
-const grokCooldownLongMs = 5 * 60 * 1000
 
 // handleGrok 处理 /grok/* 与 /xai/* 请求(并承接 /route/* 命中 "grok" Provider 的派发)。
 func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, userSession *RelaySession) {
@@ -373,7 +376,8 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 			httpClient = h.streamClient
 		}
 
-		// 单账号针对 429 尝试最多 grokSingleAcc429Retries 次, 重试均 429 失败才切下一个账号(与 handleNvidia 同构)。
+		// 单账号针对 429/403 尝试 grokSingleAcc429Retries 次(首次 + 1 次重试):
+		// 首失败等 5s 再打 1 次, 第二次仍失败即挂号池可配置长冷却(默认 24h)换号(用户语义)。
 		var activeResp *http.Response
 		accountSuccess := false
 		for singleAttempt := 1; singleAttempt <= grokSingleAcc429Retries; singleAttempt++ {
@@ -394,7 +398,7 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 			applyGrokCLIHeaders(req, poolAccount.BaseURL, h.accountMgr.GetGrokCliVersion())
 
 			if singleAttempt > 1 {
-				h.log("🔄 [Grok 中继 429 重试 %d/%d] 账号 %s 遇到 429 限流, 等待 2 秒后原地重试...", singleAttempt, grokSingleAcc429Retries, poolAccount.Email)
+				h.log("🔄 [Grok 中继 429/403 重试 %d/%d] 账号 %s 首次失败, 等待 5 秒后原地重试...", singleAttempt, grokSingleAcc429Retries, poolAccount.Email)
 			}
 
 			resp, errDo := httpClient.Do(req)
@@ -417,7 +421,7 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 				break
 			}
 
-			// 429 限流: 5 次以内原地退避 2 秒重试, 重试均 429 失败才冷冻切号。
+			// 429 限流: 首次等 5s 原地重试 1 次, 重试仍失败即挂号池可配置长冷却(默认 24h)换号(用户语义)。
 			if resp.StatusCode == http.StatusTooManyRequests {
 				errBody, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
@@ -425,27 +429,37 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 				lastErrCode = resp.StatusCode
 				lastErr = fmt.Errorf("grok upstream status 429")
 				if singleAttempt < grokSingleAcc429Retries {
-					time.Sleep(2 * time.Second)
+					time.Sleep(grokQuotaRetryWaitMs * time.Millisecond)
 					continue
 				}
-				h.log("⚠️ [Grok 中继] 账号 %s 重试 %d 次仍返回 429, 冷冻该账号并换号...", poolAccount.Email, grokSingleAcc429Retries)
+				cooldownHours := h.accountMgr.GetGrokQuotaCooldownHours()
+				cooldownUntilMs := time.Now().UnixNano()/1e6 + int64(cooldownHours)*3600*1000
+				h.log("⚠️ [Grok 中继] 账号 %s 等待 5s 重试 %d 次仍返回 429, 视为额度超限, 冷冻该账号 %d 小时并换号...", poolAccount.Email, grokSingleAcc429Retries, cooldownHours)
 				skippedAccounts[poolAccount.ID] = true
-				h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, time.Now().UnixNano()/1e6+int64(grokCooldownShortMs), grokChannel, inModel)
+				h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, cooldownUntilMs, grokChannel, inModel)
 				h.sessionRouter.UnbindSession(sessionKey)
 				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				break
 			}
 
-			// 401/403: 鉴权或配额问题, 不原号重试, 换号(5min 长冷却, 与 handleNvidia/passthrough 同口径)。
+			// 401/403: 首次等 5s 原地重试 1 次, 重试仍失败即挂号池可配置长冷却(默认 24h)换号。
+			// (401 坏/过期 Key 当天不会自愈, 一天冷冻避免刷屏; 403 鉴权/配额耗尽同口径, 与用户语义一致。)
 			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-				h.log("⚠️ [Grok 中继] 账号 %s 上游返回 %d, 剔除换号重试...", poolAccount.Email, resp.StatusCode)
 				errBody, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				lastErrBody = errBody
 				lastErrCode = resp.StatusCode
 				lastErr = fmt.Errorf("grok upstream status %d", resp.StatusCode)
+				if singleAttempt < grokSingleAcc429Retries {
+					h.log("🔄 [Grok 中继] 账号 %s 上游返回 %d, 等待 5 秒后原地重试...", poolAccount.Email, resp.StatusCode)
+					time.Sleep(grokQuotaRetryWaitMs * time.Millisecond)
+					continue
+				}
+				cooldownHours := h.accountMgr.GetGrokQuotaCooldownHours()
+				cooldownUntilMs := time.Now().UnixNano()/1e6 + int64(cooldownHours)*3600*1000
+				h.log("⚠️ [Grok 中继] 账号 %s 等待 5s 重试仍返回 %d, 视为鉴权/配额超限, 冷冻该账号 %d 小时并换号...", poolAccount.Email, resp.StatusCode, cooldownHours)
 				skippedAccounts[poolAccount.ID] = true
-				h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, time.Now().UnixNano()/1e6+int64(grokCooldownLongMs), grokChannel, inModel)
+				h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, cooldownUntilMs, grokChannel, inModel)
 				h.sessionRouter.UnbindSession(sessionKey)
 				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				break

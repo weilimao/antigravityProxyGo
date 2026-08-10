@@ -821,6 +821,30 @@ func (m *Manager) SetGrokCliVersion(v string) {
 	_ = m.SaveAccounts(false)
 }
 
+// GetGrokQuotaCooldownHours 返回 Grok 号池「额度超限后冷却时长」(单池单值, 对仗 GetGrokCliVersion,
+// 单位小时)。0/负数=未配置, 回退默认 DefaultGrokQuotaCooldownHours(24, =1 天)。
+// 仅在单账号 429/403 原地等 5s 重试 1 次仍失败时挂该冷却(见 internal/relay/grok.go)。
+func (m *Manager) GetGrokQuotaCooldownHours() int {
+	m.RLock()
+	defer m.RUnlock()
+	if m.grokQuotaCooldownHours <= 0 {
+		return DefaultGrokQuotaCooldownHours
+	}
+	return m.grokQuotaCooldownHours
+}
+
+// SetGrokQuotaCooldownHours 设置 Grok 号池「额度超限后冷却时长」并持久化(对仗 SetGrokCliVersion)。
+// 入参负数非法钳 0(等同未配置, Get 回退默认 24); 与 MaxConcurrency 负数钳 0 回退默认同口径。
+func (m *Manager) SetGrokQuotaCooldownHours(v int) {
+	if v < 0 {
+		v = 0
+	}
+	m.Lock()
+	m.grokQuotaCooldownHours = v
+	m.Unlock()
+	_ = m.SaveAccounts(false)
+}
+
 // GetGrokPoolMode / SetGrokPoolMode 是 Grok 号池的负载均衡总开关,与 NVIDIA/Other 同构互斥。
 func (m *Manager) GetGrokPoolMode() bool {
 	m.RLock()

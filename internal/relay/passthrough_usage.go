@@ -57,13 +57,17 @@ var otherReqLogSeq uint64
 // cached 为上游回报的缓存命中 token(cachedTokens), 决定 CacheStatus 与缓存命中率口径:
 // >0 → "HIT", 否则维持 "NONE"(兼容 OpenRF 之下无 cache 的第三方上游)。
 func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model string, input, output, cached int, poolAccount *account.Account, logCtx passthroughLogCtx) {
-	if input == 0 && output == 0 {
-		return
-	}
+	// usageAvailable marks whether upstream returned real usage (input/output nonzero).
+	// Some third-party upstreams (e.g. OpenRouter free models like kimi-k3-free) omit usage
+	// in their SSE final frame; here input/output come in as 0/0. We still must record the
+	// request log (points 3/4) for every completed 200 request, so only skip token-counting
+	// points 1/2 in that case.
+	usageAvailable := !(input == 0 && output == 0)
 
 	// 1) 中继用户维度统计(relay_stats.json) + 按 API Key 限额回填。
 	// 模型名不前缀 "other/" —— 与 gemini/claude 直连链路同构, 使 TotalCacheEligibleInputTokens
 	// (缓存命中率分母)正常累加(Other 上游可能支持 cache, 与 NVIDIA 刻意排除口径相反)。
+	if usageAvailable {
 	if h.statsTracker != nil && userSession != nil {
 		h.statsTracker.RecordUsage(RelaySample{
 			ReqID:        fmt.Sprintf("other-%d", time.Now().UnixNano()),
@@ -85,10 +89,11 @@ func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model str
 		}
 	}
 
-	// 2) 号池成员账号维度统计(usage.json) —— 复用既有的 usageTracker(账号使用统计页)。
-	if h.usageTracker == nil || userSession == nil {
-		return
 	}
+	// 2) 号池成员账号维度统计(usage.json) —— 复用既有的 usageTracker(账号使用统计页)。
+	if !usageAvailable || h.usageTracker == nil || userSession == nil {
+		// upstream returned no usage or tracker unavailable: skip point2 (account token stats).
+	} else {
 	var accMeta *stats.AccountMeta
 	if poolAccount != nil {
 		accMeta = &stats.AccountMeta{
@@ -107,6 +112,7 @@ func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model str
 		Account:      accMeta,
 	})
 
+	}
 	// 3/4) 全局综合统计 + 请求日志(globalStatsTracker)。
 	// 落点3 使 Other 号池请求首次计入顶部指标卡 + 模型统计表 + 综合趋势桶;
 	// 落点4 把 Other 请求写入仪表盘「请求日志」列表(绕过 AddRequestLog 的 isRealModel 过滤,

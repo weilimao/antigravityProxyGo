@@ -72,6 +72,9 @@ const passthroughMaxAttempts = 5
 const passthroughSingleAcc429Retries = 5
 
 // passthroughCooldownShort / Long: 429/5xx / 401-403 网络错的冷却时长。
+// 仅对非 Other 号池生效:Other 号池(provider=="other")不启用请求冷却,
+// 上游 429/5xx/401/403/网络错仅触发同请求内换号(skipped),不写账号冷静期。
+// Other 多为 free 档自定义上游,限流频繁,冷却 60s/5min 反而误冻账号导致连续 503。
 const (
 	passthroughCooldownShortMs = 60 * 1000     // 60s
 	passthroughCooldownLongMs  = 5 * 60 * 1000 // 5min
@@ -330,7 +333,10 @@ func (pf *passthroughForward) run(
 				res.err = errDo
 				res.statusCode = http.StatusBadGateway
 				pf.h.log("⚠️ [路由转发] 账号 %s 访问上游失败: %v", acc.Email, errDo)
-				pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
+				// Other 号池不启用请求冷却:网络错仅换号,不写冷静(见 passthroughCooldownShort 注释)。
+				if poolChannel != "other" {
+					pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
+				}
 				skipped[acc.ID] = true
 				// 网络错误换号前释放该账号并发槽(下次 attempt 选新号会重新 Acquire)。
 				pf.accountMgr.ReleaseAccount(acc.ID)
@@ -346,7 +352,10 @@ func (pf *passthroughForward) run(
 					continue // 同号续用,不释放并发槽
 				}
 				pf.h.log("⚠️ [路由转发] 账号 %s 重试 %d 次仍 429,冷冻换号", acc.Email, passthroughSingleAcc429Retries)
-				pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
+				// Other 号池不启用请求冷却:429 退避耗尽仅换号,不写冷静。
+				if poolChannel != "other" {
+					pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
+				}
 				skipped[acc.ID] = true
 				// 429 退避耗尽换号前释放并发槽。
 				pf.accountMgr.ReleaseAccount(acc.ID)
@@ -360,7 +369,10 @@ func (pf *passthroughForward) run(
 				res.body = body
 				res.err = fmt.Errorf("upstream %s %d", poolChannel, resp.StatusCode)
 				pf.h.log("⚠️ [路由转发] 账号 %s 上游 %d,剔除换号", acc.Email, resp.StatusCode)
-				pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownLongMs, poolChannel, inModel)
+				// Other 号池不启用请求冷却:401/403 仅换号,不写 5min 冷静。
+				if poolChannel != "other" {
+					pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownLongMs, poolChannel, inModel)
+				}
 				skipped[acc.ID] = true
 				// 401/403 剔除换号前释放并发槽。
 				pf.accountMgr.ReleaseAccount(acc.ID)
@@ -374,7 +386,10 @@ func (pf *passthroughForward) run(
 				res.body = body
 				res.err = fmt.Errorf("upstream %s server error %d", poolChannel, resp.StatusCode)
 				pf.h.log("⚠️ [路由转发] 账号 %s 上游 5xx(%d),换号", acc.Email, resp.StatusCode)
-				pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
+				// Other 号池不启用请求冷却:5xx 仅换号,不写冷静。
+				if poolChannel != "other" {
+					pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
+				}
 				skipped[acc.ID] = true
 				// 5xx 换号前释放并发槽。
 				pf.accountMgr.ReleaseAccount(acc.ID)

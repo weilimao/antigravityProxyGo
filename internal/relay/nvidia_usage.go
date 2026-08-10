@@ -30,11 +30,18 @@ import (
 // 不污染 gemini/claude 统计；usageTracker 侧去前缀喂入，前端模型列显示为 upstreamModel(如 z-ai/glm-5.2)，
 // pricing 的 fuzzy 匹配仍能按子串(kimi/llama/nemotron)命价。
 func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model string, input, output, cached int, poolAccount *account.Account, logCtx nvidiaLogCtx) {
-	if input == 0 && output == 0 {
-		return
+	// usageAvailable marks whether upstream returned real usage (input/output nonzero).
+	// Some upstreams omit usage in their final frame; here input/output come in as 0/0. We still
+	// must record the request log (points 3+) for every completed 200 request, so only skip
+	// token-counting points 1/2 in that case.
+	usageAvailable := !(input == 0 && output == 0)
+	displayModel := model
+	if strings.HasPrefix(displayModel, "nvidia/") {
+		displayModel = strings.TrimPrefix(displayModel, "nvidia/")
 	}
 
 	// 1) 中继用户维度统计(relay_stats.json) + 按 API Key 限额回填
+	if usageAvailable {
 	if h.statsTracker != nil && userSession != nil {
 		prefixedModel := model
 		if !strings.HasPrefix(model, "nvidia/") {
@@ -64,14 +71,15 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 		}
 	}
 
+	}
 	// 2) 号池成员账号维度统计(usage.json) —— 复用 Gemini/claude 直连链路同样口径。
 	// cached 透传上游 OpenAI Chat usage 的缓存命中口径(prompt_cache_hit_tokens 或
 	// prompt_tokens_details.cached_tokens,由上层经 CachedTokens() 解析后透传)。当前 NVIDIA
 	// 官方 NIM 端不回报 cache 字段,cached 恒 0,与旧行为等价;一旦 NVIDIA 或兼容上游开始
 	// 回报 cache 命中,此处即如实计入,不再硬编码压 0。
-	if h.usageTracker == nil || userSession == nil {
-		return
-	}
+	if !usageAvailable || h.usageTracker == nil || userSession == nil {
+		// upstream returned no usage or tracker unavailable: skip point2 (account token stats).
+	} else {
 	var accMeta *stats.AccountMeta
 	if poolAccount != nil {
 		accMeta = &stats.AccountMeta{
@@ -82,10 +90,6 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 			ScopeType: poolAccount.ScopeType,
 		}
 	}
-	displayModel := model
-	if strings.HasPrefix(displayModel, "nvidia/") {
-		displayModel = strings.TrimPrefix(displayModel, "nvidia/")
-	}
 	h.usageTracker.RecordUsage(stats.UsageSample{
 		ModelName:    displayModel,
 		InTokens:     input,
@@ -94,6 +98,7 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 		Account:      accMeta,
 	})
 
+	}
 	// 3) 全局「使用趋势-NVIDIA」专用桶 (stats.Tracker.TrackNvidiaRequest)。
 	// 这是让英伟达号池用量首次进入仪表盘使用趋势图的关键落点: 仅累加全局 stats.Tracker 的
 	// nvidiaTrends 桶, 不进 trends 综合桶, 也不动全局 stats/Models, 因此「综合趋势」Tab

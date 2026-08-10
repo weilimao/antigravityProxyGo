@@ -35,6 +35,11 @@ const (
 	// 用户可在 Grok 号池「负载均衡」区配置覆盖。对齐 CLIProxyAPI2/internal/runtime/executor/xai_executor.go:69
 	// 的 xaiClientVersionValue 常量(该项目硬编码 0.2.93; 本项目号池全局可配, 默认 1.0.0)。
 	DefaultGrokCliVersion = "1.0.0"
+	// DefaultGrokQuotaCooldownHours 是 Grok 号池「额度超限后冷却时长」默认值(24 小时 = 1 天)。
+	// 仅在单账号遇 429/403 原地等 5s 重试 1 次仍失败时挂该冷却(xAI 额度/credits 耗尽通常一天级,
+	// 不宜像 60s 短冷却那样几分钟后再拎起来挨打)。可在前端 Grok 号池「负载均衡」区配置覆盖。
+	// 0/未配置时 GetGrokQuotaCooldownHours 回退本默认值(与 grokCliVersion 空串回退范式一致)。
+	DefaultGrokQuotaCooldownHours = 24
 )
 
 // GrokModelField 是账号级四档位映射字段名(与 NVIDIA 同源,供前端录入与 ResolveGrokModel 解析)。

@@ -82,6 +82,14 @@
                     <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="grokCliVersionLabel">CLI版本</span>
                     <input type="text" id="grokCliVersion" placeholder="1.0.0" class="w-20 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="grokCliVersionTip" title="CLI 版本号(发往 cli-chat-proxy 上游的身份头);默认 1.0.0,留空回退默认" />
                 </div>
+                <!-- Grok 池「额度超限后冷却时长」(号池单值, 单位小时, 对仗 CLI 版本):单账号遇 429/403
+                     先等 5s 重试 1 次, 仍失败即挂此冷却(默认 24h=1 天, xAI 额度/credits 耗尽通常一天级)。
+                     0/留空回退默认 24; 网络错误仍走 60s 短冷却, 不受此值影响。 -->
+                <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20">
+                    <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="grokQuotaCooldownLabel">超限冷却</span>
+                    <input type="number" min="0" max="720" id="grokQuotaCooldownHours" placeholder="24" class="w-14 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="grokQuotaCooldownTip" title="429/403 重试仍失败后冷却时长(小时);默认 24(=1天),0/留空回退默认" />
+                    <span class="text-[12px] text-on-surface-variant dark:text-slate-400">h</span>
+                </div>
             </div>
             <button type="button" id="btnNvidiaPreferredModels" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg text-[13px] font-medium text-amber-600 dark:text-amber-400 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer" data-i18n-title="nvidiaPreferredModelsBtn">
                 <span class="material-symbols-outlined text-[16px]">inventory</span>

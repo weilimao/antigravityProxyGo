@@ -81,6 +81,9 @@ let grokLBModeSelect: HTMLSelectElement | null;
 let grokMaxConcurrency: HTMLInputElement | null;
 // Grok 池全局 CLI 客户端版本号(号池单值,对仗 grokMaxConcurrency):发往 chat-proxy 上游身份头,默认 1.0.0。
 let grokCliVersion: HTMLInputElement | null;
+// Grok 池「额度超限后冷却时长」(号池单值, 单位小时, 对仗 grokCliVersion):单账号 429/403 等待 5s 重试 1 次仍失败
+// 即挂此冷却(默认 24h=1 天)。0/留空回退默认 24; 网络错误走 60s 短冷却不受此值影响。
+let grokQuotaCooldownHours: HTMLInputElement | null;
 let btnExportAccounts: HTMLButtonElement | null;
 let btnImportAccounts: HTMLButtonElement | null;
 let btnLayoutGrid: HTMLButtonElement | null;
@@ -218,6 +221,10 @@ export function updateViewTabUI() {
             // Grok Tab:全局 CLI 版本号 input 用 grokCliVersion 回填(?? '1.0.0' 兜底,与后端 GetGrokCliVersion 默认一致)。
             if (grokCliVersion && state.lastBackendData) {
                 grokCliVersion.value = state.lastBackendData.grokCliVersion || '1.0.0';
+            }
+            // Grok Tab:额度超限冷却时长 input 用 grokQuotaCooldownHours 回填(?? 24 兜底,与后端 GetGrokQuotaCooldownHours 默认一致)。
+            if (grokQuotaCooldownHours && state.lastBackendData) {
+                grokQuotaCooldownHours.value = String((state.lastBackendData.grokQuotaCooldownHours as number) ?? 24);
             }
         } else if (state.currentViewTab === 'other') {
             if (btnChannelOther) btnChannelOther.className = activeClass;
@@ -411,6 +418,7 @@ export function initAccountsEvents() {
     grokLBModeSelect = document.getElementById('grokLBModeSelect') as HTMLSelectElement | null;
     grokMaxConcurrency = document.getElementById('grokMaxConcurrency') as HTMLInputElement | null;
     grokCliVersion = document.getElementById('grokCliVersion') as HTMLInputElement | null;
+    grokQuotaCooldownHours = document.getElementById('grokQuotaCooldownHours') as HTMLInputElement | null;
     // Other 号池组名子 Tab + LB 模式：句柄赋值 + 事件绑定（已抽离 otherGroupTabs.ts）
     initOtherGroupTabsEvents();
 
@@ -679,6 +687,21 @@ export function initAccountsEvents() {
             if (gcvDebounce) clearTimeout(gcvDebounce);
             gcvDebounce = setTimeout(() => {
                 ipcRenderer.send('grok:set-cli-version', v);
+            }, 300);
+        });
+    }
+
+    // Grok 池「额度超限后冷却时长」(号池单值, 单位小时, 对仗 grokCliVersion):300ms debounce。
+    // 0/留空回退默认 24(与后端 SetGrokQuotaCooldownHours 负数钳 0 + GetGrokQuotaCooldownHours 回退一致)。
+    // 仅在单账号 429/403 等待 5s 重试 1 次仍失败时挂该冷却; 网络错误仍走 60s 短冷却。
+    if (grokQuotaCooldownHours) {
+        let gqcDebounce: ReturnType<typeof setTimeout> | null = null;
+        grokQuotaCooldownHours.addEventListener('change', (e: any) => {
+            const v = Math.max(0, Math.min(720, Math.floor(Number(e.target.value) || 0)));
+            e.target.value = String(v);
+            if (gqcDebounce) clearTimeout(gqcDebounce);
+            gqcDebounce = setTimeout(() => {
+                ipcRenderer.send('grok:set-quota-cooldown-hours', v);
             }, 300);
         });
     }
