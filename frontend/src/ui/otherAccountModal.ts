@@ -10,6 +10,7 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import { otherRevealAccountId } from '../shared/revealKeyState';
+import i18n from '../shared/i18n';
 
 let groupSelectOther: HTMLSelectElement | null;
 let otherAccountModal: HTMLDivElement | null;
@@ -129,6 +130,14 @@ export function openOtherAccountModal() {
     // 复位明文查看目标:添加态不允许从后端取回明文 Key。
     otherRevealAccountId.value = null;
 
+    // 标题与保存按钮文案复位为添加态
+    const titleEl = otherAccountModal.querySelector('[data-i18n="otherAddModalTitle"]') as HTMLElement | null;
+    if (titleEl) {
+        const dict = i18n[state.currentLanguage] || i18n.zh;
+        titleEl.textContent = dict.otherAddModalTitle || '添加 Other 自定义号池账号';
+    }
+    if (btnOtherModalSave) btnOtherModalSave.textContent = '添加账号';
+
     const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
     const inputGroupName = document.getElementById('inputOtherGroupName') as HTMLInputElement | null;
     const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
@@ -161,7 +170,7 @@ export function openOtherAccountModal() {
     // 号池已有组则填充右侧「选择已有组」下拉(0 组时隐藏)。
     populateOtherGroupSelect();
 
-    otherAccountModal.classList.remove('opacity-0', 'pointer-events-none');
+    otherAccountModal.classList.remove('opacity-0', 'pointer-events-none', 'hidden');
     otherAccountModalContainer.classList.remove('scale-95');
     otherAccountModalContainer.classList.add('scale-100');
 }
@@ -183,9 +192,12 @@ let otherEditId: string | null = null;
 export function openEditOtherAccount(acc: any) {
     if (!otherAccountModal || !otherAccountModalContainer) return;
 
-    otherEditId = acc.id;
+    // 查找最新账号数据快照,防止旧卡片闭包数据过时
+    const latestAcc = state.currentAccountsList?.find((a: any) => a.id === acc.id) || acc;
+
+    otherEditId = latestAcc.id;
     // 明文查看:把当前编辑账号 id 注入 PasswordInput(revealProvider="other" 时据此取明文)。
-    otherRevealAccountId.value = acc.id;
+    otherRevealAccountId.value = latestAcc.id;
 
     const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
     const inputGroupName = document.getElementById('inputOtherGroupName') as HTMLInputElement | null;
@@ -197,23 +209,23 @@ export function openEditOtherAccount(acc: any) {
     const chkFmtOpenai = document.getElementById('chkOtherFmtOpenai') as HTMLInputElement | null;
     const chkFmtAnthropic = document.getElementById('chkOtherFmtAnthropic') as HTMLInputElement | null;
 
-    if (inputGroupId) inputGroupId.value = acc.groupId || '';
-    if (inputGroupName) inputGroupName.value = acc.groupName || '';
-    if (inputBaseUrl) inputBaseUrl.value = acc.baseUrl || '';
+    if (inputGroupId) inputGroupId.value = latestAcc.groupId || '';
+    if (inputGroupName) inputGroupName.value = latestAcc.groupName || '';
+    if (inputBaseUrl) inputBaseUrl.value = latestAcc.baseUrl || '';
     // 编辑态不预填明文 Key:留空表示保持不变;用脱敏掩码当 placeholder 提示已配置 Key。
     if (inputApiKey) {
         inputApiKey.value = '';
-        inputApiKey.placeholder = acc.maskedKey || 'sk-... (留空保持不变)';
+        inputApiKey.placeholder = latestAcc.maskedKey || 'sk-... (留空保持不变)';
     }
-    if (inputLabel) inputLabel.value = acc.email || '';
-    if (inputModelDefault) inputModelDefault.value = acc.defaultModel || '';
+    if (inputLabel) inputLabel.value = latestAcc.email || '';
+    if (inputModelDefault) inputModelDefault.value = latestAcc.defaultModel || '';
     if (selectModelDefault) {
         selectModelDefault.classList.add('hidden');
         selectModelDefault.innerHTML = '<option value="">选择模型...</option>';
     }
 
     // 据账号 Formats 勾选协议 checkbox(openai 含则勾,否则取消;anthropic 同理)。
-    const fmts: string[] = Array.isArray(acc.formats) ? acc.formats.map((f: any) => String(f).toLowerCase()) : [];
+    const fmts: string[] = Array.isArray(latestAcc.formats) ? latestAcc.formats.map((f: any) => String(f).toLowerCase()) : [];
     if (chkFmtOpenai) chkFmtOpenai.checked = fmts.includes('openai');
     if (chkFmtAnthropic) chkFmtAnthropic.checked = fmts.includes('anthropic');
     // 若两者都未开(异常数据或无 formats),默认勾 OpenAI 兜底。
@@ -232,7 +244,7 @@ export function openEditOtherAccount(acc: any) {
     if (titleEl) titleEl.textContent = '编辑 Other 号池账号';
     if (btnOtherModalSave) btnOtherModalSave.textContent = '保存修改';
 
-    otherAccountModal.classList.remove('opacity-0', 'pointer-events-none');
+    otherAccountModal.classList.remove('opacity-0', 'pointer-events-none', 'hidden');
     otherAccountModalContainer.classList.remove('scale-95');
     otherAccountModalContainer.classList.add('scale-100');
 }

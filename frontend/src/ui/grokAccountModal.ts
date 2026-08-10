@@ -79,10 +79,20 @@ export function openGrokAccountModal() {
     reanchorGrokModalHandles();
     if (!grokAccountModal || !grokAccountModalContainer) return;
 
-    // 添加态:清空编辑态标记(标题/保存按钮文案由 data-i18n 静态文本承载,无需复位)。
+    // 添加态:清空编辑态标记
     grokEditId = null;
     // 复位明文查看目标:添加态不允许从后端取回明文 Key。
     grokRevealAccountId.value = null;
+
+    // 标题与保存按钮文案复位为添加态
+    const titleEl = grokAccountModal.querySelector('[data-i18n="grokAddModalTitle"]') as HTMLElement | null;
+    if (titleEl) {
+        const dict = i18n[state.currentLanguage] || i18n.zh;
+        titleEl.textContent = dict.grokAddModalTitle || '添加 Grok 号池账号';
+    }
+    if (btnGrokModalSave) {
+        btnGrokModalSave.textContent = '添加账号';
+    }
 
     const inputBaseUrl = document.getElementById('inputGrokBaseUrl') as HTMLInputElement;
     const inputApiKey = document.getElementById('inputGrokApiKey') as HTMLInputElement;
@@ -127,7 +137,7 @@ export function openGrokAccountModal() {
     // 添加态:恢复显示授权双按钮(并列,各自独立起流)。手动表单已平铺永久显示,无需展开。
     resetGrokOAuthButtons();
 
-    grokAccountModal.classList.remove('opacity-0', 'pointer-events-none');
+    grokAccountModal.classList.remove('opacity-0', 'pointer-events-none', 'hidden');
     grokAccountModalContainer.classList.remove('scale-95');
     grokAccountModalContainer.classList.add('scale-100');
 }
@@ -160,9 +170,12 @@ export function openEditGrokAccount(acc: any) {
     reanchorGrokModalHandles();
     if (!grokAccountModal || !grokAccountModalContainer) return;
 
-    grokEditId = acc.id;
+    // 查找最新账号数据快照,防止旧卡片闭包数据过时
+    const latestAcc = state.currentAccountsList?.find((a: any) => a.id === acc.id) || acc;
+
+    grokEditId = latestAcc.id;
     // 明文查看:把当前编辑账号 id 注入 PasswordInput(revealProvider="grok" 时据此取明文)。
-    grokRevealAccountId.value = acc.id;
+    grokRevealAccountId.value = latestAcc.id;
 
     const inputBaseUrl = document.getElementById('inputGrokBaseUrl') as HTMLInputElement;
     const inputApiKey = document.getElementById('inputGrokApiKey') as HTMLInputElement;
@@ -173,17 +186,17 @@ export function openEditGrokAccount(acc: any) {
     const inputModelFable = document.getElementById('inputGrokModelFable') as HTMLInputElement;
     const inputModelDefault = document.getElementById('inputGrokModelDefault') as HTMLInputElement;
 
-    if (inputBaseUrl) inputBaseUrl.value = acc.baseUrl || '';
+    if (inputBaseUrl) inputBaseUrl.value = latestAcc.baseUrl || '';
     if (inputApiKey) {
         inputApiKey.value = ''; // 不预填明文 Key,留空保持不变
-        inputApiKey.placeholder = acc.maskedKey || 'xai-... (留空保持不变)';
+        inputApiKey.placeholder = latestAcc.maskedKey || 'xai-... (留空保持不变)';
     }
-    if (inputLabel) inputLabel.value = acc.email || '';
-    if (inputModelSonnet) inputModelSonnet.value = acc.modelSonnet || '';
-    if (inputModelOpus) inputModelOpus.value = acc.modelOpus || '';
-    if (inputModelHaiku) inputModelHaiku.value = acc.modelHaiku || '';
-    if (inputModelFable) inputModelFable.value = acc.modelFable || '';
-    if (inputModelDefault) inputModelDefault.value = acc.defaultModel || '';
+    if (inputLabel) inputLabel.value = latestAcc.email || '';
+    if (inputModelSonnet) inputModelSonnet.value = latestAcc.modelSonnet || '';
+    if (inputModelOpus) inputModelOpus.value = latestAcc.modelOpus || '';
+    if (inputModelHaiku) inputModelHaiku.value = latestAcc.modelHaiku || '';
+    if (inputModelFable) inputModelFable.value = latestAcc.modelFable || '';
+    if (inputModelDefault) inputModelDefault.value = latestAcc.defaultModel || '';
 
     // 隐藏模型选择下拉(编辑态不自动拉远端模型,保持手填;用户可点"获取模型")。
     const selectIds = [
@@ -218,7 +231,7 @@ export function openEditGrokAccount(acc: any) {
         btnGrokModalSave.textContent = '保存修改';
     }
 
-    grokAccountModal.classList.remove('opacity-0', 'pointer-events-none');
+    grokAccountModal.classList.remove('opacity-0', 'pointer-events-none', 'hidden');
     grokAccountModalContainer.classList.remove('scale-95');
     grokAccountModalContainer.classList.add('scale-100');
 }
