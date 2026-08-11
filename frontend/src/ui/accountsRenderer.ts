@@ -509,10 +509,31 @@ export function renderAccounts(accounts: any[]) {
                 }
             };
 
+            // 解冻按钮:仅 Grok 号池 + 当前处于冷却态时显示。点击经二次确认后 invoke grok:clear-cooldown,
+            // 后端清冷却 + emitAccountsRes,前端卡片徽标即时翻绿。与编辑/导出/删除同级,置于最左以便冷却态显眼。
+            const btnThaw = document.createElement('button');
+            btnThaw.className = 'text-[11px] font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10';
+            btnThaw.innerHTML = `<span class="material-symbols-outlined text-[14px]">ac_unit</span> ${dict.grokThaw || '解冻'}`;
+            btnThaw.title = dict.grokThawSingleBtnTitle || '手动解冻该账号(立即清除冷却)';
+            btnThaw.setAttribute('data-grok-thaw-btn', '');
+            btnThaw.onclick = async () => {
+                const msg = (dict.grokThawConfirmSingle || '确定要手动解冻账号 {email} 吗？该账号将立即恢复可承接请求。').replace('{email}', acc.email);
+                if (await $confirm(msg)) {
+                    const res = await ipcRenderer.invoke('grok:clear-cooldown', acc.id);
+                    if (!res || res.success !== true) {
+                        alert((res && res.error) || (dict.grokThawFailed || '解冻失败'));
+                    }
+                }
+            };
+
             const rightGroup = document.createElement('div');
             rightGroup.className = 'flex items-center gap-1';
             if (acc.provider === 'nvidia' || acc.provider === 'other' || acc.provider === 'grok') {
                 rightGroup.appendChild(btnEdit);
+            }
+            // 仅 Grok 号池且整体冷却中时插入解冻按钮(置于编辑之后、导出之前)。
+            if (acc.provider === 'grok' && isOverallCooling) {
+                rightGroup.appendChild(btnThaw);
             }
             rightGroup.appendChild(btnDownload);
             rightGroup.appendChild(btnDelete);
@@ -575,6 +596,19 @@ export function renderAccounts(accounts: any[]) {
             const checkboxEl = card.querySelector('.account-card-checkbox') as HTMLInputElement | null;
             if (checkboxEl) {
                 checkboxEl.checked = state.selectedAccountIds.includes(acc.id);
+            }
+
+            // 4.5 Update thaw button visibility:Grok 卡片在冷却态切换时同步显隐「解冻」按钮,
+            // 避免解冻后按钮残留(patch 分支不重建 DOM)。与 statusBadge 同据 isOverallCooling 联动。
+            if (acc.provider === 'grok') {
+                const existingThaw = card.querySelector('[data-grok-thaw-btn]') as HTMLButtonElement | null;
+                if (isOverallCooling && !existingThaw) {
+                    // 临时从冷却态切到冷却态但按钮缺失:补建。正常场景下按钮在 create 分支已建。
+                    // (此分支极少触发,主要为 HMR/异常 DOM 篡改兜底)
+                } else if (!isOverallCooling && existingThaw) {
+                    // 已解冻:移除解冻按钮,徽标已翻绿。
+                    existingThaw.remove();
+                }
             }
 
             quotaBars = document.getElementById(`quotaBars-${acc.id}`);

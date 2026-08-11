@@ -13,7 +13,18 @@ import (
 // conc:
 //   - 监控 goroutine 通过 cooldownStop/tokenRefreshStop chan 优雅退出,启停均持锁改 ticker;
 //   - RecordAccountError 在 5 次阈值达成的临界区清零计数,避免并发多次触发 FetchQuota;
-//   - RefreshAccountTokenSync 用 getAccountRefreshLock 做单账号互斥 + 双次 30s 复用检查。
+//   - RefreshAccountTokenSync 用 getAccountRefreshLock 做单账号互斥 + 双次 30s 复用检查;
+//   - CheckAndRefreshTokens 用 tokenRefreshMaxConcurrent 信号量跨账号节流(见下常量)。
+
+// tokenRefreshMaxConcurrent 是 CheckAndRefreshTokens 同时发起刷新的最大账号并发数。
+// 历史「每账号一个 go func 无上限」在批量导入后会把几十个号同时打到 auth.x.ai,
+// 触发上游风控 + refresh_token 轮换竞态导致 invalid_grant 误停用(详见导入场景案例)。
+// 3 = 经验值:批量刷新推进够快,又远低于 xAI 风控阈值。
+const tokenRefreshMaxConcurrent = 3
+
+// tokenRefreshSkewSec 是「access_token 仍有效」提前量(秒)。JWT exp 距当前 > 此值即跳过当前
+// tick 的刷新,避免对有效 token 无谓打刷新端点。reserved 10 分钟≈一个补刷窗口,临近再刷即可。
+const tokenRefreshSkewSec = 10 * 60
 
 // ============ 冷却监控(2 分钟 tick) ============
 
@@ -174,8 +185,29 @@ func (m *Manager) CheckAndRefreshTokens() {
 		return
 	}
 
+	// 并发限流:历史上对每个待刷账号直接 go func() 无上限并发,当一次导入几十个 OAuth 账号
+	// (如 grok OAuth 号池)后,下一个 tick 会瞬间把全部账号并发打到 auth.x.ai/oauth2/token,
+	// 触发上游风控/限流,且并发用同一 refresh_token 会因 token 轮换返回 invalid_grant 被误停用。
+	// 改为 tokenRefreshMaxConcurrent 信号量节流:同一时刻最多这么多账号在刷,主 goroutine 在
+	// `refreshSlot <- struct{}{}` 上排队等空位,天然的串行化闸门(无需额外 wg.Wait 阻塞,保持 fire-and-forget)。
+	// 值取 3:足够推进批量刷新,又不至于把 xAI 端打风控,且与 RefreshAccountTokenSync 单账号互斥
+	// 语义不冲突——RefreshAccountTokenSync 串行化「同一账号」,这里节流「不同账号并行数」。
+	refreshSlot := make(chan struct{}, tokenRefreshMaxConcurrent)
 	for _, acc := range refreshAccounts {
+		// access_token 仍是有效 JWT 且离过期还有 > tokenRefreshSkewSec 时跳过本次刷新。
+		// 背景:导入 accounts_export 时 access_token 的 exp(如 1786472417)可能远未到期,
+		// TokenRefreshedAt=0 会触发"从未刷新"分支,对本就有效的 token 白白发一次刷新请求,
+		// 既无意义又增加被上游风控的概率。仅当无法判定 exp(=0,如非 JWT 的 API Key 账号)
+		// 或临近过期(<=tokenRefreshSkewSec)时才真的刷新。
+		// 注意:provider=grok 的 access_token 是 JWT(可解析 exp);provider=antigravity 亦是;
+		// nvidia/other 的 access_token 是 API Key(非 JWT,exp=0),走原"无 exp 信息→仍刷新"分支,
+		// 行为与历史一致(它们本就不该命中本分支——非 2fa + 有 RefreshToken 的主要是 OAuth 账号)。
+		if exp := acc.AccessTokenExp(); exp > 0 && (exp-nowSec) > tokenRefreshSkewSec {
+			continue
+		}
+		refreshSlot <- struct{}{}
 		go func(a *Account) {
+			defer func() { <-refreshSlot }()
 			fmt.Printf("[TokenRefreshMonitor] Automatically refreshing token for account: %s\n", a.Email)
 			newToken, err := m.RefreshToken(a)
 			if err != nil {

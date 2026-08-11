@@ -719,6 +719,34 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		data, _ := marshalResponse(map[string]interface{}{"success": true})
 		return data, true, nil
 
+	case "grok:clear-cooldown":
+		// 手动解除单个 Grok 账号的冷却态(前端「单账号解冻」按钮入口)。
+		// args: [accountId]。与 grok:remove/toggle-enabled 同口径:精确校验 Provider=="grok" 后清冷却,
+		// 避免误清其它号池账号。ClearAccountCooldown 无论冷却是否到期都立即解除,触发 OnQuotaRestored 回调。
+		// 成功后 emitAccountsRes 广播,前端卡片冷却徽标即时翻绿。
+		id := ""
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				id = s
+			}
+		}
+		if id == "" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "缺少 accountId"})
+			return data, true, nil
+		}
+		acc := a.accountMgr.GetAccountByID(id)
+		if acc == nil || acc.Provider != "grok" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "账号不存在或非 Grok 类型"})
+			return data, true, nil
+		}
+		ok := a.accountMgr.ClearAccountCooldown(id)
+		if ok {
+			a.emitAccountsRes()
+			a.AddLog(fmt.Sprintf("🧊 [Grok] 已手动解冻账号 %s (id=%s)", acc.Email, id))
+		}
+		data, _ := marshalResponse(map[string]interface{}{"success": true, "cleared": ok})
+		return data, true, nil
+
 	case "grok:fetch-models":
 		// args: [baseURL, apiKey]
 		// 与 nvidia:fetch-models 同构: 复用通用 OpenAI list 探活(modelfetch.FetchModels 经 fetchRemoteNvidiaModels)。

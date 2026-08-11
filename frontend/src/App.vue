@@ -167,6 +167,7 @@
     <NvidiaAccountModal />
     <NvidiaPreferredModelsModal />
     <GrokAccountModal />
+    <GrokThawModal />
     <OtherAccountModal />
   </div>
 </template>
@@ -197,6 +198,7 @@ import AutoTriggerModal from './components/modals/AutoTriggerModal.vue';
 import NvidiaAccountModal from './components/modals/NvidiaAccountModal.vue';
 import NvidiaPreferredModelsModal from './components/modals/NvidiaPreferredModelsModal.vue';
 import GrokAccountModal from './components/modals/GrokAccountModal.vue';
+import GrokThawModal from './components/modals/GrokThawModal.vue';
 import OtherAccountModal from './components/modals/OtherAccountModal.vue';
 import { initRemoteEvents } from './ui/remoteController';
 import { setLanguage, switchView, initDashboardEvents } from './ui/dashboard';

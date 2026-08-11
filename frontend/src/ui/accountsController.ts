@@ -23,6 +23,7 @@ import { initSessionBindingsModalEvents } from './sessionBindingsModal';
 import { initNvidiaAccountModalEvents, writeNvidiaModalError, openNvidiaAccountModal } from './nvidiaAccountModal';
 import { initOtherAccountModalEvents, writeOtherModalError, openOtherAccountModal } from './otherAccountModal';
 import { initGrokAccountModalEvents, writeGrokModalError, openGrokAccountModal } from './grokAccountModal';
+import { initGrokThawModalEvents } from './grokThawModal';
 import { ensureNvidiaCooldownTimer } from './nvidiaCooldownTimer';
 import { ensureGrokCooldownTimer } from './grokCooldownTimer';
 import { initOtherGroupTabsEvents, renderOtherGroupTabs, renderOtherLBMode, otherLBModeSelectorVisible } from './otherGroupTabs';
@@ -141,6 +142,16 @@ export function updateLayoutUI() {
     }
 }
 
+// setGrokThawButtonVisible:控制工具栏「一键解冻」按钮在 Grok Tab 显、其它 Tab 隐。
+// 镜像 setNvidiaPreferredModelsButtonVisible 范式:每次切 Tab 都幂等调用以同步显隐。
+// 按钮默认带 hidden 类(Accounts.vue 模板),仅 grok Tab 分支 remove('hidden')。
+function setGrokThawButtonVisible(visible: boolean): void {
+    const btn = document.getElementById('btnGrokOneClickThaw');
+    if (!btn) return;
+    if (visible) btn.classList.remove('hidden');
+    else btn.classList.add('hidden');
+}
+
 export function updateViewTabUI() {
     if (btnChannelAntigravity && btnChannelProject) {
         const activeClass = 'px-4 py-1.5 rounded-md font-bold cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm';
@@ -159,6 +170,7 @@ export function updateViewTabUI() {
             if (nvidiaPoolModeContainer) nvidiaPoolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
+            setGrokThawButtonVisible(false);
             if (lblPoolMode) lblPoolMode.innerText = dict.poolLoadBalance || '账号负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.poolMode;
@@ -191,6 +203,7 @@ export function updateViewTabUI() {
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
             // NVIDIA Tab 显示穿梭框入口按钮（委托穿梭框模块控制显隐,不跨簇共享 DOM 句柄）。
             setNvidiaPreferredModelsButtonVisible(true);
+            setGrokThawButtonVisible(false);
             if (nvidiaLBModeSelect && state.lastBackendData) {
                 nvidiaLBModeSelect.value = state.lastBackendData.nvidiaLBMode || 'round-robin';
             }
@@ -211,6 +224,7 @@ export function updateViewTabUI() {
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.remove('hidden');
             setNvidiaPreferredModelsButtonVisible(false);
+            setGrokThawButtonVisible(true);
             if (grokLBModeSelect && state.lastBackendData) {
                 grokLBModeSelect.value = state.lastBackendData.grokLBMode || 'round-robin';
             }
@@ -239,6 +253,7 @@ export function updateViewTabUI() {
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
             setNvidiaPreferredModelsButtonVisible(false);
+            setGrokThawButtonVisible(false);
         } else {
             btnChannelProject.className = activeClass;
             btnChannelAntigravity.className = inactiveClass;
@@ -251,6 +266,7 @@ export function updateViewTabUI() {
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
             setNvidiaPreferredModelsButtonVisible(false);
+            setGrokThawButtonVisible(false);
             if (lblPoolMode) lblPoolMode.innerText = dict.projectLoadBalancing || '项目负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.projectPoolMode;
@@ -430,6 +446,9 @@ export function initAccountsEvents() {
 
     // Grok 账号 Modal：句柄赋值 + 事件绑定（已抽离 grokAccountModal.ts）
     initGrokAccountModalEvents();
+
+    // Grok 一键解冻 Modal:句柄赋值 + 事件绑定(已抽离 grokThawModal.ts,工具栏按钮在 Grok Tab 显示)。
+    initGrokThawModalEvents();
 
     btnExportAccounts = document.getElementById('btnExportAccounts') as HTMLButtonElement | null;
     btnImportAccounts = document.getElementById('btnImportAccounts') as HTMLButtonElement | null;

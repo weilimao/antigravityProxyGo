@@ -1,6 +1,9 @@
 package account
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 )
@@ -83,6 +86,58 @@ func (a *Account) GetTokenRefreshedAt() int64 {
 	a.tokenMu.RLock()
 	defer a.tokenMu.RUnlock()
 	return a.TokenRefreshedAt
+}
+
+// AccessTokenExp 解析 access_token(JWT,OAuth 账号)的 exp claim,返回 Unix 秒;非 JWT/无 exp/解析失败返回 0。
+// 供 Token 刷新监控判断「access_token 是否仍有效」:未过期则不必刷新,避免对刚导入的有效凭证
+// 无谓地打 token_endpoint 触发上游风控(详见 CheckAndRefreshTokens)。
+// 仅在 tokenMu 读锁内取 token 后释放再解析,避免持锁做 base64/json 解析。
+func (a *Account) AccessTokenExp() int64 {
+	a.tokenMu.RLock()
+	tok := a.AccessToken
+	a.tokenMu.RUnlock()
+	return jwtExpClaim(tok)
+}
+
+// jwtExpClaim 解析 JWT(如 xAI/Google OAuth access_token)中段 payload 的 "exp" claim。
+// 非标准 JWT(无 3 段/非 base64url/无 exp) 统一返回 0,语义「无法判定过期,按原逻辑处理」。
+// 与 internal/quota/xai_oauth.go 的 parseJWTIdentity 同源思路,但不依赖 id_token——access_token
+// 同样是 JWT 且带 exp。
+func jwtExpClaim(token string) int64 {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return 0
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return 0
+	}
+	payload := parts[1]
+	// base64url padding 补齐。
+	payload += strings.Repeat("=", (4-len(payload)%4)%4)
+	raw, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		return 0
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		return 0
+	}
+	v, ok := claims["exp"]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int64:
+		return n
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return i
+		}
+	}
+	return 0
 }
 
 type QuotaBucket struct {

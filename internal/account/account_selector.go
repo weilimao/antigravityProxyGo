@@ -296,6 +296,62 @@ func (m *Manager) SetAccountCooldownForChannel(id string, cooldownUntil int64, c
 	m.SetAccountCooldown(id, cooldownUntil, model)
 }
 
+// ClearAccountCooldown 手动解除单账号全部冷却族:把 Cooldowns 清空、CooldownUntil 置 0,
+// 定向落盘该账号所属 provider 分区(不触碰其它号池大文件),并触发 OnAccountCooldownUpdated 与
+// OnQuotaRestored 回调(后者让 autotrigger/日志感知账号已恢复可承接请求)。
+//
+// 适用场景:Grok/NVIDIA/Other 等 API Key 号池在前端「手动解冻 / 一键解冻」入口主动恢复账号,
+// 区别于 GetNextAccount 与 cooldown monitor 的"到期自动清除"——此处无论冷却是否到期都立即解除。
+// 返回值:账号存在且确实有冷却被清掉时 true;账号不存在或本就无冷却时 false(幂等,无副作用)。
+func (m *Manager) ClearAccountCooldown(id string) bool {
+	// 注意:锁内不调用 m.GetAccountByID()(其内部会再上 RLock,RWMutex 不可重入将死锁)。
+	// 与仓库既有范式一致(见 account_monitor.go / account_selector.go):锁内直接遍历本地 m.accounts,
+	// 仅在读锁内拿字段快照,落盘/回调放到锁外。此处仅需幂等 + 分支判定,故 Reader 判定放锁内。
+	m.Lock()
+	var acc *Account
+	for _, a := range m.accounts {
+		if a.ID == id {
+			acc = a
+			break
+		}
+	}
+	if acc == nil {
+		m.Unlock()
+		return false
+	}
+	provider := acc.Provider
+	hadCooldown := len(acc.Cooldowns) > 0 || acc.CooldownUntil > 0
+	// 收集被恢复的冷却族名,供 OnQuotaRestored 回调感知(与 UpdateAccountCooldownFromQuota 同口径)。
+	restoredCategories := make([]string, 0, len(acc.Cooldowns))
+	for cat := range acc.Cooldowns {
+		restoredCategories = append(restoredCategories, cat)
+	}
+	acc.Cooldowns = make(map[string]int64)
+	acc.CooldownUntil = 0
+	m.Unlock()
+
+	if !hadCooldown {
+		return false
+	}
+
+	// 定向落盘:只重写该账号所属 provider 分区,不触碰其它号池大文件。
+	if provider != "" {
+		_ = m.SaveAccountsFor(true, provider)
+	} else {
+		_ = m.SaveAccounts(true)
+	}
+	if m.OnAccountsUpdated != nil {
+		go m.OnAccountsUpdated(m.accounts)
+	}
+	if m.OnAccountCooldownUpdated != nil {
+		go m.OnAccountCooldownUpdated(id, "all", 0)
+	}
+	if len(restoredCategories) > 0 && m.OnQuotaRestored != nil {
+		go m.OnQuotaRestored(id, restoredCategories)
+	}
+	return true
+}
+
 // ============ 可用账号过滤(只读) ============
 
 func (m *Manager) GetAvailableAccountsForChannel(channel string, modelName string) []*Account {

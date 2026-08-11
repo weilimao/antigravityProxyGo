@@ -207,6 +207,10 @@
                     <span class="material-symbols-outlined text-[14px]">cleaning_services</span>
                     <span data-i18n="btnClearSessionsLabel">清空绑定</span>
                 </button>
+                <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-sky-500 dark:hover:text-sky-400 bg-outline-variant/10 hover:bg-sky-500/10 border border-outline-variant/20 hover:border-sky-500/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none hidden" id="btnGrokOneClickThaw" title="一键解冻冷却中的 Grok 账号" data-i18n-title="grokThawBtnTitle">
+                    <span class="material-symbols-outlined text-[14px]">ac_unit</span>
+                    <span data-i18n="grokOneClickThaw">一键解冻</span>
+                </button>
                 <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim bg-outline-variant/10 hover:bg-primary/10 border border-outline-variant/20 hover:border-primary/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none" id="btnRefreshAllQuota" title="刷新当前页签账号配额" data-i18n-title="btnRefreshAllQuotaTitle">
                     <span class="material-symbols-outlined text-[14px]" id="btnRefreshAllIcon">sync</span>
                     <span data-i18n="btnRefreshAllQuotaLabel">刷新配额</span>
