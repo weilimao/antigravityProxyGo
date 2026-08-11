@@ -55,7 +55,8 @@ func (m *Manager) SetPoolMode(enabled bool) {
 		m.activeChannel = "antigravity"
 	}
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	// 池配置只落 pool 分区,不触碰任何账号分区(消除「切个开关重写千账号大文件」的卡顿源)。
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 func (m *Manager) GetPoolMode() bool {
@@ -76,7 +77,7 @@ func (m *Manager) SetProjectPoolMode(enabled bool) {
 		m.activeChannel = "project"
 	}
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 func (m *Manager) GetProjectPoolMode() bool {
@@ -128,7 +129,7 @@ func (m *Manager) SetActiveChannel(channel string) {
 		m.activeChannel = channel
 	}
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 func (m *Manager) GetActiveChannel() string {
@@ -200,6 +201,7 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 				cooldownUntil = acc.CooldownUntil
 			}
 			if cooldownUntil > 0 && now >= cooldownUntil {
+				cooldownProvider := acc.Provider
 				delete(acc.Cooldowns, category)
 				acc.CooldownUntil = 0
 				for _, v := range acc.Cooldowns {
@@ -207,7 +209,7 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 						acc.CooldownUntil = v
 					}
 				}
-				go func() { _ = m.SaveAccounts(true) }()
+				go func() { _ = m.SaveAccountsFor(true, cooldownProvider) }()
 			}
 			return acc
 		}
@@ -231,6 +233,7 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 				cooldownUntil = acc.CooldownUntil
 			}
 			if cooldownUntil > 0 && now >= cooldownUntil {
+				cooldownProvider := acc.Provider
 				delete(acc.Cooldowns, category)
 				acc.CooldownUntil = 0
 				for _, v := range acc.Cooldowns {
@@ -238,7 +241,7 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 						acc.CooldownUntil = v
 					}
 				}
-				go func() { _ = m.SaveAccounts(true) }()
+				go func() { _ = m.SaveAccountsFor(true, cooldownProvider) }()
 			}
 			return acc
 		}
@@ -254,8 +257,10 @@ func (m *Manager) SetAccountCooldown(id string, untilTimeMs int64, modelName str
 	m.Lock()
 	category := ""
 	changed := false
+	provider := ""
 	for _, a := range m.accounts {
 		if a.ID == id {
+			provider = a.Provider
 			category = m.GetModelCategoryByProvider(a.Provider, modelName)
 			if a.Cooldowns == nil {
 				a.Cooldowns = make(map[string]int64)
@@ -276,7 +281,7 @@ func (m *Manager) SetAccountCooldown(id string, untilTimeMs int64, modelName str
 	m.Unlock()
 
 	if changed {
-		_ = m.SaveAccounts(true)
+		_ = m.SaveAccountsFor(true, provider)
 		if m.OnAccountsUpdated != nil {
 			go m.OnAccountsUpdated(m.accounts)
 		}
@@ -492,8 +497,10 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 	}
 
 	if changed {
+		// 定向落盘:只重写该账号所属 provider 分区,不触碰其它号池大文件。
+		cooldownProvider := acc.Provider
 		go func() {
-			_ = m.SaveAccounts(true)
+			_ = m.SaveAccountsFor(true, cooldownProvider)
 			if m.OnAccountsUpdated != nil {
 				m.OnAccountsUpdated(m.accounts)
 			}
@@ -527,7 +534,7 @@ func (m *Manager) SetNvidiaLBMode(mode string) {
 	m.Lock()
 	m.nvidiaLBMode = mode
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 // ============ 单账号最大并发数限制(四池 Get/Set + 计数器转发) ============
@@ -560,7 +567,7 @@ func (m *Manager) SetNvidiaMaxConcurrency(v int) {
 	m.Lock()
 	m.nvidiaMaxConcurrency = v
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 func (m *Manager) GetAntigravityMaxConcurrency() int {
@@ -580,7 +587,7 @@ func (m *Manager) SetAntigravityMaxConcurrency(v int) {
 	m.Lock()
 	m.antigravityMaxConcurrency = v
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 func (m *Manager) GetProjectMaxConcurrency() int {
@@ -600,7 +607,7 @@ func (m *Manager) SetProjectMaxConcurrency(v int) {
 	m.Lock()
 	m.projectMaxConcurrency = v
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 // GetOtherMaxConcurrency 返回某组单账号并发上限,未知组回退默认 10。
@@ -619,7 +626,7 @@ func (m *Manager) GetOtherMaxConcurrency(groupID string) int {
 	return v
 }
 
-// SetOtherMaxConcurrency 设置某组单账号并发上限并持久化到 accounts.json(经 AccountsData.OtherMaxConcurrency)。
+// SetOtherMaxConcurrency 设置某组单账号并发上限并持久化到 accounts_pool.json(经 poolConfigOnDisk.OtherMaxConcurrency)。
 // groupID 经小写规范化与 OtherLBModes 同口径,保证 GetOtherGroups 回显与选号查询键一致。负数置 0。
 func (m *Manager) SetOtherMaxConcurrency(groupID string, v int) {
 	gid := strings.ToLower(strings.TrimSpace(groupID))
@@ -635,7 +642,7 @@ func (m *Manager) SetOtherMaxConcurrency(groupID string, v int) {
 	}
 	m.otherMaxConcurrency[gid] = v
 	m.Unlock()
-	_ = m.SaveAccounts(true)
+	_ = m.SaveAccountsFor(true, poolPartKind)
 }
 
 // ============ 在途并发计数器转发(选号热路径用) ============
@@ -705,7 +712,7 @@ func (m *Manager) SetNvidiaPoolMode(enabled bool) {
 		m.activeChannel = "nvidia"
 	}
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 // GetOtherPoolMode / SetOtherPoolMode 是 Other 号池的负载均衡总开关,与 NVIDIA 同构互斥。
@@ -729,7 +736,7 @@ func (m *Manager) SetOtherPoolMode(enabled bool) {
 		m.activeChannel = "other"
 	}
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 // GetEnabledNvidiaAccounts 返回所有已启用且配置有效的 NVIDIA 账号（不受 CooldownUntil 过滤影响）。
@@ -776,7 +783,7 @@ func (m *Manager) SetGrokLBMode(mode string) {
 	m.Lock()
 	m.grokLBMode = mode
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 func (m *Manager) GetGrokMaxConcurrency() int {
@@ -796,7 +803,7 @@ func (m *Manager) SetGrokMaxConcurrency(v int) {
 	m.Lock()
 	m.grokMaxConcurrency = v
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 // GetGrokCliVersion 返回 Grok 号池全局 CLI 客户端版本号(单池单值,对仗 GrokMaxConcurrency)。
@@ -818,7 +825,7 @@ func (m *Manager) SetGrokCliVersion(v string) {
 	m.Lock()
 	m.grokCliVersion = strings.TrimSpace(v)
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 // GetGrokQuotaCooldownHours 返回 Grok 号池「额度超限后冷却时长」(单池单值, 对仗 GetGrokCliVersion,
@@ -842,7 +849,7 @@ func (m *Manager) SetGrokQuotaCooldownHours(v int) {
 	m.Lock()
 	m.grokQuotaCooldownHours = v
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 // GetGrokPoolMode / SetGrokPoolMode 是 Grok 号池的负载均衡总开关,与 NVIDIA/Other 同构互斥。
@@ -864,7 +871,7 @@ func (m *Manager) SetGrokPoolMode(enabled bool) {
 		m.activeChannel = "grok"
 	}
 	m.Unlock()
-	_ = m.SaveAccounts(false)
+	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
 // GetRawAccountsByProvider 按 provider 过滤返回账号(空/"all" 返回全量副本)。

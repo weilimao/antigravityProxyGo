@@ -7,7 +7,7 @@
  * init 点击委托跨模块读 viewBtnLogMap.get(btn) —— const 的 live 引用支持跨模块 mutation,语义等价于原同模块 mutation。
  */
 import state from './dashboardState';
-import { formatDuration } from './dashboardUtils';
+import { formatDuration, formatDisplayModel } from './dashboardUtils';
 
 // --- 成对 HIT/MISS 重试行折叠(展示层去重,后端落库不动) ---
 //
@@ -254,8 +254,10 @@ export function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
 
     // 模型名: 命中思考等级时追加后缀(如 z-ai/glm-5.2(max)), 后缀取「命中上游」的映射折叠值
     // (NVIDIA-NIM deepseek 模式 low/medium→high、max→max;Grok off→none/on→档;Other 走官方值)。
-    // 空串(客户端未开思考/全局关/上游无该概念)→ 不渲染后缀, 仅显示原模型名。textContent 安全无需转义。
-    const displayModel = log.reasoningEffort ? `${log.model}(${log.reasoningEffort})` : log.model;
+    // 空串(客户端未开思考/全局关/上游无该概念)与 'none'(Grok 显式关思考)→ 不渲染后缀,
+    // 仅显示原模型名, 避免「grok-4.3(none)」噪音。格式化逻辑收敛到 formatDisplayModel 纯函数,
+    // 供 dashboardModal.showModal 复用以杜绝两处展示逻辑漂移。textContent 安全无需转义。
+    const displayModel = formatDisplayModel(log.model, log.reasoningEffort);
     slot.modelName.textContent = displayModel;
     slot.modelCell.setAttribute('title', displayModel);
 

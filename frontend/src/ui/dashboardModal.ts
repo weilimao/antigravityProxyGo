@@ -8,7 +8,7 @@
  */
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
-import { formatDuration } from './dashboardUtils';
+import { formatDuration, formatDisplayModel } from './dashboardUtils';
 
 // Details Modal Elements
 let detailsModal: HTMLElement | null = null;
@@ -154,7 +154,10 @@ export function showModal(log: any) {
     // stats-updated hot path).
     if (modalTime) modalTime.textContent = log.timestamp || '-';
     if (modalSession) modalSession.textContent = log.sessionId || '-';
-    if (modalModel) modalModel.textContent = log.model || '-';
+    // 所用模型: 与请求日志「模型」列同口径, 命中思考等级时追加后缀(如 z-ai/glm-5.2(max))。
+    // 复用 dashboardUtils.formatDisplayModel 纯函数, 与 dashboardLogs.updateLogsRowSlot
+    // 共享同一格式化逻辑, 杜绝两处后缀展示漂移。空串/'none'(Grok 显式关)与无 model → 不发后缀/fallback '-'。
+    if (modalModel) modalModel.textContent = formatDisplayModel(log.model, log.reasoningEffort);
     if (modalPath) modalPath.textContent = `${log.method || 'POST'} ${log.host || ''}${log.path || ''}`;
     if (modalFirstByte) modalFirstByte.textContent = formatDuration(log.firstByteMs);
     if (modalDuration) modalDuration.textContent = formatDuration(log.durationMs);

@@ -159,7 +159,8 @@ func (m *Manager) UpdateNvidiaAccount(id string, in NvidiaAccountInput) (*Accoun
 	// 先释放写锁再 SaveAccounts(内部会 RLock;写锁持有时不可再 RLock,否则自死锁)。
 	m.Unlock()
 
-	_ = m.SaveAccounts(true)
+	// 定向落盘:只重写 NVIDIA provider 分区,不触碰其它号池大文件。
+	_ = m.SaveAccountsFor(true, "nvidia")
 
 	if m.OnAccountsUpdated != nil {
 		go m.OnAccountsUpdated(m.accounts)

@@ -149,9 +149,10 @@ func TestNewGrokAccount_BaseURLEmptyFallsBackDefault(t *testing.T) {
 	}
 }
 
-// TestManager_AddGrokAccount_DefaultModel 锁定:全部模型字段留空时,AddGrokAccount
-// 给一个开箱即用的默认档位(DefaultGrokModel="grok-4.3")。
-func TestManager_AddGrokAccount_DefaultModel(t *testing.T) {
+// TestManager_AddGrokAccount_NoDefaultModel 锁定:全部模型字段留空时,AddGrokAccount
+// 不再硬写默认模型(保持 DefaultModel 留空),客户端模型优先透传(见 ResolveGrokModel)。
+// 开箱可用性由 ResolveGrokModel 的 DefaultGrokModel 兜底保证,无需入库时强写。
+func TestManager_AddGrokAccount_NoDefaultModel(t *testing.T) {
 	m := NewManager()
 	in := validGrokInput()
 	// 全部模型字段留空
@@ -168,8 +169,8 @@ func TestManager_AddGrokAccount_DefaultModel(t *testing.T) {
 	if acc.ID != id {
 		t.Errorf("returned id mismatch")
 	}
-	if acc.DefaultModel != DefaultGrokModel {
-		t.Errorf("全部模型留空应回退默认 %q, got %q", DefaultGrokModel, acc.DefaultModel)
+	if acc.DefaultModel != "" {
+		t.Errorf("全部模型留空应保持 DefaultModel 留空(不硬写默认), got %q", acc.DefaultModel)
 	}
 }
 
@@ -283,8 +284,9 @@ func TestIsGrokAvailable(t *testing.T) {
 	}
 }
 
-// TestResolveGrokModel 锁定档位解析:[1M] 后缀剥离 / 命中档位取账号字段 / 缺省回退 DefaultModel /
-// 再缺省回退默认 / 客户端显式具名上游模型(含 /)优先透传。
+// TestResolveGrokModel 锁定档位解析:[1M] 后缀剥离 / 命中档位取账号字段 /
+// 客户端显式具名上游模型(含 /)优先透传 / 客户端传了模型名时优先透传(不被 DefaultModel 压制) /
+// 客户端未传模型名时才回退 DefaultModel / 再缺省回退默认。
 func TestResolveGrokModel(t *testing.T) {
 	acc := &Account{
 		Provider:     grokProvider,
@@ -303,8 +305,9 @@ func TestResolveGrokModel(t *testing.T) {
 		{"命中 opus 档(大小写不敏感)", "Claude-OPUS-4.1", "grok-4.3"},
 		{"命中 haiku 档", "claude-3-5-haiku", "grok-4-fast"},
 		{"命中 fable 档", "claude-fable-5", "grok-3"},
-		{"未命中档位 → DefaultModel", "deepseek-chat", "grok-4.3"},
-		{"[1M] 后缀剥离后未命中档 → DefaultModel", "gpt-4o[1M]", "grok-4.3"},
+		{"未命中档位 → 客户端模型优先透传(不被 DefaultModel 压制)", "deepseek-chat", "deepseek-chat"},
+		{"[1M] 后缀剥离后未命中档 → 透传剥离后模型名", "gpt-4o[1M]", "gpt-4o"},
+		{"客户端传 grok-4 → 透传(不硬改 4.3)", "grok-4", "grok-4"},
 		{"含 / 具名上游模型优先透传", "xai/grok-2", "xai/grok-2"},
 	}
 	for _, c := range cases {
@@ -319,6 +322,14 @@ func TestResolveGrokModel(t *testing.T) {
 	// nil acc → DefaultGrokModel。
 	if got := ResolveGrokModel("claude-sonnet-4", nil); got != DefaultGrokModel {
 		t.Errorf("nil acc should return DefaultGrokModel %q, got %q", DefaultGrokModel, got)
+	}
+	// acc 有 DefaultModel 且 input 含 / → 透传。
+	if got := ResolveGrokModel("xai/grok-2", acc); got != "xai/grok-2" {
+		t.Errorf("有 DefaultModel 且含 / 应透传, got %q", got)
+	}
+	// acc 有 DefaultModel 且 input 为空 → 回退 DefaultModel(客户端未传模型时才用默认)。
+	if got := ResolveGrokModel("", acc); got != "grok-4.3" {
+		t.Errorf("空 input + 有 DefaultModel 应回退 %q, got %q", acc.DefaultModel, got)
 	}
 	// acc 无 DefaultModel 且 input 含 / → 透传。
 	bareAcc := &Account{Provider: grokProvider, ModelSonnet: "grok-4"}

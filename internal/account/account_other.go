@@ -240,7 +240,8 @@ func (m *Manager) UpdateOtherAccount(id string, in OtherAccountInput) (*Account,
 	// 先释放写锁再 SaveAccounts(内部会 RLock;写锁持有时不可再 RLock,否则自死锁)。
 	m.Unlock()
 
-	_ = m.SaveAccounts(true)
+	// 定向落盘:只重写 Other provider 分区,不触碰其它号池大文件。
+	_ = m.SaveAccountsFor(true, otherProvider)
 	if m.OnAccountsUpdated != nil {
 		go m.OnAccountsUpdated(m.accounts)
 	}
@@ -330,7 +331,7 @@ func (m *Manager) GetOtherLBMode(groupID string) string {
 	return "round-robin"
 }
 
-// SetOtherLBMode 设置某组 LB 算法并持久化到 accounts.json(经 AccountsData.OtherLBModes)。
+// SetOtherLBMode 设置某组 LB 算法并持久化到 accounts_pool.json(经 poolConfigOnDisk.OtherLBModes)。
 func (m *Manager) SetOtherLBMode(groupID, mode string) {
 	gid := strings.ToLower(strings.TrimSpace(groupID))
 	mode = strings.TrimSpace(mode)
@@ -343,7 +344,7 @@ func (m *Manager) SetOtherLBMode(groupID, mode string) {
 	}
 	m.otherLBModes[gid] = mode
 	m.Unlock()
-	_ = m.SaveAccounts(true)
+	_ = m.SaveAccountsFor(true, poolPartKind)
 }
 
 // GetOtherGroupFormats 返回某组首个启用账号的 Formats,供中继转发层决定上游端点与协议转译方向。

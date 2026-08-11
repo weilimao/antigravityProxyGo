@@ -3,15 +3,13 @@ package account
 import (
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
 
 // account_manager.go 收纳 Manager 的核心结构、构造、初始化与账号持久化/CRUD。
 // 拆分自原 account.go:此处只保留「账号池容器 + 磁盘读写 + 增删改查」基础设施;
@@ -72,9 +70,7 @@ func (m *Manager) UpdatePath(newPath string) {
 	m.Unlock()
 
 	m.LoadAccounts()
-}
-
-// generateAccountID 生成进程内唯一的账号 ID。
+}// generateAccountID 生成进程内唯一的账号 ID。
 //
 // 旧实现 impaired
 // (两个 AddAccount 连调 / ImportAccountsList 批量导入同纳秒)下极具碰撞可能,
@@ -98,78 +94,19 @@ func (m *Manager) LoadAccounts() {
 	m.Lock()
 	defer m.Unlock()
 
-	if _, err := os.Stat(m.accountsFilePath); os.IsNotExist(err) {
-		m.accounts = make([]*Account, 0)
-		m.twofaAccounts = make([]*Account, 0)
-		return
-	}
-
-	data, err := os.ReadFile(m.accountsFilePath)
-	if err != nil {
-		fmt.Printf("[AccountManager] Failed to read accounts.json: %v\n", err)
-		return
-	}
-
-	var parsed AccountsData
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		fmt.Printf("[AccountManager] Failed to parse accounts.json: %v\n", err)
-		return
-	}
-
-	m.poolMode = parsed.PoolMode
-	m.projectPoolMode = parsed.ProjectPoolMode
-	m.geminiCliPoolMode = parsed.GeminiCliPoolMode
-	m.activeChannel = parsed.ActiveChannel
-	if parsed.OtherLBModes != nil {
-		// 载入时统一规范化为小写 groupID,保证与 SetOtherLBMode 的 key 口径一致。
-		m.otherLBModes = make(map[string]string, len(parsed.OtherLBModes))
-		for gid, mode := range parsed.OtherLBModes {
-			lgid := strings.ToLower(strings.TrimSpace(gid))
-			if lgid == "" {
-				continue
-			}
-			mode = strings.TrimSpace(mode)
-			if mode != "round-robin" && mode != "sticky" {
-				mode = "round-robin"
-			}
-			m.otherLBModes[lgid] = mode
+	// 磁盘层:首次启动若检测到旧 accounts.json 且无任何 accounts_*.json 分区文件,则一次性
+	// 拆分为 7 个分区文件并把旧文件重命名为 accounts.json.bak;随后逐分区加载到内存。
+	// 迁移失败不阻断:走分区加载(分区文件可能已部分落盘),内存层迁移逻辑会兜底正规化,
+	// 旧 accounts.json 原地保留供下次启动重试。
+	if m.shouldMigrateLegacy() {
+		if err := m.migrateLegacyFile(); err != nil {
+			fmt.Printf("[AccountManager] migrate legacy accounts.json failed: %v\n", err)
 		}
 	}
-	m.nvidiaLBMode = parsed.NvidiaLBMode
-	m.grokLBMode = parsed.GrokLBMode
-	// 单账号最大并发数限制载入(对齐 otherLBModes 范式;0/负数=未配置,Get 时回退默认 10)。
-	// Other map 持久化键规范化为小写 groupID,与 SetOtherMaxConcurrency 的 key 口径一致。
-	m.nvidiaMaxConcurrency = parsed.NvidiaMaxConcurrency
-	m.grokMaxConcurrency = parsed.GrokMaxConcurrency
-	// Grok 号池全局 CLI 客户端版本号载入(对仗 grokMaxConcurrency):空串=未配置,
-	// GetGrokCliVersion 时回退默认 DefaultGrokCliVersion("1.0.0")。TrimSpace 防御空白输入。
-	m.grokCliVersion = strings.TrimSpace(parsed.GrokCliVersion)
-	// Grok 号池「额度超限后冷却时长」载入(对仗 grokCliVersion, 单位小时):0/负数=未配置,
-	// GetGrokQuotaCooldownHours 回退默认 DefaultGrokQuotaCooldownHours(24)。负数非法钳 0(规整范式)。
-	m.grokQuotaCooldownHours = parsed.GrokQuotaCooldownHours
-	if m.grokQuotaCooldownHours < 0 {
-		m.grokQuotaCooldownHours = 0
-	}
-	m.antigravityMaxConcurrency = parsed.AntigravityMaxConcurrency
-	m.projectMaxConcurrency = parsed.ProjectMaxConcurrency
-	if parsed.OtherMaxConcurrency != nil {
-		m.otherMaxConcurrency = make(map[string]int, len(parsed.OtherMaxConcurrency))
-		for gid, v := range parsed.OtherMaxConcurrency {
-			lgid := strings.ToLower(strings.TrimSpace(gid))
-			if lgid == "" {
-				continue
-			}
-			if v < 0 {
-				v = 0 // 负数非法,规整为 0(等同未配置,Get 回退 10)
-			}
-			m.otherMaxConcurrency[lgid] = v
-		}
-	}
-	if m.activeChannel == "gemini-cli" {
-		m.activeChannel = "antigravity"
-	}
-	m.accounts = parsed.Accounts
-	m.twofaAccounts = parsed.TwoFAAccounts
+	m.loadFromPartitions()
+
+	// ===== 以下为内存层正规化(与磁盘分区无关,原样保留自旧实现) =====
+
 	if m.twofaAccounts == nil {
 		m.twofaAccounts = make([]*Account, 0)
 	}
@@ -300,45 +237,14 @@ func (m *Manager) idExistsLocked(id string) bool {
 	return false
 }
 
+// SaveAccounts 落盘全部分区(5 provider + 2fa + pool)。保留作全量写入口:
+//   - Init 后的兜底全量重建、ImportAccountsList 跨多 provider 落盘、
+//   - 旧调用点未显式指定 provider 时的兼容回退。
+//
+// 单点编辑/池配置请改用 SaveAccountsFor(silent, kinds...) 定向落盘,避免重写无关分区。
+// silent=true 时跳过 OnAccountsUpdated 回调(与旧实现同口径,供 token 刷新等静默路径用)。
 func (m *Manager) SaveAccounts(silent bool) error {
-	m.RLock()
-	data := AccountsData{
-		Accounts:                  m.accounts,
-		TwoFAAccounts:             m.twofaAccounts,
-		PoolMode:                  m.poolMode,
-		ProjectPoolMode:           m.projectPoolMode,
-		GeminiCliPoolMode:         m.geminiCliPoolMode,
-		ActiveChannel:             m.activeChannel,
-		OtherLBModes:              m.otherLBModes,
-		NvidiaLBMode:              m.nvidiaLBMode,
-		GrokLBMode:                m.grokLBMode,
-		NvidiaMaxConcurrency:      m.nvidiaMaxConcurrency,
-		AntigravityMaxConcurrency: m.antigravityMaxConcurrency,
-		ProjectMaxConcurrency:     m.projectMaxConcurrency,
-		OtherMaxConcurrency:       m.otherMaxConcurrency,
-		GrokMaxConcurrency:        m.grokMaxConcurrency,
-		GrokCliVersion:            m.grokCliVersion,
-		GrokQuotaCooldownHours:    m.grokQuotaCooldownHours,
-	}
-	m.RUnlock()
-
-	bytesData, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	m.fileLock.Lock()
-	err = os.WriteFile(m.accountsFilePath, bytesData, 0644)
-	m.fileLock.Unlock()
-
-	if err != nil {
-		return err
-	}
-
-	if !silent && m.OnAccountsUpdated != nil {
-		go m.OnAccountsUpdated(m.accounts)
-	}
-	return nil
+	return m.SaveAccountsFor(silent)
 }
 
 // ============ 账号增删改查 CRUD ============
@@ -370,9 +276,11 @@ func (m *Manager) AddAccount(acc *Account) {
 	newAccounts = append(newAccounts, acc)
 	m.accounts = newAccounts
 
+	provider := acc.Provider
 	m.Unlock()
 
-	_ = m.SaveAccounts(false)
+	// 定向落盘:只重写新增账号所属 provider 分区(排重可能波及同 provider 既有账号,故落该整分区)。
+	_ = m.SaveAccountsFor(false, provider)
 
 	// 自动为新添加的账号拉取配额和级别信息，以完成初始数据的填充
 	if m.FetchQuota != nil {
@@ -389,6 +297,8 @@ func (m *Manager) ImportAccountsList(accountsList []*Account) int {
 	m.Lock()
 	// 本批次已分配 ID 集合,防止输入 JSON 自带非唯一 ID(或旧版残留)时多账号落入同一 ID。
 	batchSeen := make(map[string]struct{}, len(accountsList))
+	// 受影响 provider 集合:批量导入可能跨多 provider,落盘时按集合逐分区写,不误伤未涉及分区。
+	touchedProviders := make(map[string]struct{}, len(accountsList))
 	addedCount := 0
 	for _, acc := range accountsList {
 		if acc.Email == "" {
@@ -417,12 +327,20 @@ func (m *Manager) ImportAccountsList(accountsList []*Account) int {
 		}
 		newAccounts = append(newAccounts, acc)
 		m.accounts = newAccounts
+		if acc.Provider != "" {
+			touchedProviders[acc.Provider] = struct{}{}
+		}
 		addedCount++
 	}
 	m.Unlock()
 
 	if addedCount > 0 {
-		_ = m.SaveAccounts(false)
+		// 定向落盘:只重写被本批次触及的 provider 分区,未涉及的号池分区不重写。
+		kinds := make([]string, 0, len(touchedProviders))
+		for p := range touchedProviders {
+			kinds = append(kinds, p)
+		}
+		_ = m.SaveAccountsFor(false, kinds...)
 	}
 	return addedCount
 }
@@ -430,8 +348,10 @@ func (m *Manager) ImportAccountsList(accountsList []*Account) int {
 func (m *Manager) RemoveAccount(id string) {
 	m.Lock()
 	var newAccounts []*Account
+	removedProvider := ""
 	for _, a := range m.accounts {
 		if a.ID == id {
+			removedProvider = a.Provider
 			continue
 		}
 		newAccounts = append(newAccounts, a)
@@ -442,7 +362,12 @@ func (m *Manager) RemoveAccount(id string) {
 	}
 	m.Unlock()
 
-	_ = m.SaveAccounts(false)
+	// 定向落盘:只重写被删账号所属 provider 分区。空 provider(理论上不会发生)兜底走全量。
+	if removedProvider != "" {
+		_ = m.SaveAccountsFor(false, removedProvider)
+	} else {
+		_ = m.SaveAccounts(false)
+	}
 }
 
 // ============ 账号读取(展示用深拷贝/原始引用) ============
@@ -511,6 +436,18 @@ func (m *Manager) GetAccountByID(id string) *Account {
 
 // ============ 账号字段更新(Token/Credits/Overages/Enabled/Tier/2FA) ============
 
+// accountProviderOfLocked 在已持锁前提下返回某 ID 账号的 provider(key)。
+// 找不到时返回空串。供定向落盘路径解析 id→provider 用,避免每次 Update* 都全量重写。
+// 调用方须已持有 m.Lock 或 m.RLock(读路径亦可,因只读 Provider 字段)。
+func (m *Manager) accountProviderOfLocked(id string) string {
+	for _, a := range m.accounts {
+		if a != nil && a.ID == id {
+			return a.Provider
+		}
+	}
+	return ""
+}
+
 func (m *Manager) UpdateAccessToken(id, newToken string) {
 	m.RLock()
 	var target *Account
@@ -520,12 +457,17 @@ func (m *Manager) UpdateAccessToken(id, newToken string) {
 			break
 		}
 	}
+	provider := ""
+	if target != nil {
+		provider = target.Provider
+	}
 	m.RUnlock()
 
 	// Use per-account token lock to update safely without holding the global Manager write lock
 	if target != nil {
 		target.SetAccessToken(newToken)
-		_ = m.SaveAccounts(true)
+		// 定向落盘:只重写该账号所属 provider 分区,不触碰其它号池的大文件。
+		_ = m.SaveAccountsFor(true, provider)
 	}
 }
 
@@ -540,19 +482,25 @@ func (m *Manager) UpdateAccountRefreshToken(id, newRefresh string) {
 			break
 		}
 	}
+	provider := ""
+	if target != nil {
+		provider = target.Provider
+	}
 	m.RUnlock()
 
 	if target != nil {
 		target.SetRefreshToken(newRefresh)
-		_ = m.SaveAccounts(true)
+		_ = m.SaveAccountsFor(true, provider)
 	}
 }
 
 func (m *Manager) UpdateAccountCredits(id string, credits float64) {
 	m.Lock()
 	changed := false
+	provider := ""
 	for _, a := range m.accounts {
 		if a.ID == id {
+			provider = a.Provider
 			if a.Credits == nil || *a.Credits != credits {
 				a.Credits = &credits
 				changed = true
@@ -563,7 +511,7 @@ func (m *Manager) UpdateAccountCredits(id string, credits float64) {
 	m.Unlock()
 
 	if changed {
-		_ = m.SaveAccounts(true)
+		_ = m.SaveAccountsFor(true, provider)
 		if m.OnAccountsUpdated != nil {
 			go m.OnAccountsUpdated(m.accounts)
 		}
@@ -573,8 +521,10 @@ func (m *Manager) UpdateAccountCredits(id string, credits float64) {
 func (m *Manager) UpdateAccountOverages(id string, enabled bool) {
 	m.Lock()
 	changed := false
+	provider := ""
 	for _, a := range m.accounts {
 		if a.ID == id {
+			provider = a.Provider
 			if a.EnableOverages != enabled {
 				a.EnableOverages = enabled
 				changed = true
@@ -585,7 +535,7 @@ func (m *Manager) UpdateAccountOverages(id string, enabled bool) {
 	m.Unlock()
 
 	if changed {
-		_ = m.SaveAccounts(true)
+		_ = m.SaveAccountsFor(true, provider)
 		if m.OnAccountsUpdated != nil {
 			go m.OnAccountsUpdated(m.accounts)
 		}
@@ -595,8 +545,10 @@ func (m *Manager) UpdateAccountOverages(id string, enabled bool) {
 func (m *Manager) UpdateAccountEnabled(id string, enabled bool) {
 	m.Lock()
 	changed := false
+	provider := ""
 	for _, a := range m.accounts {
 		if a.ID == id {
+			provider = a.Provider
 			if a.Enabled != enabled {
 				a.Enabled = enabled
 				changed = true
@@ -607,7 +559,7 @@ func (m *Manager) UpdateAccountEnabled(id string, enabled bool) {
 	m.Unlock()
 
 	if changed {
-		_ = m.SaveAccounts(true)
+		_ = m.SaveAccountsFor(true, provider)
 		if m.OnAccountsUpdated != nil {
 			go m.OnAccountsUpdated(m.accounts)
 		}
@@ -626,10 +578,14 @@ func (m *Manager) AddTwoFAAccount(email, secret string) {
 	}
 
 	foundInPool := false
+	touchedProviders := map[string]struct{}{}
 	for _, a := range m.accounts {
 		if a.Email == email {
 			a.TwoFASecret = secret
 			foundInPool = true
+			if a.Provider != "" {
+				touchedProviders[a.Provider] = struct{}{}
+			}
 		}
 	}
 
@@ -656,7 +612,13 @@ func (m *Manager) AddTwoFAAccount(email, secret string) {
 	}
 	m.Unlock()
 
-	_ = m.SaveAccounts(false)
+	// 双写:2FA 列表分区 + 被 TwoFASecret 联动改动的 active 账号 provider 分区。
+	kinds := make([]string, 0, len(touchedProviders)+1)
+	kinds = append(kinds, twoFAPartKind)
+	for p := range touchedProviders {
+		kinds = append(kinds, p)
+	}
+	_ = m.SaveAccountsFor(false, kinds...)
 }
 
 func (m *Manager) GetTwoFAAccounts() []*Account {
@@ -689,6 +651,7 @@ func (m *Manager) UpdateAccount2FASecret(id string, secret string) {
 
 	// 先通过 ID 找到对应的 Email
 	var targetEmail string
+	var touchedProviders = map[string]struct{}{}
 	for _, a := range m.accounts {
 		if a.ID == id {
 			targetEmail = a.Email
@@ -712,6 +675,9 @@ func (m *Manager) UpdateAccount2FASecret(id string, secret string) {
 				if a.TwoFASecret != secret {
 					a.TwoFASecret = secret
 					changed = true
+				}
+				if a.Provider != "" {
+					touchedProviders[a.Provider] = struct{}{}
 				}
 			}
 		}
@@ -745,15 +711,24 @@ func (m *Manager) UpdateAccount2FASecret(id string, secret string) {
 	m.Unlock()
 
 	if changed {
-		_ = m.SaveAccounts(false)
+		// 双写:2FA 列表分区 + 被 TwoFASecret 字段联动改动的 active 账号 provider 分区。
+		// touchedProviders 收集所有邮箱匹配到的 provider(同一 2FA 可能绑定多 provider 账号)。
+		kinds := make([]string, 0, len(touchedProviders)+1)
+		kinds = append(kinds, twoFAPartKind)
+		for p := range touchedProviders {
+			kinds = append(kinds, p)
+		}
+		_ = m.SaveAccountsFor(false, kinds...)
 	}
 }
 
 func (m *Manager) UpdateAccountTier(id, tier string) {
 	m.Lock()
 	changed := false
+	provider := ""
 	for _, a := range m.accounts {
 		if a.ID == id {
+			provider = a.Provider
 			if a.Tier != tier {
 				a.Tier = tier
 				changed = true
@@ -764,7 +739,7 @@ func (m *Manager) UpdateAccountTier(id, tier string) {
 	m.Unlock()
 
 	if changed {
-		_ = m.SaveAccounts(true)
+		_ = m.SaveAccountsFor(true, provider)
 		if m.OnAccountsUpdated != nil {
 			go m.OnAccountsUpdated(m.accounts)
 		}

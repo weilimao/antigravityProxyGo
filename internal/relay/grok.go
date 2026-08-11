@@ -255,8 +255,9 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 		// 成功路径在请求结束前 Release。严格按退出路径手工配对(与 handleNvidia 同款, 不依赖 defer)。
 		h.accountMgr.AcquireAccount(poolAccount.ID)
 
-		// 模型映射(账号级四档位, 与 ResolveNvidiaModel 同构): 剥离 [1M] 后缀, 命中档位取账号字段,
-		// 缺省回退 DefaultModel, 客户端显式具名上游模型(含 /)优先透传。
+		// 模型映射(账号级档位, 与 ResolveNvidiaModel 同构): 剥离 [1M] 后缀, 命中档位取账号字段,
+		// 客户端显式具名上游模型(含 /)优先透传; 客户端传了模型名时优先透传(不被账号 DefaultModel 压制),
+		// 仅客户端未传模型名时才回退 DefaultModel。客户端传什么模型就路由到中继模型映射配置的模型。
 		upstreamModel := account.ResolveGrokModel(inModel, poolAccount)
 
 		// 根据入站协议构造发往上游的 OpenAI Chat 请求体, 并在翻译【之后】用 grokApplyThinkingToChat

@@ -11,6 +11,17 @@ package settings
 const configFileName = "config.json"
 
 var dataFiles = []string{
+	// 账号数据已从单一 accounts.json 拆分为按 provider 分区存储(见 internal/account/account_storage.go):
+	//   accounts_antigravity.json / accounts_project.json / accounts_nvidia.json /
+	//   accounts_grok.json / accounts_other.json / accounts_2fa.json / accounts_pool.json
+	// 旧 accounts.json 仍保留在清单尾部,供历史数据目录迁移时一并拷贝(首次启动由 Manager 做一次性拆分)。
+	"accounts_antigravity.json",
+	"accounts_project.json",
+	"accounts_nvidia.json",
+	"accounts_grok.json",
+	"accounts_other.json",
+	"accounts_2fa.json",
+	"accounts_pool.json",
 	"accounts.json",
 	"stats.json",
 	"usage.json",

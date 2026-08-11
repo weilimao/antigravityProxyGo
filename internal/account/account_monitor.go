@@ -49,12 +49,26 @@ func (m *Manager) StartCooldownMonitor() {
 				if m.FetchQuota == nil {
 					// 如果未注册配额拉取回调，直接解除冷静状态
 					m.Lock()
+					touchedProviders := map[string]struct{}{}
 					for _, acc := range cooldownAccounts {
 						acc.CooldownUntil = 0
 						acc.Cooldowns = make(map[string]int64)
+						if acc.Provider != "" {
+							touchedProviders[acc.Provider] = struct{}{}
+						}
 					}
 					m.Unlock()
-					_ = m.SaveAccounts(false)
+					// 定向落盘:只重写被解除冷静期账号涉及的 provider 分区,不触碰其它号池大文件。
+					// cooldownAccounts 跨多 provider 时各分区分别重写,未触及号池不重写。
+					kinds := make([]string, 0, len(touchedProviders))
+					for p := range touchedProviders {
+						kinds = append(kinds, p)
+					}
+					if len(kinds) > 0 {
+						_ = m.SaveAccountsFor(false, kinds...)
+					} else {
+						_ = m.SaveAccounts(false)
+					}
 					continue
 				}
 
@@ -67,7 +81,9 @@ func (m *Manager) StartCooldownMonitor() {
 							// 刷新失败，冷静期往后延长 5 分钟
 							m.Lock()
 							targetAcc := m.GetAccountByID(a.ID)
+							cooldownProvider := ""
 							if targetAcc != nil {
+								cooldownProvider = targetAcc.Provider
 								nextCooldown := time.Now().UnixNano()/int64(time.Millisecond) + 5*60*1000
 								targetAcc.CooldownUntil = nextCooldown
 								if targetAcc.Cooldowns != nil {
@@ -77,7 +93,13 @@ func (m *Manager) StartCooldownMonitor() {
 								}
 							}
 							m.Unlock()
-							_ = m.SaveAccounts(true)
+							// 定向落盘:只重写该账号所属 provider 分区,不触碰其它号池大文件。
+							// 空 provider 兜底走全量(targetAcc 非空时 provider 必非空,此处为防御)。
+							if cooldownProvider != "" {
+								_ = m.SaveAccountsFor(true, cooldownProvider)
+							} else {
+								_ = m.SaveAccounts(true)
+							}
 							return
 						}
 

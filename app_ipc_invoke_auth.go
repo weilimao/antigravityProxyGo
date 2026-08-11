@@ -133,8 +133,9 @@ func (a *App) handleAuthInvokeIPC(channel string, args []interface{}) (string, b
 				ScopeType:     "grok",
 				BaseURL:       baseURL,
 				TokenEndpoint: tokenEP,
-				DefaultModel:  account.DefaultGrokModel,
-				Enabled:       true,
+				// 不写 DefaultModel:OAuth 授权登录后不显示默认模型,客户端传什么模型就
+				// 路由到中继模型映射配置的模型(见 ResolveGrokModel 客户端模型优先透传)。
+				Enabled: true,
 			})
 			a.AddLog(fmt.Sprintf("✅ Grok 授权登录成功: %s", email))
 			a.emitAccountsRes()

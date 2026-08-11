@@ -133,9 +133,9 @@
           </div>
         </div>
         <div class="flex flex-col gap-1 sm:col-span-2">
-          <label class="text-[11px] font-medium text-outline" data-i18n="grokFieldDefaultModel">默认模型 (档位未命中时回退)</label>
+          <label class="text-[11px] font-medium text-outline" data-i18n="grokFieldDefaultModel">默认模型 (留空则透传客户端模型)</label>
           <div class="flex items-center gap-1.5">
-            <input type="text" id="inputGrokModelDefault" placeholder="grok-4.3"
+            <input type="text" id="inputGrokModelDefault" placeholder="留空"
               class="flex-1 min-w-0 px-3 py-1.5 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" />
             <select id="selectGrokModelDefault" class="hidden w-36 shrink-0 px-2 py-1.5 bg-slate-100 dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[11px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all cursor-pointer">
               <option value="">选择模型...</option>

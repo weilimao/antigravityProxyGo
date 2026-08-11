@@ -41,7 +41,6 @@ const (
 	// 0/未配置时 GetGrokQuotaCooldownHours 回退本默认值(与 grokCliVersion 空串回退范式一致)。
 	DefaultGrokQuotaCooldownHours = 24
 )
-
 // GrokModelField 是账号级四档位映射字段名(与 NVIDIA 同源,供前端录入与 ResolveGrokModel 解析)。
 type GrokModelField string
 
@@ -125,7 +124,9 @@ func NewGrokAccount(in GrokAccountInput) *Account {
 }
 
 // AddGrokAccount 校验 + 构造 + 入库,返回新账号 ID 与 error。
-// 全部模型字段留空时给一个开箱即用的默认档位(与 NVIDIA 同口径)。
+// 不再硬写默认模型:账号级 DefaultModel 留空,前端不显示默认模型,客户端传什么模型就
+// 原样透传入站模型名(交中继层 RelayModelMapping/路由规则在上游侧映射);ResolveGrokModel
+// 在客户端未传模型时仍会回退 DefaultGrokModel 兜底,开箱可用性不丢。
 func (m *Manager) AddGrokAccount(in GrokAccountInput) (string, error) {
 	in.BaseURL = strings.TrimSpace(in.BaseURL)
 	if in.BaseURL == "" {
@@ -135,10 +136,7 @@ func (m *Manager) AddGrokAccount(in GrokAccountInput) (string, error) {
 		return "", err
 	}
 	acc := NewGrokAccount(in)
-	if acc.DefaultModel == "" && acc.ModelSonnet == "" && acc.ModelOpus == "" && acc.ModelHaiku == "" && acc.ModelFable == "" {
-		// 全部模型字段留空时给一个开箱即用的默认值
-		acc.DefaultModel = DefaultGrokModel
-	}
+	// 不再给默认模型:保持 DefaultModel 留空,前端不显示默认模型,客户端模型优先透传(见 ResolveGrokModel)。
 	m.AddAccount(acc)
 	return acc.ID, nil
 }
@@ -192,7 +190,8 @@ func (m *Manager) UpdateGrokAccount(id string, in GrokAccountInput) (*Account, e
 	// 先释放写锁再 SaveAccounts(内部会 RLock;写锁持有时不可再 RLock,否则自死锁)。
 	m.Unlock()
 
-	_ = m.SaveAccounts(true)
+	// 定向落盘:只重写 Grok provider 分区,不触碰其它号池大文件。
+	_ = m.SaveAccountsFor(true, grokProvider)
 
 	if m.OnAccountsUpdated != nil {
 		go m.OnAccountsUpdated(m.accounts)
@@ -207,8 +206,10 @@ func IsGrokAvailable(a *Account) bool {
 }
 
 // ResolveGrokModel 按入站模型名档位解析成应发给上游的 Grok 模型 id。
-// 语义与 ResolveNvidiaModel 完全对齐:剥离 [1M] 后缀;命中档位取账号对应字段,
-// 缺省回退 DefaultModel,再缺省回退默认;客户端显式具名上游模型(含 /)优先透传。
+// 语义(2026-08-11 修订):剥离 [1M] 后缀;命中档位取账号对应字段;客户端显式具名上游模型(含 /)优先透传;
+// 客户端传了模型名(哪怕非四档位)优先原样透传——客户端传什么模型就路由到中继模型映射配置的模型,
+// 不被账号级 DefaultModel 压制(避免 OAuth 登录后默认模型 grok-4.3 硬写死导致客户端模型被改写报错);
+// 仅当客户端未传模型名(name==空)时才回退账号级 DefaultModel,再缺省回退 DefaultGrokModel。
 func ResolveGrokModel(inModel string, acc *Account) string {
 	if acc == nil {
 		return DefaultGrokModel
@@ -241,12 +242,13 @@ func ResolveGrokModel(inModel string, acc *Account) string {
 		// 客户端显式指定了具名上游模型,优先直接透传
 		return name
 	}
-	if acc.DefaultModel != "" {
-		return acc.DefaultModel
-	}
 	if name != "" {
-		// 用户未配档位且非默认值时,透传原始模型名
+		// 客户端传了模型名(哪怕非四档位),优先原样透传,交中继映射/上游决定,不被 DefaultModel 压制
 		return name
+	}
+	if acc.DefaultModel != "" {
+		// 仅当客户端没传模型名时,才回退账号级默认
+		return acc.DefaultModel
 	}
 	return DefaultGrokModel
 }

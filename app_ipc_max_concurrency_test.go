@@ -7,7 +7,7 @@ import (
 )
 
 // app_ipc_max_concurrency_test.go 锁定 IPCSend 收到前端 set-max-concurrency 后,
-// 真正调用对应 Set*MaxConcurrency 并持久化(落 accounts.json),而非静默丢弃。
+// 真正调用对应 Set*MaxConcurrency 并持久化(落 accounts_pool.json 池配置分区),而非静默丢弃。
 // 对齐既有 app_ipc_other_lb_test.go 的 TestIPCSend_OtherSetLbMode 范式,覆盖四条新通道。
 
 // TestIPCSend_NvidiaSetMaxConcurrency 验证 nvidia:set-max-concurrency 落盘 + Get 回读一致。

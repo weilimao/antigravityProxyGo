@@ -15,7 +15,9 @@ import (
 // 与 account_grok_test / account_other_test 的「显式唯一 ID 绕开 old generateAccountID 撞号」
 // 注释形成呼应:此处锁定的就是该既有缺陷已被修复。
 
-// writeAccountsFile 在 dir 下写一个 accounts.json(内容为 raw JSON 字符串),供 LoadAccounts 回读。
+// writeAccountsFile 在 dir 下写一份「旧格式」accounts.json(内容为 raw JSON 字符串),供 LoadAccounts
+// 触发一次性迁移(shouldMigrateLegacy → migrateLegacyFile 拆分为 7 分区 → loadFromPartitions 回读)。
+// 迁移后该 accounts.json 会被重命名为 accounts.json.bak,内存层 ensureUniqueIDsLocked 负责去重 ID。
 func writeAccountsFile(t *testing.T, dir, raw string) {
 	t.Helper()
 	path := filepath.Join(dir, "accounts.json")

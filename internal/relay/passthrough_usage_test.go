@@ -57,10 +57,10 @@ func TestRecordOtherUsage_FiresLandings34_WhenTrackerInjected(t *testing.T) {
 // logCtx.ReasoningEffort 经 recordOtherUsage → stats.RequestLog.ReasoningEffort 真实闭环,
 // 供前端「模型」列追加 (档) 后缀展示。high(Other 走官方 OpenAI 取值集, max→high)与空串两态覆盖。
 func TestRecordOtherUsage_ReasoningEffortPropagates(t *testing.T) {
-	// 每个子用例独立注入 fresh tracker, 避免 AddRequestLogForFamily 的 prepend 语义
-	// (最新在前, requests[0]) 与 GetRecentRequestReasoningEffort 读 requests[len-1] (最旧)
-	// 的口径错位: 同一 testfun 连调两次时第二子用例会读到第一子用例旧记录。下沉后仅 1 条,
-	// [0] 与 [len-1] 同指, 断言稳定 (与 NVIDIA/Grok 同款隔离)。
+	// 每个子用例独立注入 fresh tracker。AddRequestLogForFamily 以 prepend 语义落库
+	// (新日志=requests[0]), GetRecentRequestReasoningEffort 现亦读 requests[0] 对齐
+	// (历史误读 [len-1] 已修, 见 stats_getters.go 口径说明)。此隔离使每子用例仅 1 条记录,
+	// 断言不依赖"后落即最新"隐含时序, 兼作子用例间卫生隔离 (与 NVIDIA/Grok 同款)。
 	userSession := &RelaySession{Token: "tok-other-eff", UserID: "u-other-eff", SessionKey: "auth:acc:other1234567890"}
 	start := time.Now()
 	rec := stats.NewFirstByteRecorder(start)

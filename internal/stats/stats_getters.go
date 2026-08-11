@@ -37,64 +37,74 @@ func (t *Tracker) GetRequestLogCount() int {
 // GetRecentRequestFirstByteMs 轻量级读取最近一条内存请求日志的 FirstByteMs, 供单测端到端
 // 断言 TTFT 打点链路(FirstByteRecorder → RequestLog.FirstByteMs)真实闭环而非恒 0。
 // 无日志时返回 -1。读锁内取值, 不回切片别名。
+//
+// 口径说明: AddRequestLog/TrackRequestForModel/AddRequestLogForFamily 均以 prepend 语义把
+// 新日志插在 requests[0] (见 stats_requestlog.go), 故"最近一条"= requests[0], 而非
+// requests[len-1] (后者是最旧的一条)。历史上此处误读 [len-1], 单日志场景下 [0]==[len-1]
+// 未暴露; 多日志断言时 getter 读到的其实是首条, 与"最近"语义错位。今统一改为读 [0] 对齐
+// prepend 语义, 单测相应以"每子测试独立 handler/tracker (仅一记录)"隔离避免跨用例污染。
 func (t *Tracker) GetRecentRequestFirstByteMs() int64 {
 	t.RLock()
 	defer t.RUnlock()
 	if len(t.requests) == 0 {
 		return -1
 	}
-	return t.requests[len(t.requests)-1].FirstByteMs
+	return t.requests[0].FirstByteMs
 }
 
 // GetRecentRequestCacheStatus 轻量级读取最近一条内存请求日志的 CacheStatus, 供单测端到端
 // 断言缓存命中链路(record*Usage 的 cached>0 → CacheStatus="HIT")真实闭环而非恒 "NONE"。
 // 无日志时返回 ""。读锁内取值, 不回切片别名。
+// 口径同 GetRecentRequestFirstByteMs: 最近一条 = requests[0] (prepend 语义)。
 func (t *Tracker) GetRecentRequestCacheStatus() string {
 	t.RLock()
 	defer t.RUnlock()
 	if len(t.requests) == 0 {
 		return ""
 	}
-	return t.requests[len(t.requests)-1].CacheStatus
+	return t.requests[0].CacheStatus
 }
 
 // GetRecentRequestBody 轻量级读取最近一条内存请求日志的 RequestBody, 供单测端到端断言
 // 号池直连链路(record*Usage)入站请求体落库链路(logCtx.ReqBody → stats.RequestLog.RequestBody)
 // 真实闭环而非恒 nil(前端「请求参数详情」弹窗恒落「无请求参数」兜底)。
 // 无日志时返回 nil。读锁内取值, 不回切片别名。
+// 口径同 GetRecentRequestFirstByteMs: 最近一条 = requests[0] (prepend 语义)。
 func (t *Tracker) GetRecentRequestBody() interface{} {
 	t.RLock()
 	defer t.RUnlock()
 	if len(t.requests) == 0 {
 		return nil
 	}
-	return t.requests[len(t.requests)-1].RequestBody
+	return t.requests[0].RequestBody
 }
 
 // GetRecentRequestHeaders 轻量级读取最近一条内存请求日志的 RequestHeaders, 供单测端到端断言
 // 号池直连链路(record*Usage)入站请求头落库链路(logCtx.ReqHeaders → stats.RequestLog.RequestHeaders)
 // 真实闭环而非恒 nil(前端「请求参数详情」弹窗恒落「无请求头数据」兜底)。
 // 无日志时返回 nil。读锁内取值, 不回切片别名。
+// 口径同 GetRecentRequestFirstByteMs: 最近一条 = requests[0] (prepend 语义)。
 func (t *Tracker) GetRecentRequestHeaders() interface{} {
 	t.RLock()
 	defer t.RUnlock()
 	if len(t.requests) == 0 {
 		return nil
 	}
-	return t.requests[len(t.requests)-1].RequestHeaders
+	return t.requests[0].RequestHeaders
 }
 
 // GetRecentRequestReasoningEffort 轻量级读取最近一条内存请求日志的 ReasoningEffort, 供单测端到端
 // 断言命中思考等级落库链路(logCtx.ReasoningEffort → stats.RequestLog.ReasoningEffort)
 // 真实闭环而非恒 ""(前端「模型」列命中思考等级后缀渲染的口径)。
 // 无日志时返回 ""。读锁内取值, 不回切片别名。
+// 口径同 GetRecentRequestFirstByteMs: 最近一条 = requests[0] (prepend 语义)。
 func (t *Tracker) GetRecentRequestReasoningEffort() string {
 	t.RLock()
 	defer t.RUnlock()
 	if len(t.requests) == 0 {
 		return ""
 	}
-	return t.requests[len(t.requests)-1].ReasoningEffort
+	return t.requests[0].ReasoningEffort
 }
 
 // GetNvidiaTrends 轻量级读取 NVIDIA 号池专用趋势桶的深拷贝, 供 app.go 远程中继分支
