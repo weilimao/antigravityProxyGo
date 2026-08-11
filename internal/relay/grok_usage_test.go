@@ -121,6 +121,62 @@ func TestRecordGrokUsage_FiresLandings3And4_WhenTrackerInjected(t *testing.T) {
 	}
 }
 
+// TestRecordGrokUsage_ReasoningEffortPropagates 验证命中上游思考等级落库链路(Grok):
+// logCtx.ReasoningEffort 经 recordGrokUsage → stats.RequestLog.ReasoningEffort 真实闭环,
+// 供前端「模型」列追加 (档) 后缀展示。max→high(xAI 官方无 max)、off→none 两态覆盖。
+func TestRecordGrokUsage_ReasoningEffortPropagates(t *testing.T) {
+	// 每个子用例独立注入 fresh tracker, 避免 AddRequestLogForFamily 的 prepend 语义
+	// (最新在前, requests[0]) 与 GetRecentRequestReasoningEffort 读 requests[len-1] (最旧)
+	// 的口径错位: 同一 testfun 连调两次时第二子用例会读到第一子用例旧记录。下沉后仅 1 条,
+	// [0] 与 [len-1] 同指, 断言稳定 (与 TestRecordNvidiaUsage_ReasoningEffortPropagates 同款隔离)。
+	userSession := &RelaySession{Token: "tok-grok-eff", UserID: "u-grok-eff", SessionKey: "auth:acc:grok123def4567890"}
+	start := time.Now()
+	rec := stats.NewFirstByteRecorder(start)
+	time.Sleep(2 * time.Millisecond)
+	rec.MarkFirstByte()
+
+	t.Run("high", func(t *testing.T) {
+		handler, _, _, _ := newGrokTestHandler(t, nil)
+		gt := makeInjectedGlobalTracker(t)
+		handler.SetGlobalStatsTracker(gt)
+		logCtx := grokLogCtx{
+			Method:          "POST",
+			Host:            "api.x.ai",
+			Path:            "/grok/v1/chat/completions",
+			SessionID:       "auth:acc:grok123def4567890",
+			Account:         "u-grok-eff",
+			StatusCode:      200,
+			StartTs:         start,
+			FirstByteRec:    rec,
+			ReasoningEffort: "high",
+		}
+		handler.recordGrokUsage(userSession, "grok-4.3", 100, 50, 0, nil, logCtx)
+		if got := gt.GetRecentRequestReasoningEffort(); got != "high" {
+			t.Errorf("high 落库: ReasoningEffort = %q, want %q", got, "high")
+		}
+	})
+	t.Run("none", func(t *testing.T) {
+		handler, _, _, _ := newGrokTestHandler(t, nil)
+		gt := makeInjectedGlobalTracker(t)
+		handler.SetGlobalStatsTracker(gt)
+		logCtx := grokLogCtx{
+			Method:          "POST",
+			Host:            "api.x.ai",
+			Path:            "/grok/v1/chat/completions",
+			SessionID:       "auth:acc:grok123def4567890",
+			Account:         "u-grok-eff",
+			StatusCode:      200,
+			StartTs:         start,
+			FirstByteRec:    rec,
+			ReasoningEffort: "none",
+		}
+		handler.recordGrokUsage(userSession, "grok-4.3", 100, 50, 0, nil, logCtx)
+		if got := gt.GetRecentRequestReasoningEffort(); got != "none" {
+			t.Errorf("none 落库: ReasoningEffort = %q, want %q", got, "none")
+		}
+	})
+}
+
 // TestRecordGrokUsage_SkipsLandings3And4_WhenTrackerNil 验证 globalStatsTracker==nil 时,
 // 落点3/4 安全跳过,不 panic(既有「降级跳过」语义在新增落点后仍成立)。
 func TestRecordGrokUsage_SkipsLandings3And4_WhenTrackerNil(t *testing.T) {

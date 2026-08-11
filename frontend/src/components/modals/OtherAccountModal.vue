@@ -23,7 +23,7 @@
         <option value="" data-i18n="otherGroupSelectPlaceholder">选择已有组...</option>
       </select>
     </div>
-    <div class="text-[10px] text-outline mt-0.5">英文字母/数字/下划线,作为组唯一标识与模型前缀第二段(如 other/deepseek/...);不能与内置号池重名</div>
+    <div class="text-[10px] text-outline mt-0.5" data-i18n="otherFieldGroupIdTip">英文字母/数字/下划线,作为组唯一标识与模型前缀第二段(如 other/deepseek/...);不能与内置号池重名</div>
     </div>
 
     <div class="flex flex-col gap-1.5">

@@ -2,10 +2,13 @@
  * NVIDIA 号池全局专属模型清单 Modal（双列穿梭框）模块：从 accountsController.ts 抽离的独立模块。
  *
  * 高内聚：本模块自带 28 个 DOM handle、4 个模块级状态、26 个函数，
- * 对外仅暴露 initNvidiaPreferredShuttle() 一个入口，由 accountsController.initAccountsEvents 统一调用。
- * 不依赖 state/i18n/renderAccounts 等跨簇符号；仅用 ipcRenderer 与 window.__nvidiaPreferredDict 注入点。
+ * 对外仅暴露 initNvidiaPreferredShuttle() 与 refreshNvidiaPreferredSourceI18n() 两个入口，
+ * 由 accountsController.initAccountsEvents 统一调用。不依赖 renderAccounts 等跨簇符号；
+ * i18n 经 import 引入，window.__nvidiaPreferredDict 保留为历史兼容注入点。
  */
 import { ipcRenderer } from '../shared/ipc';
+import i18n from '../shared/i18n';
+import state from './dashboardState';
 
 // ===== NVIDIA 全局专属模型清单 Modal (双列穿梭框) =====
 let btnNvidiaPreferredModels: HTMLButtonElement | null;
@@ -223,10 +226,11 @@ async function fetchAndRenderNvidiaPreferredModels(isOpening: boolean, force?: '
         const source: string = res.source || (force === 'remote' ? 'remote' : 'cache');
 
         if (lblNvidiaPreferredSource) {
+            const dict = i18n[state.currentLanguage] || i18n.zh || {};
             const dl = (window as any).__nvidiaPreferredDict || {};
             lblNvidiaPreferredSource.textContent = source === 'cache'
-                ? (dl.nvidiaPreferredModelsSourceCache || '来源:已保存清单')
-                : (dl.nvidiaPreferredModelsSourceRemote || '来源:远端实时');
+                ? (dl.nvidiaPreferredModelsSourceCache || dict.nvidiaPreferredModelsSourceCache || '来源:已保存清单')
+                : (dl.nvidiaPreferredModelsSourceRemote || dict.nvidiaPreferredModelsSourceRemote || '来源:远端实时');
             lblNvidiaPreferredSource.classList.remove('hidden');
         }
 
@@ -253,6 +257,19 @@ async function fetchAndRenderNvidiaPreferredModels(isOpening: boolean, force?: '
             iconNvidiaPreferredFetch.classList.remove('animate-spin');
         }
     }
+}
+
+// refreshNvidiaPreferredSourceI18n:语言切换时由 dashboard.setLanguage 调用,
+// 即时重刷来源徽标文案(若弹窗已打开且徽标非空)。弹窗未打开或徽标未显示时无副作用。
+// 修历史 __nvidiaPreferredDict 失联导致徽标恒冒中文兜底的盲区。
+export function refreshNvidiaPreferredSourceI18n(): void {
+    if (!lblNvidiaPreferredSource) return;
+    if (lblNvidiaPreferredSource.classList.contains('hidden')) return;
+    const dict = i18n[state.currentLanguage] || i18n.zh || {};
+    const dl = (window as any).__nvidiaPreferredDict || {};
+    lblNvidiaPreferredSource.textContent = nvidiaPreferredCurrentSource === 'local'
+        ? (dl.nvidiaPreferredModelsSourceCache || dict.nvidiaPreferredModelsSourceCache || '来源:已保存清单')
+        : (dl.nvidiaPreferredModelsSourceRemote || dict.nvidiaPreferredModelsSourceRemote || '来源:远端实时');
 }
 
 // 渲染左列(已选清单);checkedSet 为空=不勾选(左列勾选仅供"移出"用,默认不勾)

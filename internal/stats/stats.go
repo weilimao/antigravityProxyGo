@@ -87,6 +87,15 @@ type RequestLog struct {
 	// 前端可据此为 NVIDIA 行渲染专属 badge/筛选,既可合并入主列表又便于按族区分,
 	// 不污染 NVIDIA 专用趋势桶(nvidiaTrends)与综合趋势桶(trends)的物理隔离语义。
 	Family string `json:"family"`
+	// ReasoningEffort 记录本次请求「命中上游」的思考等级(low/medium/high/max/none 等)。
+	// 取映射折叠后真正发给上游的值(非客户端原始意图档),故:
+	//   - NVIDIA-NIM deepseek 模式 low/medium 折叠成 high → 此处记 "high";max → "max";
+	//   - Grok off→"none"、on→grokMapEffort 后档、unspecified→"";
+	//   - Other 走 mapToOfficialOpenAIEffort(max→high);
+	//   - Anthropic 原生端点/gemini/claude 直连无该概念 → ""。
+	// 由各池 record*Usage 从 upstreamReq(构造完成后)提取, 经 logCtx 透传落库;
+	// 空串表示客户端未开思考或上游无 reasoning_effort 概念, 前端不渲染后缀。
+	ReasoningEffort string `json:"reasoningEffort"`
 }
 
 // RequestLogLite is the scalar-only projection of RequestLog sent on the
@@ -118,6 +127,9 @@ type RequestLogLite struct {
 	// Family 与 RequestLog.Family 同义, 轻量投影随之下行到 IPC 热路径,
 	// 供前端按族渲染 badge/筛选, 不携带 requestBody/requestHeaders(按需经 GetRequestDetails 拉取)。
 	Family string `json:"family"`
+	// ReasoningEffort 与 RequestLog.ReasoningEffort 同义, 轻量投影随之下行到 IPC 热路径,
+	// 供前端在请求日志「模型」列追加 (档) 后缀展示命中思考等级。空串 → 不渲染后缀。
+	ReasoningEffort string `json:"reasoningEffort"`
 }
 
 func toRequestLogLite(r *RequestLog) RequestLogLite {
@@ -136,9 +148,10 @@ func toRequestLogLite(r *RequestLog) RequestLogLite {
 		Cost:         r.Cost,
 		Account:      r.Account,
 		SessionID:    r.SessionID,
-		DurationMs:   r.DurationMs,
-		FirstByteMs:  r.FirstByteMs,
-		Family:       r.Family,
+		DurationMs:     r.DurationMs,
+		FirstByteMs:     r.FirstByteMs,
+		Family:          r.Family,
+		ReasoningEffort: r.ReasoningEffort,
 	}
 }
 
@@ -350,7 +363,16 @@ func (t *Tracker) TrackNvidiaRequest(modelName string, inTokens, outTokens, cach
 	cost := t.pricingMgr.CalculateCost(modelName, inTokens, outTokens, cachedTokens)
 	rate := t.pricingMgr.GetPricingForModel(modelName)
 
-	inputCost := math.Round((float64(inTokens)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+	// inputCost 必须基于 nonCachedIn(扣除缓存命中部分), 与 TrackRequest(241行) /
+	// TrackRequestForModel(305行) 同构。缓存命中那部分成本归 CachedCost(走 rate.Cached),
+	// 不得在 InputCost 里按 rate.Input 重算, 否则违反「Cost = InputCost + OutputCost +
+	// CachedCost」恒等式, 出现「输入总成本 > 总成本」的反向数值(前端 NVIDIA Tab 四卡自洽)。
+	nonCachedIn := inTokens - cachedTokens
+	if nonCachedIn < 0 {
+		nonCachedIn = 0
+	}
+
+	inputCost := math.Round((float64(nonCachedIn)*rate.Input/1000000.0)*1000000.0) / 1000000.0
 	outputCost := math.Round((float64(outTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
 	cachedCost := math.Round((float64(cachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
 

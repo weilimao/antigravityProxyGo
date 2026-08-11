@@ -62,6 +62,12 @@ type grokLogCtx struct {
 	// {键: 值} 映射, 供 recordGrokUsage 落库为 stats.RequestLog.RequestHeaders, 使前端详情弹窗
 	// 能展示入站请求头而非「无请求头数据」兜底。
 	ReqHeaders interface{}
+	// ReasoningEffort 是本次请求「命中上游」的思考等级(Grok 走 xAI 官方顶层 reasoning_effort,
+	// grokApplyThinkingToChat 落地值:off→"none"、on→grokMapEffort 后档 low/medium/high、
+	// unspecified→"")。由 handleGrok 在 upstreamReq 构造完成后取 upstreamReq.ReasoningEffort,
+	// 经 writeGrokResponse 透传到 recordGrokUsage → stats.RequestLog.ReasoningEffort, 供前端
+	// 「模型」列追加 (档) 后缀展示。空串=未开思考/unspecified 省略, 前端不渲染后缀。
+	ReasoningEffort string
 }
 
 // grokHostFromBaseURL 从上游账号 BaseURL(如 https://api.x.ai/v1)提取裸 host(如 api.x.ai),
@@ -210,7 +216,8 @@ func (h *APICompatHandler) recordGrokUsage(userSession *RelaySession, model stri
 			SessionID:      logCtx.SessionID,
 			DurationMs:     durationMs,
 			FirstByteMs:    firstByteMs,
-			Family:         "grok",
+			Family:          "grok",
+			ReasoningEffort: logCtx.ReasoningEffort,
 		}
 		h.globalStatsTracker.AddRequestLogForFamily(reqLog)
 	}

@@ -31,18 +31,22 @@ func (a *App) SetQuitting(quitting bool) {
 func (a *App) initTray() {
 	tray.SetupTray(
 		func() {
-			// 点击“显示控制面板”：显示窗口并使其获取焦点，使用 goroutine 异步执行以避免阻塞托盘自身的事件协程
-			go func() {
-				wailsRuntime.WindowShow(a.ctx)
-				a.SetWindowVisible(true)
-			}()
+			// 点击"显示控制面板"/双击托盘图标:走统一显示入口。
+			// showMainWindow 内部已 go 两路(正规 WindowShow + Win32 跨线程保底),
+			// 此处不再额外 go,直接调用即不阻塞 systray 自身的事件协程。
+			a.showMainWindow()
 		},
 		func() {
-			// 点击“退出代理引擎”：设置退出标志并异步调用退出，避免阻塞托盘自身的事件协程
+			// 点击"退出代理引擎":设置退出标志并异步调用退出，避免阻塞托盘自身的事件协程
 			a.SetQuitting(true)
 
-			// 立即隐藏窗口,避免退出过程中窗口停留在"无响应"假死态
-			wailsRuntime.WindowHide(a.ctx)
+			// 立即隐藏窗口,避免退出过程中窗口停留在"无响应"假死态。
+			// WindowHide 走 w32.ShowWindow 跨线程直调,异步化避免在 systray
+			// 线程上同步跨线程操作 UI 窗口。
+			go func() {
+				defer func() { _ = recover() }()
+				wailsRuntime.WindowHide(a.ctx)
+			}()
 
 			// 异步发起 Wails 退出流程
 			go wailsRuntime.Quit(a.ctx)

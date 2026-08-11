@@ -19,6 +19,7 @@ export const nvidiaZh: Record<string, string> = {
     nvidiaFieldDefaultModel: "默认模型 (档位未命中时回退)",
     nvidiaModalCancel: "取消",
     nvidiaModalSave: "添加账号",
+    nvidiaFieldFetchModels: "获取模型",
     nvidiaQuotaDesc: "第三方上游端点，限额由 API Key 决定",
     nvidiaQuotaFail: "配额请求失败",
     nvidiaAccountAvailable: "账号可用 (NVIDIA 第三方 API Key)",
@@ -63,6 +64,14 @@ export const nvidiaZh: Record<string, string> = {
     enableThinkingModeLabel: "开启思考模式 (Enable Thinking Mode)",
     enableThinkingModeDesc: "默认开启。作用于 NVIDIA NIM 与 Gemini 转译链路：关闭后代理将透明拦截并自动剥离请求 Payload 中的思考参数，让上游模型直出正文回答，降低响应开销。",
     thinkingModeCardTip: "全局总开关：控制 NVIDIA NIM 与 Gemini 转译链路是否向请求注入思考参数（让上游输出明文思维链）。关闭后代理透明剥离所有思考配置，模型直出正文。Claude 协议直通不经此开关。NVIDIA 链路专属的「思考过程直吐正文」展现项已移至「NVIDIA设置」tab。",
+    thinkingModeCardTitle: "思维链与思考模式设置",
+    debuggerModeCardTitle: "Debugger 调试模式与全量请求日志落盘",
+    debuggerModeCardTip: "开启后，系统将把每一笔中继请求的 Headers、Body、上游地址、状态码以及原始 SSE 流逐帧毫秒级实时记录存储到指定日志文件中，便于精准诊断断流与异常排查。",
+    enableDebuggerModeLabel: "启用 Debugger 调试模式",
+    enableDebuggerModeDesc: "开启后实时将中继与上游交互的全量原始字节与 SSE 帧落盘到指定的调试日志文件夹中（默认关闭）。",
+    debuggerLogPathLabel: "调试日志保存目录",
+    btnBrowseDebuggerDir: "更改目录",
+    debuggerLogPathPlaceholder: "logs/debugger",
 };
 
 export const nvidiaEn: Record<string, string> = {
@@ -82,6 +91,7 @@ export const nvidiaEn: Record<string, string> = {
     nvidiaFieldDefaultModel: "Default Model (Fallback if tier unmatched)",
     nvidiaModalCancel: "Cancel",
     nvidiaModalSave: "Add Account",
+    nvidiaFieldFetchModels: "Fetch Models",
     nvidiaQuotaDesc: "Third-party endpoint, limit is bound to API Key",
     nvidiaQuotaFail: "Quota Probe Failed",
     nvidiaAccountAvailable: "Account Available (NVIDIA API Key)",
@@ -126,4 +136,12 @@ export const nvidiaEn: Record<string, string> = {
     enableThinkingModeLabel: "Enable Thinking Mode",
     enableThinkingModeDesc: "Enabled by default. Applies to NVIDIA NIM and Gemini translation paths: when disabled, the proxy automatically strips CoT parameters from the request payload to force direct output.",
     thinkingModeCardTip: "Global master switch: controls whether NVIDIA NIM and Gemini translation paths inject thinking parameters (forcing upstream to emit plain-text reasoning). When off, the proxy strips all CoT config so the model outputs body only. Claude passthrough is unaffected. The NVIDIA-specific 'reasoning-as-text' presentation toggle has moved to the NVIDIA Settings tab.",
+    thinkingModeCardTitle: "Thinking & Reasoning Mode",
+    debuggerModeCardTitle: "Debugger Mode & Full Request Log Persistence",
+    debuggerModeCardTip: "When enabled, the system persists every relay request's Headers, Body, upstream URL, status code, and raw SSE frames to a specified log file in real time (millisecond granularity) for precise stream-stall and exception diagnosis.",
+    enableDebuggerModeLabel: "Enable Debugger Mode",
+    enableDebuggerModeDesc: "When enabled, the full raw bytes and SSE frames of relay-upstream interactions are persisted to a designated debugger log folder in real time (disabled by default).",
+    debuggerLogPathLabel: "Debugger Log Directory",
+    btnBrowseDebuggerDir: "Change Directory",
+    debuggerLogPathPlaceholder: "logs/debugger",
 };

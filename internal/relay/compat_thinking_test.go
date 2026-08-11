@@ -662,7 +662,7 @@ func TestTranslateOpenAIToGemini_InjectsIncludeThoughts(t *testing.T) {
 // ===== B: responses 流式 reasoning 独立 item 收尾(问题 B 根因修复) =====
 //
 // 对应改动:compat.go handleStreamResponse responses 路径 reasoning 拆为独立 output_item,
-// 闭包 closeResponsesReasoning 发 reasoning_text.done + content_part.done + output_item.done。
+// 闭包 closeResponsesReasoning 发 reasoning_summary_text.done + reasoning_summary_part.done + output_item.done。
 // 旧实现 thought 与正文共用 responsesMsgOpened/responsesMsgID 且硬编码 output_index 0,无 reasoning done。
 
 // runGeminiResponsesStream 用给定的 Gemini 上游 SSE 喂入 handleStreamResponse(responses),
@@ -689,8 +689,10 @@ func runGeminiResponsesStream(t *testing.T, upstream string) string {
 }
 
 // TestResponsesStream_ReasoningThenText_DoneEmitted 锁定:Codex(Antigravity 池)流式思考后跟正文,
-// 下游出现独立 reasoning item 的完整事件序列:reasoning_text.delta → reasoning_text.done →
-// content_part.done → output_item.done,正文 message item 占不同 output_index,且正文 done 也齐。
+// 下游出现独立 reasoning item 的完整事件序列(OpenAI Responses 官方 reasoning summary 家族):
+// reasoning_summary_part.added → reasoning_summary_text.delta → reasoning_summary_text.done →
+// reasoning_summary_part.done → output_item.done(item.type=reasoning, summary[].type=summary_text),
+// 正文 message item 占不同 output_index,且正文 done 也齐。
 func TestResponsesStream_ReasoningThenText_DoneEmitted(t *testing.T) {
 	upstream := geminiThoughtSSE("思考第一步.", true) +
 		geminiThoughtSSE("思考结论.", true) +
@@ -701,18 +703,19 @@ func TestResponsesStream_ReasoningThenText_DoneEmitted(t *testing.T) {
 	requireEvent(t, events, "response.created")
 	requireEvent(t, events, "response.in_progress")
 	requireEvent(t, events, "response.output_item.added")
-	requireEvent(t, events, "response.content_part.added")
-	requireEvent(t, events, "response.reasoning_text.delta")
-	requireEvent(t, events, "response.reasoning_text.done")
+	requireEvent(t, events, "response.reasoning_summary_part.added")
+	requireEvent(t, events, "response.reasoning_summary_text.delta")
+	requireEvent(t, events, "response.reasoning_summary_text.done")
+	requireEvent(t, events, "response.reasoning_summary_part.done")
 	requireEvent(t, events, "response.output_item.done")
 	requireEvent(t, events, "response.output_text.delta")
 	requireEvent(t, events, "response.output_text.done")
 	requireEvent(t, events, "response.completed")
 
-	// reasoning_text.done 累积文本应包含两段思考
+	// reasoning_summary_text.done 累积文本应包含两段思考
 	var reasonDoneText string
 	for _, ev := range events {
-		if ev.event != "response.reasoning_text.done" {
+		if ev.event != "response.reasoning_summary_text.done" {
 			continue
 		}
 		var m map[string]interface{}
@@ -723,7 +726,7 @@ func TestResponsesStream_ReasoningThenText_DoneEmitted(t *testing.T) {
 		}
 	}
 	if !strings.Contains(reasonDoneText, "第一步") || !strings.Contains(reasonDoneText, "结论") {
-		t.Fatalf("reasoning_text.done 文本累积不完整,实际=%q", reasonDoneText)
+		t.Fatalf("reasoning_summary_text.done 文本累积不完整,实际=%q", reasonDoneText)
 	}
 
 	// reasoning item 的 output_index 与正文 message item 的 output_index 必须不同(独立 item)
@@ -734,7 +737,7 @@ func TestResponsesStream_ReasoningThenText_DoneEmitted(t *testing.T) {
 			continue
 		}
 		switch ev.event {
-		case "response.reasoning_text.delta":
+		case "response.reasoning_summary_text.delta":
 			if v, ok := m["output_index"].(float64); ok && reasonOutIdx == -1 {
 				reasonOutIdx = int(v)
 			}
@@ -751,7 +754,7 @@ func TestResponsesStream_ReasoningThenText_DoneEmitted(t *testing.T) {
 		t.Fatalf("reasoning 与正文 output_index 不得相同(独立 item),reason=%d text=%d", reasonOutIdx, textOutIdx)
 	}
 
-	// reasoning item 必须收尾 output_item.done(item.type=message, content[].type=reasoning_text)
+	// reasoning item 必须收尾 output_item.done(item.type=reasoning, summary[].type=summary_text, 且 item 无 status)
 	hasReasonItemDone := false
 	for _, ev := range events {
 		if ev.event != "response.output_item.done" {
@@ -762,19 +765,22 @@ func TestResponsesStream_ReasoningThenText_DoneEmitted(t *testing.T) {
 			continue
 		}
 		item, _ := m["item"].(map[string]interface{})
-		if item == nil {
+		if item == nil || item["type"] != "reasoning" {
 			continue
 		}
-		content, _ := item["content"].([]interface{})
-		for _, c := range content {
-			cp, _ := c.(map[string]interface{})
-			if cp != nil && cp["type"] == "reasoning_text" {
+		if _, hasStatus := item["status"]; hasStatus {
+			t.Errorf("reasoning item done 不应带 status 字段(对齐 OpenAI 官方),实际 item=%+v", item)
+		}
+		summary, _ := item["summary"].([]interface{})
+		for _, s := range summary {
+			sp, _ := s.(map[string]interface{})
+			if sp != nil && sp["type"] == "summary_text" {
 				hasReasonItemDone = true
 			}
 		}
 	}
 	if !hasReasonItemDone {
-		t.Fatalf("reasoning item 必须有 output_item.done 收尾(events=%v)", eventNames(events))
+		t.Fatalf("reasoning item 必须有 output_item.done 收尾(summary_text)(events=%v)", eventNames(events))
 	}
 }
 
@@ -784,8 +790,8 @@ func TestResponsesStream_ReasoningOnly_ClosesAtTail(t *testing.T) {
 	upstream := geminiThoughtSSE("纯思考无正文.", true)
 	got := runGeminiResponsesStream(t, upstream)
 	events := parseSSEEvents(got)
-	requireEvent(t, events, "response.reasoning_text.delta")
-	requireEvent(t, events, "response.reasoning_text.done")
+	requireEvent(t, events, "response.reasoning_summary_text.delta")
+	requireEvent(t, events, "response.reasoning_summary_text.done")
 	requireEvent(t, events, "response.output_item.done")
 	requireEvent(t, events, "response.completed")
 	// 不应出现 output_text.delta(无正文)
@@ -853,7 +859,8 @@ func TestGeminiNormalResponse_ThoughtSeparatedAnthropic(t *testing.T) {
 }
 
 // TestGeminiNormalResponse_ThoughtSeparatedResponses 锁定:非流式 Responses 路径,
-// thought 翻译为独立 reasoning message item(置于正文 message item 之前)。
+// thought 翻译为独立 reasoning item(置于正文 message item 之前),
+// 形态对齐 OpenAI Responses 官方:type=reasoning + summary[]{summary_text},无 role/content/status。
 func TestGeminiNormalResponse_ThoughtSeparatedResponses(t *testing.T) {
 	part1 := map[string]interface{}{"text": "reasoning here", "thought": true}
 	part2 := map[string]interface{}{"text": "final answer"}
@@ -894,19 +901,25 @@ func TestGeminiNormalResponse_ThoughtSeparatedResponses(t *testing.T) {
 		t.Fatalf("应至少 2 个 output item(reasoning+text),实际 %d", len(output))
 	}
 	reasonItem, _ := output[0].(map[string]interface{})
-	if reasonItem["type"] != "message" {
-		t.Errorf("output[0] 应为 message(reasoning),实际 %v", reasonItem["type"])
+	if reasonItem["type"] != "reasoning" {
+		t.Errorf("output[0] 应为 reasoning,实际 %v", reasonItem["type"])
 	}
-	reasonContent, _ := reasonItem["content"].([]interface{})
-	if len(reasonContent) == 0 {
-		t.Fatalf("reasoning item content 空")
+	if _, hasStatus := reasonItem["status"]; hasStatus {
+		t.Errorf("reasoning item 不应带 status 字段(对齐 OpenAI 官方),实际 %v", reasonItem["status"])
 	}
-	rc, _ := reasonContent[0].(map[string]interface{})
-	if rc["type"] != "reasoning_text" {
-		t.Errorf("output[0].content[0].type 应为 reasoning_text,实际 %v", rc["type"])
+	if _, hasRole := reasonItem["role"]; hasRole {
+		t.Errorf("reasoning item 不应带 role 字段(对齐 OpenAI 官方),实际 %v", reasonItem["role"])
+	}
+	reasonSummary, _ := reasonItem["summary"].([]interface{})
+	if len(reasonSummary) == 0 {
+		t.Fatalf("reasoning item summary 空")
+	}
+	rc, _ := reasonSummary[0].(map[string]interface{})
+	if rc["type"] != "summary_text" {
+		t.Errorf("output[0].summary[0].type 应为 summary_text,实际 %v", rc["type"])
 	}
 	if !strings.Contains(fmt.Sprintf("%v", rc["text"]), "reasoning") {
-		t.Errorf("reasoning_text 文本应含 reasoning,实际 %v", rc["text"])
+		t.Errorf("summary_text 文本应含 reasoning,实际 %v", rc["text"])
 	}
 
 	textItem, _ := output[1].(map[string]interface{})

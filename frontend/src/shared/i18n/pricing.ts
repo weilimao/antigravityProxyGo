@@ -38,6 +38,20 @@ export const pricingZh: Record<string, string> = {
     aiPricingReviewTip: "以下为 AI 生成的建议价格,请核对后确认添加(可直接编辑数值):",
     aiPricingErrSelectAccount: "请先选择一个用于生成的 Antigravity 账号",
     aiPricingEmptyResult: "AI 未返回任何可用定价结果",
+    // 进度阶段文案(对应后端 Generate 6 阶段 progressFn step 键,前端 aiPricingController 按 step 映射)
+    aiPricingStageFetchToken: "正在获取账号凭证...",
+    aiPricingStageGrounding: "正在联网检索各厂商官方定价页...",
+    aiPricingStageDegraded: "⚠ 联网检索被上游拒收,降级为知识库估算(结果将标「未联网」)",
+    aiPricingStageRefresh: "账号凭证过期,正在自动刷新...",
+    aiPricingStageParse: "正在解析定价结果...",
+    aiPricingStageDone: "生成完成",
+    aiPricingStageError: "生成失败",
+    // 行标记文案(对应 AIPriceResult 的 Grounded/Estimated/AnchorConflict 标记)
+    aiPricingTagEstimated: "估算",
+    aiPricingTagNotGrounded: "未联网",
+    aiPricingTagAnchorConflict: "与参考价偏差过大",
+    aiPricingTagGrounded: "已联网",
+    aiPricingSourcesLabel: "来源",
 };
 
 export const pricingEn: Record<string, string> = {
@@ -76,4 +90,18 @@ export const pricingEn: Record<string, string> = {
     aiPricingReviewTip: "AI-suggested prices below — review & edit values before confirming:",
     aiPricingErrSelectAccount: "Please select an Antigravity account for generation first",
     aiPricingEmptyResult: "AI returned no usable pricing results",
+    // Progress stage text (maps to backend Generate 6-stage progressFn step keys)
+    aiPricingStageFetchToken: "Fetching account credentials...",
+    aiPricingStageGrounding: "Searching vendor pricing pages online...",
+    aiPricingStageDegraded: "⚠ Online search rejected by upstream, falling back to knowledge-base estimate (rows will be tagged 'not grounded')",
+    aiPricingStageRefresh: "Credentials expired, refreshing...",
+    aiPricingStageParse: "Parsing pricing results...",
+    aiPricingStageDone: "Generation complete",
+    aiPricingStageError: "Generation failed",
+    // Row tag text (maps to AIPriceResult Grounded/Estimated/AnchorConflict flags)
+    aiPricingTagEstimated: "estimated",
+    aiPricingTagNotGrounded: "not grounded",
+    aiPricingTagAnchorConflict: "deviates from reference price",
+    aiPricingTagGrounded: "grounded",
+    aiPricingSourcesLabel: "source",
 };

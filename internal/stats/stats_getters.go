@@ -84,6 +84,19 @@ func (t *Tracker) GetRecentRequestHeaders() interface{} {
 	return t.requests[len(t.requests)-1].RequestHeaders
 }
 
+// GetRecentRequestReasoningEffort 轻量级读取最近一条内存请求日志的 ReasoningEffort, 供单测端到端
+// 断言命中思考等级落库链路(logCtx.ReasoningEffort → stats.RequestLog.ReasoningEffort)
+// 真实闭环而非恒 ""(前端「模型」列命中思考等级后缀渲染的口径)。
+// 无日志时返回 ""。读锁内取值, 不回切片别名。
+func (t *Tracker) GetRecentRequestReasoningEffort() string {
+	t.RLock()
+	defer t.RUnlock()
+	if len(t.requests) == 0 {
+		return ""
+	}
+	return t.requests[len(t.requests)-1].ReasoningEffort
+}
+
 // GetNvidiaTrends 轻量级读取 NVIDIA 号池专用趋势桶的深拷贝, 供 app.go 远程中继分支
 // 在手工组装 stats-updated payload 时携带本地 nvidiaTrends (该分支走 remote query 不
 // 调 GetPayload, 故需单独取)。线程安全: 读锁内值拷贝每个 HourlyTrend, 与 GetPayload 的

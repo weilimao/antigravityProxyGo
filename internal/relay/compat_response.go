@@ -178,13 +178,15 @@ func (h *APICompatHandler) handleNormalResponse(
 		// 再跟正文 message item。与流式路径 reasoning 独立 item 语义一致(B)。
 		var outputItems []interface{}
 		outIdx := 0
+		// 若有思考,先插一个 reasoning item(独立 output_index),再跟正文 message item。
+		// reasoning item 形态对齐 OpenAI Responses 官方:type="reasoning" + summary[]{summary_text},
+		// 无 status/role/content。Codex CLI 只认这套形态才会在 TUI 渲染思考摘要
+		// (对齐 cc-switch reasoning_item())。旧实现用 message+reasoning_text 是非标准自造形态。
 		if thinkingText.Len() > 0 {
 			outputItems = append(outputItems, map[string]interface{}{
-				"id":      fmt.Sprintf("msg_%s_r0", respID),
-				"type":    "message",
-				"status":  "completed",
-				"role":    "assistant",
-				"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": thinkingText.String()}},
+				"id":      fmt.Sprintf("rs_%s", respID),
+				"type":    "reasoning",
+				"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": thinkingText.String()}},
 			})
 			outIdx = 1
 		}

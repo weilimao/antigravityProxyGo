@@ -21,6 +21,40 @@ let btnOtherModalClose: HTMLButtonElement | null;
 let btnOtherFetchModels: HTMLButtonElement | null;
 let otherModalError: HTMLDivElement | null;
 
+// otherGroupPlaceholderOptionHtml:构建「选择已有组」占位 option,文案从 i18n dict 取值,
+// 避免 innerHTML 重写时用硬编码中文覆盖 setLanguage 的替换结果(语言切换后重开弹窗冒中文)。
+function otherGroupPlaceholderOptionHtml(): string {
+    const dict = i18n[state.currentLanguage] || i18n.zh || {};
+    const ph = dict.otherGroupSelectPlaceholder || '选择已有组...';
+    return `<option value="" data-i18n="otherGroupSelectPlaceholder">${ph}</option>`;
+}
+
+// otherSelectModelPlaceholderHtml:构建模型下拉「选择模型...」占位 option,同上理由从 dict 取值。
+function otherSelectModelPlaceholderHtml(): string {
+    const dict = i18n[state.currentLanguage] || i18n.zh || {};
+    const ph = dict.otherSelectModelPlaceholder || '选择模型...';
+    return `<option value="">${ph}</option>`;
+}
+
+// refreshOtherGroupSelectI18n:语言切换时由 dashboard.setLanguage 调用,
+// 即时重刷 Other 弹窗「选择已有组」与「默认模型」下拉的占位 option 文案( 若弹窗已打开 ),
+// 弥补 innerHTML 动态写入绕过 data-i18n 遍历的语言切换盲区。弹窗未打开时无副作用。
+export function refreshOtherGroupSelectI18n(): void {
+    const dict = i18n[state.currentLanguage] || i18n.zh || {};
+    if (!groupSelectOther) {
+        groupSelectOther = document.getElementById('selectOtherGroup') as HTMLSelectElement | null;
+    }
+    if (groupSelectOther) {
+        const phOpt = groupSelectOther.querySelector('option[value=""]') as HTMLOptionElement | null;
+        if (phOpt) phOpt.textContent = dict.otherGroupSelectPlaceholder || '选择已有组...';
+    }
+    const selModel = document.getElementById('selectOtherModelDefault') as HTMLSelectElement | null;
+    if (selModel) {
+        const phOpt = selModel.querySelector('option[value=""]') as HTMLOptionElement | null;
+        if (phOpt) phOpt.textContent = dict.otherSelectModelPlaceholder || '选择模型...';
+    }
+}
+
 // populateOtherGroupSelect:打开 Other 账号 Modal 时,若号池已有组则填充右侧「选择已有组」下拉。
 // 0 组时隐藏下拉。每次打开不预选任何组(避免误覆盖用户手动输入)。
 function populateOtherGroupSelect() {
@@ -33,11 +67,11 @@ function populateOtherGroupSelect() {
         : [];
     if (groups.length === 0) {
         groupSelectOther.classList.add('hidden');
-        groupSelectOther.innerHTML = '<option value="" data-i18n="otherGroupSelectPlaceholder">选择已有组...</option>';
+        groupSelectOther.innerHTML = otherGroupPlaceholderOptionHtml();
         groupSelectOther.value = '';
         return;
     }
-    groupSelectOther.innerHTML = '<option value="" data-i18n="otherGroupSelectPlaceholder">选择已有组...</option>';
+    groupSelectOther.innerHTML = otherGroupPlaceholderOptionHtml();
     for (const g of groups) {
         const gid = String(g.groupId || g.groupID || g.id || '');
         if (!gid) continue;
@@ -156,7 +190,7 @@ export function openOtherAccountModal() {
     if (inputModelDefault) inputModelDefault.value = '';
     if (selectModelDefault) {
         selectModelDefault.classList.add('hidden');
-        selectModelDefault.innerHTML = '<option value="">选择模型...</option>';
+        selectModelDefault.innerHTML = otherSelectModelPlaceholderHtml();
     }
     // 默认勾选 OpenAI 格式,与新建态初始 checked 一致。
     if (chkFmtOpenai) chkFmtOpenai.checked = true;
@@ -221,7 +255,7 @@ export function openEditOtherAccount(acc: any) {
     if (inputModelDefault) inputModelDefault.value = latestAcc.defaultModel || '';
     if (selectModelDefault) {
         selectModelDefault.classList.add('hidden');
-        selectModelDefault.innerHTML = '<option value="">选择模型...</option>';
+        selectModelDefault.innerHTML = otherSelectModelPlaceholderHtml();
     }
 
     // 据账号 Formats 勾选协议 checkbox(openai 含则勾,否则取消;anthropic 同理)。
@@ -375,7 +409,7 @@ async function fetchOtherModels() {
         const res = await ipcRenderer.invoke('other:fetch-models', JSON.stringify({ groupId, baseUrl, apiKey }));
         if (res && res.success && Array.isArray(res.models)) {
             if (selectModelDefault) {
-                selectModelDefault.innerHTML = '<option value="">选择模型...</option>';
+                selectModelDefault.innerHTML = otherSelectModelPlaceholderHtml();
                 res.models.forEach((m: string) => {
                     const opt = document.createElement('option');
                     opt.value = m;

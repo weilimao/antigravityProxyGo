@@ -502,7 +502,10 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 			}
 			// 把请求交 writeGrokResponse 按入站协议回译并回写, 内部调 recordGrokUsage 落库五落点。
 			// inboundBody 透传入站原始请求体(bodyBytes), 供 grokLogCtx.ReqBody 落库(前端详情弹窗展示「入站时」请求体)。
-			h.writeGrokResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, bodyBytes, inboundInputTokens, start, firstByteRec)
+			// resolvedEffort 为命中上游思考等级(grokApplyThinkingToChat 落地的 upstreamReq.ReasoningEffort:
+			// off→"none"、on→档、unspecified→""), 透传给 writeGrokResponse 装配 logCtx.ReasoningEffort,
+			// 供前端「模型」列追加 (档) 后缀展示。
+			h.writeGrokResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, bodyBytes, inboundInputTokens, start, firstByteRec, upstreamReq.ReasoningEffort)
 			// 响应流结束后释放并发槽(writeGrokResponse 返回即流结束, 与 handleNvidia 成功路径同口径)。
 			h.accountMgr.ReleaseAccount(poolAccount.ID)
 			return

@@ -62,6 +62,12 @@ type forwardResult struct {
 	// / EnsureInputTokens 用入站请求体本地估算补齐,让 Claude Code spinner 流首即显示 ↑。其余分支不读。
 	// 由 handleRoutedForward 在 pf.run 后注入;为切片头拷贝,零额外拷贝开销。
 	inboundBody []byte
+	// usedReasoningEffort 是本次请求命中上游的思考等级(Other 号池取官方 OpenAI 顶层 reasoning_effort:
+	// AnthropicToOpenAIChat 经 mapToOfficialOpenAIEffort 写入 upstreamReq.ReasoningEffort;OpenAI Chat/Responses
+	// 直传取入站 body 的 reasoning_effort。upstreamFormat=anthropic 原生端点无该概念 → "")。
+	// 由 buildUpstreamBody 在 upstreamReq 构造完成后提取并回填,经 handleRoutedForward 装入 logCtx.ReasoningEffort,
+	// 透传到 recordOtherUsage → stats.RequestLog.ReasoningEffort, 供前端「模型」列追加 (档) 后缀展示。
+	usedReasoningEffort string
 }
 
 // passthroughMaxAttempts 是单请求最多换号次数(含首号)。
@@ -179,7 +185,7 @@ func (pf *passthroughForward) run(
 	//   入站 anthropic + 上游 anthropic → 原样透传 body(仅 model 改写);
 	//   入站 openai/responses + 上游 anthropic → OpenAIToAnthropicMessages(新写,见 passthrough_anthropic.go);
 	//   入站 responses + 上游 anthropic → Responses→OpenAIChat 再 OpenAI→Anthropic 两步。
-	upstreamBody, buildErr := pf.buildUpstreamBody(bodyBytes, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, !isOcrSelf)
+	upstreamBody, resolvedEffort, buildErr := pf.buildUpstreamBody(bodyBytes, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, !isOcrSelf)
 	if buildErr != nil {
 		res.err = buildErr
 		res.statusCode = http.StatusBadRequest
@@ -187,6 +193,10 @@ func (pf *passthroughForward) run(
 		return res
 	}
 	res.upstreamFormat = upstreamFormat
+	// 缓存首构提取的命中上游思考等级(image 降级重构只动 image, 不改 reasoning_effort, 故更不刷新)。
+	// 经 handleRoutedForward 装入 logCtx.ReasoningEffort → recordOtherUsage → stats.RequestLog.ReasoningEffort,
+	// 供前端「模型」列追加 (档) 后缀展示。
+	res.usedReasoningEffort = resolvedEffort
 
 	skipped := make(map[string]bool)
 	httpClient := pf.h.client
@@ -260,7 +270,7 @@ func (pf *passthroughForward) run(
 			// 下游仍会发原样 upstreamBody,本地路径注入无效)。静默 miss 不报错。
 			if nb, enriched := pf.h.ocr.EnrichLocalImagePathsInOpenAIChat(bodyBytes, userSession); enriched > 0 {
 				bodyBytes = nb
-				if newUpstream, be := pf.buildUpstreamBody(bodyBytes, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, false); be == nil {
+				if newUpstream, _, be := pf.buildUpstreamBody(bodyBytes, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, false); be == nil {
 					upstreamBody = newUpstream
 				}
 				pf.h.log("✅ [路由转发] OpenAI Chat 检测到 %d 个本地图片路径,已读图 OCR 注入 text 块(provider %s | 会话 %s)", enriched, poolChannel, ocrSessionDisplay(userSession))
@@ -270,7 +280,7 @@ func (pf *passthroughForward) run(
 				pf.h.log("⚠️ [路由转发] OpenAI Chat image 自愈降级出错(provider %s | 会话 %s): %v,继续原始请求", poolChannel, ocrSessionDisplay(userSession), errDown)
 			} else if replacedDown > 0 {
 				pf.h.log("✅ [路由转发] OpenAI Chat 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(provider %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replacedDown, poolChannel, ocrSessionDisplay(userSession), ocrHitsDown, ocrMissesDown, ocrSkippedDown)
-				if newBody, e := pf.buildUpstreamBody(downBody, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, false); e == nil {
+				if newBody, _, e := pf.buildUpstreamBody(downBody, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, false); e == nil {
 					upstreamBody = newBody
 				}
 			}

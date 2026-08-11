@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -103,6 +104,32 @@ func TestRequestLogLite_FirstByteProjection(t *testing.T) {
 	// 不在此处重复构造, 仅断言「打点后非 0」这一关键链路。
 }
 
+// TestRequestLogLite_ReasoningEffortProjection 验证 RequestLog.ReasoningEffort 经 toRequestLogLite
+// 端到端投影到 RequestLogLite.ReasoningEffort, 供仪表盘热路径读出、前端「模型」列追加 (档) 后缀。
+// 这条不变式是后端打点 → 内存结构 → IPC 投影链路不丢命中思考等级的保证。
+func TestRequestLogLite_ReasoningEffortProjection(t *testing.T) {
+	rl := &RequestLog{
+		ID:              "test_req_effort",
+		Timestamp:       time.Now().Format("01/02 15:04:05"),
+		Model:           "z-ai/glm-5.2",
+		Family:          "nvidia",
+		ReasoningEffort: "max",
+	}
+	lite := toRequestLogLite(rl)
+	if lite.ReasoningEffort != "max" {
+		t.Fatalf("toRequestLogLite lost ReasoningEffort: lite=%q saved=%q", lite.ReasoningEffort, rl.ReasoningEffort)
+	}
+	if lite.Model != rl.Model {
+		t.Errorf("toRequestLogLite lost Model: lite=%q saved=%q", lite.Model, rl.Model)
+	}
+	// 空串(客户端未开思考)投影也需正确保留, 前端凭空串判定不渲染后缀。
+	rlEmpty := &RequestLog{ID: "test_req_effort_empty", Model: "grok-4"}
+	liteEmpty := toRequestLogLite(rlEmpty)
+	if liteEmpty.ReasoningEffort != "" {
+		t.Errorf("toRequestLogLite empty ReasoningEffort: lite=%q want empty", liteEmpty.ReasoningEffort)
+	}
+}
+
 // TestTrackNvidiaRequest_IndependentBucket 验证 NVIDIA 专用趋势桶与综合全局桶物理隔离:
 //  - TrackNvidiaRequest 仅累加 nvidiaTrends, 不进 trends, 也不动全局 stats;
 //  - 同时走一次 TrackRequest 验证综合桶独立累加, 两个桶各自计数、互不污染。
@@ -189,6 +216,75 @@ func TestTrackNvidiaRequest_AccruesCached(t *testing.T) {
 	// 综合桶摩擦不变式: nvidiaTrends 写入不进 trends。
 	if len(tracker.trends) != 0 {
 		t.Errorf("global trends should stay empty, got %d bins (nvidiaTrends 不得污染综合桶)", len(tracker.trends))
+	}
+
+	// === InputCost 口径回归(2026-08-11 修复) ===
+	// 历史缺陷: TrackNvidiaRequest 的 inputCost 曾用全量 inTokens(含 cached) × rate.Input,
+	// 致缓存命中那部分在 InputCost 按 rate.Input 重算一次, 违反
+	// 「Cost = InputCost + OutputCost + CachedCost」恒等式, 前端 NVIDIA Tab 出现
+	// 「输入总成本 > 总成本」反向数值。修复后 inputCost 应基于 nonCachedIn(=inTokens-cached)。
+	rate := pm.GetPricingForModel("z-ai/glm-5.2")
+	nonCachedIn := 1000 - 600 // 400
+	wantInputCost := math.Round((float64(nonCachedIn)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+	wantCachedCost := math.Round((float64(600)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
+
+	if math.Abs(nBin.InputCost-wantInputCost) > 1e-9 {
+		t.Errorf("nvidia bin InputCost = %v, want %v (应基于 nonCachedIn=%d 扣除 cached, 不得用全量 inTokens×rate.Input)",
+			nBin.InputCost, wantInputCost, nonCachedIn)
+	}
+	// 恒等式: 三项之和 == Cost(允许 1e-6 round 累积误差)。
+	sumThree := math.Round((nBin.InputCost+nBin.OutputCost+nBin.CachedCost)*1000000.0) / 1000000.0
+	if math.Abs(sumThree-nBin.Cost) > 1e-6 {
+		t.Errorf("nvidia cost identity broken: InputCost(%v)+OutputCost(%v)+CachedCost(%v)=%v != Cost=%v "+
+			"(应满足 Cost = InputCost + OutputCost + CachedCost)", nBin.InputCost, nBin.OutputCost, nBin.CachedCost, sumThree, nBin.Cost)
+	}
+	// 反向不变式: InputCost 不得超过 Cost(rate.Cached < rate.Input 时, 含 cached 的请求 InputCost 应小于 Cost)。
+	if nBin.InputCost > nBin.Cost+1e-9 {
+		t.Errorf("nvidia bin InputCost(%v) > Cost(%v): 输入总成本不应超过总成本 (cached 段被误并入 InputCost 是旧缺陷特征)",
+			nBin.InputCost, nBin.Cost)
+	}
+	// wantXxx 自洽性自检(防 pricing 表漂移导致断言失真, 纯保护性)。
+	if wantCachedCost <= 0 {
+		t.Errorf("test fixture invalid: wantCachedCost=%v (rate.Cached 异常, 断言基准失效)", wantCachedCost)
+	}
+}
+
+// TestTrackNvidiaRequest_InputCostExcludesCached 是 TestTrackNvidiaRequest_AccruesCached 的
+// 独立镜像用例, 专注校验「InputCost 不吞 cached 段」这一条不变式, 意图明确便于回归定位。
+// 背景:2026-08-11 修复 TrackNvidiaRequest 的 inputCost 口径(由 inTokens×rate.Input 改为
+// nonCachedIn×rate.Input), 与 TrackRequest/TrackRequestForModel 同构。本用例用极简数据复现
+// 修复前后的差异:in=1000/cached=800 时, 修复前 InputCost≈1000×Input(虚高), 修复后≈200×Input。
+func TestTrackNvidiaRequest_InputCostExcludesCached(t *testing.T) {
+	pm := pricing.NewManager()
+	tracker := NewTracker(pm)
+	tracker.persistPath = ""
+
+	tracker.TrackNvidiaRequest("z-ai/glm-5.2", 1000, 100, 800)
+
+	tracker.RLock()
+	defer tracker.RUnlock()
+
+	if len(tracker.nvidiaTrends) != 1 {
+		t.Fatalf("expected 1 nvidia trends bin, got %d", len(tracker.nvidiaTrends))
+	}
+	nBin := tracker.nvidiaTrends[0]
+
+	rate := pm.GetPricingForModel("z-ai/glm-5.2")
+	nonCachedIn := 200 // 1000 - 800
+	wantInputCost := math.Round((float64(nonCachedIn)*rate.Input/1000000.0)*1000000.0) / 1000000.0
+	wantCachedCost := math.Round((float64(800)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
+
+	if math.Abs(nBin.InputCost-wantInputCost) > 1e-9 {
+		t.Errorf("InputCost = %v, want %v (nonCachedIn=%d × rate.Input; 修复前会算成 1000 × rate.Input 虚高 5x)",
+			nBin.InputCost, wantInputCost, nonCachedIn)
+	}
+	if math.Abs(nBin.CachedCost-wantCachedCost) > 1e-9 {
+		t.Errorf("CachedCost = %v, want %v (800 × rate.Cached)", nBin.CachedCost, wantCachedCost)
+	}
+	// 恒等式必须成立。
+	sumThree := math.Round((nBin.InputCost+nBin.OutputCost+nBin.CachedCost)*1000000.0) / 1000000.0
+	if math.Abs(sumThree-nBin.Cost) > 1e-6 {
+		t.Errorf("cost identity broken: %v != Cost %v", sumThree, nBin.Cost)
 	}
 }
 

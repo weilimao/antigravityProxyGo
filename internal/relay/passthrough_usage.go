@@ -43,6 +43,12 @@ type passthroughLogCtx struct {
 	// stats.RequestLog.RequestHeaders,使前端「请求参数详情」弹窗能展示入站请求头而非
 	// 「无请求头数据」兜底。
 	ReqHeaders interface{}
+	// ReasoningEffort 是本次请求「命中上游」的思考等级(Other 号池走官方 OpenAI 顶层 reasoning_effort,
+	// 取 mapToOfficialOpenAIEffort 映射后的值 max→high、low/medium/high 1:1;upstreamFormat=anthropic
+	// 原生端点无该概念 → "")。由 buildUpstreamBody 在 upstreamReq 构造完成后提取, 经 router_entry.go
+	// 回填 res.usedReasoningEffort → logCtx.ReasoningEffort, 透传到 recordOtherUsage →
+	// stats.RequestLog.ReasoningEffort, 供前端「模型」列追加 (档) 后缀展示。空串=未开思考。
+	ReasoningEffort string
 }
 
 // otherReqLogSeq 是 Other 号池请求日志(落点4)的全局原子递增序列, 用于生成稳定且无碰撞的
@@ -164,7 +170,8 @@ func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model str
 			SessionID:      logCtx.SessionID,
 			DurationMs:     durationMs,
 			FirstByteMs:    firstByteMs,
-			Family:         "other",
+			Family:          "other",
+			ReasoningEffort: logCtx.ReasoningEffort,
 		}
 		h.globalStatsTracker.AddRequestLogForFamily(reqLog)
 	}

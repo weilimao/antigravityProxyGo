@@ -54,7 +54,7 @@
 <div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
 <span class="material-symbols-outlined text-primary text-[20px]">psychology</span>
-<span>思维链与思考模式设置</span>
+<span data-i18n="thinkingModeCardTitle">思维链与思考模式设置</span>
 </h2>
 <p class="text-xs text-outline leading-relaxed" data-i18n="thinkingModeCardTip">
 全局总开关：控制 NVIDIA NIM 与 Gemini 转译链路是否向请求注入思考参数（让上游输出明文思维链）。关闭后代理透明剥离所有思考配置，模型直出正文。Claude 协议直通不经此开关。NVIDIA 链路专属的「思考过程直吐正文」展现项已移至「NVIDIA设置」tab。

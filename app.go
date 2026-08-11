@@ -156,6 +156,41 @@ func (a *App) SetWindowVisible(v bool) {
 	}
 }
 
+// showMainWindow 统一"显示主窗口并唤到前台"的语义入口。
+//
+// 设计背景:
+//   Wails Windows 前端的所有窗口操作都走 Invoke → w32.PostMessage 落到
+//   单一主 UI 线程消息队列串行执行。当主线程被 WebView2 COM 回调占用
+//   时,正规 WindowShow 的 Invoke 闭包排队出不来,用户看到"点打开没反应"。
+//
+// 双路并发,治本不依赖单一线程队列:
+//   - 正规路径: wailsRuntime.WindowShow (Invoke 投递) + SetWindowVisible(true),
+//     主线程空闲时先到,窗口正常显示并补偿一次 stats-updated。
+//   - 保底路径: foregroundFallback (Win32 跨线程 ShowWindowAsync + SetForegroundWindow),
+//     不依赖主线程消息队列,由内核异步投递 WM_SHOW/WM_RESTORE。
+//     主线程被占用正规路径排队时,保底路径直接唤出窗口。
+//
+// 调用点: app_tray.go 的托盘"显示控制面板"/双击图标 + app_lifecycle.go 的
+//   domReady 自动显示。两路 goroutine 各自 recover,绝不 panic 上抛;
+//   即使 a.ctx 尚未就绪 (startup 早于 domReady) 也由 recover 静默吞掉。
+//
+// 多层 goroutine 说明:调用方无需自行 go,本方法内两路均已 go;
+//   调用点直接 a.showMainWindow() 即可。
+func (a *App) showMainWindow() {
+	// 正规路径:异步投递到主线程队列,不阻塞调用方
+	// (托盘 systray 线程的 onShow 回调 / domReady goroutine)。
+	go func() {
+		defer func() { _ = recover() }()
+		wailsRuntime.WindowShow(a.ctx)
+		a.SetWindowVisible(true)
+	}()
+
+	// Win32 跨线程保底:独立 goroutine,不依赖主线程消息队列。
+	// Windows 下做真实枚举+唤醒;非 Windows 下 foregroundFallback 是 no-op,
+	// 仅正规路径生效。
+	go a.foregroundFallback()
+}
+
 // IsWindowVisibleAndActive 检查窗口是否在前台且可见（非最小化且未隐藏）
 func (a *App) IsWindowVisibleAndActive() bool {
 	if a.ctx == nil {

@@ -32,7 +32,11 @@ type RequestLog struct {
 	SessionID    string  `json:"session_id"`
 	// Family 标记请求所属协议族(gemini/claude 直连默认 "", NVIDIA 号池链路记 "nvidia")。
 	// 供远程聚合查询按族过滤, 与 stats.RequestLog.Family / RequestLogLite.Family 同义。
-	Family       string  `json:"family"`
+	Family string `json:"family"`
+	// ReasoningEffort 记录命中上游的思考等级(映射折叠后真正发给上游的值, 非客户端原始意图档)。
+	// 供前端请求日志「模型」列追加 (档) 后缀展示。空串 = 未开思考 / 全局关 / 无该概念。
+	// 与 stats.RequestLog.ReasoningEffort / RequestLogLite.ReasoningEffort 同义。
+	ReasoningEffort string `json:"reasoning_effort"`
 }
 
 // InsertRequestLog inserts a new request log into the database
@@ -45,14 +49,14 @@ func InsertRequestLog(log *RequestLog) error {
 		INSERT INTO request_logs (
 			server_log_id, req_id, timestamp, mode, user_id, model_name,
 			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, first_byte_ms, status_code,
-			method, host, path, session_id, family
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			method, host, path, session_id, family, reasoning_effort
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	res, err := GlobalDB.Exec(query,
 		log.ServerLogID, log.ReqID, log.Timestamp, log.Mode, log.UserID, log.ModelName,
 		log.InTokens, log.OutTokens, log.CachedTokens, log.Cost, log.InputCost, log.OutputCost, log.CachedCost, log.DurationMs, log.FirstByteMs, log.StatusCode,
-		log.Method, log.Host, log.Path, log.SessionID, log.Family,
+		log.Method, log.Host, log.Path, log.SessionID, log.Family, log.ReasoningEffort,
 	)
 	if err != nil {
 		LastInsertError = err.Error()
@@ -87,7 +91,7 @@ func GetRequestLogsSince(userID, mode string, lastID int64, limit int) ([]*Reque
 		SELECT
 			id, server_log_id, req_id, timestamp, mode, user_id, model_name,
 			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, first_byte_ms, status_code,
-			method, host, path, session_id, family
+			method, host, path, session_id, family, reasoning_effort
 		FROM request_logs
 		WHERE user_id = ? AND mode = ? AND id > ?
 		ORDER BY id ASC
@@ -106,7 +110,7 @@ func GetRequestLogsSince(userID, mode string, lastID int64, limit int) ([]*Reque
 		if err := rows.Scan(
 			&l.ID, &l.ServerLogID, &l.ReqID, &l.Timestamp, &l.Mode, &l.UserID, &l.ModelName,
 			&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost, &l.DurationMs, &l.FirstByteMs, &l.StatusCode,
-			&l.Method, &l.Host, &l.Path, &l.SessionID, &l.Family,
+			&l.Method, &l.Host, &l.Path, &l.SessionID, &l.Family, &l.ReasoningEffort,
 		); err != nil {
 			return nil, err
 		}

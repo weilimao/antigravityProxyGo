@@ -53,6 +53,61 @@ func TestRecordOtherUsage_FiresLandings34_WhenTrackerInjected(t *testing.T) {
 	}
 }
 
+// TestRecordOtherUsage_ReasoningEffortPropagates 验证命中上游思考等级落库链路(Other 号池):
+// logCtx.ReasoningEffort 经 recordOtherUsage → stats.RequestLog.ReasoningEffort 真实闭环,
+// 供前端「模型」列追加 (档) 后缀展示。high(Other 走官方 OpenAI 取值集, max→high)与空串两态覆盖。
+func TestRecordOtherUsage_ReasoningEffortPropagates(t *testing.T) {
+	// 每个子用例独立注入 fresh tracker, 避免 AddRequestLogForFamily 的 prepend 语义
+	// (最新在前, requests[0]) 与 GetRecentRequestReasoningEffort 读 requests[len-1] (最旧)
+	// 的口径错位: 同一 testfun 连调两次时第二子用例会读到第一子用例旧记录。下沉后仅 1 条,
+	// [0] 与 [len-1] 同指, 断言稳定 (与 NVIDIA/Grok 同款隔离)。
+	userSession := &RelaySession{Token: "tok-other-eff", UserID: "u-other-eff", SessionKey: "auth:acc:other1234567890"}
+	start := time.Now()
+	rec := stats.NewFirstByteRecorder(start)
+	time.Sleep(2 * time.Millisecond)
+	rec.MarkFirstByte()
+
+	t.Run("high", func(t *testing.T) {
+		handler, _, _, _ := newNvidiaTestHandler(t, nil)
+		gt := makeInjectedGlobalTracker(t)
+		handler.SetGlobalStatsTracker(gt)
+		logCtx := passthroughLogCtx{
+			Method:          "POST",
+			Host:            "token-plan.cn-beijing.maas.aliyuncs.com",
+			Path:            "/route/v1/chat/completions",
+			SessionID:       "auth:acc:other1234567890",
+			Account:         "u-other-eff",
+			StatusCode:      200,
+			StartTs:         start,
+			FirstByteRec:    rec,
+			ReasoningEffort: "high",
+		}
+		handler.recordOtherUsage(userSession, "deepseek-v4-flash-0731", 100, 50, 0, nil, logCtx)
+		if got := gt.GetRecentRequestReasoningEffort(); got != "high" {
+			t.Errorf("high 落库: ReasoningEffort = %q, want %q", got, "high")
+		}
+	})
+	t.Run("empty", func(t *testing.T) {
+		handler, _, _, _ := newNvidiaTestHandler(t, nil)
+		gt := makeInjectedGlobalTracker(t)
+		handler.SetGlobalStatsTracker(gt)
+		logCtx := passthroughLogCtx{
+			Method:       "POST",
+			Host:         "token-plan.cn-beijing.maas.aliyuncs.com",
+			Path:         "/route/v1/chat/completions",
+			SessionID:    "auth:acc:other1234567890",
+			Account:      "u-other-eff",
+			StatusCode:   200,
+			StartTs:      start,
+			FirstByteRec: rec,
+		}
+		handler.recordOtherUsage(userSession, "deepseek-v4-flash-0731", 100, 50, 0, nil, logCtx)
+		if got := gt.GetRecentRequestReasoningEffort(); got != "" {
+			t.Errorf("空串落库: ReasoningEffort = %q, want empty", got)
+		}
+	})
+}
+
 // TestRecordOtherUsage_SkipsLanding34_WhenTrackerNil 验证 globalStatsTracker==nil ?recordOtherUsage
 // 的落?/4 全安全跳? ?panic (?recordNvidiaUsage 降级语义一??
 func TestRecordOtherUsage_SkipsLanding34_WhenTrackerNil(t *testing.T) {

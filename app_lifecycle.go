@@ -71,6 +71,12 @@ func (a *App) startup(ctx context.Context) {
 
 	activeDir := a.settingsMgr.GetActiveDataDirectory()
 
+	// 0a. 接线周期性 goroutine 全栈快照落盘 (每 5s 滚动保留 6 份)。
+	// 当程序出现死等型整体卡死、连 pprof HTTP 端点 (18765) 也连不上时，
+	// <activeDir>/diag/goroutines_LATEST.txt 即为离线取证的唯一现场来源。
+	// 内部 sync.Once 启动独立 goroutine,失败静默,靠进程退出回收,不泄漏句柄。
+	diagserver.StartAutoDump(diagserver.SnapshotDirFor(activeDir))
+
 	// 2. Initialize Pricing
 	a.pricingMgr = pricing.NewManager()
 	a.pricingMgr.Init(activeDir)
@@ -721,7 +727,9 @@ func (a *App) domReady(ctx context.Context) {
 	}
 
 	if !(isAutostart && a.settingsMgr.GetSilentStart()) {
-		wailsRuntime.WindowShow(ctx)
-		a.SetWindowVisible(true)
+		// 走统一显示入口:正规 WindowShow + Win32 跨线程保底。
+		// domReady 此时已在 goroutine 中,showMainWindow 内部再 go 两路,
+		// 双层 go 无害且确保启动时序不阻塞 domReady 回调本身。
+		go a.showMainWindow()
 	}
 }

@@ -80,30 +80,38 @@ func TestGrokResolveAnthropicThinking_DisabledIsOff(t *testing.T) {
 	}
 }
 
+// TestGrokResolveAnthropicThinking_EnabledAdaptiveIsOn 锁定 enabled/adaptive → on,
+// effort 取 resolveReasoningEffort 的内部规范化值(low/medium/high/max,阈值对齐旧版 Anthropic)。
 func TestGrokResolveAnthropicThinking_EnabledAdaptiveIsOn(t *testing.T) {
-	// enabled + budget 32000 → resolveReasoningEffort=high
+	// enabled + budget 32000 → max(≥16000 落 max 档)
 	req := makeAnthReq(t, "grok-4", `{"type":"enabled","budget_tokens":32000}`, "")
 	mode, effort := grokResolveAnthropicThinking(req, true)
-	if mode != grokThinkOn || effort != "high" {
-		t.Fatalf("enabled+budget32000 → (on, high), got (%v, %q)", mode, effort)
+	if mode != grokThinkOn || effort != "max" {
+		t.Fatalf("enabled+budget32000 → (on, max), got (%v, %q)", mode, effort)
 	}
-	// adaptive → resolveReasoningEffort=max
+	// adaptive → max
 	req2 := makeAnthReq(t, "grok-4", `{"type":"adaptive"}`, "")
 	mode2, effort2 := grokResolveAnthropicThinking(req2, true)
 	if mode2 != grokThinkOn || effort2 != "max" {
 		t.Fatalf("adaptive → (on, max), got (%v, %q)", mode2, effort2)
 	}
-	// enabled + budget 1024 → low
+	// enabled + budget 1024 → medium(1000-7999 落 medium 档)
 	req3 := makeAnthReq(t, "grok-4", `{"type":"enabled","budget_tokens":1024}`, "")
 	mode3, effort3 := grokResolveAnthropicThinking(req3, true)
-	if mode3 != grokThinkOn || effort3 != "low" {
-		t.Fatalf("enabled+budget1024 → (on, low), got (%v, %q)", mode3, effort3)
+	if mode3 != grokThinkOn || effort3 != "medium" {
+		t.Fatalf("enabled+budget1024 → (on, medium), got (%v, %q)", mode3, effort3)
 	}
-	// enabled + budget 8000 → medium
+	// enabled + budget 8000 → high(8000-15999 落 high 档)
 	req4 := makeAnthReq(t, "grok-4", `{"type":"enabled","budget_tokens":8000}`, "")
 	mode4, effort4 := grokResolveAnthropicThinking(req4, true)
-	if mode4 != grokThinkOn || effort4 != "medium" {
-		t.Fatalf("enabled+budget8000 → (on, medium), got (%v, %q)", mode4, effort4)
+	if mode4 != grokThinkOn || effort4 != "high" {
+		t.Fatalf("enabled+budget8000 → (on, high), got (%v, %q)", mode4, effort4)
+	}
+	// enabled + budget 512 → low(<1000 落 low 档)
+	req5 := makeAnthReq(t, "grok-4", `{"type":"enabled","budget_tokens":512}`, "")
+	mode5, effort5 := grokResolveAnthropicThinking(req5, true)
+	if mode5 != grokThinkOn || effort5 != "low" {
+		t.Fatalf("enabled+budget512 → (on, low), got (%v, %q)", mode5, effort5)
 	}
 }
 
@@ -347,9 +355,11 @@ func TestGrokAnthropicResolveThenApply_EndToEnd(t *testing.T) {
 		wantApplied  string // apply 后的 ReasoningEffort
 	}{
 		{"disabled → off → none", `{"type":"disabled"}`, "", grokThinkOff, "", "none"},
-		{"enabled+budget32000 → on high → high", `{"type":"enabled","budget_tokens":32000}`, "", grokThinkOn, "high", "high"},
+		{"enabled+budget32000 → on max → high", `{"type":"enabled","budget_tokens":32000}`, "", grokThinkOn, "max", "high"},
 		{"adaptive → on max → high", `{"type":"adaptive"}`, "", grokThinkOn, "max", "high"},
-		{"enabled+budget1024 → on low → low", `{"type":"enabled","budget_tokens":1024}`, "", grokThinkOn, "low", "low"},
+		{"enabled+budget1024 → on medium → medium", `{"type":"enabled","budget_tokens":1024}`, "", grokThinkOn, "medium", "medium"},
+		{"enabled+budget8000 → on high → high", `{"type":"enabled","budget_tokens":8000}`, "", grokThinkOn, "high", "high"},
+		{"enabled+budget512 → on low → low", `{"type":"enabled","budget_tokens":512}`, "", grokThinkOn, "low", "low"},
 		{"no thinking → unspecified → empty", "", "", grokThinkUnspecified, "", ""},
 		{"output_config=low → on low → low", `{"type":"adaptive"}`, `{"effort":"low"}`, grokThinkOn, "low", "low"},
 	}

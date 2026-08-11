@@ -1,4 +1,4 @@
-// Package pricing: aigen.go —— AI 一键生成计费配置的后端实现。
+// Package pricing: aigen.go —— AI 一键生成计费配置的后端实现(主流程)。
 //
 // 用途:用户在「计费配置」面板点 AI 一键生成按钮后,前端把"模型统计里出现、但
 // 尚未登记单价的候选模型基名[]"传过来,本生成器调用一个 Gemini 模型(默认
@@ -6,17 +6,20 @@
 // /v1internal:streamGenerateContent?alt=sse)生成建议单价(USD/每百万 tokens)。
 //
 // 链路复用:与 internal/stats/packet.go 的 AnalyzePackets 完全同构 ——
-//   - 同样的 v1internal 信封(外层 project/requestId/request/model/userAgent/
-//     requestType/enabledCreditTypes,内层 request 是 Gemini generateContent 体);
-//   - 同样的 SSE 抽取(candidates[0].content.parts[0].text 拼接);
+//   - 同样的 v1internal 信封(见 aigen_envelope.go buildAIRequestEnvelope);
+//   - 同样的 SSE 抽取(见 aigen_extract.go extractSSETextWithMeta);
 //   - 同样的 401 + refreshToken 自动 refreshAccount 重试一次。
 // 因 pricing 不应反向 import stats(那会拉进抓包/磁盘等无关依赖),SSE 抽取与
 // 信封构造就地复制为本包内私有函数,语义与 packet.go 逐字对齐,零行为漂移。
 //
 // 取数策略:先尝试携带 googleSearch grounding 工具做联网检索以拿实时公开定价;
-// 若上游拒收工具(HTTP 非 200 或错误文本含 grounding/tool/search 关键词)则
-// 去掉 tools 再发一次,降级为纯 LLM 训练知识生成。grounding 兜底失败不影响
-// 最终可用性,只影响单价新发布模型的准确性,最终由用户人工确认兜底。
+// 若上游拒收工具(HTTP 400 且错误文本含 grounding 关键词)则去掉 tools 再发一次,
+// 降级为纯 LLM 训练知识生成。grounding 兜底失败不影响最终可用性,只影响单份
+// 新发布模型的准确性,最终由用户人工确认兜底。
+//
+// 进度推送:Generate 接 progressFn func(stage, status string) 回调,在取 token /
+// 联网 / 降级 / 刷新 / 解析 / 完成 六个阶段边界回调,上层 IPC 入口把回调桥接到
+// wails EventsEmit("pricing:ai-progress", ...),前端实时显示处理阶段。
 //
 // 不经过本地 18443 MITM 代理:此请求直连 daily-cloudcode-pa.googleapis.com,
 // 因此 internal/proxy/json_schema_clean.go 的 functionDeclarations 剥离逻辑
@@ -48,6 +51,21 @@ const AIModelDefault = "gemini-2.5-flash-lite"
 
 // AIMaxOutputTokens 限制单次生成 token 上限,价格表本身很短(模型数×1行JSON)。
 const AIMaxOutputTokens = 8192
+
+// AIPriceResult 是 Generate 返回给上层(IPC → 前端)的单模型定价结果。
+// 它与 ModelRate 严格分离:ModelRate 仍是 pricing.json 存储格式与计费匹配引擎的
+// 唯一契约(扩展会连锁破坏 CalculateCostBreakdown / 前端 get-pricing-res 渲染 /
+// quota 等),AIPriceResult 只在 ai-generate 通道承载质检标记与来源,不入库不参与计费。
+//
+// 到达前端的 AIPriceResult 由 aiPricingController 渲染成可编辑表格行,
+// 用户最终确认时仍只取 Rate 的 input/output/cached 组 batch 走 update-pricing-batch。
+type AIPriceResult struct {
+	Rate           ModelRate `json:"rate"`           // 估算/检索到的单价(前端入编辑框)
+	Grounded       bool      `json:"grounded"`        // 本次结果是否真经联网检索取到 grounding 来源
+	Estimated      bool      `json:"estimated"`       // AI 自标估算或后端 Cached 0.25× 兜底估算
+	AnchorConflict bool      `json:"anchorConflict"`  // 与 realPricingAnchor 真实厂商标价偏差 > 2x
+	Sources        []WebRef  `json:"sources"`        // grounding 引用的官方价页 URL,前端可点开核对
+}
 
 // AIPriceGenerator 用一个 Antigravity 账号 token 直连 daily-cloudcode-pa,
 // 对一批候选模型名生成 USD/每百万 tokens 单价。
@@ -102,7 +120,7 @@ func NewAIPriceGenerator(
 		refreshAccount:   refreshAccount,
 		logFn:            logFn,
 		endpointURL:       AIEndpointDefault,
-		client:           netutil.NewClient(120 * time.Second),
+		client:            netutil.NewClient(120 * time.Second),
 		model:             AIModelDefault,
 	}
 	for _, opt := range opts {
@@ -119,14 +137,30 @@ func (g *AIPriceGenerator) logf(format string, args ...interface{}) {
 	g.logFn(fmt.Sprintf("[AI-Price] "+format, args...))
 }
 
-// Generate 对 models 候选列表生成单价,返回 {模型基名: ModelRate}。
+// notifyProgress 是 progressFn 的 nil-safe 守卫包装,与 logf 同款空值静默。
+func (g *AIPriceGenerator) notifyProgress(progressFn func(stage, status string), stage, status string) {
+	if progressFn == nil {
+		return
+	}
+	progressFn(stage, status)
+}
+
+// Generate 对 models 候选列表生成单价,返回 {模型基名: AIPriceResult}。
 // accountId 必须指向一个已登录且 token 有效的 Antigravity 账号。
+// progressFn 是阶段进度回调(可为 nil):在取 token / 联网 / 降级 / 刷新 / 解析 / 完成
+// 边界被调用,上层经 wails EventsEmit 推送前端实时进度。
 //
 // 返回 map 的键严格等于输入 models 各元素(按下标对齐),与 AI 返回 name 字段解耦,
 // 避免大小写/空白漂移导致前端表格行对不上。AI 返回条目缺失时填 {0,0,0} 不报错,
-// 让用户在表格里手动补。models 为空时直接返回空 map(不算错误)。
-func (g *AIPriceGenerator) Generate(models []string, accountId string) (map[string]ModelRate, error) {
-	result := make(map[string]ModelRate, len(models))
+// 让用户在表格里手动补并标 Estimated。models 为空时直接返回空 map(不算错误)。
+//
+// AIPriceResult 承载 Rate + 三个质检标记:
+//   - Grounded:       本次结果是否真经联网检索取到 grounding 来源(groundingChunks 非空)
+//   - Estimated:      AI 自标估算(prompt 第 6 条)或后端 Cached 0.25× 兜底估算
+//   - AnchorConflict: 与 realPricingAnchor 真实厂商标价偏差 > 2x,前端打红色警示
+//   - Sources:        grounding 引用的官方价页 URL,前端可点开核对
+func (g *AIPriceGenerator) Generate(models []string, accountId string, progressFn func(stage, status string)) (map[string]AIPriceResult, error) {
+	result := make(map[string]AIPriceResult, len(models))
 	if len(models) == 0 {
 		return result, nil
 	}
@@ -134,11 +168,14 @@ func (g *AIPriceGenerator) Generate(models []string, accountId string) (map[stri
 		return result, errors.New("AIPriceGenerator 未就绪")
 	}
 
+	g.notifyProgress(progressFn, "fetch-token", "正在获取账号凭证...")
 	accessToken, refreshToken, projectID, err := g.getAccountTokens(accountId)
 	if err != nil {
+		g.notifyProgress(progressFn, "error", "获取账号 Token 失败: "+err.Error())
 		return result, fmt.Errorf("获取账号 Token 失败: %w", err)
 	}
 	if accessToken == "" {
+		g.notifyProgress(progressFn, "error", "该账号暂无有效的 Access Token")
 		return result, errors.New("该账号暂无有效的 Access Token")
 	}
 	if projectID == "" {
@@ -146,62 +183,107 @@ func (g *AIPriceGenerator) Generate(models []string, accountId string) (map[stri
 	}
 
 	// 先尝试带 googleSearch grounding 联网检索,失败再降级纯知识。
-	text, err := g.generateOnce(accessToken, projectID, models, true)
+	g.notifyProgress(progressFn, "grounding-search", "正在联网检索各厂商官方定价页...")
+	// text 与 sources 一起追踪本次(及可能降级重试后的最终)联网结果。
+	text, sources, err := g.generateOnce(accessToken, projectID, models, true)
 	// grounding 失败(非 401,即非鉴权问题)则去掉 tools 重试一次纯知识。
 	if err != nil && !isAuthError(err) && isGroundingRejection(err) {
 		g.logf("grounding 工具被上游拒收(%v),降级为纯知识库生成", err)
-		text, err = g.generateOnce(accessToken, projectID, models, false)
+		g.notifyProgress(progressFn, "grounding-degraded", "联网检索被上游拒收,降级为知识库估算(结果将标「未联网」)")
+		text, sources, err = g.generateOnce(accessToken, projectID, models, false)
 	}
-	// 401 鉴权失败 + 有 refreshToken → 刷新 token 后纯知识重试一次(与 packet.go:590 一致)。
+	// 401 鉴权失败 + 有 refreshToken → 刷新 token 后重试一次(与 packet.go:590 一致)。
 	if err != nil && isAuthError(err) && refreshToken != "" && g.refreshAccount != nil {
 		g.logf("Token 过期(账号 %s),刷新后重试...", accountId)
+		g.notifyProgress(progressFn, "token-refresh", "账号凭证过期,正在自动刷新...")
 		newToken, refreshErr := g.refreshAccount(accountId)
 		if refreshErr != nil {
+			g.notifyProgress(progressFn, "error", "账号 Token 过期且自动刷新失败")
 			return result, fmt.Errorf("账号 Token 过期且自动刷新失败: %v", refreshErr)
 		}
-		// 刷新后直接用纯知识重试(grounding 已被证明拒收则不重试工具;
-		// 但若 401 发生在 grounding 阶段而上游其实支持工具,保险起见按原 wantTools 重试)。
-		text, err = g.generateOnce(newToken, projectID, models, true)
+		g.notifyProgress(progressFn, "grounding-search", "凭证已刷新,正在联网检索厂商官方定价页...")
+		// 刷新后优先按原 wantTools=true 重试(若 401 发生在 grounding 阶段而上游其实支持工具)。
+		text, sources, err = g.generateOnce(newToken, projectID, models, true)
 		if err != nil && !isAuthError(err) && isGroundingRejection(err) {
-			text, err = g.generateOnce(newToken, projectID, models, false)
+			text, sources, err = g.generateOnce(newToken, projectID, models, false)
 		}
 	}
 	if err != nil {
+		g.notifyProgress(progressFn, "error", "生成失败: "+err.Error())
 		return result, err
 	}
 
+	g.notifyProgress(progressFn, "parse-result", "正在解析定价结果...")
+	grounded := len(sources) > 0
 	extracted := extractPricingJSON(text)
 	for _, name := range models {
-		rate, ok := extracted[name]
+		key := strings.ToLower(strings.TrimSpace(name))
+		parsed, ok := extracted[key]
 		if !ok {
-			// AI 没按顺序返回或缺位:补零,前端表格仍渲染该行让用户手动填。
-			rate = ModelRate{Input: 0, Output: 0, Cached: 0}
-		} else if rate.Cached <= 0 && rate.Input > 0 {
+			// AI 没按顺序返回或缺位:补零并标估算,前端表格仍渲染该行让用户手动填。
+			result[name] = AIPriceResult{
+				Rate:      ModelRate{Input: 0, Output: 0, Cached: 0},
+				Estimated: true,
+				Grounded:  false,
+			}
+			continue
+		}
+		rate := parsed.Rate
+		estimated := parsed.Estimated
+		if rate.Cached <= 0 && rate.Input > 0 {
 			// 无官方缓存定价时按输入单价 0.25 倍兜底估算,与 defaultPricing
 			// (claude 3→0.75=0.25×3、gpt-oss 0.15→0.0375=0.25×0.15)保持口径一致。
+			// 兜底估算一律标 Estimated,前端提示用户核对 cached。
 			rate.Cached = rate.Input * 0.25
+			estimated = true
 		}
-		result[name] = rate
+		// 单条来源 URL(AI 在 prompt 第 8 条返回的 source_url)优先并入 Sources,
+		// 与 SSE 帧里抽取的 grounding 来源合并展示。
+		rowSources := sources
+		if parsed.SourceURL != "" {
+			seen := false
+			for _, s := range rowSources {
+				if s.URI == parsed.SourceURL {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				if rowSources == nil {
+					rowSources = []WebRef{{URI: parsed.SourceURL}}
+				} else {
+					rowSources = append(rowSources, WebRef{URI: parsed.SourceURL})
+				}
+			}
+		}
+		result[name] = AIPriceResult{
+			Rate:          rate,
+			Grounded:      grounded,
+			Estimated:     estimated,
+			AnchorConflict: anchorConflictForModel(key, rate),
+			Sources:       rowSources,
+		}
 	}
+	g.notifyProgress(progressFn, "done", "生成完成")
 	return result, nil
 }
 
-// generateOnce 用 token 调一次上游生成定价文本。wantTools=true 时带 googleSearch 工具,
-// false 时纯知识。返回拼接后的纯文本或带分类的错误。
+// generateOnce 用 token 调一次上游生成定价文本与 grounding 来源。wantTools=true 时带
+// googleSearch 工具,false 时纯知识。返回拼接后的纯文本 + grounding 来源引用,或带分类的错误。
 //
 // 错误分类(供 Generate 决定重试策略):
 //   - 鉴权错误(isAuthError):含 "HTTP 401" 文本 → 上层走 refreshAccount 重试
-//   - grounding 拒收(isGroundingRejection):HTTP 400 + grounding/tool/search 关键词 → 上层去 tools 重试
+//   - grounding 拒收(isGroundingRejection):HTTP 400 + grounding 关键词 → 上层去 tools 重试
 //   - 其他: 直接返回,上层不重试
-func (g *AIPriceGenerator) generateOnce(token, projectID string, models []string, wantTools bool) (string, error) {
+func (g *AIPriceGenerator) generateOnce(token, projectID string, models []string, wantTools bool) (string, []WebRef, error) {
 	if g == nil || g.client == nil {
-		return "", errors.New("AIPriceGenerator: nil service or client")
+		return "", nil, errors.New("AIPriceGenerator: nil service or client")
 	}
 	prompt := buildPricingPrompt(models)
 	reqBodyMap := buildAIRequestEnvelope(projectID, prompt, g.model, wantTools)
 	jsonBody, err := json.Marshal(reqBodyMap)
 	if err != nil {
-		return "", fmt.Errorf("marshal AI pricing request: %w", err)
+		return "", nil, fmt.Errorf("marshal AI pricing request: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -209,7 +291,7 @@ func (g *AIPriceGenerator) generateOnce(token, projectID string, models []string
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpointURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
-		return "", fmt.Errorf("create AI pricing request: %w", err)
+		return "", nil, fmt.Errorf("create AI pricing request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -218,7 +300,7 @@ func (g *AIPriceGenerator) generateOnce(token, projectID string, models []string
 
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("execute AI pricing request: %w", err)
+		return "", nil, fmt.Errorf("execute AI pricing request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -235,230 +317,12 @@ func (g *AIPriceGenerator) generateOnce(token, projectID string, models []string
 		if errProbe.Error.Message != "" {
 			errMsg = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, errProbe.Error.Message)
 		}
-		return "", errors.New(errMsg)
+		return "", nil, errors.New(errMsg)
 	}
 
-	return extractSSEText(bodyBytes)
-}
-
-// buildAIRequestEnvelope 构造 v1internal 信封,与 packet.go:527-554 逐段对齐。
-// wantTools=true 时在内层 request tools 里加一个 googleSearch 顶层工具做联网检索。
-func buildAIRequestEnvelope(projectID, prompt, model string, wantTools bool) map[string]interface{} {
-	requestInner := map[string]interface{}{
-		"contents": []interface{}{
-			map[string]interface{}{
-				"role": "user",
-				"parts": []interface{}{
-					map[string]interface{}{"text": prompt},
-				},
-			},
-		},
-		"generationConfig": map[string]interface{}{
-			"maxOutputTokens": AIMaxOutputTokens,
-			"thinkingConfig": map[string]interface{}{
-				"includeThoughts": false,
-				"thinkingBudget":  0,
-			},
-		},
+	ex, err := extractSSETextWithMeta(bodyBytes)
+	if err != nil {
+		return "", nil, err
 	}
-	if wantTools {
-		requestInner["tools"] = []interface{}{
-			map[string]interface{}{"google_search": map[string]interface{}{}},
-		}
-	}
-	return map[string]interface{}{
-		"project":   projectID,
-		"requestId": fmt.Sprintf("aiprice/%d", time.Now().UnixNano()),
-		"request":   requestInner,
-		"model":     model,
-		"userAgent": "antigravity",
-		// requestType 与 enabledCreditTypes 与 AnalyzePackets 对齐,
-		// 让上游把这次调用计入 GOOGLE_ONE_AI 计费档(与抓包分析路径同信任域)。
-		"requestType":        "chat",
-		"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
-	}
-}
-
-// extractSSEText 从 daily-cloudcode-pa 的 SSE 响应里抽取候选文本,
-// 逻辑与 packet.go:617-688 的 SSE/JSON 双形态抽取逐字对齐(就地复制,避免 import stats):
-//   - 优先按 "data:" 行解析,逐行取 response.candidates[0].content.parts[0].text 拼接;
-//   - 非 SSE 形态时按普通 JSON 解析同一候选路径。
-func extractSSEText(bodyBytes []byte) (string, error) {
-	bodyStr := strings.TrimSpace(string(bodyBytes))
-	if strings.HasPrefix(bodyStr, "data:") {
-		var fullText strings.Builder
-		lines := strings.Split(bodyStr, "\n")
-		for _, line := range lines {
-			cleanLine := strings.TrimSpace(line)
-			if !strings.HasPrefix(cleanLine, "data:") {
-				continue
-			}
-			jsonStr := strings.TrimSpace(cleanLine[5:])
-			var data map[string]interface{}
-			if json.Unmarshal([]byte(jsonStr), &data) != nil {
-				continue
-			}
-			if t := firstCandidateText(data); t != "" {
-				fullText.WriteString(t)
-			}
-		}
-		if fullText.Len() > 0 {
-			return fullText.String(), nil
-		}
-		return "", errors.New("AI 定价 SSE 响应中未包含任何文本内容")
-	}
-
-	// 普通 JSON 形态(非流式响应)。
-	var respJson map[string]interface{}
-	if json.Unmarshal(bodyBytes, &respJson) == nil {
-		if t := firstCandidateText(respJson); t != "" {
-			return t, nil
-		}
-	}
-	return "", fmt.Errorf("解析 AI 定价响应失败,原始响应前300字符: %s", truncateBody(bodyBytes))
-}
-
-// firstCandidateText 从一个响应对象里抽取 candidates[0].content.parts[0].text,
-// 兼容响应直接就是候选对象或被包在 "response" 键下两种形态(与 packet.go 同款)。
-func firstCandidateText(data map[string]interface{}) string {
-	var resObj interface{}
-	if val, ok := data["response"]; ok {
-		resObj = val
-	} else {
-		resObj = data
-	}
-	resMap, ok := resObj.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	candidates, ok := resMap["candidates"].([]interface{})
-	if !ok || len(candidates) == 0 {
-		return ""
-	}
-	candidateMap, ok := candidates[0].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	content, ok := candidateMap["content"].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	parts, ok := content["parts"].([]interface{})
-	if !ok || len(parts) == 0 {
-		return ""
-	}
-	partMap, ok := parts[0].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	if text, ok := partMap["text"].(string); ok {
-		return text
-	}
-	return ""
-}
-
-// extractPricingJSON 从 AI 返回的纯文本里取第一个 '[' 到最后一个 ']' 的子串,
-// json.Unmarshal 到 []aiPriceEntry,再以 "name 低小写" → ModelRate 的 map 返回。
-// 兼容裸数组、```json 代码块包裹、带前导解释文本三种形态。
-// 解析失败或提取不到数组时返回空 map(Generate 会给每个输入模型补零)。
-func extractPricingJSON(text string) map[string]ModelRate {
-	result := map[string]ModelRate{}
-	start := strings.Index(text, "[")
-	end := strings.LastIndex(text, "]")
-	if start < 0 || end < 0 || end <= start {
-		return result
-	}
-	jsonStr := text[start : end+1]
-	var entries []aiPriceEntry
-	if err := json.Unmarshal([]byte(jsonStr), &entries); err != nil {
-		return result
-	}
-	for _, e := range entries {
-		if strings.TrimSpace(e.Name) == "" {
-			continue
-		}
-		result[strings.ToLower(strings.TrimSpace(e.Name))] = ModelRate{
-			Input:  e.Input,
-			Output: e.Output,
-			Cached: e.Cached,
-		}
-	}
-	return result
-}
-
-// aiPriceEntry 是 AI 返回的定价数组单元素结构。
-type aiPriceEntry struct {
-	Name   string  `json:"name"`
-	Input  float64 `json:"input"`
-	Output float64 `json:"output"`
-	Cached float64 `json:"cached"`
-}
-
-// buildPricingPrompt 构造让 AI 给一批模型生成 USD/每百万 tokens 单价的提示词。
-// 强约束:仅输出 JSON 数组、顺序与输入一致、不许返回 0/留空、无缓存价按输入 0.25× 估算、
-// 不确定给最合理估算。模型名作为键保留原始基名(已由前端清洗掉前缀)直接回传。
-func buildPricingPrompt(models []string) string {
-	var b strings.Builder
-	b.WriteString("你是资深云模型计费定价分析师。请基于你的训练知识,为下面这批 AI 模型给出公开标准定价,")
-	b.WriteString("单位统一为 USD/每百万 Tokens(United States Dollar per one million tokens),")
-	b.WriteString("包含输入(input)、输出(output)、缓存命中(cached)三类单价。\n\n")
-	b.WriteString("严格要求:\n")
-	b.WriteString("1. 仅输出一个 JSON 数组,绝对不要 markdown 代码块标记(```),不要任何解释性前言或总结,")
-	b.WriteString("回答的第一个字符必须是 '['。\n")
-	b.WriteString("2. 数组长度与顺序必须与下方输入模型列表完全一致,每个元素形如 ")
-	b.WriteString(`{"name":"模型名","input":数值,"output":数值,"cached":数值}。` + "\n")
-	b.WriteString("3. name 字段回传我给你的模型原始名称,不要改名不要加引号外符号。\n")
-	b.WriteString("4. input/output 是厂家公布的标准公开单价,精确到 6 位小数;如果你确信该模型有公开定价,")
-	b.WriteString("必须给真实数值,不许返回 0、不许留空、不许写 null。\n")
-	b.WriteString("5. cached 是缓存命中输入的单价(各厂常用输入价的 1/4)。若该模型厂家明确公布缓存定价用公布值;")
-	b.WriteString("若未公布,则按 input 单价乘以 0.25 估算填入 cached 字段,不要留空。\n")
-	b.WriteString("6. 若是较新的模型你不确定准确数字,给出你认为最合理的估算值(基于同系列相邻型号的定价规律),")
-	b.WriteString("不允许返回 0 或空。\n\n")
-	b.WriteString("需定价的模型列表(共 ")
-	b.WriteString(fmt.Sprintf("%d 个):", len(models)))
-	for i, m := range models {
-		if i%6 == 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString(m)
-		if i < len(models)-1 {
-			b.WriteString(", ")
-		}
-	}
-	b.WriteString("\n\n现在请直接输出 JSON 数组,第一个字符必须是 '['。")
-	return b.String()
-}
-
-// isAuthError 判断错误是否为鉴权失败,上层据此触发 refreshAccount 重试。
-func isAuthError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "HTTP 401")
-}
-
-// isGroundingRejection 判断错误是否疑似上游拒收 googleSearch 工具,
-// 上层据此决定是否去掉 tools 降级为纯知识库生成。
-// 命中条件:HTTP 400 且错误文本含 grounding/tool/search 任一关键词。
-func isGroundingRejection(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	if !strings.Contains(msg, "http 400") {
-		return false
-	}
-	return strings.Contains(msg, "grounding") ||
-		strings.Contains(msg, "google_search") ||
-		strings.Contains(msg, "googlesearch") ||
-		strings.Contains(msg, "tool") ||
-		strings.Contains(msg, "search")
-}
-
-// truncateBody 把过长的错误响应体截断,避免污染日志与错误串(与 packet.go 路径同款)。
-func truncateBody(b []byte) string {
-	if len(b) > 300 {
-		return string(b[:300])
-	}
-	return string(b)
+	return ex.Text, ex.Sources, nil
 }

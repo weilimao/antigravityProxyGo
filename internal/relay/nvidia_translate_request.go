@@ -186,8 +186,10 @@ func thinkingRequested(req *AnthropicRequest) bool {
 // 移植自 cc-switch transform.rs:94-124,优先级:output_config.effort > thinking.type+budget_tokens。
 //
 // 解析入口:output_config.effort(low/medium/high/max 1:1,未知丢)优先;
-// 兜底 thinking.type:adaptive→max,enabled 按 budget_tokens 分档(<4000→low,4000-15999→medium,
-// ≥16000→high,无 budget→high),disabled/缺省→""。
+// 兜底 thinking.type:adaptive→max,enabled 按 budget_tokens 分档——对齐旧版 Anthropic 思考强度档位:
+//   <1000→low(旧版 Low 低强度),1000-7999→medium(旧版 Medium 中强度 2000-5000+缓冲),
+//   8000-15999→high(旧版 High 高强度 8000-16000),≥16000→max(旧版 Max/Ultra 30000-100000+),
+//   无 budget→high(旧版 High 为未显式声明时的默认档),disabled/缺省→""。
 func resolveReasoningEffort(req *AnthropicRequest) string {
 	if req == nil {
 		return ""
@@ -221,13 +223,15 @@ func resolveReasoningEffort(req *AnthropicRequest) string {
 		b := req.Thinking.BudgetTokens
 		switch {
 		case b <= 0:
-			return "high" // enabled 但无 budget → 假定强推理
-		case b < 4000:
-			return "low"
+			return "high" // enabled 但无 budget → 旧版默认档 High
+		case b < 1000:
+			return "low" // 旧版 Low:<1000 tokens(无扩展思考/极小预算)
+		case b < 8000:
+			return "medium" // 旧版 Medium:2000-5000 tokens(+缓冲)
 		case b < 16000:
-			return "medium"
+			return "high" // 旧版 High:8000-16000 tokens
 		default:
-			return "high"
+			return "max" // 旧版 Max/Ultra:30000-100000+ tokens(≥16000 进 max 档)
 		}
 	default:
 		return "" // disabled / 缺省
@@ -320,6 +324,22 @@ func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte
 	}
 	// effort 非空但映射后为空(如未识别档):回落不注入,避免往上游塞空 reasoning_effort 触发 400。
 	chatReq.ChatTemplateKwargs = nil
+}
+
+// extractNvidiaResolvedEffort 从已构造完成的 OpenAIChatRequest 提取「命中上游」的思考等级。
+// NVIDIA-NIM 池的唯一命中载体是 chat_template_kwargs.reasoning_effort(mapReasoningEffort 映射后
+// 只剩 high/max);顶层 ReasoningEffort 已被 injectNvidiaChatTemplateKwargs 清空(NIM 不认)。
+// 空串 = 客户端未开思考 / 全局关 / 模型禁注入 kwargs, 前端不渲染后缀。
+func extractNvidiaResolvedEffort(req *OpenAIChatRequest) string {
+	if req == nil || req.ChatTemplateKwargs == nil {
+		return ""
+	}
+	v, ok := req.ChatTemplateKwargs["reasoning_effort"]
+	if !ok {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
 }
 
 // isNvidiaModelNoKwargs 判定模型映射配置是否显式禁用 chat_template_kwargs 思考参数。

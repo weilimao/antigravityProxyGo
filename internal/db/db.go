@@ -92,6 +92,10 @@ func runMigrations(db *sql.DB, dataDir string) error {
 			path TEXT NOT NULL DEFAULT '',
 			session_id TEXT NOT NULL DEFAULT '',
 			family TEXT NOT NULL DEFAULT '',
+			-- reasoning_effort: 命中上游的思考等级(low/medium/high/max/none 等, 映射折叠后真正发给
+			-- 上游的值, 非客户端原始意图档)。供前端请求日志「模型」列追加 (档) 后缀展示。
+			-- 空串=客户端未开思考 / 全局关 / 上游无 reasoning_effort 概念(gemini/claude 直连)。
+			reasoning_effort TEXT NOT NULL DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_req_logs_user_mode ON request_logs(user_id, mode);`,
@@ -175,6 +179,10 @@ func runMigrations(db *sql.DB, dataDir string) error {
 	// SELECT/INSERT 列序一致; 幂等 ALTER 兼容既有库(列已存在时 SQLite 返回 "duplicate column" 错误,
 	// 忽略即可)。旧数据默认 0, 等价于"未采集"。
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN first_byte_ms INTEGER NOT NULL DEFAULT 0;`)
+	// reasoning_effort: 命中上游的思考等级(见建表注释), 供前端请求日志「模型」列追加 (档) 后缀展示。
+	// 置于 first_byte_ms 之后, 与 repo_stats / repo_query 的 SELECT/INSERT 列序一致; 幂等 ALTER 兼容
+	// 既有库(列已存在时 SQLite 返回 "duplicate column" 错误, 忽略即可)。旧数据默认空串 = 不渲染后缀。
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT '';`)
 
 	// --- Versioned Migrations ---
 	migrationVersion := getMigrationVersion(db)

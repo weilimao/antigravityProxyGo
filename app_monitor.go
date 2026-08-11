@@ -192,21 +192,22 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 					formattedTime = t.Local().Format("01/02 15:04:05")
 				}
 				requests = append(requests, &stats.RequestLog{
-					ID:           dr.ReqID,
-					Timestamp:    formattedTime,
-					Model:        dr.ModelName,
-					InTokens:     dr.InTokens,
-					OutTokens:    dr.OutTokens,
-					CachedTokens: dr.CachedTokens,
-					Cost:         dr.Cost,
-					Account:      dr.UserID,
-					DurationMs:   dr.DurationMs,
-					StatusCode:   dr.StatusCode,
-					Method:       dr.Method,
-					Host:         dr.Host,
-					Path:         dr.Path,
-					SessionID:    dr.SessionID,
-					Family:       dr.Family,
+					ID:              dr.ReqID,
+					Timestamp:       formattedTime,
+					Model:           dr.ModelName,
+					InTokens:        dr.InTokens,
+					OutTokens:       dr.OutTokens,
+					CachedTokens:    dr.CachedTokens,
+					Cost:            dr.Cost,
+					Account:         dr.UserID,
+					DurationMs:      dr.DurationMs,
+					StatusCode:      dr.StatusCode,
+					Method:          dr.Method,
+					Host:            dr.Host,
+					Path:            dr.Path,
+					SessionID:       dr.SessionID,
+					Family:          dr.Family,
+					ReasoningEffort: dr.ReasoningEffort,
 				})
 			}
 			if requests == nil {

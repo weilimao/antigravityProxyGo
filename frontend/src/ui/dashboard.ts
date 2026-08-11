@@ -15,6 +15,8 @@ import { initAppVersion } from './updaterController';
 import { startOtpTimer, stopOtpTimer } from './otpController';
 import { refreshRelayPackages, refreshRelayUsers } from './relayController';
 import { deactivateSettings } from './settingsController';
+import { refreshOtherGroupSelectI18n } from './otherAccountModal';
+import { refreshNvidiaPreferredSourceI18n } from './nvidiaPreferredShuttle';
 
 // DOM Elements
 let html: HTMLElement;
@@ -267,6 +269,11 @@ export function setLanguage(lang: string) {
     if ((state.callbacks as any).refreshRelayUI) {
         (state.callbacks as any).refreshRelayUI();
     }
+    // 语言切换后重刷 Other 弹窗「选择已有组」与「默认模型」下拉占位文案:
+    // 这两处由 otherAccountModal.ts innerHTML 动态写入,绕过 data-i18n 遍历,
+    // 需显式重刷避免弹窗重开时冒旧语言。NVIDIA 专属模型来源徽标同理(经 __dict 注入失败兜底)。
+    refreshOtherGroupSelectI18n();
+    refreshNvidiaPreferredSourceI18n();
 }
 
 export function updateStatusLabel() {

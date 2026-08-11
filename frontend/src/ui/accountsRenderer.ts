@@ -82,19 +82,28 @@ function buildAccountHeaderInnerHTML(acc: any, dict: any): string {
 
     let tierBadge = '';
     if (acc.tier) {
-        const tierStr = acc.tier.toUpperCase();
-        if (tierStr === 'PRO') {
-            tierBadge = '<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 dark:text-rose-400 text-[9px] font-bold border border-rose-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Pro</span>';
-        } else if (tierStr === 'ULTRA') {
-            tierBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center font-extrabold tracking-wide flex-shrink-0 whitespace-nowrap">Ultra</span>';
-        } else if (tierStr === 'ENTERPRISE') {
-            tierBadge = '<span class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[9px] font-bold border border-blue-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Enterprise</span>';
-        } else if (tierStr === 'STANDARD') {
-            tierBadge = '<span class="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[9px] font-bold border border-sky-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Standard</span>';
-        } else if (tierStr === 'FREE') {
-            tierBadge = '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Free</span>';
-        } else {
-            tierBadge = `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">${acc.tier}</span>`;
+        // 去重:NVIDIA/Grok 号池后端配额探测把 Tier 写成了 provider 名(quota.go:628/666),
+        // 与 providerBadge 文本重复(quota 回写见 account_monitor.go:263-264),此处跳过该 tier 徽标;
+        // antigravity(Pro/Ultra)、project(Pay-As-You-Go)、other(自定义上游)等真实 tier 不受影响。
+        const tierUpper = acc.tier.toUpperCase();
+        const dupProviderName =
+            (acc.provider === 'nvidia' && tierUpper === 'NVIDIA') ||
+            (acc.provider === 'grok' && tierUpper === 'GROK');
+        if (!dupProviderName) {
+            const tierStr = acc.tier.toUpperCase();
+            if (tierStr === 'PRO') {
+                tierBadge = '<span class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 dark:text-rose-400 text-[9px] font-bold border border-rose-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Pro</span>';
+            } else if (tierStr === 'ULTRA') {
+                tierBadge = '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center font-extrabold tracking-wide flex-shrink-0 whitespace-nowrap">Ultra</span>';
+            } else if (tierStr === 'ENTERPRISE') {
+                tierBadge = '<span class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[9px] font-bold border border-blue-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Enterprise</span>';
+            } else if (tierStr === 'STANDARD') {
+                tierBadge = '<span class="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[9px] font-bold border border-sky-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Standard</span>';
+            } else if (tierStr === 'FREE') {
+                tierBadge = '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Free</span>';
+            } else {
+                tierBadge = `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 text-[9px] font-bold border border-outline-variant/30 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">${acc.tier}</span>`;
+            }
         }
     }
 

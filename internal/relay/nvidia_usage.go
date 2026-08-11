@@ -167,7 +167,8 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 			SessionID:      logCtx.SessionID,
 			DurationMs:     durationMs,
 			FirstByteMs:    firstByteMs,
-			Family:         "nvidia",
+			Family:          "nvidia",
+			ReasoningEffort: logCtx.ReasoningEffort,
 		}
 		h.globalStatsTracker.AddRequestLogForFamily(reqLog)
 	}

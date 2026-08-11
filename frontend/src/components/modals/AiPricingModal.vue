@@ -26,10 +26,13 @@
       </button>
     </div>
 
-    <!-- 生成中态 -->
+    <!-- 生成中态(多阶段进度,由后端 pricing:ai-progress 实时推送驱动) -->
     <div id="aiPricingLoading" class="hidden flex flex-col items-center justify-center py-10 gap-3">
       <div class="w-9 h-9 border-3 border-primary/30 border-t-primary rounded-full animate-spin"></div>
-      <p class="text-[12px] text-outline" data-i18n="aiPricingGenFetching">正在调用 Gemini 生成定价...</p>
+      <!-- 进度文案:由 aiPricingController 监听 pricing:ai-progress 事件动态写入,
+           对应后端 Generate 的 fetch-token / grounding-search / grounding-degraded /
+           token-refresh / parse-result / done / error 七个阶段 step 键 -->
+      <p id="aiPricingProgressMsg" class="text-[12px] text-outline" data-i18n="aiPricingGenFetching">正在调用 Gemini 生成定价...</p>
     </div>
 
     <!-- 结果可编辑表 -->

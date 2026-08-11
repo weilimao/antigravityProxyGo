@@ -22,20 +22,21 @@ func TestRequestLog_FamilyRoundTrip(t *testing.T) {
 	}()
 
 	nv := &RequestLog{
-		ReqID:      "nv-rt-1",
-		Timestamp:  time.Now().Format(time.RFC3339),
-		Mode:       "local",
-		UserID:     "u-1",
-		ModelName:  "z-ai/glm-5.2",
-		InTokens:   100,
-		OutTokens:  50,
-		Cost:       0.001,
-		StatusCode: 200,
-		Method:     "POST",
-		Host:       "integrate.api.nvidia.com",
-		Path:       "/nvidia/v1/chat/completions",
-		SessionID:  "tok-1",
-		Family:     "nvidia",
+		ReqID:           "nv-rt-1",
+		Timestamp:       time.Now().Format(time.RFC3339),
+		Mode:            "local",
+		UserID:          "u-1",
+		ModelName:       "z-ai/glm-5.2",
+		InTokens:        100,
+		OutTokens:       50,
+		Cost:            0.001,
+		StatusCode:      200,
+		Method:          "POST",
+		Host:            "integrate.api.nvidia.com",
+		Path:            "/nvidia/v1/chat/completions",
+		SessionID:       "tok-1",
+		Family:          "nvidia",
+		ReasoningEffort: "max",
 	}
 	if err := InsertRequestLog(nv); err != nil {
 		t.Fatalf("InsertRequestLog(nvidia): %v", err)
@@ -80,6 +81,8 @@ func TestRequestLog_FamilyRoundTrip(t *testing.T) {
 		} else {
 			t.Errorf("nvidia family round-trip = %q, want %q", got.Family, "nvidia")
 		}
+	} else if got.ReasoningEffort != "max" {
+		t.Errorf("nvidia reasoning_effort round-trip = %q, want %q", got.ReasoningEffort, "max")
 	}
 	if got := byReq["gem-rt-1"]; got == nil || got.Family != "" {
 		if got == nil {
@@ -87,6 +90,8 @@ func TestRequestLog_FamilyRoundTrip(t *testing.T) {
 		} else {
 			t.Errorf("legacy family round-trip = %q, want empty", got.Family)
 		}
+	} else if got.ReasoningEffort != "" {
+		t.Errorf("legacy reasoning_effort round-trip = %q, want empty", got.ReasoningEffort)
 	}
 }
 
@@ -110,6 +115,8 @@ func TestDBMigration_FamilyColumnIdempotent(t *testing.T) {
 	defer rows.Close()
 	hasFamily := false
 	familyCount := 0
+	hasReasoningEffort := false
+	reasoningEffortCount := 0
 	for rows.Next() {
 		var cid int
 		var name, ctype string
@@ -123,11 +130,21 @@ func TestDBMigration_FamilyColumnIdempotent(t *testing.T) {
 			hasFamily = true
 			familyCount++
 		}
+		if name == "reasoning_effort" {
+			hasReasoningEffort = true
+			reasoningEffortCount++
+		}
 	}
 	if !hasFamily {
 		t.Fatal("request_logs missing family column after migration")
 	}
 	if familyCount != 1 {
 		t.Errorf("family column count = %d, want exactly 1 (no duplicate column)", familyCount)
+	}
+	if !hasReasoningEffort {
+		t.Fatal("request_logs missing reasoning_effort column after migration")
+	}
+	if reasoningEffortCount != 1 {
+		t.Errorf("reasoning_effort column count = %d, want exactly 1 (no duplicate column)", reasoningEffortCount)
 	}
 }

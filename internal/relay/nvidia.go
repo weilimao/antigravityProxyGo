@@ -47,6 +47,12 @@ type nvidiaLogCtx struct {
 	// stats.RequestLog.RequestHeaders,使前端「请求参数详情」弹窗能展示入站请求头而非
 	// 「无请求头数据」兜底。同样由 writeNvidiaResponse 在装配 logCtx 时从入站 r.Header 注入。
 	ReqHeaders interface{}
+	// ReasoningEffort 是本次请求「命中上游」的思考等级(NVIDIA-NIM 池取 chat_template_kwargs.
+	// reasoning_effort, 映射折叠后真正发给 NIM 的值, 只剩 high/max)。由 handleNvidia 在
+	// upstreamReq 构造完成后经 extractNvidiaResolvedEffort 提取, 经 writeNvidiaResponse 透传到
+	// recordNvidiaUsage → stats.RequestLog.ReasoningEffort, 供前端「模型」列追加 (档) 后缀展示。
+	// 空串 = 客户端未开思考 / 全局关 / 模型禁注入 kwargs, 前端不渲染后缀。
+	ReasoningEffort string
 }
 
 // nvidiaHostFromBaseURL 从上游账号 BaseURL(如 https://integrate.api.nvidia.com/v1)
@@ -674,7 +680,11 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			// inboundBody 透传入站原始请求体(bodyBytes, 非协议转换后的 upstreamBody),
 			// 供 writeNvidiaResponse 两侧消费:Anthropic 流式回译在上游断流时以完整上游请求体重连;
 			// 同时作为入站请求体原貌注入 logCtx.ReqBody 落库(前端详情弹窗展示「入站时」请求体)。
-			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, targetURL, upstreamBody, bodyBytes, inboundInputTokens, start, firstByteRec)
+			// resolvedEffort: 本次请求命中上游的思考等级(upstreamReq 构造完成后, 经 injectNvidiaChatTemplateKwargs
+			// 注入到 chat_template_kwargs.reasoning_effort 的值, 只剩 high/max), 透传给 writeNvidiaResponse
+			// 装配 logCtx.ReasoningEffort 落库, 供前端「模型」列追加 (档) 后缀展示。
+			resolvedEffort := extractNvidiaResolvedEffort(upstreamReq)
+			h.writeNvidiaResponse(w, r, activeResp, inboundKind, isStreaming, upstreamModel, userSession, poolAccount, targetURL, upstreamBody, bodyBytes, inboundInputTokens, start, firstByteRec, resolvedEffort)
 			// 蓄流重试(pullAnthropicStreamWithRetry)全程占账号槽,writeNvidiaResponse 返回即响应流结束,
 			// 本次请求结束,释放并发槽。release 必须在 writeNvidiaResponse 返回之后(见方案 §4)。
 			h.accountMgr.ReleaseAccount(poolAccount.ID)

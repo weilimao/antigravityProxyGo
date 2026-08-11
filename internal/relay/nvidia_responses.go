@@ -121,13 +121,15 @@ type ResponsesResponse struct {
 }
 
 // ResponsesOutputItem 是 Responses output[] 的统一条目。
-// 文本条目用 Type="message" + Content；工具调用条目用 Type="function_call" + Name/CallID/Arguments。
+// 文本条目用 Type="message" + Content;工具调用条目用 Type="function_call" + Name/CallID/Arguments;
+// 思考条目用 Type="reasoning" + Summary(对齐 OpenAI Responses 官方 reasoning summary 形态,无 role/content)。
 type ResponsesOutputItem struct {
 	Type      string                 `json:"type"`
 	ID        string                 `json:"id,omitempty"`
 	Role      string                 `json:"role,omitempty"`
 	Status    string                 `json:"status,omitempty"`
 	Content   []ResponsesContentPart `json:"content,omitempty"`
+	Summary   []ResponsesSummaryPart `json:"summary,omitempty"`
 	CallID    string                 `json:"call_id,omitempty"`
 	Name      string                 `json:"name,omitempty"`
 	Arguments string                 `json:"arguments,omitempty"`
@@ -136,6 +138,13 @@ type ResponsesOutputItem struct {
 // ResponsesContentPart 是 message 条目里的内容块（类型 output_text）。
 type ResponsesContentPart struct {
 	Type string `json:"type"` // "output_text"
+	Text string `json:"text"`
+}
+
+// ResponsesSummaryPart 是 reasoning 条目里的摘要块（类型 summary_text）。
+// 对齐 OpenAI Responses 官方 reasoning item.summary[] 形态。
+type ResponsesSummaryPart struct {
+	Type string `json:"type"` // "summary_text"
 	Text string `json:"text"`
 }
 
@@ -183,12 +192,13 @@ func OpenAIChatToResponses(resp *OpenAIChatResponse, displayModel string) *Respo
 }
 
 // openAIChoiceToResponsesItems 把一个 OpenAI Chat choice message 拆成 Responses output[] 条目。
-// 思考(reasoning_content/reasoning)→独立 reasoning message 条目置于正文前(D-nvidia 侧);
+// 思考(reasoning_content/reasoning)→独立 reasoning summary 条目置于正文前(D-nvidia 侧);
 // 文本→message 条目；tool_calls→每个一个 function_call 条目（顺序与上游一致）。
 func openAIChoiceToResponsesItems(m ChatMessage, respID string) []ResponsesOutputItem {
 	var items []ResponsesOutputItem
 
-	// 思考条目(若有):独立 output item,content[].type=reasoning_text,置于正文之前。
+	// 思考条目(若有):独立 output item,type=reasoning + summary[]{summary_text},置于正文之前。
+	// 形态对齐 OpenAI Responses 官方 reasoning summary 家族(Codex CLI 只认这套才在 TUI 渲染思考摘要)。
 	// 旧实现非流式路径忽略思考,把 reason 文本丢失——Codex 非流式完全无思考(D-nvidia 侧)。
 	rrText := m.ReasoningContent
 	if strings.TrimSpace(rrText) == "" && m.Reasoning != "" {
@@ -202,12 +212,10 @@ func openAIChoiceToResponsesItems(m ChatMessage, respID string) []ResponsesOutpu
 	}
 	if strings.TrimSpace(rrText) != "" {
 		items = append(items, ResponsesOutputItem{
-			Type:   "message",
-			ID:     "msg_" + respID + "_r0",
-			Role:   "assistant",
-			Status: "completed",
-			Content: []ResponsesContentPart{{
-				Type: "reasoning_text",
+			Type: "reasoning",
+			ID:   "rs_" + respID,
+			Summary: []ResponsesSummaryPart{{
+				Type: "summary_text",
 				Text: rrText,
 			}},
 		})
@@ -359,7 +367,10 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 	// reasoning(思考)独立 item:上游 NIM 推理模型先发 reasoning_content 再发正文,
 	// 思考与正文是两个独立 output_item,与 compat.go 流式 reasoning 独立 item 语义一致(B)。
 	// 旧实现此处零 reasoning 处理,reasoning_content 被整段丢弃——Codex 走 NVIDIA 池完全无思考(C)。
-	reasonItem := &responsesStreamItem{kind: "reasoning", id: "msg_" + streamID + "_r0"}
+	// 协议形态对齐 OpenAI Responses 官方 reasoning summary 家族(type=reasoning + summary/summary_text,
+	// 事件 response.reasoning_summary_part.added / response.reasoning_summary_text.delta),
+	// Codex CLI 只认这套才在 TUI 渲染思考摘要。旧实现用 message+reasoning_text 是非标准自造形态。
+	reasonItem := &responsesStreamItem{kind: "reasoning", id: "rs_" + streamID}
 	var reasoningBuf strings.Builder
 	reasoningOpened := false
 	reasonOutIdx := 0 // reasoning item 锁定的 output_index(开块时赋值,正文来时推进)
@@ -394,7 +405,7 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 		ch := chunk.Choices[0]
 
 		// 思考增量:reasoning_content(主)/reasoning(兜底)先于正文到达,
-		// 映射成 response.reasoning_text.delta,part.type=reasoning_text,独立 output_item。
+		// 映射成 response.reasoning_summary_text.delta,part.type=summary_text,独立 output_item。
 		// 仅在非空时进分支:无推理模型(reasoning_content 恒空)永不开元,对齐 NVIDIA thinking 守卫。
 		rrDelta := ch.Delta.ReasoningContent
 		if strings.TrimSpace(rrDelta) == "" && ch.Delta.Reasoning != "" {
@@ -404,7 +415,7 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 			if IsReasoningAsText() {
 				// 打字机模式(与 Anthropic 入站 nvidia_translate_sse.go 同款口径):
 				// 把思考原文伪装成普通 output_text delta,直接逐字推打屏幕,避免 Codex 客户端
-				// 把 reasoning_text item 默认折叠收起。与正文共享同一 text item(沿用 textItem.outIdx
+				// 把 reasoning summary item 默认折叠收起。与正文共享同一 text item(沿用 textItem.outIdx
 				// 与 fullText 累积),收尾时随正文一起 output_text.done,无独立 reasoning item 闭合。
 				textItem.ensureOpened(fw, "output_text", reasonOutIdx)
 				fullText.WriteString(rrDelta)
@@ -413,11 +424,11 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 				if !reasoningOpened {
 					reasoningOpened = true
 					fw.writeEvent("response.output_item.added", responsesReasoningItemAddedPayload(reasonItem.id, reasonOutIdx))
-					fw.writeEvent("response.content_part.added", responsesReasoningPartAddedPayload(reasonItem.id, reasonOutIdx))
+					fw.writeEvent("response.reasoning_summary_part.added", responsesReasoningPartAddedPayload(reasonItem.id, reasonOutIdx))
 					reasonItem.opened = true
 				}
 				reasoningBuf.WriteString(rrDelta)
-				fw.writeEvent("response.reasoning_text.delta", responsesReasoningDeltaPayload(reasonItem.id, reasonOutIdx, rrDelta))
+				fw.writeEvent("response.reasoning_summary_text.delta", responsesReasoningDeltaPayload(reasonItem.id, reasonOutIdx, rrDelta))
 			}
 		}
 
@@ -717,16 +728,17 @@ func responsesFunctionCallItemDonePayload(it *responsesStreamItem, args string) 
 }
 
 // ===== reasoning(思考)item 的 Responses SSE payload 构造器(C) =====
-// reasoning item 用 type=message + content[].type=reasoning_text,与正文 output_text item 分离。
+// reasoning item 用 type=reasoning + summary[],与正文 output_text item 分离。
+// 形态对齐 OpenAI Responses 官方 reasoning summary 家族(Codex CLI 只认这套才在 TUI 渲染思考摘要):
+// item.type=reasoning(非 message),summary=[{type:"summary_text",text}],无 role/content。
 // output_index 由调用侧 reasonOutIdx 显式传入(不存ResponsesStreamItem.index,避免与 tool index 混用)。
 
 func responsesReasoningItemAddedPayload(itemID string, outIdx int) string {
 	item := map[string]interface{}{
 		"id":      itemID,
-		"type":    "message",
+		"type":    "reasoning",
 		"status":  "in_progress",
-		"role":    "assistant",
-		"content": []interface{}{},
+		"summary": []interface{}{},
 	}
 	return jsonString(map[string]interface{}{
 		"type":            "response.output_item.added",
@@ -737,54 +749,55 @@ func responsesReasoningItemAddedPayload(itemID string, outIdx int) string {
 }
 
 func responsesReasoningPartAddedPayload(itemID string, outIdx int) string {
-	part := map[string]interface{}{"type": "reasoning_text", "text": ""}
+	part := map[string]interface{}{"type": "summary_text", "text": ""}
 	return jsonString(map[string]interface{}{
-		"type":            "response.content_part.added",
+		"type":            "response.reasoning_summary_part.added",
 		"sequence_number": 0,
 		"item_id":         itemID,
 		"output_index":    outIdx,
-		"content_index":   0,
+		"summary_index":   0,
 		"part":            part,
 	})
 }
 
 func responsesReasoningDeltaPayload(itemID string, outIdx int, delta string) string {
 	return jsonString(map[string]interface{}{
-		"type":            "response.reasoning_text.delta",
+		"type":            "response.reasoning_summary_text.delta",
 		"sequence_number": 0,
 		"item_id":         itemID,
 		"output_index":    outIdx,
-		"content_index":   0,
+		"summary_index":   0,
 		"delta":           delta,
 	})
 }
 
-// responsesCloseReasoning 闭合已开启的 reasoning item:发 reasoning_text.done +
-// content_part.done + output_item.done 三件套。调用方保证仅在 reasoningOpened=true 时调用,
+// responsesCloseReasoning 闭合已开启的 reasoning item:发 reasoning_summary_text.done +
+// reasoning_summary_part.done + output_item.done 三件套。调用方保证仅在 reasoningOpened=true 时调用,
 // 调用后推进 output_index。不幂等(调用方负责状态翻转)。
+// done 的 reasoning item 无 status 字段(对齐 cc-switch reasoning_close_with_item)。
 func responsesCloseReasoning(fw *flushWriter, itemID string, outIdx int, reasonsText string) {
 	reasonDone := map[string]interface{}{
-		"type":            "response.reasoning_text.done",
+		"type":            "response.reasoning_summary_text.done",
 		"sequence_number": 0,
 		"item_id":         itemID,
 		"output_index":    outIdx,
-		"content_index":   0,
+		"summary_index":   0,
 		"text":            reasonsText,
 	}
-	fw.writeEvent("response.reasoning_text.done", jsonString(reasonDone))
+	fw.writeEvent("response.reasoning_summary_text.done", jsonString(reasonDone))
 
 	reasonPartDone := map[string]interface{}{
-		"type":            "response.content_part.done",
+		"type":            "response.reasoning_summary_part.done",
 		"sequence_number": 0,
 		"item_id":         itemID,
 		"output_index":    outIdx,
-		"content_index":   0,
+		"summary_index":   0,
 		"part": map[string]interface{}{
-			"type": "reasoning_text",
+			"type": "summary_text",
 			"text": reasonsText,
 		},
 	}
-	fw.writeEvent("response.content_part.done", jsonString(reasonPartDone))
+	fw.writeEvent("response.reasoning_summary_part.done", jsonString(reasonPartDone))
 
 	itemDone := map[string]interface{}{
 		"type":            "response.output_item.done",
@@ -792,10 +805,8 @@ func responsesCloseReasoning(fw *flushWriter, itemID string, outIdx int, reasons
 		"output_index":    outIdx,
 		"item": map[string]interface{}{
 			"id":      itemID,
-			"type":    "message",
-			"status":  "completed",
-			"role":    "assistant",
-			"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": reasonsText}},
+			"type":    "reasoning",
+			"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": reasonsText}},
 		},
 	}
 	fw.writeEvent("response.output_item.done", jsonString(itemDone))

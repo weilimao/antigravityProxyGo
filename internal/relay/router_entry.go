@@ -191,8 +191,13 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		// bodyBytes 为入站原始请求体(上方 readBodyWithTimeout 读出, 与 goctx 含义一致);
 		// r.Header 经 collectInboundHeadersForLog 对 Authorization / x-api-key 等敏感头脱敏,
 		// 杜绝把客户端凭证写进仪表盘与 SQLite。超长字段后续由 stats.TruncateRequestBody 截断。
-		ReqBody:     parseInboundBodyForLog(bodyBytes),
-		ReqHeaders:  collectInboundHeadersForLog(r.Header),
+		ReqBody:    parseInboundBodyForLog(bodyBytes),
+		ReqHeaders: collectInboundHeadersForLog(r.Header),
+		// ReasoningEffort: 命中上游思考等级(buildUpstreamBody 在 upstreamReq 构造完成后提取,
+		// AnthropicToOpenAIChat 经 mapToOfficialOpenAIEffort 写入 / 直传取入站 body 顶层值;
+		// Anthropic 原生端点无该概念 → ""), 透传到 recordOtherUsage → stats.RequestLog.ReasoningEffort,
+		// 供前端「模型」列追加 (档) 后缀展示。空串=未开思考, 前端不渲染后缀。
+		ReasoningEffort: res.usedReasoningEffort,
 	}
 	if res.usedAccPtr != nil {
 		res.logCtx.Host = passthroughHostFromBaseURL(res.usedAccPtr.BaseURL)

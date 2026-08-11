@@ -252,8 +252,12 @@ export function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
     slot.sessionId.textContent = log.sessionId || '-';
     slot.sessionId.setAttribute('title', log.sessionId || '-');
 
-    slot.modelName.textContent = log.model;
-    slot.modelCell.setAttribute('title', log.model);
+    // 模型名: 命中思考等级时追加后缀(如 z-ai/glm-5.2(max)), 后缀取「命中上游」的映射折叠值
+    // (NVIDIA-NIM deepseek 模式 low/medium→high、max→max;Grok off→none/on→档;Other 走官方值)。
+    // 空串(客户端未开思考/全局关/上游无该概念)→ 不渲染后缀, 仅显示原模型名。textContent 安全无需转义。
+    const displayModel = log.reasoningEffort ? `${log.model}(${log.reasoningEffort})` : log.model;
+    slot.modelName.textContent = displayModel;
+    slot.modelCell.setAttribute('title', displayModel);
 
     // NVIDIA 号池链路请求(family==="nvidia")在模型名行右侧显示绿色 NVIDIA badge, 便于在
     // 合并的请求日志列表里一眼区分英伟达号池来源(gemini/claude 直连日志无此 badge)。

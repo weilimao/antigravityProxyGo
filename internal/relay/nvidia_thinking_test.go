@@ -418,14 +418,21 @@ func TestResolveReasoningEffort_OutputConfigEffort(t *testing.T) {
 }
 
 // TestResolveReasoningEffort_ThinkingFallback 锁定 thinking 兜底:
-// adaptive→max,enabled+budget 分档,enabled 无 budget→high,disabled→空。
+// adaptive→max,enabled+budget 分四档(对齐旧版 Anthropic 思考强度档位),enabled 无 budget→high,disabled→空。
+// 阈值:<1000→low,1000-7999→medium,8000-15999→high,≥16000→max。
 func TestResolveReasoningEffort_ThinkingFallback(t *testing.T) {
 	cases := map[string]string{
 		`{"type":"adaptive"}`:                      "max",
-		`{"type":"enabled","budget_tokens":1024}`:  "low",
-		`{"type":"enabled","budget_tokens":8000}`:  "medium",
-		`{"type":"enabled","budget_tokens":32000}`: "high",
-		`{"type":"enabled"}`:                       "high",
+		`{"type":"enabled","budget_tokens":512}`:   "low",   // <1000 → low(旧版 Low)
+		`{"type":"enabled","budget_tokens":999}`:   "low",   // low 上界
+		`{"type":"enabled","budget_tokens":1024}`:  "medium", // 1000-7999 → medium(旧版 Medium 2-5k)
+		`{"type":"enabled","budget_tokens":7999}`:  "medium", // medium 上界
+		`{"type":"enabled","budget_tokens":8000}`:  "high",   // 8000-15999 → high(旧版 High 8-16k)
+		`{"type":"enabled","budget_tokens":15999}`: "high",   // high 上界
+		`{"type":"enabled","budget_tokens":16000}`: "max",    // ≥16000 → max(旧版 Max/Ultra 30-100k+)
+		`{"type":"enabled","budget_tokens":32000}`: "max",    // max 档
+		`{"type":"enabled","budget_tokens":64000}`: "max",    // max 档
+		`{"type":"enabled"}`:                       "high",   // 无 budget → 旧默认 High
 		`{"type":"disabled"}`:                      "",
 	}
 	for tk, want := range cases {
@@ -485,12 +492,12 @@ func TestAnthropicToOpenAIChat_InjectsChatTemplateKwargs(t *testing.T) {
 		t.Fatalf("adaptive→max,实际 reasoning_effort=%v want=max", kw["reasoning_effort"])
 	}
 
-	// low 等级(deepseek mode 落回 high)→ reasoning_effort:high
+	// medium 等级(budget=1024 落 medium 档,deepseek mode 把 medium 收敛成 high)→ reasoning_effort:high
 	req2 := makeAnthReq(t, "deepseek-ai/deepseek-v4-flash", `{"type":"enabled","budget_tokens":1024}`, "")
 	out2, _ := AnthropicToOpenAIChat(req2)
 	kw2 := ctKwargs(t, out2)
 	if kw2["reasoning_effort"] != "high" {
-		t.Fatalf("low 经 deepseek mode 映射应→high,实际=%v", kw2["reasoning_effort"])
+		t.Fatalf("medium 经 deepseek mode 映射应→high,实际=%v", kw2["reasoning_effort"])
 	}
 
 	// 客户端明示 disabled → 不注入 chat_template_kwargs(回归安全)

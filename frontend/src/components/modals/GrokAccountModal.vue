@@ -88,7 +88,7 @@
         </div>
         <button type="button" id="btnGrokFetchModels" class="px-2.5 py-1 text-[11px] font-bold text-primary bg-primary/10 hover:bg-primary/20 rounded-lg transition-colors flex items-center gap-1 shrink-0 cursor-pointer">
           <span class="material-symbols-outlined text-[14px]">download</span>
-          <span>获取模型</span>
+          <span data-i18n="grokFieldFetchModels">获取模型</span>
         </button>
       </div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">

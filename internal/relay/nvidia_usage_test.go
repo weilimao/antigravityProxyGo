@@ -178,6 +178,64 @@ func TestRecordNvidiaUsage_CachedHitSetsHITStatus(t *testing.T) {
 	}
 }
 
+// TestRecordNvidiaUsage_ReasoningEffortPropagates 验证命中上游思考等级落库链路:
+// logCtx.ReasoningEffort 经 recordNvidiaUsage → stats.RequestLog.ReasoningEffort 真实闭环,
+// 供前端「模型」列追加 (档) 后缀展示。空串(未开思考)与 max(命中)两态均需覆盖。
+func TestRecordNvidiaUsage_ReasoningEffortPropagates(t *testing.T) {
+	// 每个子用例独立注入 fresh tracker, 避免 AddRequestLogForFamily 的 prepend 语义
+	// (最新在前, requests[0]) 与 GetRecentRequestReasoningEffort 读 requests[len-1] (最旧)
+	// 的口径错位: 同一 testfun 连调两次 recordNvidiaUsage 时, 第二次断言会读到第一次旧记录。
+	// 下沉 tracker 后每个子用例 requests 段仅 1 条, [0] 与 [len-1] 同指, 断言稳定。
+	// 该不一致对既有 FirstByteMs/CacheStatus getter 同样存在, 但既有用例每 testfun 只调一次,
+	// 不触发; 本用例是首个同 testfun 连调两次的, 故选择隔离 tracker 而非改 getter 口径
+	// (改 getter 会波及全量既有用例语义边界)。
+	userSession := &RelaySession{Token: "tok-eff", UserID: "u-eff", SessionKey: "auth:acc:abc123def4567890"}
+	start := time.Now()
+	rec := stats.NewFirstByteRecorder(start)
+	time.Sleep(2 * time.Millisecond)
+	rec.MarkFirstByte()
+
+	t.Run("max", func(t *testing.T) {
+		handler, _, _, _ := newNvidiaTestHandler(t, nil)
+		gt := makeInjectedGlobalTracker(t)
+		handler.SetGlobalStatsTracker(gt)
+		logCtx := nvidiaLogCtx{
+			Method:          "POST",
+			Host:            "integrate.api.nvidia.com",
+			Path:            "/nvidia/v1/chat/completions",
+			SessionID:       "auth:acc:abc123def4567890",
+			Account:         "u-eff",
+			StatusCode:      200,
+			StartTs:         start,
+			FirstByteRec:    rec,
+			ReasoningEffort: "max",
+		}
+		handler.recordNvidiaUsage(userSession, "nvidia/z-ai/glm-5.2", 100, 50, 0, nil, logCtx)
+		if got := gt.GetRecentRequestReasoningEffort(); got != "max" {
+			t.Errorf("max 落库: ReasoningEffort = %q, want %q", got, "max")
+		}
+	})
+	t.Run("empty", func(t *testing.T) {
+		handler, _, _, _ := newNvidiaTestHandler(t, nil)
+		gt := makeInjectedGlobalTracker(t)
+		handler.SetGlobalStatsTracker(gt)
+		logCtx := nvidiaLogCtx{
+			Method:       "POST",
+			Host:         "integrate.api.nvidia.com",
+			Path:         "/nvidia/v1/chat/completions",
+			SessionID:    "auth:acc:abc123def4567890",
+			Account:      "u-eff",
+			StatusCode:   200,
+			StartTs:      start,
+			FirstByteRec: rec,
+		}
+		handler.recordNvidiaUsage(userSession, "nvidia/z-ai/glm-5.2", 100, 50, 0, nil, logCtx)
+		if got := gt.GetRecentRequestReasoningEffort(); got != "" {
+			t.Errorf("空串落库: ReasoningEffort = %q, want empty", got)
+		}
+	})
+}
+
 // TestRecordNvidiaUsage_ZeroCachedStaysNONE 验证 cached==0 ?CacheStatus 仍为 "NONE",
 // 即旧行为(前端紫色 NONE badge)无回归。当?NVIDIA 官方 NIM 不回?cache,真实链路恒走此分支?
 func TestRecordNvidiaUsage_ZeroCachedStaysNONE(t *testing.T) {

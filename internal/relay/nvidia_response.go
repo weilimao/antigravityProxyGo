@@ -33,7 +33,10 @@ import (
 // parseInboundBodyForLog 注入 logCtx.ReqBody 落库,使前端详情弹窗能展示「入站时」的请求体。
 // inboundInputTokens 为入站请求本地估算的输入 token 数(保底 1),仅 anthropic 流式分支透传给
 // writeNvidiaAnthropicStream → message_start.usage.input_tokens,让客户端流首即显示 ↑。
-func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte, inboundBody []byte, inboundInputTokens int, startTs time.Time, firstByteRec *stats.FirstByteRecorder) {
+// resolvedEffort 为本次请求命中上游的思考等级(NVIDIA-NIM 取 chat_template_kwargs.reasoning_effort,
+// 映射折叠后真正发给 NIM 的值, 只剩 high/max), 装入 logCtx.ReasoningEffort 透传到 recordNvidiaUsage
+// 落库为 stats.RequestLog.ReasoningEffort, 供前端「模型」列追加 (档) 后缀展示。空串=未开思考/全局关。
+func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account, targetURL string, upstreamBody []byte, inboundBody []byte, inboundInputTokens int, startTs time.Time, firstByteRec *stats.FirstByteRecorder, resolvedEffort string) {
 	defer resp.Body.Close()
 
 	// logCtx: 在分发出站协议前统一组装请求日志上下文, 共享给四个下行函数的 recordNvidiaUsage 调用点。
@@ -80,6 +83,11 @@ func (h *APICompatHandler) writeNvidiaResponse(w http.ResponseWriter, r *http.Re
 	//     超长字段后续由 stats.TruncateRequestBody 在 AddRequestLogForFamily 内统一截断防 OOM。
 	logCtx.ReqBody = parseInboundBodyForLog(inboundBody)
 	logCtx.ReqHeaders = collectInboundHeadersForLog(r.Header)
+	// 命中上游思考等级透传装配:由 handleNvidia 在 upstreamReq 构造完成后经
+	// extractNvidiaResolvedEffort 提取(chat_template_kwargs.reasoning_effort, 只剩 high/max),
+	// 经此参数装入 logCtx, 透传到 recordNvidiaUsage → stats.RequestLog.ReasoningEffort 落库,
+	// 供前端「模型」列追加 (档) 后缀展示。空串=未开思考/全局关/模型禁注入 kwargs。
+	logCtx.ReasoningEffort = resolvedEffort
 
 	switch inboundKind {
 	case "anthropic":

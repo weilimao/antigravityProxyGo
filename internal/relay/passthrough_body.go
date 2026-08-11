@@ -12,16 +12,18 @@ import (
 
 // buildUpstreamBody 按入站协议与上游协议形态构造发往上游的请求体。
 // allowOCR 为 false 时跳过 image 降级(避免换号时重复降级,外部已降级后调用)。
-// 返回的 body 直接作为上游请求体 marshal 透传。
+// 返回的 body 直接作为上游请求体 marshal 透传;第二个返回值 resolvedEffort 为命中上游的思考等级
+// (Other 号池官方 OpenAI 顶层 reasoning_effort;Anthropic 原生端点无该概念 → ""), 供调用方回填
+// forwardResult.usedReasoningEffort → logCtx.ReasoningEffort 落库, 前端「模型」列追加 (档) 后缀。
 func (pf *passthroughForward) buildUpstreamBody(bodyBytes []byte, upstreamModel string, isStreaming bool,
 	isChat, isResponses, isMessages bool, upstreamFormat string, userSession *RelaySession, allowOCR bool,
-) ([]byte, error) {
+) ([]byte, string, error) {
 	// 上游 OpenAI 兼容端点:入站 OpenAI Chat / Responses → OpenAIChatRequest(Responses 转换);入站 Anthropic → AnthropicToOpenAIChat(含 image 降级)。
 	if upstreamFormat == "openai" {
 		if isMessages {
 			var anthReq AnthropicRequest
 			if err := json.Unmarshal(bodyBytes, &anthReq); err != nil {
-				return nil, fmt.Errorf("invalid anthropic request: %w", err)
+				return nil, "", fmt.Errorf("invalid anthropic request: %w", err)
 			}
 			anthReq.Model = upstreamModel
 			// 本地图片路径自愈(L2.5 预处理):Claude Code 等客户端对未识别模型会剔除 image 块,
@@ -47,18 +49,28 @@ func (pf *passthroughForward) buildUpstreamBody(bodyBytes []byte, upstreamModel 
 			preserveImages := allowOCR && pf.h.ocr != nil && pf.h.ocr.modelSupportsImage(upstreamModel)
 			u, err := AnthropicToOpenAIChatPreservingImages(&anthReq, preserveImages, mappings)
 			if err != nil {
-				return nil, fmt.Errorf("anthropic->openai transform failed: %w", err)
+				return nil, "", fmt.Errorf("anthropic->openai transform failed: %w", err)
 			}
 			if isStreaming {
 				ensureIncludeUsage(u)
 			}
-			return json.Marshal(u)
+			body, mErr := json.Marshal(u)
+			if mErr != nil {
+				return nil, "", mErr
+			}
+			// 命中上游值:AnthropicToOpenAIChat 经 mapToOfficialOpenAIEffort 写入 u.ReasoningEffort。
+			return body, u.ReasoningEffort, nil
 		}
 		upstreamReq, err := buildPassthroughUpstreamReq(bodyBytes, upstreamModel, isStreaming)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		return json.Marshal(upstreamReq)
+		body, mErr := json.Marshal(upstreamReq)
+		if mErr != nil {
+			return nil, "", mErr
+		}
+		// 入站 OpenAI Chat/Responses 直传:命中上游值取归一后的顶层 reasoning_effort。
+		return body, upstreamReq.ReasoningEffort, nil
 	}
 
 	// 上游 Anthropic 原生端点 /v1/messages。
@@ -66,18 +78,29 @@ func (pf *passthroughForward) buildUpstreamBody(bodyBytes []byte, upstreamModel 
 	if isMessages {
 		var obj map[string]json.RawMessage
 		if err := json.Unmarshal(bodyBytes, &obj); err != nil {
-			return nil, fmt.Errorf("invalid anthropic request: %w", err)
+			return nil, "", fmt.Errorf("invalid anthropic request: %w", err)
 		}
 		mb, _ := json.Marshal(upstreamModel)
 		obj["model"] = mb
-		return json.Marshal(obj)
+		body, mErr := json.Marshal(obj)
+		if mErr != nil {
+			return nil, "", mErr
+		}
+		// Anthropic 原生端点无 reasoning_effort 概念, 命中值留空。
+		return body, "", nil
 	}
 	// 入站 OpenAI Chat / Responses → Anthropic Messages 请求体。
 	anthReq, err := OpenAIToAnthropicMessages(bodyBytes, upstreamModel, isResponses)
 	if err != nil {
-		return nil, fmt.Errorf("openai->anthropic transform failed: %w", err)
+		return nil, "", fmt.Errorf("openai->anthropic transform failed: %w", err)
 	}
-	return json.Marshal(anthReq)
+	body, mErr := json.Marshal(anthReq)
+	if mErr != nil {
+		return nil, "", mErr
+	}
+	// OpenAIToAnthropic 把入站 reasoning_effort 翻译为 Anthropic thinking 字段,上游 Anthropic 原生端点
+	// 不认 reasoning_effort 顶层, 命中值留空(前端不渲染后缀)。
+	return body, "", nil
 }
 
 // buildPassthroughUpstreamReq 把入站 body 归一化为 OpenAIChatRequest 并改写 model/stream_options。

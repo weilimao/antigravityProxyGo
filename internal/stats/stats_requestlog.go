@@ -64,6 +64,7 @@ func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 			Host:         rl.Host,
 			Path:         rl.Path,
 			SessionID:    rl.SessionID,
+			Family:       rl.Family,
 		}
 		_ = db.InsertRequestLog(dbItem)
 	}(reqLog, t.pricingMgr)
@@ -118,13 +119,14 @@ func (t *Tracker) AddRequestLogForFamily(reqLog *RequestLog) {
 			InputCost:    inputCost,
 			OutputCost:   outputCost,
 			CachedCost:   cachedCost,
-			DurationMs:   rl.DurationMs,
-			StatusCode:   rl.StatusCode,
-			Method:       rl.Method,
-			Host:         rl.Host,
-			Path:         rl.Path,
-			SessionID:    rl.SessionID,
-			Family:       rl.Family,
+			DurationMs:      rl.DurationMs,
+			StatusCode:      rl.StatusCode,
+			Method:          rl.Method,
+			Host:            rl.Host,
+			Path:            rl.Path,
+			SessionID:       rl.SessionID,
+			Family:          rl.Family,
+			ReasoningEffort: rl.ReasoningEffort,
 		}
 		_ = db.InsertRequestLog(dbItem)
 	}(reqLog, t.pricingMgr)

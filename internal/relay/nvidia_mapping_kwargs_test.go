@@ -160,9 +160,13 @@ func TestAnthropicToOpenAIChat_OtherPool_ReasoningEffortGrades(t *testing.T) {
 
 	cases := map[string]string{
 		// thinking.type=enabled + budget_tokens 分档(resolveReasoningEffort 内部档→官方映射)
-		`{"type":"enabled","budget_tokens":1024}`:  "low", // <4000 → low
-		`{"type":"enabled","budget_tokens":8000}`:  "medium",
-		`{"type":"enabled","budget_tokens":32000}`: "high",
+		// 阈值对齐旧版 Anthropic:<1000→low,1000-7999→medium,8000-15999→high,≥16000→max;
+		// 经 mapToOfficialOpenAIEffort:max→high(官方无 max),各小档→官方 low/medium/high 1:1。
+		`{"type":"enabled","budget_tokens":1024}`:  "medium", // 1024 落 medium(旧版 Medium 2-5k)→ 官方 medium
+		`{"type":"enabled","budget_tokens":8000}`:  "high",   // 8000 落 high(旧版 High 8-16k)→ 官方 high
+		`{"type":"enabled","budget_tokens":32000}`: "high",   // 32000 落 max → 官方无 max → high
+		`{"type":"enabled","budget_tokens":16000}`: "high",   // 16000 落 max → 官方 high(新档边界)
+		`{"type":"enabled","budget_tokens":999}`:   "low",    // <1000 落 low(旧版 Low)→ 官方 low
 		`{"type":"adaptive"}`:                      "high", // adaptive→max→官方 high(无 max)
 		`{"type":"disabled"}`:                      "",     // 显式关闭 → 不注入
 	}

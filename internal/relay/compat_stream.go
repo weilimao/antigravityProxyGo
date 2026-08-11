@@ -131,11 +131,16 @@ func (h *APICompatHandler) handleStreamResponse(
 	var responsesTextBuf strings.Builder
 
 	// ===== Responses 协议 reasoning(思考)独立 item 状态机 =====
-	// thought 与正文必须拆成各自独立的 output_item,不能共用一个 message 条目:
-	// 旧实现 thought 与 text 共用 responsesMsgOpened/responsesMsgID/responsesTextBuf 且都硬编码 output_index 0,
-	// 导致 thought 一旦真正流入(A 修复后),part 类型被正文覆盖、index 撞车、无收尾 done——Codex 收到损坏流。
-	// 此处用独立状态把思考拆为单独的 reasoning item(item.type=message, content[].type=reasoning_text),
-	// 与正文 message item、function_call item 各占一个 output_index,互不干扰。
+	// thought 与正文必须拆成各自独立的 output_item,不能共用一个条目。
+	//
+	// 协议形态对齐 OpenAI 官方 Responses 流式 reasoning summary 家族(与 cc-switch
+	// codex_responses_sse.rs 逐字节一致),Codex CLI 只认这套事件才会在 TUI 渲染思考摘要:
+	//   item.type = "reasoning",item.summary = [{type:"summary_text",text}]
+	//   事件:<output_item.added> → <reasoning_summary_part.added> →
+	//        <reasoning_summary_text.delta>* → <reasoning_summary_text.done> →
+	//        <reasoning_summary_part.done> → <output_item.done>(done 的 item 无 status 字段)
+	// 旧实现用 item.type=message + content[].type=reasoning_text + response.reasoning_text.*,
+	// 属非标准自造形态,Codex 客户端不识别 → 思考增量被丢弃 → 不显示。
 	//
 	// output_index 分配约定(responsesOutIdx 递增计数器,开块即分配并推进):
 	//   - reasoning item 开块时取 responsesOutIdx 并 ++(reasoning 先到则占 0)
@@ -143,43 +148,44 @@ func (h *APICompatHandler) handleStreamResponse(
 	//   - 每个 function_call item 开块时取 responsesOutIdx 并 ++
 	// 每类 item 用各自记录的 index 续发 delta/done,互不撞车。
 	responsesReasoningOpened := false
-	responsesReasoningID := fmt.Sprintf("msg_%s_r0", streamID)
+	responsesReasoningID := fmt.Sprintf("rs_%s", streamID)
 	responsesReasoningOutIdx := 0 // reasoning item 锁定的 output_index(开块时赋值)
 	var responsesReasoningBuf strings.Builder
 
 	responsesOutIdx := 0
-	// closeResponsesReasoning 闭合已开启的 reasoning item:发 reasoning_text.done +
-	// content_part.done + output_item.done 三件套,清零状态。幂等(未开则不动作)。
+	// closeResponsesReasoning 闭合已开启的 reasoning item:发 reasoning_summary_text.done +
+	// reasoning_summary_part.done + output_item.done 三件套,清零状态。幂等(未开则不动作)。
 	// 不在此推进 responsesOutIdx(index 在开块时已分配并推进),只发收尾事件。
+	// done 的 reasoning item 无 status 字段(对齐 cc-switch reasoning_close_with_item)。
 	closeResponsesReasoning := func() {
 		if !responsesReasoningOpened {
 			return
 		}
 		reasonsText := responsesReasoningBuf.String()
 		reasonDone := map[string]interface{}{
-			"type":            "response.reasoning_text.done",
+			"type":            "response.reasoning_summary_text.done",
 			"sequence_number": nextSeq(),
 			"item_id":         responsesReasoningID,
 			"output_index":    responsesReasoningOutIdx,
-			"content_index":   0,
+			"summary_index":   0,
 			"text":            reasonsText,
 		}
 		rdBytes, _ := json.Marshal(reasonDone)
-		fmt.Fprintf(w, "event: response.reasoning_text.done\ndata: %s\n\n", string(rdBytes))
+		fmt.Fprintf(w, "event: response.reasoning_summary_text.done\ndata: %s\n\n", string(rdBytes))
 
 		reasonPartDone := map[string]interface{}{
-			"type":            "response.content_part.done",
+			"type":            "response.reasoning_summary_part.done",
 			"sequence_number": nextSeq(),
 			"item_id":         responsesReasoningID,
 			"output_index":    responsesReasoningOutIdx,
-			"content_index":   0,
+			"summary_index":   0,
 			"part": map[string]interface{}{
-				"type": "reasoning_text",
+				"type": "summary_text",
 				"text": reasonsText,
 			},
 		}
 		rpdBytes, _ := json.Marshal(reasonPartDone)
-		fmt.Fprintf(w, "event: response.content_part.done\ndata: %s\n\n", string(rpdBytes))
+		fmt.Fprintf(w, "event: response.reasoning_summary_part.done\ndata: %s\n\n", string(rpdBytes))
 
 		reasonItemDone := map[string]interface{}{
 			"type":            "response.output_item.done",
@@ -187,10 +193,8 @@ func (h *APICompatHandler) handleStreamResponse(
 			"output_index":    responsesReasoningOutIdx,
 			"item": map[string]interface{}{
 				"id":      responsesReasoningID,
-				"type":    "message",
-				"status":  "completed",
-				"role":    "assistant",
-				"content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": reasonsText}},
+				"type":    "reasoning",
+				"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": reasonsText}},
 			},
 		}
 		ridBytes, _ := json.Marshal(reasonItemDone)
@@ -351,41 +355,40 @@ func (h *APICompatHandler) handleStreamResponse(
 								"output_index":    responsesReasoningOutIdx,
 								"item": map[string]interface{}{
 									"id":      responsesReasoningID,
-									"type":    "message",
+									"type":    "reasoning",
 									"status":  "in_progress",
-									"role":    "assistant",
-									"content": []interface{}{},
+									"summary": []interface{}{},
 								},
 							}
 							itemBytes, _ := json.Marshal(itemAdded)
 							fmt.Fprintf(w, "event: response.output_item.added\ndata: %s\n\n", string(itemBytes))
 
 							partAdded := map[string]interface{}{
-								"type":            "response.content_part.added",
+								"type":            "response.reasoning_summary_part.added",
 								"sequence_number": nextSeq(),
 								"item_id":         responsesReasoningID,
 								"output_index":    responsesReasoningOutIdx,
-								"content_index":   0,
+								"summary_index":   0,
 								"part": map[string]interface{}{
-									"type": "reasoning_text",
+									"type": "summary_text",
 									"text": "",
 								},
 							}
 							partBytes, _ := json.Marshal(partAdded)
-							fmt.Fprintf(w, "event: response.content_part.added\ndata: %s\n\n", string(partBytes))
+							fmt.Fprintf(w, "event: response.reasoning_summary_part.added\ndata: %s\n\n", string(partBytes))
 							responsesReasoningOpened = true
 						}
 						responsesReasoningBuf.WriteString(cleanText)
 						deltaEvt := map[string]interface{}{
-							"type":            "response.reasoning_text.delta",
+							"type":            "response.reasoning_summary_text.delta",
 							"sequence_number": nextSeq(),
 							"item_id":         responsesReasoningID,
 							"output_index":    responsesReasoningOutIdx,
-							"content_index":   0,
+							"summary_index":   0,
 							"delta":           cleanText,
 						}
 						deltaBytes, _ := json.Marshal(deltaEvt)
-						fmt.Fprintf(w, "event: response.reasoning_text.delta\ndata: %s\n\n", string(deltaBytes))
+						fmt.Fprintf(w, "event: response.reasoning_summary_text.delta\ndata: %s\n\n", string(deltaBytes))
 					}
 					flusher.Flush()
 				} else {

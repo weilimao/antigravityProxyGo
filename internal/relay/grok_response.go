@@ -38,7 +38,10 @@ import (
 // inboundInputTokens 为入站请求本地估算的输入 token 数(保底 1), 仅 anthropic 流式分支透传给
 // OpenAIChatSSEToAnthropicSSE → message_start.usage.input_tokens, 让客户端流首即显示 ↑。
 // startTs / firstByteRec 由 handleGrok 入口起算与全程共享, 用于请求日志的 DurationMs / FirstByteMs。
-func (h *APICompatHandler) writeGrokResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account, inboundBody []byte, inboundInputTokens int, startTs time.Time, firstByteRec *stats.FirstByteRecorder) {
+// resolvedEffort 为本次请求命中上游的思考等级(Grok 走 xAI 官方顶层 reasoning_effort,
+// grokApplyThinkingToChat 落地值:off→"none"、on→档、unspecified→""), 装入 logCtx.ReasoningEffort
+// 透传到 recordGrokUsage → stats.RequestLog.ReasoningEffort, 供前端「模型」列追加 (档) 后缀展示。
+func (h *APICompatHandler) writeGrokResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, inboundKind string, isStreaming bool, model string, userSession *RelaySession, poolAccount *account.Account, inboundBody []byte, inboundInputTokens int, startTs time.Time, firstByteRec *stats.FirstByteRecorder, resolvedEffort string) {
 	defer resp.Body.Close()
 
 	// logCtx: 在分发出站协议前统一组装请求日志上下文(与 writeNvidiaResponse 同构), 共享给四个下行
@@ -76,6 +79,10 @@ func (h *APICompatHandler) writeGrokResponse(w http.ResponseWriter, r *http.Requ
 	//     杜绝把客户端凭证写进仪表盘与 SQLite。
 	logCtx.ReqBody = parseInboundBodyForLog(inboundBody)
 	logCtx.ReqHeaders = collectInboundHeadersForLog(r.Header)
+	// 命中上游思考等级透传装配:由 handleGrok 在 upstreamReq 构造完成后取 upstreamReq.ReasoningEffort
+	// (grokApplyThinkingToChat 落地值), 装入 logCtx.ReasoningEffort 透传到 recordGrokUsage →
+	// stats.RequestLog.ReasoningEffort, 供前端「模型」列追加 (档) 后缀展示。空串=未开思考/unspecified。
+	logCtx.ReasoningEffort = resolvedEffort
 
 	switch inboundKind {
 	case "anthropic":
