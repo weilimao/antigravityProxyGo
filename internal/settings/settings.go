@@ -176,6 +176,10 @@ type Config struct {
 	// NvidiaPreferredModels 是全局级"NVIDIA 专属模型清单",所有 NVIDIA 账号共用。
 	// 配置后,前端"获取模型"直接返回该清单(不请求远端);为空时才请求远端 /v1/models。
 	NvidiaPreferredModels []string `json:"nvidiaPreferredModels"`
+	// AccountLayout/AccountGridColumns 是号池网格视图的纯 UI 偏好(grid|list 布局 + 3|4|5 列数)。
+	// 落 config.json 而非前端 localStorage,规避 WebView2 localStorage 按 exe 构建隔离导致的重启回退。
+	AccountLayout      string `json:"accountLayout"`
+	AccountGridColumns int    `json:"accountGridColumns"`
 }
 
 // DefaultOcrModel 是入站 image 自愈降级时调用的本地 Gemini OCR 模型默认值。
@@ -369,6 +373,12 @@ type ManagerInterface interface {
 	GetResolvedDebuggerLogPath() string
 	GetNvidiaPreferredModels() []string
 	SetNvidiaPreferredModels(val []string) error
+	// GetAccountLayout/SetAccountLayout: 号池视图布局("grid"|"list"),纯 UI pref,落 config.json。
+	GetAccountLayout() string
+	SetAccountLayout(layout string) error
+	// GetAccountGridColumns/SetAccountGridColumns: 号池网格列数(3|4|5),纯 UI pref,落 config.json。
+	GetAccountGridColumns() int
+	SetAccountGridColumns(cols int) error
 	// GetMaxInputTokensByModel: 按「上游模型 id → 上下文窗口」解析模型列表 max_input_tokens
 	// 声明的查询函数。allowlist 为空不过滤;fallback 为未显式配置时的兜底窗口(0=不声明)。
 	GetMaxInputTokensByModel(allowlist []string, fallback int64) func(string) int64

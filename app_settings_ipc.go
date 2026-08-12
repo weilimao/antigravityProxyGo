@@ -348,6 +348,17 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		_ = a.settingsMgr.SetMaxRetries(getIntArg(0))
 		return true
 
+	case "settings:set-account-layout":
+		layout := getStringArg(0)
+		if layout == "grid" || layout == "list" {
+			_ = a.settingsMgr.SetAccountLayout(layout)
+		}
+		return true
+
+	case "settings:set-account-grid-columns":
+		_ = a.settingsMgr.SetAccountGridColumns(getIntArg(0))
+		return true
+
 	case "settings:set-max-retry-delay":
 		_ = a.settingsMgr.SetMaxRetryDelay(getIntArg(0))
 		return true

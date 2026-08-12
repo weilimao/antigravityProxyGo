@@ -14,7 +14,7 @@ let currentTab = 'all';
 
 // Tab 固定顺序：all 永远在首位，其余按 provider 优先级排列。
 // 未在数据中出现的 provider 不会渲染对应 Tab。
-const TAB_ORDER = ['all', 'antigravity', 'project', 'nvidia', 'direct'] as const;
+const TAB_ORDER = ['all', 'antigravity', 'project', 'nvidia', 'grok', 'direct'] as const;
 
 // Tab 与 i18n key 的映射，用于查找字典中的文案。
 const TAB_I18N_KEYS: Record<string, string> = {
@@ -22,6 +22,7 @@ const TAB_I18N_KEYS: Record<string, string> = {
     antigravity: 'usage_tabAntigravity',
     project: 'usage_tabProject',
     nvidia: 'usage_tabNvidia',
+    grok: 'usage_tabGrok',
     direct: 'usage_tabDirect',
 };
 
@@ -31,6 +32,7 @@ const TAB_TONE: Record<string, string> = {
     antigravity: 'primary',
     project: 'emerald',
     nvidia: 'amber',
+    grok: 'sky',
     direct: 'slate',
 };
 
@@ -66,6 +68,8 @@ export function getToneClasses(tone: string): string {
             return 'text-emerald-600 dark:text-emerald-400';
         case 'amber':
             return 'text-amber-600 dark:text-amber-400';
+        case 'sky':
+            return 'text-sky-600 dark:text-sky-400';
         default:
             return 'text-slate-600 dark:text-slate-300';
     }
@@ -91,7 +95,7 @@ export function sortModelsByTokens(items: any[]): any[] {
 // 规整账号 provider 字段：空串与未知值统一兜底为 direct，
 // 保持与其他页面对“直连”账号的处理一致。
 export function normalizeProvider(value: any): string {
-    const p = String(value == null ? '' : value).trim();
+    const p = String(value == null ? '' : value).trim().toLowerCase();
     if (p === '' || p === 'unknown') return 'direct';
 
     // 仅识别项目内已知 provider，其余归入 direct，避免显示脏 Tab。
@@ -99,6 +103,7 @@ export function normalizeProvider(value: any): string {
         antigravity: true,
         project: true,
         nvidia: true,
+        grok: true,
         direct: true,
     };
     return known[p] ? p : 'direct';
@@ -239,7 +244,9 @@ export function renderAccountBlock(account: any): string {
             ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
             : provider === 'nvidia'
                 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-                : 'bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 border-outline-variant/30';
+                : provider === 'grok'
+                    ? 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20'
+                    : 'bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-300 border-outline-variant/30';
 
     const accountKey = account.email || account.accountId || 'Direct';
     const isOpen = openAccounts.has(accountKey);

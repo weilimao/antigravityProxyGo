@@ -562,5 +562,38 @@ func (m *Manager) SetEnableThinkingMode(val bool) error {
 	return setSetting(m, func(c *Config, v bool) { c.EnableThinkingMode = v }, val)
 }
 
+// ============ 号池视图布局与列数(纯 UI pref,落 config.json) ============
+
+func (m *Manager) GetAccountLayout() string {
+	return getSetting(m, func(c *Config) string {
+		if c.AccountLayout != "grid" && c.AccountLayout != "list" {
+			return "grid"
+		}
+		return c.AccountLayout
+	})
+}
+
+func (m *Manager) SetAccountLayout(layout string) error {
+	return setSetting(m, func(c *Config, v string) { c.AccountLayout = v }, layout)
+}
+
+func (m *Manager) GetAccountGridColumns() int {
+	return getSetting(m, func(c *Config) int {
+		if c.AccountGridColumns < 3 || c.AccountGridColumns > 5 {
+			return 4
+		}
+		return c.AccountGridColumns
+	})
+}
+
+func (m *Manager) SetAccountGridColumns(cols int) error {
+	return setSetting(m, func(c *Config, v int) {
+		if v < 3 || v > 5 {
+			v = 4
+		}
+		c.AccountGridColumns = v
+	}, cols)
+}
+
 // Debugger / OCR / SessionOptimization / NVIDIA 等含特化逻辑的访问器
 // 已迁移至 settings_extras.go 与 settings_nvidia.go(需 filepath/strings 等额外 import)。

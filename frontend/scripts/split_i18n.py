@@ -282,7 +282,7 @@ USAGE_KEYS = {
     'usage_noAccountUsage', 'usage_showingEntries', 'usage_searchPlaceholder',
     'usage_accounts', 'usage_callsCount', 'usage_totalTokens',
     'usage_noMatchingData', 'usage_tabAll', 'usage_tabAntigravity',
-    'usage_tabProject', 'usage_tabNvidia', 'usage_tabDirect', 'usage_tabEmpty',
+    'usage_tabProject', 'usage_tabNvidia', 'usage_tabGrok', 'usage_tabDirect', 'usage_tabEmpty',
     'usage_prevPage', 'usage_nextPage', 'summaryTotalCostToday',
     'summaryTotalCost24h', 'summaryTotalCost3d', 'summaryTotalCost7d',
     'summaryTotalCost30d', 'summaryTotalCostCustom', 'summaryInputCost',

@@ -104,6 +104,13 @@ export const shell = {
             console.error('[IPC] Failed to run refreshRelayUsers:', err);
         }
     }
+    if ((window as any).refreshAccountLayoutFromBackend) {
+        try {
+            (window as any).refreshAccountLayoutFromBackend();
+        } catch (err) {
+            console.error('[IPC] Failed to run refreshAccountLayoutFromBackend:', err);
+        }
+    }
 
     // Request initial state, accounts, and certificate status once channels are established
     ipcRenderer.send('get-state');

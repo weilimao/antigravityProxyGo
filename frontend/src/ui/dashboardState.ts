@@ -83,6 +83,12 @@ export interface DashboardState {
     };
 }
 
+// 号池布局与列数是纯 UI pref,已迁移到后端 config.json(规避 WebView2 localStorage 按 exe 构建隔离)。
+// module 顶层为同步代码,这里直接读 domReady 注入的 window.wailsConfigCache;localStorage 仅作旧数据兜底,
+// 无 cache(如纯浏览器调试)时回退本地值。默认列数 4 与后端 GetAccountGridColumns 一致。
+const cachedAccountLayout = (window as any).wailsConfigCache?.['settings:get-account-layout'] as string | undefined;
+const cachedAccountGridColumns = Number((window as any).wailsConfigCache?.['settings:get-account-grid-columns']);
+
 const state: DashboardState = {
     // Basic State Variables
     currentLanguage: 'zh',
@@ -122,8 +128,8 @@ const state: DashboardState = {
     accountCurrentPage: 1,
     accountItemsPerPage: 10,
     selectedAccountIds: [],
-    accountLayout: (localStorage.getItem('accounts_layout') as 'grid' | 'list') || 'grid',
-    accountGridColumns: Number(localStorage.getItem('accounts_grid_columns')) || 5,
+    accountLayout: (cachedAccountLayout === 'grid' || cachedAccountLayout === 'list') ? cachedAccountLayout : ((localStorage.getItem('accounts_layout') as 'grid' | 'list') || 'grid'),
+    accountGridColumns: (cachedAccountGridColumns >= 3 && cachedAccountGridColumns <= 5) ? cachedAccountGridColumns : (Number(localStorage.getItem('accounts_grid_columns')) || 4),
 
     // Pricing Config Cache
     pricingConfig: {},

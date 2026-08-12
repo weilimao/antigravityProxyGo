@@ -210,7 +210,7 @@ import { initChartFilters } from './ui/chartRenderer';
 import { initMigrationEvents } from './ui/migrationController';
 import { initUpdaterEvents } from './ui/updaterController';
 import { initRetryErrorLogsEvents } from './ui/retryErrorLogsController';
-import { initAccountsGlobalEvents } from './ui/accountsController';
+import { initAccountsGlobalEvents, refreshAccountLayoutFromCache, updateLayoutUI } from './ui/accountsController';
 
 const route = useRoute();
 
@@ -399,6 +399,13 @@ onMounted(() => {
     };
 
     (window as any).refreshLanguageFromBackend();
+
+    // 号池布局/列数回填:与 refreshLanguageFromBackend 同构,由 ipc.ts initWailsReady 在
+    // wailsConfigCache 注入后调用(Accounts.vue onMounted 的 initAccountsEvents 也会直接回填)。
+    (window as any).refreshAccountLayoutFromBackend = () => {
+      refreshAccountLayoutFromCache();
+      updateLayoutUI();
+    };
 
     // Manually trigger initial switchView to populate settings etc.
     const initialView = route.path === '/' ? 'dashboard' : route.path.substring(1);

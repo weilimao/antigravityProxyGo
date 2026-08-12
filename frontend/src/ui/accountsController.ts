@@ -143,6 +143,21 @@ export function updateLayoutUI() {
     }
 }
 
+// refreshAccountLayoutFromCache:从 domReady 注入的 wailsConfigCache(后端 config.json)同步回填
+// 号池布局/列数。注意:该 cache 在 domReady 才注入,晚于所有前端模块顶层执行,因此不能放在
+// dashboardState.ts 模块顶层读取(会读到 undefined 而回退 localStorage 旧值);必须在组件
+// onMounted(晚于 domReady)后调用,保证首次 updateLayoutUI 即用后端持久化值。
+export function refreshAccountLayoutFromCache(): void {
+    const layout = ipcRenderer.sendSync('settings:get-account-layout');
+    const cols = Number(ipcRenderer.sendSync('settings:get-account-grid-columns'));
+    if (layout === 'grid' || layout === 'list') {
+        state.accountLayout = layout;
+    }
+    if (cols >= 3 && cols <= 5) {
+        state.accountGridColumns = cols;
+    }
+}
+
 // setGrokThawButtonVisible:控制工具栏「一键解冻」按钮在 Grok Tab 显、其它 Tab 隐。
 // 镜像 setNvidiaPreferredModelsButtonVisible 范式:每次切 Tab 都幂等调用以同步显隐。
 // 按钮默认带 hidden 类(Accounts.vue 模板),仅 grok Tab 分支 remove('hidden')。
@@ -522,6 +537,9 @@ export function initAccountsEvents() {
         });
     }
 
+    // domReady 已注入 wailsConfigCache,此处同步回填后端持久化的布局/列数(见 refreshAccountLayoutFromCache)。
+    refreshAccountLayoutFromCache();
+
     btnLayoutGrid = document.getElementById('btnLayoutGrid') as HTMLButtonElement | null;
     btnLayoutList = document.getElementById('btnLayoutList') as HTMLButtonElement | null;
 
@@ -529,7 +547,7 @@ export function initAccountsEvents() {
         btnLayoutGrid.addEventListener('click', () => {
             if (state.accountLayout === 'grid') return;
             state.accountLayout = 'grid';
-            localStorage.setItem('accounts_layout', 'grid');
+            ipcRenderer.send('settings:set-account-layout', 'grid');
             updateLayoutUI();
             renderAccounts(state.currentAccountsList);
         });
@@ -538,7 +556,7 @@ export function initAccountsEvents() {
         btnLayoutList.addEventListener('click', () => {
             if (state.accountLayout === 'list') return;
             state.accountLayout = 'list';
-            localStorage.setItem('accounts_layout', 'list');
+            ipcRenderer.send('settings:set-account-layout', 'list');
             updateLayoutUI();
             renderAccounts(state.currentAccountsList);
         });
@@ -546,12 +564,17 @@ export function initAccountsEvents() {
 
     const selectGridColumns = document.getElementById('selectGridColumns') as HTMLSelectElement | null;
     if (selectGridColumns) {
+        // 列数切换写入后端 config.json:300ms debounce 防频繁落盘(对齐 grok:set-cli-version 范式)。
+        let colsDebounce: ReturnType<typeof setTimeout> | null = null;
         selectGridColumns.addEventListener('change', (e: any) => {
             const cols = Number(e.target.value);
             state.accountGridColumns = cols;
-            localStorage.setItem('accounts_grid_columns', String(cols));
             updateLayoutUI();
             renderAccounts(state.currentAccountsList);
+            if (colsDebounce) clearTimeout(colsDebounce);
+            colsDebounce = setTimeout(() => {
+                ipcRenderer.send('settings:set-account-grid-columns', cols);
+            }, 300);
         });
     }
 

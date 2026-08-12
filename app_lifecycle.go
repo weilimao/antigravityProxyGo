@@ -709,6 +709,8 @@ func (a *App) domReady(ctx context.Context) {
 		"settings:get-reasoning-as-text":                a.settingsMgr.GetReasoningAsText(),
 		"settings:get-enable-thinking-mode":             a.settingsMgr.GetEnableThinkingMode(),
 		"settings:get-language":                         a.settingsMgr.GetLanguage(),
+		"settings:get-account-layout":                   a.settingsMgr.GetAccountLayout(),
+		"settings:get-account-grid-columns":             a.settingsMgr.GetAccountGridColumns(),
 		"settings:get-session-optimization":             a.settingsMgr.GetSessionOptimization(),
 		"settings:get-ocr-model":                        a.settingsMgr.GetOcrModel(),
 	}
