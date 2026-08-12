@@ -232,6 +232,10 @@
                 <span class="font-medium text-on-surface dark:text-white" id="lblSelectedCount">已选择 0 个账号</span>
             </div>
             <div class="flex items-center gap-2 flex-wrap">
+                <button id="btnBatchDeleteAccounts" class="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white dark:bg-red-500/20 dark:text-red-400 dark:hover:bg-red-500 dark:hover:text-white border border-red-500/30 rounded-lg text-[12px] font-bold transition-all shadow-sm cursor-pointer select-none">
+                    <span class="material-symbols-outlined text-[15px]">delete</span>
+                    <span data-i18n="btnBatchDelete">批量删除</span>
+                </button>
                 <button id="btnTriggerTestResponse" class="flex items-center gap-1.5 px-3.5 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-lg text-[12px] font-bold transition-all shadow-sm cursor-pointer select-none">
                     <span class="material-symbols-outlined text-[15px]" id="btnTriggerTestIcon">bolt</span>
                     <span data-i18n="btnTriggerTest">触发测试刷新</span>

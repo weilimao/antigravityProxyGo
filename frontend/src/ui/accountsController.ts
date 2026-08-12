@@ -866,6 +866,40 @@ export function initAccountsEvents() {
         });
     }
 
+    // 批量删除按钮绑定与二次确认弹窗
+    const btnBatchDelete = document.getElementById('btnBatchDeleteAccounts') as HTMLButtonElement | null;
+    if (btnBatchDelete) {
+        btnBatchDelete.addEventListener('click', async () => {
+            const count = state.selectedAccountIds.length;
+            if (count === 0) return;
+
+            const dict = i18n[state.currentLanguage] || i18n.zh;
+            const confirmMsg = (dict.batchDeleteAccountsConfirm || '确定要删除选中的 {count} 个账号吗？删除后不可恢复！')
+                .replace('{count}', String(count));
+
+            const $confirm = (window as any).$confirm;
+            let confirmed = false;
+            if (typeof $confirm === 'function') {
+                confirmed = await $confirm(confirmMsg);
+            } else {
+                confirmed = confirm(confirmMsg);
+            }
+            if (!confirmed) return;
+
+            const toDeleteIds = [...state.selectedAccountIds];
+            try {
+                await ipcRenderer.invoke('accounts:batch-remove', toDeleteIds);
+            } catch (err) {
+                // 兜底 send 兼容
+                ipcRenderer.send('accounts:batch-remove', toDeleteIds);
+            }
+
+            state.selectedAccountIds = [];
+            updateBatchActionBarUI();
+            ipcRenderer.send('accounts:get');
+        });
+    }
+
     // 触发测试回复 Modal：句柄赋值 + 事件绑定（已抽离 triggerTestModal.ts）
     initTriggerTestModalEvents();
 

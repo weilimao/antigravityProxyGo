@@ -145,6 +145,44 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		})
 		return data, true, err
 
+	case "accounts:batch-remove":
+		var ids []string
+		if len(args) > 0 {
+			if slice, ok := args[0].([]interface{}); ok {
+				for _, item := range slice {
+					if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+						ids = append(ids, strings.TrimSpace(s))
+					}
+				}
+			} else if sliceStr, ok := args[0].([]string); ok {
+				ids = sliceStr
+			}
+		}
+		if len(ids) == 0 {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "没有可删除的账号 ID"})
+			return data, true, nil
+		}
+
+		removedCount := 0
+		for _, id := range ids {
+			if acc := a.accountMgr.GetAccountByID(id); acc != nil {
+				a.accountMgr.RemoveAccount(id)
+				removedCount++
+			}
+		}
+
+		if removedCount > 0 {
+			a.emitAccountsRes()
+			a.AddLog(fmt.Sprintf("🗑️ [批量删除] 成功批量删除 %d 个账号 (请求共 %d 个)", removedCount, len(ids)))
+		}
+
+		data, _ := marshalResponse(map[string]interface{}{
+			"success":      true,
+			"removedCount": removedCount,
+			"totalCount":   len(ids),
+		})
+		return data, true, nil
+
 	// ========== NVIDIA 号池 CRUD ==========
 
 	case "nvidia:add":
