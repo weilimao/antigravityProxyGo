@@ -36,12 +36,19 @@ func (m *Manager) StartCooldownMonitor() {
 	}
 	m.cooldownTicker = time.NewTicker(2 * time.Minute)
 	m.cooldownStop = make(chan struct{})
+	// 捕获为局部变量供 goroutine 闭包引用,而非每轮 select 重新读 m.cooldownTicker / m.cooldownStop。
+	// 背景:StopCooldownMonitor 会先 m.cooldownTicker.Stop() 再 m.cooldownTicker=nil 再 close(stop),
+	// 若 goroutine 每轮 select 重读 m.cooldownTicker.C,在「Stop 已置 nil 但 close(stop) 尚未生效」
+	// 的窗口内重入 select 会读 nil.C 触发 panic。局部捕获后 goroutine 永远引用非 nil 的 ticker 句柄,
+	// close(stop) 立即唤醒 return 分支,与 Stop 置 nil m.cooldownTicker 正交,消除该窗口竞态。
+	ticker := m.cooldownTicker
+	stop := m.cooldownStop
 	m.Unlock()
 
 	go func() {
 		for {
 			select {
-			case <-m.cooldownTicker.C:
+			case <-ticker.C:
 				m.RLock()
 				var cooldownAccounts []*Account
 				now := time.Now().UnixNano() / int64(time.Millisecond)
@@ -119,7 +126,7 @@ func (m *Manager) StartCooldownMonitor() {
 						}
 					}(acc)
 				}
-			case <-m.cooldownStop:
+			case <-stop:
 				return
 			}
 		}
@@ -146,14 +153,17 @@ func (m *Manager) StartTokenRefreshMonitor() {
 	}
 	m.tokenRefreshTicker = time.NewTicker(5 * time.Minute)
 	m.tokenRefreshStop = make(chan struct{})
+	// 局部捕获(同 StartCooldownMonitor):消除 Stop 置 nil 与 select 重读 m.tokenRefreshTicker.C 的窗口竞态。
+	ticker := m.tokenRefreshTicker
+	stop := m.tokenRefreshStop
 	m.Unlock()
 
 	go func() {
 		for {
 			select {
-			case <-m.tokenRefreshTicker.C:
+			case <-ticker.C:
 				m.CheckAndRefreshTokens()
-			case <-m.tokenRefreshStop:
+			case <-stop:
 				return
 			}
 		}
@@ -165,6 +175,12 @@ func (m *Manager) CheckAndRefreshTokens() {
 	var refreshAccounts []*Account
 	nowSec := time.Now().Unix()
 	for _, a := range m.accounts {
+		// grok 号池脱离本全局 5min tick,改走专用 1h 节奏的 CheckAndPurgeGrokAuth
+		// (见 StartGrokAuthMonitor)。grok OAuth 刷新语义已收口到「过期检查→刷新→失效移除」,
+		// 不再混入本「TokenRefreshedAt 超 50min 即刷」的粗粒度节奏,避免双重 tick 重复刷。
+		if a.Provider == "grok" {
+			continue
+		}
 		// 仅对已启用，有刷新Token和AccessToken的非2fa账号做定时刷新
 		// 判断时间是否超过50分钟 (50 * 60 = 3000 秒)
 		// a.TokenRefreshedAt 如果是 0，说明还没存过，应当刷新一次进行初始化记录
@@ -228,6 +244,152 @@ func (m *Manager) StopTokenRefreshMonitor() {
 		m.tokenRefreshTicker = nil
 		close(m.tokenRefreshStop)
 	}
+}
+
+// ============ Grok 号池专用「授权过期检查→刷新→失效移除」监控(1 小时 tick) ============
+
+// grokAuthRefreshSkewSec 是 grok 专用「access_token 仍有效」提前量(秒)。JWT exp 距当前
+// <= 此值才触发刷新。取 60 分钟:与 1 小时 tick 自洽——最坏「检查时剩 61min 被跳过 →
+// 1h 后剩 1min 立即刷新」,access_token(JWT 寿命 6h)不会在两次 tick 间裸奔过期。
+// 与全局 tokenRefreshSkewSec(10min,服务 antigravity/project/google)正交,grok 专走本值。
+const grokAuthRefreshSkewSec = 60 * 60
+
+// grokAuthCheckInterval 是 Grok 授权过期检查的 tick 间隔(1 小时)。
+// 用户语义:刷新频率由全局 5min 降到 1h(仅 grok),通过 grokAuthRefreshSkewSec 提前量兜底不裸奔。
+const grokAuthCheckInterval = 60 * time.Minute
+
+// GrokAuthCheckResult 是单个 grok 账号一次授权检查的结果,供 IPC 汇总回前端展示。
+// Outcome 取值:
+//   - "skipped":access_token 仍有效(exp 距当前 > grokAuthRefreshSkewSec),未刷新;
+//   - "refreshed":临近/已过期,刷新成功,新 token 已写入;
+//   - "removed":刷新命中永久失败(invalid_grant 等),已 RemoveAccount 从号池移除;
+//   - "failed":刷新命中瞬时失败(网络/5xx/超时),未移除,留给下个 tick 重试。
+type GrokAuthCheckResult struct {
+	AccountID string `json:"accountId"`
+	Email     string `json:"email"`
+	Outcome   string `json:"outcome"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+// StartGrokAuthMonitor 启动 Grok 号池专用 1h tick:每 tick 调 CheckAndPurgeGrokAuth,
+// 对所有 grok OAuth 账号做「过期检查→临近过期刷新→永久失败移除」。
+// 与 StartTokenRefreshMonitor 同构:启停均持锁改 ticker,goroutine 经 stop chan 优雅退出。
+// 幂等:已在运行时再次调用直接返回(不重复起 goroutine)。
+func (m *Manager) StartGrokAuthMonitor() {
+	m.Lock()
+	if m.grokAuthTicker != nil {
+		m.Unlock()
+		return
+	}
+	m.grokAuthTicker = time.NewTicker(grokAuthCheckInterval)
+	m.grokAuthStop = make(chan struct{})
+	// 局部捕获(同 StartCooldownMonitor/StartTokenRefreshMonitor):消除 Stop 置 nil 与
+	// select 重读 m.grokAuthTicker.C 的窗口竞态。
+	ticker := m.grokAuthTicker
+	stop := m.grokAuthStop
+	m.Unlock()
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				m.CheckAndPurgeGrokAuth()
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
+// StopGrokAuthMonitor 停止 Grok 专用授权检查监控,释放 ticker 句柄与后台 goroutine。
+// 幂等:未启动时不做任何事(与 StopTokenRefreshMonitor 同口径)。
+func (m *Manager) StopGrokAuthMonitor() {
+	m.Lock()
+	defer m.Unlock()
+	if m.grokAuthTicker != nil {
+		m.grokAuthTicker.Stop()
+		m.grokAuthTicker = nil
+		close(m.grokAuthStop)
+	}
+}
+
+// CheckAndPurgeGrokAuth 对所有 Grok OAuth 账号做一次授权过期检查与刷新。
+// 判定主走 access_token(JWT)的 exp claim:
+//   - exp > 0 且 (exp - now) > grokAuthRefreshSkewSec:授权仍有效 → skipped;
+//   - exp == 0(非 JWT 或解析失败,OAuth grok 一般是 JWT,此分支兜底)或 (exp - now) <= skew:临近/已过期
+//     → 调 RefreshAccountTokenSync(单账号互斥 + 30s 复用检查,防抖):
+//     成功 → refreshed;失败 → 标 failed(瞬时失败不移除)或 removed(永久失败已在 RefreshToken
+//     内 RemoveAccount,见 internal/quota/oauth.go refreshXaiToken)。
+// 返回每账号结果列表(已移除的号亦在返回中标 removed,供调用方汇总日志/广播前端)。
+//
+// 串行逐号刷新(不并发):grok OAuth 号池规模小,串行既避免把多号同时打到 auth.x.ai 触发风控,
+// 又让 RemoveAccount 的内存变更在逐号推进中即时可见,避免切片并发遍历读到已删的尾元素。
+func (m *Manager) CheckAndPurgeGrokAuth() []GrokAuthCheckResult {
+	nowSec := time.Now().Unix()
+	// 先取一份 grok OAuth 账号快照(RLock 临临界区),逐号串行刷新用 RefreshAccountTokenSync
+	// 内部自带单账号互斥,不持 Manager 锁打网络。
+	m.RLock()
+	var grokAccounts []*Account
+	for _, a := range m.accounts {
+		// 仅 grok 且带 RefreshToken 的 OAuth 账号才参与;API Key 型 grok 账号(RefreshToken=="")
+		// 无 OAuth 刷新概念,跳过。
+		if a.Provider == "grok" && a.RefreshToken != "" {
+			grokAccounts = append(grokAccounts, a)
+		}
+	}
+	m.RUnlock()
+
+	if len(grokAccounts) == 0 {
+		return nil
+	}
+
+	var results []GrokAuthCheckResult
+	for _, a := range grokAccounts {
+		// 账号可能在上一轮迭代里被 RemoveAccount(永久失败移除语义),逐号重新校验存在性,跳过已删号。
+		// GetAccountByID 内部 RLock,与上面的 RLock 临临界区不重叠,无自死锁。
+		if m.GetAccountByID(a.ID) == nil {
+			continue
+		}
+
+		// 仍有效则跳过本次刷新,避免对有效 token 无谓打 xAI 端(防风控抖动)。
+		if exp := a.AccessTokenExp(); exp > 0 && (exp-nowSec) > grokAuthRefreshSkewSec {
+			results = append(results, GrokAuthCheckResult{
+				AccountID: a.ID, Email: a.Email, Outcome: "skipped",
+				Detail: "授权仍有效,未刷新",
+			})
+			continue
+		}
+
+		// 临近或已过期(exp==0 兜底也刷新):走单账号互斥刷新(SingleFlight + 30s 复用)。
+		_, refErr := m.RefreshAccountTokenSync(a.ID)
+		if refErr == nil {
+			results = append(results, GrokAuthCheckResult{
+				AccountID: a.ID, Email: a.Email, Outcome: "refreshed",
+				Detail: "access_token 临近/已过期,刷新成功",
+			})
+			continue
+		}
+
+		// 刷新失败:判定是否已被永久失败链路 RemoveAccount。
+		// refreshXaiToken 命中 isPermanent 时已做 RemoveAccount,此处 GetAccountByID==nil 即已移除。
+		if m.GetAccountByID(a.ID) == nil {
+			fmt.Printf("[GrokAuthMonitor] Account %s (id=%s) removed from pool due to permanent refresh failure: %v\n",
+				a.Email, a.ID, refErr)
+			results = append(results, GrokAuthCheckResult{
+				AccountID: a.ID, Email: a.Email, Outcome: "removed",
+				Detail: refErr.Error(),
+			})
+		} else {
+			// 仍在号池 → 瞬时失败(网络/5xx/超时),未移除,留待下个 tick 重试。
+			fmt.Printf("[GrokAuthMonitor] Account %s (id=%s) transient refresh failure, will retry next tick: %v\n",
+				a.Email, a.ID, refErr)
+			results = append(results, GrokAuthCheckResult{
+				AccountID: a.ID, Email: a.Email, Outcome: "failed",
+				Detail: refErr.Error(),
+			})
+		}
+	}
+	return results
 }
 
 // ============ 错误计数 + 配额回写 ============

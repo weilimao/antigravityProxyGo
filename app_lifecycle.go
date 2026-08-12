@@ -639,6 +639,7 @@ func (a *App) shutdown() {
 	if a.accountMgr != nil {
 		a.accountMgr.StopCooldownMonitor()
 		a.accountMgr.StopTokenRefreshMonitor()
+		a.accountMgr.StopGrokAuthMonitor()
 	}
 
 	// Clean up patches on exit

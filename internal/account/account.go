@@ -238,6 +238,11 @@ type Manager struct {
 	cooldownStop       chan struct{}
 	tokenRefreshTicker *time.Ticker
 	tokenRefreshStop   chan struct{}
+	// grokAuthTicker/Stop 是 Grok 号池专用的「授权过期检查→刷新→失效移除」1 小时定时器,
+	// 与全局 tokenRefreshTicker 并列但职责正交:grok 脱离 CheckAndRefreshTokens(见其 grok 排除
+	// 分支),专走 CheckAndPurgeGrokAuth 的「JWT exp 临近过期才刷 + 永久失败移除」语义。
+	grokAuthTicker *time.Ticker
+	grokAuthStop   chan struct{}
 
 	// idEpoch 是 generateAccountID 的进程内随机基数,NewManager 时用 crypto/rand 一次性生成。
 	// 作用:消除「同纳秒同取模 → 同 ID」的并发碰撞(Windows/高频导入下尤其明显),

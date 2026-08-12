@@ -211,6 +211,10 @@
                     <span class="material-symbols-outlined text-[14px]">ac_unit</span>
                     <span data-i18n="grokOneClickThaw">一键解冻</span>
                 </button>
+                <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-emerald-500 dark:hover:text-emerald-400 bg-outline-variant/10 hover:bg-emerald-500/10 border border-outline-variant/20 hover:border-emerald-500/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none hidden" id="btnGrokCheckAuth" title="检查 Grok 授权是否过期，过期则刷新令牌，刷新令牌失效则自动移除" data-i18n-title="grokCheckAuthBtnTitle">
+                    <span class="material-symbols-outlined text-[14px]">verified_user</span>
+                    <span data-i18n="grokCheckAuth">检查授权</span>
+                </button>
                 <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim bg-outline-variant/10 hover:bg-primary/10 border border-outline-variant/20 hover:border-primary/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none" id="btnRefreshAllQuota" title="刷新当前页签账号配额" data-i18n-title="btnRefreshAllQuotaTitle">
                     <span class="material-symbols-outlined text-[14px]" id="btnRefreshAllIcon">sync</span>
                     <span data-i18n="btnRefreshAllQuotaLabel">刷新配额</span>

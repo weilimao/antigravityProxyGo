@@ -61,6 +61,7 @@ func (m *Manager) Init(userDataPath string) {
 	m.LoadAccounts()
 	m.StartCooldownMonitor()
 	m.StartTokenRefreshMonitor()
+	m.StartGrokAuthMonitor()
 }
 
 func (m *Manager) UpdatePath(newPath string) {

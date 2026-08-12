@@ -785,6 +785,44 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		})
 		return data, true, nil
 
+	case "grok:check-auth":
+		// 手动触发一次「Grok 号池授权过期检查→刷新→失效移除」,复用后端 CheckAndPurgeGrokAuth
+		// (与 1h 定时 tick 同一逻辑)。无参:检查全部 grok OAuth 账号。
+		// 判定主走 access_token(JWT)exp:仍有效 skipped / 临近过期刷新成功 refreshed /
+		// 刷新命中永久失败(invalid_grant 等)已 RemoveAccount removed / 瞬时失败 failed。
+		// 移除已发生在 CheckAndPurgeGrokAuth→RefreshAccountTokenSync→refreshXaiToken 链路内,
+		// 此处汇总计数 + AddLog + emitAccountsRes 广播(可能移除了账号,前端需即时刷新)。
+		results := a.accountMgr.CheckAndPurgeGrokAuth()
+		var removed, refreshed, skipped, failed int
+		for _, r := range results {
+			switch r.Outcome {
+			case "removed":
+				removed++
+			case "refreshed":
+				refreshed++
+			case "skipped":
+				skipped++
+			case "failed":
+				failed++
+			}
+		}
+		total := len(results)
+		a.AddLog(fmt.Sprintf("🔍 [Grok 检查授权] 完成,共 %d 个 OAuth 账号:刷新 %d / 移除 %d / 跳过 %d / 失败 %d",
+			total, refreshed, removed, skipped, failed))
+		// 移除与否都广播一次:刷新成功的号 token 已变,前端虽不展示 token 但配额/冷却态可能联动;
+		// 移除的号必须广播否则前端看不到消失。broadcast 幂等,无移除也无妨。
+		a.emitAccountsRes()
+		data, _ := marshalResponse(map[string]interface{}{
+			"success":   true,
+			"total":     total,
+			"removed":   removed,
+			"refreshed": refreshed,
+			"skipped":   skipped,
+			"failed":    failed,
+			"details":   results,
+		})
+		return data, true, nil
+
 	case "account:reveal-key":
 		// 明文查看 API Key(编辑号池账号时眼睛切明文)。
 		// args: [accountId, provider] —— provider 限定可被查看明文的池类型(nvidia / other / grok),

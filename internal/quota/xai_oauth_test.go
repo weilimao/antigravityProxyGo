@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"antigravity-proxy/internal/account"
 )
 
 // fakeJWT 组装一个假的三段式 JWT(header.payload.signature),payload 为给定 map。
@@ -269,5 +271,121 @@ func TestAuthManager_GetXaiLoginStatus(t *testing.T) {
 	// 未知 state
 	if _, err := am.GetXaiLoginStatus("no-such"); err == nil {
 		t.Fatalf("expected error for unknown state")
+	}
+}
+
+// newAuthManagerWithGrokAccount 构造一个 AuthManager,其 accountMgr 持有单个 grok OAuth 账号,
+// 用于 refreshXaiToken 的「永久失败 → 移除」集成测试。tokenEndpoint 指向测试 httptest server,
+// 使 refreshXaiToken 内部 NewXAIAuth().RefreshTokens 打到可控的桩端点。
+func newAuthManagerWithGrokAccount(t *testing.T, tokenEndpoint string) (*AuthManager, *account.Account, *account.Manager) {
+	t.Helper()
+	tempDir := t.TempDir()
+	mgr := account.NewManager()
+	mgr.Init(tempDir)
+	t.Cleanup(func() {
+		mgr.StopCooldownMonitor()
+		mgr.StopTokenRefreshMonitor()
+		mgr.StopGrokAuthMonitor()
+	})
+
+	acc := &account.Account{
+		ID:           "grok-test-1",
+		Email:        "grok-test@x.ai",
+		Provider:     "grok",
+		ScopeType:    "grok",
+		AccessToken:  "stale-at",
+		RefreshToken: "stale-rt",
+		BaseURL:      "https://cli-chat-proxy.grok.com/v1",
+		TokenEndpoint: tokenEndpoint,
+		Enabled:      true,
+		Cooldowns:     map[string]int64{},
+	}
+	mgr.AddAccount(acc)
+
+	am := NewAuthManager(mgr)
+	return am, acc, mgr
+}
+
+// TestRefreshXaiToken_PermanentFailure_RemovesAccount 锁定 refreshXaiToken 在命中 invalid_grant
+// 等永久失败时,1 次即从号池彻底 RemoveAccount(而非旧的连续 2 次停用),且账号不再可被 GetAccountByID 取回。
+func TestRefreshXaiToken_PermanentFailure_RemovesAccount(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"refresh token expired or revoked"}`))
+	}))
+	defer srv.Close()
+
+	am, acc, mgr := newAuthManagerWithGrokAccount(t, srv.URL)
+
+	// 前置:账号确在池中。
+	if mgr.GetAccountByID(acc.ID) == nil {
+		t.Fatal("precondition: grok account should exist before refresh")
+	}
+
+	_, err := am.RefreshToken(acc)
+	if err == nil {
+		t.Fatal("expected refresh error for permanent failure, got nil")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "invalid_grant") {
+		t.Fatalf("expected error containing invalid_grant, got: %v", err)
+	}
+
+	// 关键断言:永久失败 1 次即从号池彻底移除(旧实现是 UpdateAccountEnabled(false) 停用但保留)。
+	if mgr.GetAccountByID(acc.ID) != nil {
+		t.Fatalf("grok account %s should be removed from pool after permanent refresh failure, still present", acc.ID)
+	}
+	// 池内 grok 账号列表应为空。
+	if got := len(mgr.GetRawAccountsByProvider("grok")); got != 0 {
+		t.Errorf("expected 0 grok accounts after removal, got %d", got)
+	}
+}
+
+// TestRefreshXaiToken_TransientFailure_NoRemoval 锁定 refreshXaiToken 在命中瞬时失败
+// (5xx / 非 invalid_grant 类关键词)时,不移除账号,留待下个 tick 重试。
+func TestRefreshXaiToken_TransientFailure_NoRemoval(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"server_error","error_description":"upstream 502"}`))
+	}))
+	defer srv.Close()
+
+	am, acc, mgr := newAuthManagerWithGrokAccount(t, srv.URL)
+
+	_, err := am.RefreshToken(acc)
+	if err == nil {
+		t.Fatal("expected refresh error for transient failure, got nil")
+	}
+	// 瞬时失败不移除:账号仍在池中。
+	if mgr.GetAccountByID(acc.ID) == nil {
+		t.Fatalf("grok account %s should NOT be removed after transient failure, but it's gone", acc.ID)
+	}
+}
+
+// TestRefreshXaiToken_Success_NoRemoval 锁定正常刷新成功时账号保留且 access_token 已更新。
+func TestRefreshXaiToken_Success_NoRemoval(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"new-at","refresh_token":"new-rt","id_token":"` + fakeJWT(xaiClaims("grok-test@x.ai", "sub-1")) + `","expires_in":21600}`))
+	}))
+	defer srv.Close()
+
+	am, acc, mgr := newAuthManagerWithGrokAccount(t, srv.URL)
+
+	token, err := am.RefreshToken(acc)
+	if err != nil {
+		t.Fatalf("expected refresh success, got: %v", err)
+	}
+	if token != "new-at" {
+		t.Errorf("expected new access token 'new-at', got %q", token)
+	}
+	// 成功刷新账号保留,token 已更新。
+	got := mgr.GetAccountByID(acc.ID)
+	if got == nil {
+		t.Fatal("grok account should still exist after successful refresh")
+	}
+	if got.GetAccessToken() != "new-at" {
+		t.Errorf("access token should be updated to new-at, got %q", got.GetAccessToken())
 	}
 }
