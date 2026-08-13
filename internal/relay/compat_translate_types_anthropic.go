@@ -17,7 +17,11 @@ type AnthropicContent struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
 	// thinking 块字段(响应构建:Gemini thought:true 回译为 Anthropic thinking 块)
-	// signature 恒为空串占位(Gemini 已剥真签名,对齐流式路径 signature_delta 空串策略)
+	// signature:无真签名上游(Gemini thought 已剥签名)时发空串占位,严格对齐官方
+	// {"thinking":"","signature":""} 载荷与流式 signature_delta 空串口径。
+	// 哨兵 skip_thought_signature_validator 仅用于【请求体】functionCall part 的 thoughtSignature 注入
+	// (见 compat_translate_translate.go),不得出现在响应侧,否则 Claude Code 的 MessageAccumulator
+	// 判为非法签名导致思考块被客户端整块丢弃(只显思考标签不显思考正文)。
 	Thinking  string `json:"thinking,omitempty"`
 	Signature string `json:"signature,omitempty"`
 	// tool_use 字段（响应构建 + 请求历史解析）

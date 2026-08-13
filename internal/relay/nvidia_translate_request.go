@@ -389,8 +389,9 @@ func isOtherProviderTarget(model string, mappings ...[]settings.ModelMappingEntr
 // mapToOfficialOpenAIEffort 把内部规范化思考等级(low/medium/high/max)映射为
 // OpenAI 官方 reasoning_effort 取值。返回空串表示不注入(opt-in OFF 或未识别)。
 //
-// OpenAI 官方 reasoning_effort 取值集为 {"low","medium","high"}(部分新一代推理模型支持 "minimal")。
-// 本函数统一映射为官方全集里最稳的三档:max→high(官方无 max,顶级即 high),其余 1:1。
+// OpenAI 官方 reasoning_effort 取值集为 {"low","medium","high","max"}(部分新一代推理模型
+// 还支持 "minimal")。max/xhigh 为客户端顶格档位,阿里云 MaaS 兼容端点(DeepSeek v4-flash)
+// 实测认 reasoning_effort=max,故顶格档 1:1 透传,不做降级。其余 low/medium/high 1:1。
 // 不产 "minimal" —— 仅部分 o-series 支持,通用 OpenAI 兼容中继未必认,保守起见落 low。
 //
 // 输入空串(opt-in OFF / 显式 none|off|disabled 经 normalizeEffort 归一为空)→ 返回空串:
@@ -404,7 +405,7 @@ func mapToOfficialOpenAIEffort(effort string) string {
 	case "high":
 		return "high"
 	case "max", "xhigh":
-		return "high" // 官方无 max,顶级克制档映射为 high
+		return "max" // 阿里云 MaaS 兼容端点(DeepSeek v4-flash 等)认 reasoning_effort=max,顶格档不降级
 	default:
 		return "" // 空串/未识别 → 不注入
 	}

@@ -58,5 +58,7 @@
   "enableThinkingMode": false,
   "enableDebuggerMode": false,
   "debuggerLogPath": "",
-  "nvidiaPreferredModels": null
+  "nvidiaPreferredModels": null,
+  "accountLayout": "",
+  "accountGridColumns": 0
 }

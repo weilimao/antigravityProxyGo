@@ -101,7 +101,7 @@ func TestGeminiThoughtEmitsThinkingAndSignatureDelta(t *testing.T) {
 		case "signature_delta":
 			hasSignatureDelta = true
 			if delta["signature"] != "" {
-				t.Fatalf("Gemini signature_delta 必须为空串占位,实际=%v", delta["signature"])
+				t.Fatalf("Gemini signature_delta 必须为空串占位(Claude Code 的 MessageAccumulator 要求开块 signature 字段为空串,非空哨兵会被判为非法签名导致思考块被客户端丢弃),实际=%v", delta["signature"])
 			}
 		case "text_delta":
 			t.Fatalf("纯 thought 流不应出现 text_delta,events=%v", eventNames(events))
@@ -111,10 +111,37 @@ func TestGeminiThoughtEmitsThinkingAndSignatureDelta(t *testing.T) {
 		t.Fatalf("缺少 thinking_delta 事件,events=%v", eventNames(events))
 	}
 	if !hasSignatureDelta {
-		t.Fatalf("Gemini 路径关 thinking 块前必须补一条空串 signature_delta,events=%v", eventNames(events))
+		t.Fatalf("Gemini 路径关 thinking 块前必须补一条 signature_delta,events=%v", eventNames(events))
 	}
 	if !strings.Contains(thinkingText, "compute") {
 		t.Fatalf("thinking_delta 文本累积不完整,实际=%q", thinkingText)
+	}
+
+	// 核心形态断言:thinking 块的 content_block_start 必须携带 signature 字段且为空串占位。
+	// 修前 bug:开块载荷被删掉 signature 字段 → Claude Code 的 MessageAccumulator 判为非法 thinking 块,
+	// 即便 thinking_delta 下发了推理正文,客户端也整块丢弃 → "只显示思考标签、思考结束不显示思考正文"。
+	// 严格对齐官方载荷 {"content_block":{"type":"thinking","thinking":"","signature":""}}。
+	var thinkingBlockSigFound bool
+	for _, ev := range events {
+		if ev.event != "content_block_start" {
+			continue
+		}
+		m := dataMap(t, ev)
+		cb, _ := m["content_block"].(map[string]interface{})
+		if cb == nil || cb["type"] != "thinking" {
+			continue
+		}
+		thinkingBlockSigFound = true
+		sigVal, hasSig := cb["signature"]
+		if !hasSig {
+			t.Fatalf("thinking 块 content_block_start 必须携带 signature 字段(空串占位),实际缺字段 content_block=%+v", cb)
+		}
+		if sigVal != "" {
+			t.Fatalf("thinking 块 signature 必须为空串占位,实际=%v(非空哨兵会被 MessageAccumulator 判为非法签名)", sigVal)
+		}
+	}
+	if !thinkingBlockSigFound {
+		t.Fatalf("缺少 thinking 类型的 content_block_start,events=%v", eventNames(events))
 	}
 }
 

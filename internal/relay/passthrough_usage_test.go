@@ -55,7 +55,7 @@ func TestRecordOtherUsage_FiresLandings34_WhenTrackerInjected(t *testing.T) {
 
 // TestRecordOtherUsage_ReasoningEffortPropagates 验证命中上游思考等级落库链路(Other 号池):
 // logCtx.ReasoningEffort 经 recordOtherUsage → stats.RequestLog.ReasoningEffort 真实闭环,
-// 供前端「模型」列追加 (档) 后缀展示。high(Other 走官方 OpenAI 取值集, max→high)与空串两态覆盖。
+// 供前端「模型」列追加 (档) 后缀展示。high, max(Other 走官方 OpenAI 取值集, max 1:1 透传)与空串三态覆盖。
 func TestRecordOtherUsage_ReasoningEffortPropagates(t *testing.T) {
 	// 每个子用例独立注入 fresh tracker。AddRequestLogForFamily 以 prepend 语义落库
 	// (新日志=requests[0]), GetRecentRequestReasoningEffort 现亦读 requests[0] 对齐

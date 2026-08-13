@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/settings"
 )
 
 // anthropic_count_tokens_test.go 锁定 NVIDIA 中继对 Anthropic 可选端点
@@ -322,5 +324,120 @@ func TestCountTokens_KnownEstimate(t *testing.T) {
 	// 允许 ±1 容差(text " hi" 含空格可能影响 otherCount 计数精度)
 	if tokens < 3 || tokens > 5 {
 		t.Errorf("known estimate input_tokens = %v, want 3..5", tokens)
+	}
+}
+
+// ===== /route/v1/messages/count_tokens 端点拦截回归(消除计数回退小推理请求) =====
+//
+// 背景:Anthropic 官方 LLM Gateway Protocol 把 /v1/messages/count_tokens 标为 (optional),
+// 缺失/失败不致命,Claude Code 自动回退到本地估算。但官方文档明确当网关不提供该端点时,
+// CLI 会"回退成用 /v1/messages 推理端点计数",产生额外的小推理请求(号池消耗 + 日志噪声)。
+// nvidia 池(/nvidia/v1/messages/count_tokens 与 /vc 别名)与 grok 池已分别在本池入口拦截,
+// 但 /route/* 通用转发入口此前缺失该拦截 → Other/deepseek/阿里云等经 /route 进入的号池
+// 仍会产生计数回退小推理请求。router_entry.go 现已在 /route 三生成端点 404 兜底之前补齐拦截,
+// 复用 handleNvidiaCountTokens 纯本地估算(零上游、零号池、零计费)。以下用例锁定该路由回归。
+
+// TestRouteCountTokens_NoUpstream_LocalEstimate 打 /route/v1/messages/count_tokens,
+// 断言走纯本地估算:HTTP 200、input_tokens 非零正整数。
+// 关键:不走 resolveRoutedTarget 选号,故即便没有任何账号/号池规则也必须 200。
+func TestRouteCountTokens_NoUpstream_LocalEstimate(t *testing.T) {
+	// handler 不注入任何号池账号,且 settingsMgr 故意返回不匹配入站 model 的空规则表
+	// (证明 count_tokens 拦截发生在 resolveRoutedTarget 之前,不依赖任何号池规则)。
+	h := &APICompatHandler{
+		accountMgr:   account.NewManager(),
+		settingsMgr:  &stubPassThroughSettings{routes: nil},
+		logFn:        func(string) {},
+		client:       &http.Client{Timeout: 5 * time.Second},
+		streamClient: &http.Client{Timeout: 0},
+	}
+
+	body := `{"model":"other/aliyun/deepseek-v4-flash-0731","messages":[{"role":"user","content":"hello count tokens world"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/route/v1/messages/count_tokens", bytes.NewReader([]byte(body)))
+	rr := httptest.NewRecorder()
+	h.handleRoutedForward(rr, req, &RelaySession{UserID: "u", UserKey: "k"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(rr.Body.String()), &out); err != nil {
+		t.Fatalf("invalid response json: %v body=%s", err, rr.Body.String())
+	}
+	tokens, ok := out["input_tokens"].(float64)
+	if !ok {
+		t.Fatalf("missing/non-numeric input_tokens: %+v", out)
+	}
+	if tokens < 1 {
+		t.Errorf("input_tokens = %v, want >= 1", tokens)
+	}
+}
+
+// TestRouteCountTokens_NonMessagesNotIntercepted 确保 /route 普通生成端点仍正常走号池
+// 转发逻辑,不被 count_tokens 拦截误伤:打 /route/v1/messages(无 count_tokens 后缀),
+// 在无匹配号池规则时应如旧回 404(与既有 TestRouteEndpoints_UnmatchedModel 行为一致),而非被
+// count_tokens 分支吞成 200。防止"count_tokens 拦截范围过宽"的回归。
+func TestRouteCountTokens_NonMessagesNotIntercepted(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _ = r.Body.Close() }))
+	defer upstream.Close()
+
+	// 空 routes → resolveRoutedTarget 走默认 nvidia 规则会兜底命中,故用「乱填无规则」表只匹配 x-*,
+	// 使 /route/v1/messages 上不命中任何号池规则,走 404 分支(与既有非测同理)。
+	h := &APICompatHandler{
+		accountMgr:  account.NewManager(),
+		settingsMgr: &stubPassThroughSettings{routes: []settings.ModelRouteRule{{Pattern: "x-*", TargetProvider: "x", Enabled: true}}},
+		logFn:       func(string) {},
+		client:      &http.Client{Timeout: 5 * time.Second},
+		streamClient: &http.Client{Timeout: 0},
+	}
+
+	body := `{"model":"nomatch","messages":[]}`
+	req := httptest.NewRequest(http.MethodPost, "/route/v1/messages", bytes.NewReader([]byte(body)))
+	rr := httptest.NewRecorder()
+	h.handleRoutedForward(rr, req, &RelaySession{UserID: "u", UserKey: "k"})
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("non-count_tokens /route/v1/messages must fall through to route resolution (404 when unmatched), got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestRouteCountTokens_TrailingSlash 尾带斜杠的 /route/v1/messages/count_tokens/ 也应识别:
+// handleRoutedForward 在入口已 strings.TrimRight(path, "/") 归一,拦截判定基于归一后的 path。
+func TestRouteCountTokens_TrailingSlash(t *testing.T) {
+	h := &APICompatHandler{
+		accountMgr:  account.NewManager(),
+		settingsMgr: &stubPassThroughSettings{routes: nil},
+		logFn:       func(string) {},
+		client:      &http.Client{Timeout: 5 * time.Second},
+		streamClient: &http.Client{Timeout: 0},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/route/v1/messages/count_tokens/", bytes.NewReader([]byte(`{"model":"x","messages":[{"role":"user","content":"hi"}]}`)))
+	rr := httptest.NewRecorder()
+	h.handleRoutedForward(rr, req, &RelaySession{UserID: "u", UserKey: "k"})
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("trailing slash route = %d, want 200 body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestRouteCountTokens_InvalidJSON_400 非法 JSON 入站 count_tokens 应回 400(与 nvidia 链路口径一致)。
+func TestRouteCountTokens_InvalidJSON_400(t *testing.T) {
+	h := &APICompatHandler{
+		accountMgr:  account.NewManager(),
+		settingsMgr: &stubPassThroughSettings{routes: nil},
+		logFn:       func(string) {},
+		client:      &http.Client{Timeout: 5 * time.Second},
+		streamClient: &http.Client{Timeout: 0},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/route/v1/messages/count_tokens", bytes.NewReader([]byte(`{not valid json`)))
+	rr := httptest.NewRecorder()
+	h.handleRoutedForward(rr, req, &RelaySession{UserID: "u", UserKey: "k"})
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid json, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "invalid_request_error") {
+		t.Errorf("400 body should be anthropic error shape: %s", rr.Body.String())
 	}
 }

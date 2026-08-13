@@ -59,6 +59,30 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 	isChat := strings.HasSuffix(path, "/v1/chat/completions") || strings.HasSuffix(path, "/chat/completions")
 	isResponses := strings.HasSuffix(path, "/v1/responses") || strings.HasSuffix(path, "/responses") || strings.HasSuffix(path, "/responses/compact")
 	isMessages := strings.HasSuffix(path, "/v1/messages") || strings.HasSuffix(path, "/messages")
+	// count_tokens:Anthropic 可选端点(官方 LLM Gateway Protocol 标 optional),与 nvidia/grok 链路同口径
+	// 纯本地字符级粗估后回 200,不请求上游、不消耗号池、不计费(见 anthropic_count_tokens.go)。
+	// 此处必须在下方三个生成端点的 404 兜底之前识别并提前 return —— 否则 /route/v1/messages/count_tokens
+	// 因后缀为 "/count_tokens" 而非 "/v1/messages",isMessages 不命中,会被当"不支持的端点"回 404;
+	// CLI 虽可降级,但官方文档明确该端点缺失时 Claude Code 会回退成"用 /v1/messages 推理端点计数",
+	// 产生额外的小推理请求(日志噪声 + 号池消耗)。补齐该端点后,Other/deepseek 号池不再有此类回退。
+	if strings.HasSuffix(path, "/v1/messages/count_tokens") || strings.HasSuffix(path, "/messages/count_tokens") {
+		// 读入站 body(带超时,复用 nvidia 的 readBodyWithTimeout 防 handler 钉死),
+		// 供 handleNvidiaCountTokens 本地估算。count_tokens 端点不再向下走任何号池转发逻辑。
+		bodyBytes, err := readBodyWithTimeout(r, nvidiaInboundReadTimeout)
+		if err != nil {
+			if errors.Is(err, ErrBodyReadTimeout) {
+				h.log("⏱️ [路由转发] count_tokens 入站 body 读取超时 %s,回写 408", nvidiaInboundReadTimeout)
+				writeJSON(w, http.StatusRequestTimeout, map[string]interface{}{"error": "request body read timeout"})
+				return
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "failed to read request body"})
+			return
+		}
+		r.Body.Close()
+		h.log("ℹ️ [路由转发] count_tokens /route 本地估算(零上游, 不计费)")
+		h.handleNvidiaCountTokens(w, bodyBytes)
+		return
+	}
 	if !isChat && !isResponses && !isMessages {
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error": "unsupported /route endpoint: use /route/v1/chat/completions, /route/v1/responses or /route/v1/messages",

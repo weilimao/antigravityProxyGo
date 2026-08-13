@@ -91,7 +91,7 @@ type RequestLog struct {
 	// 取映射折叠后真正发给上游的值(非客户端原始意图档),故:
 	//   - NVIDIA-NIM deepseek 模式 low/medium 折叠成 high → 此处记 "high";max → "max";
 	//   - Grok off→"none"、on→grokMapEffort 后档、unspecified→"";
-	//   - Other 走 mapToOfficialOpenAIEffort(max→high);
+	//   - Other 走 mapToOfficialOpenAIEffort(max 1:1 透传);
 	//   - Anthropic 原生端点/gemini/claude 直连无该概念 → ""。
 	// 由各池 record*Usage 从 upstreamReq(构造完成后)提取, 经 logCtx 透传落库;
 	// 空串表示客户端未开思考或上游无 reasoning_effort 概念, 前端不渲染后缀。

@@ -116,9 +116,9 @@ func TestInjectNvidiaChatTemplateKwargs_OtherPoolNeverInjects(t *testing.T) {
 	if outAnth.ChatTemplateKwargs != nil {
 		t.Fatalf("Other 号池 Anthropic 入站应抑制 chat_template_kwargs 注入, 实际=%v", outAnth.ChatTemplateKwargs)
 	}
-	// 修复后:Other 号池改用官方 OpenAI reasoning_effort 顶层字段。adaptive→max→官方映射为 high(无 max)。
-	if outAnth.ReasoningEffort != "high" {
-		t.Fatalf("Other 号池 Anthropic 入站开思考(adaptive→max)应注入官方 reasoning_effort=high, 实际=%q", outAnth.ReasoningEffort)
+	// 修复后:Other 号池改用官方 OpenAI reasoning_effort 顶层字段。adaptive→max→官方 max(1:1 透传)。
+	if outAnth.ReasoningEffort != "max" {
+		t.Fatalf("Other 号池 Anthropic 入站开思考(adaptive→max)应注入官方 reasoning_effort=max, 实际=%q", outAnth.ReasoningEffort)
 	}
 
 	// 对照组: 非 Other 号池(NVIDIA)同款条目保持注入, 确认抑制只针对 chat_template_kwargs 语义,
@@ -146,9 +146,9 @@ func TestInjectNvidiaChatTemplateKwargs_OtherPoolNeverInjects(t *testing.T) {
 }
 
 // TestAnthropicToOpenAIChat_OtherPool_ReasoningEffortGrades 锁定 Other 号池 Anthropic→OpenAI
-// 转译时思考等级按官方 OpenAI reasoning_effort 取值集{low,medium,high}注入,max→high。
+// 转译时思考等级按官方 OpenAI reasoning_effort 取值集{low,medium,high,max}注入,max 1:1 透传。
 // 各 Anthropic 思考信号(thinking.type+budget_tokens / output_config.effort)经 resolveReasoningEffort
-// 归一为内部档位后再映射为官方值,确认档位语义保留且不产 NIM 专有的 max/minimal。
+// 归一为内部档位后再映射为官方值,确认档位语义保留且不产 NIM 专有的 minimal。
 func TestAnthropicToOpenAIChat_OtherPool_ReasoningEffortGrades(t *testing.T) {
 	SetGlobalEnableThinkingMode(true)
 	defer SetGlobalEnableThinkingMode(true)
@@ -161,14 +161,14 @@ func TestAnthropicToOpenAIChat_OtherPool_ReasoningEffortGrades(t *testing.T) {
 	cases := map[string]string{
 		// thinking.type=enabled + budget_tokens 分档(resolveReasoningEffort 内部档→官方映射)
 		// 阈值对齐旧版 Anthropic:<1000→low,1000-7999→medium,8000-15999→high,≥16000→max;
-		// 经 mapToOfficialOpenAIEffort:max→high(官方无 max),各小档→官方 low/medium/high 1:1。
+		// 经 mapToOfficialOpenAIEffort:max→max 透传(阿里云 MaaS 兼容端点认 max),各小档→官方 1:1。
 		`{"type":"enabled","budget_tokens":1024}`:  "medium", // 1024 落 medium(旧版 Medium 2-5k)→ 官方 medium
 		`{"type":"enabled","budget_tokens":8000}`:  "high",   // 8000 落 high(旧版 High 8-16k)→ 官方 high
-		`{"type":"enabled","budget_tokens":32000}`: "high",   // 32000 落 max → 官方无 max → high
-		`{"type":"enabled","budget_tokens":16000}`: "high",   // 16000 落 max → 官方 high(新档边界)
+		`{"type":"enabled","budget_tokens":32000}`: "max",    // 32000 落 max → 官方 max 透传
+		`{"type":"enabled","budget_tokens":16000}`: "max",    // 16000 落 max → 官方 max 透传
 		`{"type":"enabled","budget_tokens":999}`:   "low",    // <1000 落 low(旧版 Low)→ 官方 low
-		`{"type":"adaptive"}`:                      "high", // adaptive→max→官方 high(无 max)
-		`{"type":"disabled"}`:                      "",     // 显式关闭 → 不注入
+		`{"type":"adaptive"}`:                      "max",    // adaptive→max→官方 max 透传
+		`{"type":"disabled"}`:                      "",       // 显式关闭 → 不注入
 	}
 	for tk, want := range cases {
 		req := makeAnthReq(t, "other/openai/gpt-4o", tk, "")
