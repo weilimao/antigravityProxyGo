@@ -1,3 +1,10 @@
+### v1.3.3 更新日志
+
+- **关键修复：账号管理器自死锁致高并发下请求全链路卡死**：
+  - 修复 `sync.RWMutex` 不可重入导致的致命自死锁：冷却期监控与 Token 同步刷新在持写锁/读锁临界区内再次调用 `GetAccountByID`（内部重复 `RLock`），运行时既不报错也不让步，整把账号管理器锁被永久焊死，所有选号热路径（`GetAvailableAccountsForChannel` 等）排队等锁，表现为运行一段时间后入站请求全部卡在路由转发后、上游中继前的死锁状态；
+  - 抽出无锁内查 `getAccountByIDLocked()` 供已持锁临界区使用，消除 `CooldownMonitor` 刷新配额失败分支与 `RefreshAccountTokenSync` 两处自死锁点，并补充切片 nil 指针守卫防潜在 panic；
+  - 新增死锁回归测试套件（`TestCooldownMonitor_FetchQuotaError_NoDeadlock` / `TestRefreshAccountTokenSync_Concurrent_NoDeadlock`），以超时守卫钉死两类死锁场景，防止未来回归。
+
 ### v1.3.2 更新日志
 
 - **账号体系与号池持久化升级**：

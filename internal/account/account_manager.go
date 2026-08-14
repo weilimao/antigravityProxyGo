@@ -424,15 +424,21 @@ func (m *Manager) GetRawAccounts() []*Account {
 	return m.accounts
 }
 
-func (m *Manager) GetAccountByID(id string) *Account {
-	m.RLock()
-	defer m.RUnlock()
+// getAccountByIDLocked 在已持有 m.Lock 或 m.RLock 的临界区内按 ID 查找账号。
+// 严禁在此方法内再次调用 m.Lock/RLock，以避免 RWMutex 不可重入导致自死锁。
+func (m *Manager) getAccountByIDLocked(id string) *Account {
 	for _, a := range m.accounts {
-		if a.ID == id {
+		if a != nil && a.ID == id {
 			return a
 		}
 	}
 	return nil
+}
+
+func (m *Manager) GetAccountByID(id string) *Account {
+	m.RLock()
+	defer m.RUnlock()
+	return m.getAccountByIDLocked(id)
 }
 
 // ============ 账号字段更新(Token/Credits/Overages/Enabled/Tier/2FA) ============
