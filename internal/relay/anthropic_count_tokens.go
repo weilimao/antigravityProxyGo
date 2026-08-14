@@ -33,6 +33,14 @@ const (
 	cjkCharsPerToken   = 1.5
 	otherCharsPerToken = 4.0
 	countTokensHardCap = 1_000_000
+	// imageBlockTokenCost:单个 image content block 的固定 token 估值。
+	// 对齐官方 count_tokens 对图片按 patch token 计的口径(≈ 宽×高/750),
+	// 1024×1024 基准图约 1.6K token。取 1600 作为不解码尺寸时的保守上界。
+	// 旧实现把 base64 字符串按 otherCharsPerToken(4 字符/token)计入,一张 1MB 图
+	// (base64≈1.35M 字符)被估成 ~34 万 token,真实仅 ~1.6K,虚高约 200 倍,
+	// 会把 CLI 的上下文窗口/compact 判定带偏。这里改为每个 image 块固定计入本常量,
+	// 不再把塞 base64 进字符加权。URL 型 image(source.type=url)官方同样按 patch 计,同此常量。
+	imageBlockTokenCost = 1600
 )
 
 // handleNvidiaCountTokens 处理 POST /nvidia/v1/messages/count_tokens(及 /nvidia/v1/messages/count_tokens/
@@ -99,6 +107,8 @@ func estimateInputTokens(req *AnthropicRequest) int {
 		return 1
 	}
 	var sb strings.Builder
+	// tokens 累加非字符加权项(image 块按 patch 固定估值),与下方字符加权结果相加。
+	var tokens int
 	// 1) system(UnmarshalJSON 已把数组形态归一为单字符串)
 	if req.System != "" {
 		sb.WriteString(req.System)
@@ -106,19 +116,24 @@ func estimateInputTokens(req *AnthropicRequest) int {
 	}
 	// 2) messages.content:遍历每个 content block,按类型取出文本载荷
 	//    - text: Text
-	//    - thinking: Thinking(前一轮 assistant 思考块;官方 count_tokens 说前一轮 thinking 不计,
-	//      但 CLI 入站历史里更常见的是当前轮次的引用,保守计入不影响正确性,只是偏高)
+	//    - thinking: 仅"当前轮"(末条消息且 role==assistant 的 prefill)才计入 input_tokens;
+	//      前序 assistant 轮的 thinking 块官方明确不计(见 Anthropic count_tokens 指南:
+	//      "Thinking blocks from previous assistant turns are ignored and do not count toward
+	//      your input tokens; Current assistant turn thinking does count")。旧实现无差别计入
+	//      所有 thinking,长链会话历史 thinking 越积越多、虚高随轮次线性放大。此处按口径剔除前序。
 	//    - tool_result: ToolResultContent(可能是 string 或 []block,flattenToolResultContent 已统一展开)
 	//    - tool_use: Name + 序列化后的 Input(工具调用入参也算输入侧 token)
-	//    - image: Source.Data(base64,占大体积)计字符 —— image block 的 base64 会被 NVIDIA 入站
-	//      自愈降级抹成 text,这里保守计入 base64 字符数,贴近真实"输入侧体积"。
-	for _, msg := range req.Messages {
+	//    - image: 每个 image 块按 imageBlockTokenCost 固定计入一次(见常量注释),不再把 base64
+	//      字符串塞进字符加权。base64/graph 型多模态请求由此从虚高 ~34 万级回到 ~1.6K 级真实口径。
+	lastIdx := len(req.Messages) - 1
+	for i, msg := range req.Messages {
+		isCurrentTurn := i == lastIdx && msg.Role == "assistant"
 		for _, c := range msg.Content {
 			if c.Text != "" {
 				sb.WriteString(c.Text)
 				sb.WriteByte(' ')
 			}
-			if c.Thinking != "" {
+			if c.Thinking != "" && isCurrentTurn {
 				sb.WriteString(c.Thinking)
 				sb.WriteByte(' ')
 			}
@@ -140,9 +155,10 @@ func estimateInputTokens(req *AnthropicRequest) int {
 					}
 				}
 			}
-			if c.Type == "image" && c.Source != nil && c.Source.Data != "" {
-				sb.WriteString(c.Source.Data)
-				sb.WriteByte(' ')
+			if c.Type == "image" && c.Source != nil {
+				// base64 与 url 两种来源官方都按 patch token 计,统一用固定估值。
+				// 不读 Source.Data 字符长度,避免再被 base64 体积拖高估算。
+				tokens += imageBlockTokenCost
 			}
 		}
 	}
@@ -165,7 +181,7 @@ func estimateInputTokens(req *AnthropicRequest) int {
 	}
 	// 4) tool_choice / thinking / output_config 等小体积配置字段不计入:
 	//    它们体积极小且与 token 计费语义弱相关,计入反而引入噪声,跟随官方"估算"宽松语义省略。
-	tokens := weightedTokenEstimate(sb.String())
+	tokens += weightedTokenEstimate(sb.String())
 	if tokens < 1 {
 		tokens = 1
 	}

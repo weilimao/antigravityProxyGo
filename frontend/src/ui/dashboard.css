@@ -315,8 +315,10 @@ body {
     display: none !important;
 }
 
-/* 在网格布局下，隐藏占位 div */
-#accountsList.layout-grid > div .acc-card-credit.hidden-grid-placeholder {
+/* 在网格与列表布局下，彻底隐藏无用占位 div */
+.acc-card-credit.hidden-grid-placeholder,
+#accountsList.layout-grid > div .acc-card-credit.hidden-grid-placeholder,
+#accountsList.layout-list > div .acc-card-credit.hidden-grid-placeholder {
     display: none !important;
 }
 
@@ -333,14 +335,21 @@ body {
     border-bottom: none !important;
 }
 
-/* 大屏下升级为更舒展、更合理的 Grid 弹性对齐 */
+/* 大屏下升级为更舒展、更合理的 Grid 弹性自适应对齐 */
 @media (min-width: 1024px) {
+    /* 默认 3 列模式 (非 Antigravity 官方账号：Grok, NVIDIA, GCP, Other 无积分占位) */
     #accountsList.layout-list > div {
         display: grid !important;
-        /* 第一列(邮箱)起步 440px，第三列(进度条)起步 360px，均弹性分配多余宽度，消除右侧大空白 */
-        grid-template-columns: minmax(440px, 1.2fr) 180px minmax(360px, 1.8fr) 220px !important;
+        /* 第一列(账号信息)弹性伸缩，第二列(配额进度)弹性伸缩，第三列(操作栏)由按钮自然撑开绝不截断 */
+        grid-template-columns: minmax(220px, 1.2fr) minmax(200px, 1.5fr) auto !important;
         align-items: center;
-        gap: 24px;
+        gap: 16px;
+    }
+
+    /* 存在 AI 积分时的 4 列模式 (Antigravity 官方账号) */
+    #accountsList.layout-list > div.has-credit,
+    #accountsList.layout-list > div:has(.acc-card-credit:not(.hidden-grid-placeholder)) {
+        grid-template-columns: minmax(200px, 1.1fr) minmax(140px, 0.7fr) minmax(180px, 1.3fr) auto !important;
     }
 }
 
@@ -351,24 +360,34 @@ body {
     justify-content: flex-start !important; /* 居左靠拢，引导内容横向展现 */
     gap: 12px;
     width: 100%;
+    min-width: 0;
 }
 
-/* 取消邮箱名容器的 flex-1，防止它强行把状态标签推到最右侧 */
+/* 取消邮箱名容器的 flex-1，防止它强行把状态标签推到最右侧，并确保文本截断安全 */
 #accountsList.layout-list > div .acc-card-header .acc-info-header {
     flex: 0 1 auto !important;
+    min-width: 0;
 }
 
 #accountsList.layout-list > div .acc-card-credit {
     width: 100%;
+    min-width: 0;
 }
 
 #accountsList.layout-list > div .acc-card-quota {
     width: 100%;
+    min-width: 0;
 }
 
 #accountsList.layout-list > div .acc-card-footer {
-    width: 100%;
+    width: auto;
     margin-top: 0 !important;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 /* 在列表模式下配额进度条组微调，使其更加紧凑 */

@@ -155,12 +155,16 @@ func TestEstimateInputTokens_WithTools(t *testing.T) {
 }
 
 func TestEstimateInputTokens_WithThinkingAndToolResult(t *testing.T) {
-	// thinking 块 + tool_result content(string 形态)应计入
+	// 官方 count_tokens 口径:前序 assistant 轮的 thinking 块不计 input_tokens,
+	// 仅当前轮(末条且 role==assistant 的 prefill)的 thinking 才计。
+	// 本用例 assistant 的 thinking 处于前序(末条是 user.tool_result),故应被剔除,
+	// 估算仅剩 tool_result 的 "result data here"(18 字符 ≈ 5 token)。
+	const prevThinking = "Let me reason about this carefully"
 	req := &AnthropicRequest{
 		Model: "claude-sonnet-4-5",
 		Messages: []AnthropicMessage{
 			{Role: "assistant", Content: []AnthropicContent{
-				{Type: "thinking", Thinking: "Let me reason about this carefully"},
+				{Type: "thinking", Thinking: prevThinking},
 			}},
 			{Role: "user", Content: []AnthropicContent{
 				{Type: "tool_result", ToolUseID: "toolu_1", ToolResultContent: json.RawMessage(`"result data here"`)},
@@ -168,8 +172,34 @@ func TestEstimateInputTokens_WithThinkingAndToolResult(t *testing.T) {
 		},
 	}
 	got := estimateInputTokens(req)
+	// 对照:完全不含该 thinking 块的请求(前序 thinking 被剔除后应与之等价)。
+	baseline := estimateInputTokens(&AnthropicRequest{
+		Model: "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: []AnthropicContent{
+				{Type: "tool_result", ToolUseID: "toolu_1", ToolResultContent: json.RawMessage(`"result data here"`)},
+			}},
+		},
+	})
+	if got != baseline {
+		t.Errorf("previous-turn thinking should be excluded: got %d, want baseline %d (thinking+tool_result)", got, baseline)
+	}
 	if got < 5 {
-		t.Errorf("thinking+tool_result estimate = %d, want >= 5", got)
+		t.Errorf("tool_result-only estimate = %d, want >= 5", got)
+	}
+	// 对照:把同一 thinking 挪到末条 assistant(prefill)应被计入,估算值严格高于剔除口径。
+	prefill := estimateInputTokens(&AnthropicRequest{
+		Model: "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: []AnthropicContent{{Type: "tool_result", ToolUseID: "toolu_1", ToolResultContent: json.RawMessage(`"result data here"`)}}},
+			{Role: "assistant", Content: []AnthropicContent{
+				{Type: "thinking", Thinking: prevThinking},
+				{Type: "text", Text: "ok"},
+			}},
+		},
+	})
+	if prefill <= baseline {
+		t.Errorf("current-turn(prefill) thinking should be counted: prefill %d <= baseline %d", prefill, baseline)
 	}
 }
 
@@ -219,6 +249,145 @@ func TestEstimateInputTokens_HardCap(t *testing.T) {
 	got := estimateInputTokens(req)
 	if got != countTokensHardCap {
 		t.Errorf("huge input = %d, want hard cap %d", got, countTokensHardCap)
+	}
+}
+
+// ===== thinking 计入口径对齐官方(仅当前轮计入,前序剔除) =====
+
+// TestEstimate_Thinking_PreviousTurnSkipped:[user, assistant(thinking+text), user]
+// 末条非 assistant,前序 assistant 的 thinking 应被剔除。断言:带 thinking 的估算 == 去掉
+// thinking 的同请求估算(证明前序 thinking 零增量)。
+func TestEstimate_Thinking_PreviousTurnSkipped(t *testing.T) {
+	const thinking = "I should reason step by step about this number theory problem before answering"
+	withThinking := &AnthropicRequest{
+		Model: "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "Are there infinitely many primes p with p mod 4 == 3?"}}},
+			{Role: "assistant", Content: []AnthropicContent{
+				{Type: "thinking", Thinking: thinking},
+				{Type: "text", Text: "Yes, there are infinitely many such primes."},
+			}},
+			{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "Can you write a formal proof?"}}},
+		},
+	}
+	// 对照:把同一 assistant 轮的 thinking 块置空(其余完全一致)。
+	withoutThinking := &AnthropicRequest{
+		Model: "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "Are there infinitely many primes p with p mod 4 == 3?"}}},
+			{Role: "assistant", Content: []AnthropicContent{
+				{Type: "text", Text: "Yes, there are infinitely many such primes."},
+			}},
+			{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "Can you write a formal proof?"}}},
+		},
+	}
+	got := estimateInputTokens(withThinking)
+	want := estimateInputTokens(withoutThinking)
+	if got != want {
+		t.Errorf("previous-turn thinking must be excluded: with=%d, without=%d (should match)", got, want)
+	}
+}
+
+// TestEstimate_Thinking_CurrentTurnPrefillCounted:末条为 assistant prefill 且带 thinking,
+// 该 thinking 属"当前轮"应计入。断言:估算值严格高于去掉该 thinking 的同请求。
+func TestEstimate_Thinking_CurrentTurnPrefillCounted(t *testing.T) {
+	const thinking = "Let me carefully check the base case of this induction argument before continuing"
+	withThinking := &AnthropicRequest{
+		Model: "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "Prove by induction that sum 1..n = n(n+1)/2"}}},
+			{Role: "assistant", Content: []AnthropicContent{
+				{Type: "thinking", Thinking: thinking},
+				{Type: "text", Text: "Base case"},
+			}},
+		},
+	}
+	withoutThinking := &AnthropicRequest{
+		Model: "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "Prove by induction that sum 1..n = n(n+1)/2"}}},
+			{Role: "assistant", Content: []AnthropicContent{
+				{Type: "text", Text: "Base case"},
+			}},
+		},
+	}
+	got := estimateInputTokens(withThinking)
+	baseline := estimateInputTokens(withoutThinking)
+	if got <= baseline {
+		t.Errorf("current-turn(prefill) thinking must be counted: with=%d, without=%d (should be strictly greater)", got, baseline)
+	}
+}
+
+// ===== image 计入口径修正(patch 固定估值替代 base64 字符法) =====
+
+// TestEstimate_Image_FlatCost:1 个 base64 image 块(Data 长 1.2M 字符)+ 一句 text。
+// 旧实现把 1.2M base64 字符按 4 字符/token 计会估成 ~30 万 token;新实现每个 image 块按
+// imageBlockTokenCost 固定计入,合计应 < 3000(真实约 1.6K 图 + 少量文本)。锁定量级归正。
+func TestEstimate_Image_FlatCost(t *testing.T) {
+	bigBase64 := strings.Repeat("A", 1_200_000) // 1.2M base64 字符模拟一张图
+	req := &AnthropicRequest{
+		Model: "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{
+			{Type: "image", Source: &AnthropicImageSource{Type: "base64", MediaType: "image/png", Data: bigBase64}},
+			{Type: "text", Text: "Describe this image concisely"},
+		}}},
+	}
+	got := estimateInputTokens(req)
+	if got >= 3000 {
+		t.Errorf("image flat-cost regression: got %d, want < 3000 (base64 char-counting leaked back: imageBlockTokenCost=%d)", got, imageBlockTokenCost)
+	}
+	if got < imageBlockTokenCost {
+		t.Errorf("image flat-cost too low: got %d, want >= imageBlockTokenCost %d", got, imageBlockTokenCost)
+	}
+	// 对照:去掉 image 块后(仅文本)估算应严格更低,且两者之差恰好等于 imageBlockTokenCost。
+	textOnly := &AnthropicRequest{
+		Model: "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{
+			{Type: "text", Text: "Describe this image concisely"},
+		}}},
+	}
+	textOnlyEst := estimateInputTokens(textOnly)
+	if got-textOnlyEst != imageBlockTokenCost {
+		t.Errorf("image block delta = %d, want exactly imageBlockTokenCost %d", got-textOnlyEst, imageBlockTokenCost)
+	}
+}
+
+// TestEstimate_ImageURL_FlatCost:URL 型 image(source.type=url)官方同样按 patch 计,应按固定估值计入。
+func TestEstimate_ImageURL_FlatCost(t *testing.T) {
+	req := &AnthropicRequest{
+		Model: "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{
+			{Type: "image", Source: &AnthropicImageSource{Type: "url", MediaType: "image/jpeg", Url: "https://example.com/big.jpg"}},
+			{Type: "text", Text: "What is in this picture"},
+		}}},
+	}
+	got := estimateInputTokens(req)
+	textOnly := estimateInputTokens(&AnthropicRequest{
+		Model:    "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "What is in this picture"}}}},
+	})
+	if got-textOnly != imageBlockTokenCost {
+		t.Errorf("url image block delta = %d, want exactly imageBlockTokenCost %d", got-textOnly, imageBlockTokenCost)
+	}
+}
+
+// TestEstimate_Image_MultiBlockAccumulates:多个 image 块应累加多次固定估值。
+func TestEstimate_Image_MultiBlockAccumulates(t *testing.T) {
+	req := &AnthropicRequest{
+		Model: "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{
+			{Type: "image", Source: &AnthropicImageSource{Type: "base64", MediaType: "image/png", Data: strings.Repeat("B", 50_000)}},
+			{Type: "image", Source: &AnthropicImageSource{Type: "base64", MediaType: "image/jpeg", Data: strings.Repeat("C", 30_000)}},
+			{Type: "text", Text: "Compare these two"},
+		}}},
+	}
+	got := estimateInputTokens(req)
+	// 2 个 image 块应贡献 2*imageBlockTokenCost,加上一句短文本。
+	if got < 2*imageBlockTokenCost {
+		t.Errorf("multi-image should accumulate twice imageBlockTokenCost: got %d, want >= %d", got, 2*imageBlockTokenCost)
+	}
+	if got >= 3*imageBlockTokenCost {
+		t.Errorf("multi-image over-charged: got %d, want < 3*imageBlockTokenCost %d", got, 3*imageBlockTokenCost)
 	}
 }
 

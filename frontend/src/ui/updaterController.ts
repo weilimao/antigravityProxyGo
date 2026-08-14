@@ -268,9 +268,14 @@ export function initUpdaterEvents() {
     ipcRenderer.on('app:download-complete', (event: any, filePath: string) => {
         downloadedInstallerPath = filePath;
         setUpdaterUIState('downloaded');
-        // 下载安装包成功后，自动在文件管理器中定位到该安装包
+        // 不再自动弹出文件管理器定位安装包：
+        // 弹出的资源管理器窗口会诱导用户手动双击 .exe，走无 /S 的交互式 NSIS 向导
+        // （“Choose Install Location / Install”），破坏应用内无感静默更新。
+        // 下载完成后唯一出口应为本弹窗的“立即重启”按钮，确保经 install_windows.go
+        // 的 ShellExecuteW(runas, /S) 静默链路覆盖安装并自动重启新版本。
         if (filePath) {
-            ipcRenderer.send('settings:open-folder', filePath);
+            // 仅记录日志用于排障，不主动打开目录
+            console.log('[Updater] 安装包已就绪（静默安装待触发）：', filePath);
         }
     });
 

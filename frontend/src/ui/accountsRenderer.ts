@@ -345,6 +345,7 @@ export function renderAccounts(accounts: any[]) {
             creditSection.className = 'flex flex-col gap-1 border-t border-outline-variant/20 pt-2 acc-card-credit';
             
             if (acc.provider === 'antigravity') {
+                card.classList.add('has-credit');
                 const creditHeader = document.createElement('div');
                 creditHeader.className = 'flex justify-between items-center';
                 
@@ -391,6 +392,7 @@ export function renderAccounts(accounts: any[]) {
 
                 creditSection.appendChild(overagesToggleWrapper);
             } else {
+                card.classList.remove('has-credit');
                 creditSection.classList.add('hidden-grid-placeholder');
             }
             card.appendChild(creditSection);
@@ -461,7 +463,7 @@ export function renderAccounts(accounts: any[]) {
             applySwitchState(checkbox, accLabel, isChecked, { dict, card });
             
             const btnDownload = document.createElement('button');
-            btnDownload.className = 'text-[11px] font-medium text-primary hover:text-primary/80 hover:bg-primary/5 dark:hover:bg-primary/10 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 mr-1';
+            btnDownload.className = 'text-[11px] font-medium text-primary hover:text-primary/80 hover:bg-primary/5 dark:hover:bg-primary/10 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0';
             btnDownload.innerHTML = `<span class="material-symbols-outlined text-[14px]">download</span> ${dict.btnExport || '导出'}`;
             btnDownload.title = dict.exportAccountTitle || '导出该账号文件';
             btnDownload.onclick = () => {
@@ -477,7 +479,7 @@ export function renderAccounts(accounts: any[]) {
             };
 
             const btnDelete = document.createElement('button');
-            btnDelete.className = 'text-[11px] font-medium text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10';
+            btnDelete.className = 'text-[11px] font-medium text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0';
             btnDelete.innerHTML = `<span class="material-symbols-outlined text-[14px]">delete</span> ${dict.btnRemove || '移除'}`;
             btnDelete.onclick = async () => {
                 if (await $confirm((dict.removeAccountConfirm || '确定要移除账号 {email} 吗？').replace('{email}', acc.email))) {
@@ -496,7 +498,7 @@ export function renderAccounts(accounts: any[]) {
 
             // 编辑按钮:仅 API Key 型号池(NVIDIA / Other / Grok)提供,复用各自添加账号模态框做预填编辑。
             const btnEdit = document.createElement('button');
-            btnEdit.className = 'text-[11px] font-medium text-primary hover:text-primary/80 hover:bg-primary/5 dark:hover:bg-primary/10 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10';
+            btnEdit.className = 'text-[11px] font-medium text-primary hover:text-primary/80 hover:bg-primary/5 dark:hover:bg-primary/10 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0';
             btnEdit.innerHTML = `<span class="material-symbols-outlined text-[14px]">edit</span> ${dict.btnEdit || '编辑'}`;
             btnEdit.title = dict.editAccountTitle || '编辑该账号参数';
             btnEdit.onclick = () => {
@@ -512,7 +514,7 @@ export function renderAccounts(accounts: any[]) {
             // 解冻按钮:仅 Grok 号池 + 当前处于冷却态时显示。点击经二次确认后 invoke grok:clear-cooldown,
             // 后端清冷却 + emitAccountsRes,前端卡片徽标即时翻绿。与编辑/导出/删除同级,置于最左以便冷却态显眼。
             const btnThaw = document.createElement('button');
-            btnThaw.className = 'text-[11px] font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10';
+            btnThaw.className = 'text-[11px] font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0';
             btnThaw.innerHTML = `<span class="material-symbols-outlined text-[14px]">ac_unit</span> ${dict.grokThaw || '解冻'}`;
             btnThaw.title = dict.grokThawSingleBtnTitle || '手动解冻该账号(立即清除冷却)';
             btnThaw.setAttribute('data-grok-thaw-btn', '');
@@ -527,7 +529,7 @@ export function renderAccounts(accounts: any[]) {
             };
 
             const rightGroup = document.createElement('div');
-            rightGroup.className = 'flex items-center gap-1';
+            rightGroup.className = 'flex items-center gap-1 flex-shrink-0';
             if (acc.provider === 'nvidia' || acc.provider === 'other' || acc.provider === 'grok') {
                 rightGroup.appendChild(btnEdit);
             }
@@ -563,6 +565,7 @@ export function renderAccounts(accounts: any[]) {
 
             // 2. Update AI Credits (Antigravity only)
             if (acc.provider === 'antigravity') {
+                card.classList.add('has-credit');
                 const creditValue = card.querySelector('.acc-credit-value') as HTMLElement;
                 if (creditValue) {
                     const creditVal = typeof acc.credits === 'number' ? `$${acc.credits.toFixed(2)}` : (dict.creditNotLoaded || '未加载');
@@ -578,6 +581,8 @@ export function renderAccounts(accounts: any[]) {
                         applySwitchState(overagesCheckbox, overagesLabel, isOveragesChecked);
                     }
                 }
+            } else {
+                card.classList.remove('has-credit');
             }
 
             // 3. Update enabled/disabled status and style classes
