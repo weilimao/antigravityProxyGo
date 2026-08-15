@@ -203,6 +203,7 @@ func (h *APICompatHandler) handleAnthropicMessages(w http.ResponseWriter, r *htt
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid anthropic request: " + err.Error()})
 		return
 	}
+	anthReq.UserAgent = r.Header.Get("User-Agent")
 
 	geminiModel := MapClientModelToGemini(anthReq.Model, h.getModelMapping())
 	geminiReq := TranslateAnthropicToGemini(&anthReq)

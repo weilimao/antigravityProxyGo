@@ -53,21 +53,42 @@ func TestExtractClientSessionHeader(t *testing.T) {
 	router := NewRouter()
 
 	const (
-		claudeID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-		codexSID  = "019fea2a-ebe0-7693-a323-14df0c53786c"
-		codexTID  = "019fea2a-ebe0-7693-a323-14df0c53786c"
+		claudeID    = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+		opencodeSID = "ses_ffad672d8ffenm0wrlAwIM85IH"
+		codexSID    = "019fea2a-ebe0-7693-a323-14df0c53786c"
+		codexTID    = "019fea2a-ebe0-7693-a323-14df0c53786c"
 	)
 
 	tests := []struct {
 		name    string
 		headers map[string]string
 		req     *http.Request
-		want     string
+		want    string
 	}{
 		{
 			name:    "Claude Code 头 优先",
-			headers: map[string]string{"X-Claude-Code-Session-Id": claudeID, "Session-Id": codexSID, "Thread-Id": codexTID},
+			headers: map[string]string{"X-Claude-Code-Session-Id": claudeID, "X-Session-Id": opencodeSID, "Session-Id": codexSID, "Thread-Id": codexTID},
 			want:    "claude:" + claudeID,
+		},
+		{
+			name:    "OpenCode X-Session-Id 优先于 Codex",
+			headers: map[string]string{"X-Session-Id": opencodeSID, "Session-Id": codexSID},
+			want:    "opencode:" + opencodeSID,
+		},
+		{
+			name:    "仅 OpenCode X-Session-Id",
+			headers: map[string]string{"X-Session-Id": opencodeSID},
+			want:    "opencode:" + opencodeSID,
+		},
+		{
+			name:    "仅 OpenCode X-Session-Affinity 兜底",
+			headers: map[string]string{"X-Session-Affinity": opencodeSID},
+			want:    "opencode:" + opencodeSID,
+		},
+		{
+			name:    "OpenCode X-Session-Id 优先于 X-Session-Affinity",
+			headers: map[string]string{"X-Session-Id": opencodeSID, "X-Session-Affinity": "other-affinity"},
+			want:    "opencode:" + opencodeSID,
 		},
 		{
 			name:    "仅 Codex Session-Id",
@@ -80,18 +101,18 @@ func TestExtractClientSessionHeader(t *testing.T) {
 			want:    "codex:" + codexTID,
 		},
 		{
-			name:    "三头全缺 返回空串",
+			name:    "多头全缺 返回空串",
 			headers: map[string]string{},
 			want:    "",
 		},
 		{
-			name:    "Claude 头纯空白视同未携带 回退 Codex",
-			headers: map[string]string{"X-Claude-Code-Session-Id": "   ", "Session-Id": codexSID},
+			name:    "Claude 与 OpenCode 头纯空白视同未携带 回退 Codex",
+			headers: map[string]string{"X-Claude-Code-Session-Id": "   ", "X-Session-Id": "\t", "Session-Id": codexSID},
 			want:    "codex:" + codexSID,
 		},
 		{
-			name:    "三头皆空白 返回空串",
-			headers: map[string]string{"Session-Id": "\t", "Thread-Id": " "},
+			name:    "全头皆空白 返回空串",
+			headers: map[string]string{"X-Session-Id": " ", "Session-Id": "\t", "Thread-Id": " "},
 			want:    "",
 		},
 		{

@@ -68,10 +68,10 @@ export const grokZh: Record<string, string> = {
     grokOAuthExpired: "授权已超时，请重新发起",
     // 手动检查授权(后端 1h 定时之外的手动触发,与 btnGrokCheckAuth / grok:check-auth 对齐)
     grokCheckAuth: "检查授权",
-    grokCheckAuthBtnTitle: "检查 Grok 授权是否过期，过期则刷新令牌，刷新令牌失效则自动移除",
-    grokCheckAuthConfirm: "将立即检查所有 Grok OAuth 账号的授权状态：仍有效的跳过、临近过期的自动刷新、刷新令牌已失效的将从号池移除。是否继续？",
+    grokCheckAuthBtnTitle: "检查 Grok 授权是否过期，过期则刷新令牌，刷新令牌失效则自动停用",
+    grokCheckAuthConfirm: "将立即检查所有 Grok OAuth 账号的授权状态：仍有效的跳过、临近过期的自动刷新、刷新令牌已失效的将自动停用。是否继续？",
     grokCheckAuthRunning: "正在检查授权…",
-    grokCheckAuthDone: "检查完成：共 {total} 个 · 刷新 {refreshed} · 跳过 {skipped} · 移除 {removed} · 失败 {failed}",
+    grokCheckAuthDone: "检查完成：共 {total} 个 · 刷新 {refreshed} · 跳过 {skipped} · 停用 {disabled} · 失败 {failed}",
     grokCheckAuthNoAccounts: "当前没有可检查的 Grok OAuth 账号",
     grokCheckAuthFailed: "检查授权失败: {detail}",
 };
@@ -136,10 +136,10 @@ export const grokEn: Record<string, string> = {
     grokOAuthExpired: "Authorization timed out, please try again",
     // Manual auth check (on-demand complement to the backend 1h timer; aligned with btnGrokCheckAuth / grok:check-auth)
     grokCheckAuth: "Check Auth",
-    grokCheckAuthBtnTitle: "Check whether Grok authorization has expired; refresh if so, and remove the account if the refresh token is dead",
-    grokCheckAuthConfirm: "This will immediately check all Grok OAuth accounts: still-valid tokens are skipped, near-expiry ones are refreshed, and accounts whose refresh token is dead are removed from the pool. Continue?",
+    grokCheckAuthBtnTitle: "Check whether Grok authorization has expired; refresh if so, and disable the account if the refresh token is dead",
+    grokCheckAuthConfirm: "This will immediately check all Grok OAuth accounts: still-valid tokens are skipped, near-expiry ones are refreshed, and accounts whose refresh token is dead are disabled. Continue?",
     grokCheckAuthRunning: "Checking authorization…",
-    grokCheckAuthDone: "Done: {total} total · refreshed {refreshed} · skipped {skipped} · removed {removed} · failed {failed}",
+    grokCheckAuthDone: "Done: {total} total · refreshed {refreshed} · skipped {skipped} · disabled {disabled} · failed {failed}",
     grokCheckAuthNoAccounts: "No Grok OAuth accounts to check",
     grokCheckAuthFailed: "Check auth failed: {detail}",
 };

@@ -551,3 +551,56 @@ func TestRoundTrip_LoadSaveLoad(t *testing.T) {
 	// 提供 placeholder 引用以避免 import 未用(若未来加 strings 用例保留导入)。
 	_ = strings.TrimSpace
 }
+
+// TestNvidiaAccount_EgressIP 验证 NVIDIA 账号配置专属 EgressIP 的 CRUD 与落盘往返
+func TestNvidiaAccount_EgressIP(t *testing.T) {
+	tmp := t.TempDir()
+	m := NewManager()
+	m.Init(tmp)
+
+	// 1. 添加带 EgressIP 的账号
+	id, err := m.AddNvidiaAccount(NvidiaAccountInput{
+		BaseURL:  "https://integrate.api.nvidia.com/v1",
+		APIKey:   "nvapi-test-key",
+		Label:    "nv-with-ip",
+		EgressIP: "104.28.19.82",
+	})
+	if err != nil {
+		t.Fatalf("AddNvidiaAccount failed: %v", err)
+	}
+
+	acc := m.GetAccountByID(id)
+	if acc == nil || acc.EgressIP != "104.28.19.82" {
+		t.Fatalf("Expected EgressIP 104.28.19.82, got %+v", acc)
+	}
+
+	// 2. 更新 EgressIP
+	_, err = m.UpdateNvidiaAccount(id, NvidiaAccountInput{
+		BaseURL:  "https://integrate.api.nvidia.com/v1",
+		Label:    "nv-with-ip-updated",
+		EgressIP: "104.28.19.99",
+	})
+	if err != nil {
+		t.Fatalf("UpdateNvidiaAccount failed: %v", err)
+	}
+
+	accUpdated := m.GetAccountByID(id)
+	if accUpdated == nil || accUpdated.EgressIP != "104.28.19.99" {
+		t.Fatalf("Expected updated EgressIP 104.28.19.99, got %+v", accUpdated)
+	}
+
+	// 3. 从新 Manager 重新加载，验证 JSON 分区文件落盘无损回填与 GetAccounts 深拷贝透出
+	m2 := NewManager()
+	m2.Init(tmp)
+	reloadedAcc := m2.GetAccountByID(id)
+	if reloadedAcc == nil || reloadedAcc.EgressIP != "104.28.19.99" {
+		t.Fatalf("Expected reloaded EgressIP 104.28.19.99, got %+v", reloadedAcc)
+	}
+
+	// 4. 验证 GetAccounts 深拷贝列表透出 EgressIP(供前端展示与编辑模态框回显)
+	frontendAccounts := m2.GetAccounts()
+	if len(frontendAccounts) != 1 || frontendAccounts[0].EgressIP != "104.28.19.99" {
+		t.Fatalf("Expected frontend deep copy EgressIP 104.28.19.99, got %+v", frontendAccounts)
+	}
+}
+

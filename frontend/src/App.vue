@@ -166,6 +166,7 @@
     <AutoTriggerModal />
     <NvidiaAccountModal />
     <NvidiaPreferredModelsModal />
+    <NvidiaBatchAssignIPModal />
     <GrokAccountModal />
     <GrokThawModal />
     <OtherAccountModal />
@@ -197,6 +198,7 @@ import TriggerTestModal from './components/modals/TriggerTestModal.vue';
 import AutoTriggerModal from './components/modals/AutoTriggerModal.vue';
 import NvidiaAccountModal from './components/modals/NvidiaAccountModal.vue';
 import NvidiaPreferredModelsModal from './components/modals/NvidiaPreferredModelsModal.vue';
+import NvidiaBatchAssignIPModal from './components/modals/NvidiaBatchAssignIPModal.vue';
 import GrokAccountModal from './components/modals/GrokAccountModal.vue';
 import GrokThawModal from './components/modals/GrokThawModal.vue';
 import OtherAccountModal from './components/modals/OtherAccountModal.vue';

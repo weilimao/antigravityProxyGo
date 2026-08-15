@@ -511,18 +511,16 @@ type xaiLoginData struct {
 
 // refreshXaiToken 用 xAI 设备码流刷新 access token(grok provider 专用)。
 //
-// 永久失败判定与处置(2026-08-12 修订):命中 invalid_grant/unauthorized_client/invalid_client/
-// access_denied 等真正「凭证作废类永久失败」时,1 次即从号池彻底 RemoveAccount 移除(不再先停用
-// 保留)。语义对齐用户需求「refresh_token 也失效就自动移除号池」。
+// 永久失败判定与处置:命中 invalid_grant/unauthorized_client/invalid_client/
+// access_denied 等凭证作废类永久失败时,自动将账号标记为停用(Enabled=false),
+// 绝不直接 RemoveAccount 物理删除,保留账号卡片及所有凭证,防止网络或上游抖动导致账号丢失。
 //
-// 抖动误删防护(不变,本就是 1 次即移除的安全前提):
+// 抖动防护:
 //   - RefreshToken 入口的 refreshPromises(SingleFlight)已合并同账号并发刷新,同一 refresh_token
 //     不会被并发重复打到 auth.x.ai,从根上消除「并发刷同一 token 临时返 invalid_grant」的抖动源;
 //   - 定时/手动触发链路(CheckAndPurgeGrokAuth、RefreshAccountTokenSync)均遵守「只刷临近/已过期的」
 //     口径(JWT exp 距当前 <= grokAuthRefreshSkewSec 才刷),不主动刷仍有效的 token,进一步压低抖动概率;
-//   - invalid_request/bad request 这类瞬时协议/风控错误不视作永久失败,不移除(仅返回 err 让上层重试)。
-//
-// 移除前打一条 fmt.Printf 留证,便于事后追溯是否出现误删。
+//   - invalid_request/bad request 这类瞬时协议/风控错误不视作永久失败,不停用(仅返回 err 让上层重试)。
 func (am *AuthManager) refreshXaiToken(acc *account.Account) (*XAITokenResult, error) {
 	if acc == nil {
 		return nil, errors.New("xai token refresh: account is nil")
@@ -535,25 +533,22 @@ func (am *AuthManager) refreshXaiToken(acc *account.Account) (*XAITokenResult, e
 	res, err := auth.RefreshTokens(context.Background(), acc.RefreshToken, tokenEndpoint)
 	if err != nil {
 		errMsg := strings.ToLower(err.Error())
-		// 关键词收紧:只对真正「凭证作废类永久失败」移除。invalid_request/bad request
-		// 在 OAuth 2.0 里也可能是瞬时协议/风控错误(如重复刷新同一 token),不视作永久失败。
+		// 关键词判定:命中凭证作废类永久失败时自动停用,不停留物理删除风险。
 		isPermanent := strings.Contains(errMsg, "invalid_grant") ||
 			strings.Contains(errMsg, "unauthorized_client") ||
 			strings.Contains(errMsg, "invalid_client") ||
 			strings.Contains(errMsg, "access_denied")
 
 		if isPermanent && am.accountMgr != nil {
-			// 永久失败 1 次即从号池彻底移除(对齐需求「refresh_token 也失效就自动移除号池」)。
-			// RemoveAccount 内部已定向落盘该 provider 分区,但不触发 OnAccountsUpdated 回调,
-			// 故此处移除后在 goroutine 里主动触发广播,让前端实时感知号池变化。
-			fmt.Printf("[AuthManager] Permanent xai token refresh failure for %s (id=%s), removing account from pool: %s\n",
+			// 永久失败自动停用账号(对齐 Google 官方账号策略,保留账号卡片供用户重新授权)。
+			fmt.Printf("[AuthManager] Permanent xai token refresh failure for %s (id=%s), disabling account: %s\n",
 				acc.Email, acc.ID, errMsg)
-			am.accountMgr.RemoveAccount(acc.ID)
+			am.accountMgr.UpdateAccountEnabled(acc.ID, false)
 			if cb := am.accountMgr.OnAccountsUpdated; cb != nil {
 				go cb(am.accountMgr.GetRawAccounts())
 			}
 		} else if am.accountMgr != nil {
-			// 非永久失败(网络抖动/5xx/超时/invalid_request 瞬时):不移除,仅告警,留给下一个 tick 重试。
+			// 非永久失败(网络抖动/5xx/超时/invalid_request 瞬时):不停用,仅告警,留给下一个 tick 重试。
 			fmt.Printf("[AuthManager] Transient xai token refresh failure for %s (id=%s), will retry next tick: %s\n",
 				acc.Email, acc.ID, errMsg)
 		}

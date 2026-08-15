@@ -55,22 +55,32 @@ func grokResolveAnthropicThinking(req *AnthropicRequest, globalOn bool) (mode gr
 		// 全局总闸关:强制 off,所有上下游请求都发 "none" 关闭推理。
 		return grokThinkOff, ""
 	}
-	if req == nil || req.Thinking == nil {
-		// 无 thinking 字段 → opt-in 默认,不强开不强关。
+	if req == nil {
 		return grokThinkUnspecified, ""
 	}
-	switch strings.ToLower(strings.TrimSpace(req.Thinking.Type)) {
-	case "disabled":
-		// 客户端显式关思考 → off(本注入器会把 "none" 发给上游,而非省略)。
-		return grokThinkOff, ""
-	case "enabled", "adaptive":
-		// 客户端显式开思考 → on,effort 取档。
-		effort = resolveReasoningEffort(req) // 返回 low/medium/high/max(内部规范化)
-		return grokThinkOn, effort
-	default:
-		// 缺省/未识别 type → unspecified。
-		return grokThinkUnspecified, ""
+	if req.Thinking != nil {
+		switch strings.ToLower(strings.TrimSpace(req.Thinking.Type)) {
+		case "disabled":
+			// 客户端显式关思考 → off(本注入器会把 "none" 发给上游,而非省略)。
+			return grokThinkOff, ""
+		case "enabled", "adaptive":
+			// 客户端显式开思考 → on,effort 取档。
+			effort = resolveReasoningEffort(req) // 返回 low/medium/high/max(内部规范化)
+			return grokThinkOn, effort
+		default:
+			// 缺省/未识别 type → unspecified。
+			return grokThinkUnspecified, ""
+		}
 	}
+	// 无 thinking 字段场景: OpenCode 客户端由 output_config.effort 驱动思考
+	if isOpenCodeUA(req.UserAgent) {
+		effort = resolveReasoningEffort(req)
+		if effort != "" {
+			return grokThinkOn, effort
+		}
+	}
+	// 其余客户端无 thinking 字段 → opt-in 默认,不强开不强关。
+	return grokThinkUnspecified, ""
 }
 
 // grokResolveOpenAIThinking 从 OpenAI Chat / Responses 入站请求体识别客户端思考意图,返回 (mode, effort)。

@@ -340,6 +340,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				return
 			}
 			anthReq.Model = upstreamModel
+			anthReq.UserAgent = r.Header.Get("User-Agent")
 
 			// 本地图片路径自愈(L2.5 预处理):Claude Code 等客户端对未识别模型(如 nvidia/z-ai/glm-4.9)
 			// 会在发送前剔除 image 块,本地截图路径作为纯 text 块发来。此处先扫 text 块裸路径,
@@ -451,8 +452,14 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			upstreamReq = &chatReq
 		}
 
-		// 构造上游 URL：{BaseURL}/v1/chat/completions (若 base_url 已含 /v1 后缀，不再重复拼接)
+		// 构造上游 URL：优先使用全局 Worker 代理出口（若启用），否则回退账号本身的 BaseURL
 		baseURL := strings.TrimRight(poolAccount.BaseURL, "/")
+		if h.isNvidiaWorkerProxyEnabledSafe() {
+			workerURL := strings.TrimRight(h.getNvidiaWorkerProxyURLSafe(), "/")
+			if workerURL != "" {
+				baseURL = workerURL
+			}
+		}
 		targetURL := baseURL + "/v1/chat/completions"
 		if strings.HasSuffix(baseURL, "/v1") {
 			targetURL = baseURL + "/chat/completions"
@@ -476,9 +483,20 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
 		req.Header.Set("Accept", "application/json")
+		if strings.TrimSpace(poolAccount.EgressIP) != "" {
+			req.Header.Set("X-Egress-IP", strings.TrimSpace(poolAccount.EgressIP))
+		}
 		// NVIDIA 上游不识别 anthropic 头，不注入
 
-		h.log("🟢 [NVIDIA 中继 %d/%d] 用户 %s 分配账号 %s | 模型 %s -> %s | 会话 %s | %s", attempt+1, maxAttempts, userSession.UserID, poolAccount.Email, inModel, upstreamModel, ocrSessionDisplay(userSession), targetURL)
+		proxyTag := ""
+		if h.isNvidiaWorkerProxyEnabledSafe() {
+			proxyTag = " [Worker 代理出口]"
+		}
+		egressTag := ""
+		if strings.TrimSpace(poolAccount.EgressIP) != "" {
+			egressTag = " (IP: " + strings.TrimSpace(poolAccount.EgressIP) + ")"
+		}
+		h.log("🟢 [NVIDIA 中继 %d/%d]%s 用户 %s 分配账号 %s%s | 模型 %s -> %s | 会话 %s | %s", attempt+1, maxAttempts, proxyTag, userSession.UserID, poolAccount.Email, egressTag, inModel, upstreamModel, ocrSessionDisplay(userSession), targetURL)
 
 		httpClient := h.client
 		if isStreaming {
@@ -505,6 +523,9 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
 			req.Header.Set("Accept", "application/json")
+			if strings.TrimSpace(poolAccount.EgressIP) != "" {
+				req.Header.Set("X-Egress-IP", strings.TrimSpace(poolAccount.EgressIP))
+			}
 
 			if singleAttempt > 1 {
 				h.log("🔄 [NVIDIA 中继 429 重试 %d/%d] 账号 %s 遇到 429 限流，等待 2 秒后原地重试...", singleAttempt, maxSingleAcc429Retries, poolAccount.Email)
@@ -726,4 +747,28 @@ func (h *APICompatHandler) getRelayModelMappingSafe() (mappings []settings.Model
 		}
 	}()
 	return h.settingsMgr.GetRelayModelMapping()
+}
+
+func (h *APICompatHandler) isNvidiaWorkerProxyEnabledSafe() (enabled bool) {
+	if h == nil || h.settingsMgr == nil {
+		return false
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			enabled = false
+		}
+	}()
+	return h.settingsMgr.IsNvidiaWorkerProxyEnabled()
+}
+
+func (h *APICompatHandler) getNvidiaWorkerProxyURLSafe() (url string) {
+	if h == nil || h.settingsMgr == nil {
+		return ""
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			url = ""
+		}
+	}()
+	return h.settingsMgr.GetNvidiaWorkerProxyURL()
 }

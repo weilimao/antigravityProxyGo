@@ -185,7 +185,7 @@ func (pf *passthroughForward) run(
 	//   入站 anthropic + 上游 anthropic → 原样透传 body(仅 model 改写);
 	//   入站 openai/responses + 上游 anthropic → OpenAIToAnthropicMessages(新写,见 passthrough_anthropic.go);
 	//   入站 responses + 上游 anthropic → Responses→OpenAIChat 再 OpenAI→Anthropic 两步。
-	upstreamBody, resolvedEffort, buildErr := pf.buildUpstreamBody(bodyBytes, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, !isOcrSelf)
+	upstreamBody, resolvedEffort, buildErr := pf.buildUpstreamBody(bodyBytes, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, !isOcrSelf, r.Header.Get("User-Agent"))
 	if buildErr != nil {
 		res.err = buildErr
 		res.statusCode = http.StatusBadRequest
@@ -270,7 +270,7 @@ func (pf *passthroughForward) run(
 			// 下游仍会发原样 upstreamBody,本地路径注入无效)。静默 miss 不报错。
 			if nb, enriched := pf.h.ocr.EnrichLocalImagePathsInOpenAIChat(bodyBytes, userSession); enriched > 0 {
 				bodyBytes = nb
-				if newUpstream, _, be := pf.buildUpstreamBody(bodyBytes, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, false); be == nil {
+				if newUpstream, _, be := pf.buildUpstreamBody(bodyBytes, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, false, r.Header.Get("User-Agent")); be == nil {
 					upstreamBody = newUpstream
 				}
 				pf.h.log("✅ [路由转发] OpenAI Chat 检测到 %d 个本地图片路径,已读图 OCR 注入 text 块(provider %s | 会话 %s)", enriched, poolChannel, ocrSessionDisplay(userSession))
@@ -280,7 +280,7 @@ func (pf *passthroughForward) run(
 				pf.h.log("⚠️ [路由转发] OpenAI Chat image 自愈降级出错(provider %s | 会话 %s): %v,继续原始请求", poolChannel, ocrSessionDisplay(userSession), errDown)
 			} else if replacedDown > 0 {
 				pf.h.log("✅ [路由转发] OpenAI Chat 检测到 %d 个 image 块,已本地 OCR 降级为纯文本(provider %s | 会话 %s | 缓存命中 %d / 未命中 %d / 窗外占位 %d)", replacedDown, poolChannel, ocrSessionDisplay(userSession), ocrHitsDown, ocrMissesDown, ocrSkippedDown)
-				if newBody, _, e := pf.buildUpstreamBody(downBody, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, false); e == nil {
+				if newBody, _, e := pf.buildUpstreamBody(downBody, upstreamModel, isStreaming, isChat, isResponses, isMessages, upstreamFormat, userSession, false, r.Header.Get("User-Agent")); e == nil {
 					upstreamBody = newBody
 				}
 			}

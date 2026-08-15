@@ -35,6 +35,32 @@ func (m *Manager) SetNvidiaPreferredModels(val []string) error {
 	}, val)
 }
 
+// ============ NVIDIA Cloudflare Worker 出口代理配置 ============
+
+// GetNvidiaWorkerProxyURL 返回 NVIDIA 号池专用的 Cloudflare Worker 出口代理 URL (如 https://my-nvidia.workers.dev)
+func (m *Manager) GetNvidiaWorkerProxyURL() string {
+	return getSetting(m, func(c *Config) string {
+		return strings.TrimSpace(c.NvidiaWorkerProxyURL)
+	})
+}
+
+// SetNvidiaWorkerProxyURL 持久化 NVIDIA Cloudflare Worker 出口代理 URL
+func (m *Manager) SetNvidiaWorkerProxyURL(val string) error {
+	return setSetting(m, func(c *Config, v string) { c.NvidiaWorkerProxyURL = strings.TrimSpace(v) }, val)
+}
+
+// IsNvidiaWorkerProxyEnabled 返回是否启用 NVIDIA Worker 出口代理
+func (m *Manager) IsNvidiaWorkerProxyEnabled() bool {
+	return getSetting(m, func(c *Config) bool {
+		return c.NvidiaWorkerProxyEnabled && strings.TrimSpace(c.NvidiaWorkerProxyURL) != ""
+	})
+}
+
+// SetNvidiaWorkerProxyEnabled 持久化是否启用 NVIDIA Worker 出口代理
+func (m *Manager) SetNvidiaWorkerProxyEnabled(val bool) error {
+	return setSetting(m, func(c *Config, v bool) { c.NvidiaWorkerProxyEnabled = v }, val)
+}
+
 // ============ OCR 模型(含 trim 兜底,泛型 + trim 回调) ============
 
 // GetOcrModel 读取入站 image 自愈降级使用的本地 Gemini OCR 模型名。

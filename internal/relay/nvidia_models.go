@@ -207,6 +207,12 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 
 	// 构造发往上游的 URL：剥离 /nvidia 本地路由前缀，强匹配上游 /v1/models
 	baseURL := strings.TrimRight(poolAccount.BaseURL, "/")
+	if h.isNvidiaWorkerProxyEnabledSafe() {
+		workerURL := strings.TrimRight(h.getNvidiaWorkerProxyURLSafe(), "/")
+		if workerURL != "" {
+			baseURL = workerURL
+		}
+	}
 	targetURL := baseURL + "/v1/models"
 	if strings.HasSuffix(baseURL, "/v1") {
 		targetURL = baseURL + "/models"
@@ -220,9 +226,12 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 	}
 	req.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
 	req.Header.Set("Accept", "application/json")
+	if strings.TrimSpace(poolAccount.EgressIP) != "" {
+		req.Header.Set("X-Egress-IP", strings.TrimSpace(poolAccount.EgressIP))
+	}
 
 	h.log("🟢 [NVIDIA 模型列表透传] 使用账号 %s | BaseURL: %s | 请求上游: %s | Token前缀: %s...",
-		poolAccount.Email, poolAccount.BaseURL, targetURL,
+		poolAccount.Email, baseURL, targetURL,
 		func() string {
 			t := poolAccount.AccessToken
 			if len(t) > 12 {

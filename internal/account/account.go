@@ -38,6 +38,8 @@ type Account struct {
 	// 仅在 GetAccounts 深拷贝时填充,供前端编辑态辨认"已配置 Key"且绝不下发明文。
 	MaskedKey string `json:"maskedKey,omitempty"`
 	BaseURL   string `json:"baseUrl,omitempty"`
+	// EgressIP 是账号绑定的专属出口伪装 IP(如 104.28.19.82),经 Worker 代理出口时通过 X-Egress-IP 请求头透传。
+	EgressIP string `json:"egressIp,omitempty"`
 	// TokenEndpoint 是 OAuth 账号的 token 刷新端点(如 Grok 的 https://auth.x.ai/oauth2/token)。
 	// 仅后端刷新用;GetAccounts 深拷贝透出(非敏感,token 本身不清空),前端展示/编辑态可见。
 	TokenEndpoint string `json:"tokenEndpoint,omitempty"`

@@ -50,9 +50,9 @@ async function onGrokCheckAuthClick(): Promise<void> {
     if (isChecking) return;
     const dict = i18n[state.currentLanguage] || i18n.zh;
 
-    // 二次确认:检查会刷新/移除账号,属轻度不可逆动作,需用户显式确认。
+    // 二次确认:检查会刷新/停用账号,属轻度状态变更动作,需用户显式确认。
     const confirmMsg = dict.grokCheckAuthConfirm ||
-        '将检查所有 Grok OAuth 账号授权状态,过期则刷新,刷新令牌失效则移除。是否继续?';
+        '将检查所有 Grok OAuth 账号授权状态,过期则刷新,刷新令牌失效则自动停用。是否继续?';
     if (!window.confirm(confirmMsg)) return;
 
     setCheckingUI(true);
@@ -84,16 +84,17 @@ function handleCheckAuthResult(res: any, dict: Record<string, string>): void {
     }
     const refreshed = typeof res.refreshed === 'number' ? res.refreshed : 0;
     const skipped = typeof res.skipped === 'number' ? res.skipped : 0;
-    const removed = typeof res.removed === 'number' ? res.removed : 0;
+    const disabled = typeof res.disabled === 'number' ? res.disabled : (typeof res.removed === 'number' ? res.removed : 0);
     const failed = typeof res.failed === 'number' ? res.failed : 0;
     const tmpl = dict.grokCheckAuthDone ||
-        '检查完成:共 {total} 个 · 刷新 {refreshed} · 跳过 {skipped} · 移除 {removed} · 失败 {failed}';
+        '检查完成:共 {total} 个 · 刷新 {refreshed} · 跳过 {skipped} · 停用 {disabled} · 失败 {failed}';
     window.alert(
         tmpl
             .replace('{total}', String(total))
             .replace('{refreshed}', String(refreshed))
             .replace('{skipped}', String(skipped))
-            .replace('{removed}', String(removed))
+            .replace('{disabled}', String(disabled))
+            .replace('{removed}', String(disabled))
             .replace('{failed}', String(failed))
     );
 }

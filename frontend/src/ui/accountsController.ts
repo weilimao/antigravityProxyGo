@@ -21,6 +21,7 @@ export { switchAutoTriggerPanel } from './autoTrigger';
 import { initTriggerTestModalEvents, appendTriggerTestLog } from './triggerTestModal';
 import { initSessionBindingsModalEvents } from './sessionBindingsModal';
 import { initNvidiaAccountModalEvents, writeNvidiaModalError, openNvidiaAccountModal } from './nvidiaAccountModal';
+import { initNvidiaBatchAssignIPModal } from './nvidiaBatchAssignIPModal';
 import { initOtherAccountModalEvents, writeOtherModalError, openOtherAccountModal } from './otherAccountModal';
 import { initGrokAccountModalEvents, writeGrokModalError, openGrokAccountModal } from './grokAccountModal';
 import { initGrokThawModalEvents } from './grokThawModal';
@@ -178,6 +179,14 @@ function setGrokCheckAuthButtonVisible(visible: boolean): void {
     else btn.classList.add('hidden');
 }
 
+// setNvidiaBatchAssignIPButtonVisible: 控制工具栏「分配住宅IP」按钮在 NVIDIA Tab 显、其它 Tab 隐。
+function setNvidiaBatchAssignIPButtonVisible(visible: boolean): void {
+    const btn = document.getElementById('btnNvidiaBatchAssignIP');
+    if (!btn) return;
+    if (visible) btn.classList.remove('hidden');
+    else btn.classList.add('hidden');
+}
+
 export function updateViewTabUI() {
     if (btnChannelAntigravity && btnChannelProject) {
         const activeClass = 'px-4 py-1.5 rounded-md font-bold cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm';
@@ -198,6 +207,7 @@ export function updateViewTabUI() {
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
             setGrokThawButtonVisible(false);
             setGrokCheckAuthButtonVisible(false);
+            setNvidiaBatchAssignIPButtonVisible(false);
             if (lblPoolMode) lblPoolMode.innerText = dict.poolLoadBalance || '账号负载均衡';
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.poolMode;
@@ -228,8 +238,9 @@ export function updateViewTabUI() {
             if (poolModeContainer) poolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.remove('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
-            // NVIDIA Tab 显示穿梭框入口按钮（委托穿梭框模块控制显隐,不跨簇共享 DOM 句柄）。
+            // NVIDIA Tab 显示穿梭框入口按钮与分配住宅IP按钮。
             setNvidiaPreferredModelsButtonVisible(true);
+            setNvidiaBatchAssignIPButtonVisible(true);
             setGrokThawButtonVisible(false);
             setGrokCheckAuthButtonVisible(false);
             if (nvidiaLBModeSelect && state.lastBackendData) {
@@ -252,6 +263,7 @@ export function updateViewTabUI() {
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.remove('hidden');
             setNvidiaPreferredModelsButtonVisible(false);
+            setNvidiaBatchAssignIPButtonVisible(false);
             setGrokThawButtonVisible(true);
             setGrokCheckAuthButtonVisible(true);
             if (grokLBModeSelect && state.lastBackendData) {
@@ -282,6 +294,7 @@ export function updateViewTabUI() {
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
             setNvidiaPreferredModelsButtonVisible(false);
+            setNvidiaBatchAssignIPButtonVisible(false);
             setGrokThawButtonVisible(false);
             setGrokCheckAuthButtonVisible(false);
         } else {
@@ -296,6 +309,7 @@ export function updateViewTabUI() {
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
             setNvidiaPreferredModelsButtonVisible(false);
+            setNvidiaBatchAssignIPButtonVisible(false);
             setGrokThawButtonVisible(false);
             setGrokCheckAuthButtonVisible(false);
             if (lblPoolMode) lblPoolMode.innerText = dict.projectLoadBalancing || '项目负载均衡';
@@ -474,6 +488,9 @@ export function initAccountsEvents() {
 
     // NVIDIA 账号 Modal：句柄赋值 + 事件绑定（已抽离 nvidiaAccountModal.ts）
     initNvidiaAccountModalEvents();
+
+    // NVIDIA 批量分配住宅 IP Modal：句柄赋值 + 事件绑定
+    initNvidiaBatchAssignIPModal();
 
     // Grok 账号 Modal：句柄赋值 + 事件绑定（已抽离 grokAccountModal.ts）
     initGrokAccountModalEvents();

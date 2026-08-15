@@ -92,11 +92,170 @@
 </div>
 </div>
 </div>
+
+<!-- NVIDIA Cloudflare 代理出口 Worker 卡片 (通过 Anycast 边缘节点打散出口，避免单 IP 触发 429) -->
+<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+<span class="material-symbols-outlined text-amber-500 text-[20px]">cloud</span>
+<span data-i18n="nvidiaWorkerProxyTitle">NVIDIA Cloudflare 代理出口 Worker</span>
+</h2>
+<p class="text-xs text-outline leading-relaxed" data-i18n="nvidiaWorkerProxyEnableDesc">
+将 NVIDIA 请求转发至 Cloudflare Worker，通过 Anycast 边缘 IP 轮换打散出口，避免单 IP 突发流量触发 429 拦截。
+</p>
+<div class="flex flex-col gap-3 border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex items-center justify-between">
+<div class="flex flex-col gap-0.5">
+<label class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="nvidiaWorkerProxyEnableLabel">启用 Cloudflare 边缘代理出口</label>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="nvidiaWorkerProxyEnableDesc">将 NVIDIA 请求转发至 Cloudflare Worker，通过 Anycast 边缘 IP 轮换打散出口，避免触发单 IP 429 限流</span>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="chkNvidiaWorkerProxyEnabled" type="checkbox"/>
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
+<div class="flex flex-col gap-2 mt-1" id="divNvidiaWorkerProxyUrl" style="display: none;">
+<label class="text-[12px] font-bold text-outline" data-i18n="nvidiaWorkerProxyUrlLabel">Cloudflare Worker 地址 (URL)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-mono" id="txtNvidiaWorkerProxyUrl" placeholder="https://your-worker.workers.dev" data-i18n-placeholder="nvidiaWorkerProxyUrlPlaceholder" type="text"/>
+<span class="text-[11px] text-outline" data-i18n="nvidiaWorkerProxyUrlTip">填写部署好的 Cloudflare Worker 地址。若账号配置了专属出口 IP，将通过 X-Egress-IP 请求头一并透传给 Worker。</span>
+</div>
+
+<!-- 部署教程与 Worker 脚本展示 -->
+<div class="border-t border-outline-variant/10 pt-4 mt-2 flex flex-col gap-3">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[18px] text-primary">menu_book</span>
+<span class="text-[13px] font-bold text-on-surface dark:text-white">Cloudflare Worker 部署指南与脚本</span>
+</div>
+</div>
+
+<p class="text-[12px] text-outline leading-relaxed">
+当您使用多个 NVIDIA 账号高频请求时，官方网关可能会因<b>单 IP 短期内吞吐过大</b>触发 429 拦截。通过部署 Cloudflare Worker 作为代理出口，可利用 Cloudflare 全球 Anycast 边缘出站 IP 自动打散流量，并支持账号级独立伪装住宅 IP。
+</p>
+
+<!-- Worker 脚本代码编辑器 (带语法着色、行号、原位编辑与一键复制) -->
+<div class="flex flex-col gap-1.5">
+<div class="text-[11px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
+  <span class="material-symbols-outlined text-[16px] text-amber-500">code</span>
+  <span>Worker 脚本代码（支持流式 SSE、防流锁定重试与 X-Egress-IP 伪装，可直接编辑与一键复制）：</span>
+</div>
+<CodeEditor
+  v-model="workerScriptCode"
+  :defaultCode="defaultWorkerScriptCode"
+  fileName="cloudflare-worker.js"
+  language="JavaScript"
+/>
+</div>
+
+<div class="text-[12px] text-outline leading-relaxed flex flex-col gap-1">
+<div class="font-bold text-on-surface dark:text-white">使用步骤：</div>
+<div>1. 登录 <a href="https://dash.cloudflare.com" target="_blank" class="text-primary hover:underline">Cloudflare Dashboard</a> &rarr; <b>Workers &amp; Pages</b> &rarr; 点击 <b>Create application</b> &rarr; 创建 Worker。</div>
+<div>2. 点击 <b>Quick edit</b>，粘贴上方一键复制的代码并点击 <b>Save and deploy</b>。</div>
+<div>3. 复制生成的 Worker 地址（如 <code>https://your-worker.workers.dev</code>），粘贴到上方「Cloudflare Worker 地址」输入框并开启。</div>
+<div>4. （可选）在「账号池 &rarr; NVIDIA」点击账号编辑，即可查看到已为各账号分配的专属住宅伪装 IP。</div>
+</div>
+</div>
+
+</div>
+</div>
 </div>
 </template>
 
 <script setup lang="ts">
-// NvidiaPanel: 从 Settings.vue 提取的纯展示面板。
-// 保留所有 id / data-i18n / onclick / class 属性，
-// 使 settingsController / relayController 的 getElementById 与 classList 操作零改动。
+import { ref } from 'vue';
+import CodeEditor from '../../common/CodeEditor.vue';
+import PasswordInput from '../../modals/PasswordInput.vue';
+
+const defaultWorkerScriptCode = `export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    // 1. 健康检查与 CORS 预检
+    if (url.pathname === "/health") {
+      return new Response(JSON.stringify({ status: "ok", edge: "cloudflare-worker" }), {
+        headers: { "content-type": "application/json" }
+      });
+    }
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": "*"
+        }
+      });
+    }
+
+    // 2. 构造目标 URL (NVIDIA 官方 API)
+    const targetUrl = \`https://integrate.api.nvidia.com\${url.pathname}\${url.search}\`;
+
+    // 3. 构造出站 Headers（修正 Host 并注入专属伪装 IP，剔除逐跳头）
+    const newHeaders = new Headers(request.headers);
+    newHeaders.set("host", "integrate.api.nvidia.com");
+
+    const egressIP = request.headers.get("x-egress-ip");
+    if (egressIP && egressIP.trim() !== "") {
+      const cleanIP = egressIP.trim();
+      newHeaders.set("cf-connecting-ip", cleanIP);
+      newHeaders.set("x-real-ip", cleanIP);
+      newHeaders.set("x-forwarded-for", cleanIP);
+    } else {
+      newHeaders.delete("cf-connecting-ip");
+      newHeaders.delete("x-real-ip");
+      newHeaders.delete("x-forwarded-for");
+    }
+    newHeaders.delete("x-egress-ip");
+
+    // 4. 优化请求体转发与 429 智能重试
+    let bodyBytes = null;
+    if (request.body && request.method !== "GET" && request.method !== "HEAD") {
+      bodyBytes = await request.arrayBuffer();
+    }
+
+    const maxRetries = 2;
+    let response;
+
+    for (let i = 0; i <= maxRetries; i++) {
+      try {
+        response = await fetch(targetUrl, {
+          method: request.method,
+          headers: newHeaders,
+          body: bodyBytes,
+          redirect: "follow",
+          cf: {
+            cacheEverything: false,
+            cacheTtl: 0
+          }
+        });
+
+        // 遇到正常响应 (2xx/3xx/4xx除429外) 直接跳出重试循环，进入极速返回通道
+        if (![429, 500, 502, 503, 504].includes(response.status)) {
+          break;
+        }
+
+        // 仅在 429/5xx 且未耗尽重试次数时进行毫秒级退避重试 (100ms * (i + 1))
+        if (i < maxRetries) {
+          await new Promise(r => setTimeout(r, 100 * (i + 1)));
+        }
+      } catch (err) {
+        if (i === maxRetries) throw err;
+        await new Promise(r => setTimeout(r, 100 * (i + 1)));
+      }
+    }
+
+    // 5. 构造下游响应（透传 SSE 流式传输，禁用 Cloudflare 边缘缓存与压缩缓冲）
+    const respHeaders = new Headers(response.headers);
+    respHeaders.set("access-control-allow-origin", "*");
+    respHeaders.set("cache-control", "no-cache, no-transform");
+    respHeaders.set("x-accel-buffering", "no");
+    respHeaders.delete("content-length");
+
+    return new Response(response.body, {
+      status: response.status,
+      headers: respHeaders
+    });
+  }
+};`;
+
+const workerScriptCode = ref(defaultWorkerScriptCode);
 </script>

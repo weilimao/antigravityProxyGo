@@ -167,6 +167,35 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		})
 		return true
 
+	case "settings:get-nvidia-worker-proxy":
+		wailsRuntime.EventsEmit(a.ctx, "settings:nvidia-worker-proxy-res", map[string]interface{}{
+			"nvidiaWorkerProxyUrl":     a.settingsMgr.GetNvidiaWorkerProxyURL(),
+			"nvidiaWorkerProxyEnabled": a.settingsMgr.IsNvidiaWorkerProxyEnabled(),
+		})
+		return true
+
+	case "settings:set-nvidia-worker-proxy-url":
+		url := ""
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				url = s
+			}
+		}
+		_ = a.settingsMgr.SetNvidiaWorkerProxyURL(url)
+		a.AddLog(fmt.Sprintf("⚙️ NVIDIA Cloudflare Worker 出口代理 URL: %s", a.settingsMgr.GetNvidiaWorkerProxyURL()))
+		return true
+
+	case "settings:set-nvidia-worker-proxy-enabled":
+		enabled := false
+		if len(args) > 0 {
+			if b, ok := args[0].(bool); ok {
+				enabled = b
+			}
+		}
+		_ = a.settingsMgr.SetNvidiaWorkerProxyEnabled(enabled)
+		a.AddLog(fmt.Sprintf("⚙️ NVIDIA Cloudflare Worker 代理出口启用状态: %v", a.settingsMgr.IsNvidiaWorkerProxyEnabled()))
+		return true
+
 	case "settings:get-network-status":
 		fallbackURL := ""
 		if u := netutil.GetCachedLocalProxy(); u != nil {

@@ -306,9 +306,9 @@ func newAuthManagerWithGrokAccount(t *testing.T, tokenEndpoint string) (*AuthMan
 	return am, acc, mgr
 }
 
-// TestRefreshXaiToken_PermanentFailure_RemovesAccount 锁定 refreshXaiToken 在命中 invalid_grant
-// 等永久失败时,1 次即从号池彻底 RemoveAccount(而非旧的连续 2 次停用),且账号不再可被 GetAccountByID 取回。
-func TestRefreshXaiToken_PermanentFailure_RemovesAccount(t *testing.T) {
+// TestRefreshXaiToken_PermanentFailure_DisablesAccount 锁定 refreshXaiToken 在命中 invalid_grant
+// 等永久失败时,将账号自动标记为停用(Enabled=false),保留在号池中供用户重新授权,绝不直接物理删除。
+func TestRefreshXaiToken_PermanentFailure_DisablesAccount(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -318,7 +318,7 @@ func TestRefreshXaiToken_PermanentFailure_RemovesAccount(t *testing.T) {
 
 	am, acc, mgr := newAuthManagerWithGrokAccount(t, srv.URL)
 
-	// 前置:账号确在池中。
+	// 前置:账号确在池中且已启用。
 	if mgr.GetAccountByID(acc.ID) == nil {
 		t.Fatal("precondition: grok account should exist before refresh")
 	}
@@ -331,13 +331,17 @@ func TestRefreshXaiToken_PermanentFailure_RemovesAccount(t *testing.T) {
 		t.Fatalf("expected error containing invalid_grant, got: %v", err)
 	}
 
-	// 关键断言:永久失败 1 次即从号池彻底移除(旧实现是 UpdateAccountEnabled(false) 停用但保留)。
-	if mgr.GetAccountByID(acc.ID) != nil {
-		t.Fatalf("grok account %s should be removed from pool after permanent refresh failure, still present", acc.ID)
+	// 关键断言:永久失败后账号仍保留在池中,但已被自动停用(Enabled=false)。
+	gotAcc := mgr.GetAccountByID(acc.ID)
+	if gotAcc == nil {
+		t.Fatalf("grok account %s should NOT be removed from pool after permanent refresh failure, but it was deleted", acc.ID)
 	}
-	// 池内 grok 账号列表应为空。
-	if got := len(mgr.GetRawAccountsByProvider("grok")); got != 0 {
-		t.Errorf("expected 0 grok accounts after removal, got %d", got)
+	if gotAcc.Enabled {
+		t.Errorf("expected grok account to be disabled (Enabled=false), but Enabled=true")
+	}
+	// 池内 grok 账号数量保持为 1。
+	if got := len(mgr.GetRawAccountsByProvider("grok")); got != 1 {
+		t.Errorf("expected 1 grok account in pool, got %d", got)
 	}
 }
 

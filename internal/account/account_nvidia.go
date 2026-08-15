@@ -30,6 +30,7 @@ type NvidiaAccountInput struct {
 	BaseURL      string
 	APIKey       string
 	Label        string // 可选展示名（写入 Email 字段）
+	EgressIP     string // 可选专属出口伪装 IP
 	DefaultModel string
 	ModelSonnet  string
 	ModelOpus    string
@@ -81,6 +82,7 @@ func NewNvidiaAccount(in NvidiaAccountInput) *Account {
 		ScopeType:    "nvidia",
 		AccessToken:  strings.TrimSpace(in.APIKey), // 复用 AccessToken 存 API Key
 		BaseURL:      baseURL,
+		EgressIP:     strings.TrimSpace(in.EgressIP),
 		DefaultModel: strings.TrimSpace(in.DefaultModel),
 		ModelSonnet:  strings.TrimSpace(in.ModelSonnet),
 		ModelOpus:    strings.TrimSpace(in.ModelOpus),
@@ -146,6 +148,7 @@ func (m *Manager) UpdateNvidiaAccount(id string, in NvidiaAccountInput) (*Accoun
 	}
 	target.BaseURL = in.BaseURL
 	target.Email = label
+	target.EgressIP = strings.TrimSpace(in.EgressIP)
 	target.DefaultModel = strings.TrimSpace(in.DefaultModel)
 	target.ModelSonnet = strings.TrimSpace(in.ModelSonnet)
 	target.ModelOpus = strings.TrimSpace(in.ModelOpus)

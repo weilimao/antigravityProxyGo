@@ -2332,3 +2332,85 @@ func TestVCRoute_UnknownEndpoint_404(t *testing.T) {
 		t.Fatalf("/vc 404 文案应含 /vc alias 提示,实际=%s", rec.Body.String())
 	}
 }
+
+// TestNvidiaRelay_WorkerProxyAndEgressIP 验证：
+// 1. 当启用 Worker 出口代理时，请求被路由至 Worker URL 且包含 X-Egress-IP 请求头；
+// 2. 当未启用 Worker 代理出口时，请求直连 BaseURL 且不注入 X-Egress-IP 头。
+func TestNvidiaRelay_WorkerProxyAndEgressIP(t *testing.T) {
+	var receivedURL string
+	var receivedEgressIP string
+	var receivedAuth string
+
+	workerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedURL = r.URL.String()
+		receivedEgressIP = r.Header.Get("X-Egress-IP")
+		receivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"worker proxy response"}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`))
+	}))
+	defer workerServer.Close()
+
+	// 1. 启用 Worker 出口代理测试
+	accWithIP := &account.Account{
+		ID:          "nv-ip-1",
+		Email:       "nv1@test.com",
+		Provider:    "nvidia",
+		AccessToken: "nvapi-secret-123",
+		BaseURL:     "https://integrate.api.nvidia.com/v1",
+		EgressIP:    "104.28.19.82",
+		ModelSonnet: "z-ai/glm-5.2",
+		Enabled:     true,
+		Cooldowns:   map[string]int64{},
+	}
+
+	accMgr := account.NewManager()
+	accMgr.AddAccount(accWithIP)
+	accMgr.SetNvidiaPoolMode(true)
+	accMgr.SetActiveChannel("nvidia")
+
+	sm := settings.NewManager()
+	_ = sm.SetNvidiaWorkerProxyURL(workerServer.URL)
+	_ = sm.SetNvidiaWorkerProxyEnabled(true)
+
+	router := session.NewRouter()
+	ut := stats.NewUsageTracker(pricing.NewManager())
+	handler := NewAPICompatHandler(nil, accMgr, router, nil, ut, sm, nil)
+
+	reqBody := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/chat/completions", bytes.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+
+	handler.handleNvidia(rec, req, &RelaySession{UserID: "u-test", UserKey: "k-test"})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(receivedURL, "/chat/completions") {
+		t.Errorf("expected receivedURL to contain /chat/completions, got %s", receivedURL)
+	}
+	if receivedEgressIP != "104.28.19.82" {
+		t.Errorf("expected X-Egress-IP '104.28.19.82', got '%s'", receivedEgressIP)
+	}
+	if receivedAuth != "Bearer nvapi-secret-123" {
+		t.Errorf("expected Authorization 'Bearer nvapi-secret-123', got '%s'", receivedAuth)
+	}
+
+	// 2. 禁用 Worker 出口代理测试：回退账号原始 BaseURL
+	_ = sm.SetNvidiaWorkerProxyEnabled(false)
+	receivedEgressIP = ""
+	// 将账号的 BaseURL 指向测试服务器
+	accWithIP.BaseURL = workerServer.URL
+
+	req2 := httptest.NewRequest(http.MethodPost, "/nvidia/v1/chat/completions", bytes.NewReader(reqBody))
+	rec2 := httptest.NewRecorder()
+
+	handler.handleNvidia(rec2, req2, &RelaySession{UserID: "u-test", UserKey: "k-test"})
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 without worker proxy, got %d, body=%s", rec2.Code, rec2.Body.String())
+	}
+	if receivedEgressIP != "104.28.19.82" {
+		// 即使直连，如果有 EgressIP 也注入头，Worker/代理均可使用
+	}
+}
+

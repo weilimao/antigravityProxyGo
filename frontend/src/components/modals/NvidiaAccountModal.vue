@@ -37,6 +37,15 @@
         class="px-3 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" />
     </div>
 
+    <div class="flex flex-col gap-1.5">
+      <label class="text-[12px] font-medium text-on-surface dark:text-white" data-i18n="nvidiaFieldEgressIp">专属出口伪装 IP (可选)</label>
+      <input type="text" id="inputNvidiaEgressIp"
+        placeholder="例如 104.28.19.82 (需启用 Worker 代理出口)"
+        data-i18n-placeholder="nvidiaFieldEgressIpPlaceholder"
+        class="px-3 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" />
+      <div class="text-[11px] text-outline" data-i18n="nvidiaFieldEgressIpTip">启用 Cloudflare Worker 代理出口时，此 IP 会作为 X-Egress-IP 传给 Worker 实现账号级独立 IP 伪装。</div>
+    </div>
+
     <div class="border-t border-outline-variant/20 pt-4">
       <div class="mb-2.5 flex items-center justify-between">
         <div>

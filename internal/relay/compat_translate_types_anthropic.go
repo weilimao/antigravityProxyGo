@@ -137,6 +137,8 @@ type AnthropicRequest struct {
 	// OutputConfig 承载 Anthropic 新协议的 output_config.effort 字段,用 RawMessage 原样保留,
 	// 由 nvidia 链路 resolveReasoningEffort 优先解析 effort,高于 thinking.budget_tokens。
 	OutputConfig json.RawMessage `json:"output_config,omitempty"`
+	// UserAgent 记录发起请求的客户端 User-Agent(json:"-", 仅内存流转, 用于识别 OpenCode 等客户端的思考模式与协议差异)。
+	UserAgent string `json:"-"`
 }
 
 // UnmarshalJSON 允许 AnthropicRequest.System 兼容字符串及数组两种格式 of JSON 解析

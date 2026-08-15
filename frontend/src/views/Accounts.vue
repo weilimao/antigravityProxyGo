@@ -207,11 +207,15 @@
                     <span class="material-symbols-outlined text-[14px]">cleaning_services</span>
                     <span data-i18n="btnClearSessionsLabel">清空绑定</span>
                 </button>
+                <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-amber-500 dark:hover:text-amber-400 bg-outline-variant/10 hover:bg-amber-500/10 border border-outline-variant/20 hover:border-amber-500/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none hidden" id="btnNvidiaBatchAssignIP" title="为 NVIDIA 号池账号一键批量分配独立住宅 IP" data-i18n-title="btnNvidiaBatchAssignIPTitle">
+                    <span class="material-symbols-outlined text-[14px]">public</span>
+                    <span data-i18n="btnNvidiaBatchAssignIPLabel">分配住宅IP</span>
+                </button>
                 <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-sky-500 dark:hover:text-sky-400 bg-outline-variant/10 hover:bg-sky-500/10 border border-outline-variant/20 hover:border-sky-500/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none hidden" id="btnGrokOneClickThaw" title="一键解冻冷却中的 Grok 账号" data-i18n-title="grokThawBtnTitle">
                     <span class="material-symbols-outlined text-[14px]">ac_unit</span>
                     <span data-i18n="grokOneClickThaw">一键解冻</span>
                 </button>
-                <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-emerald-500 dark:hover:text-emerald-400 bg-outline-variant/10 hover:bg-emerald-500/10 border border-outline-variant/20 hover:border-emerald-500/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none hidden" id="btnGrokCheckAuth" title="检查 Grok 授权是否过期，过期则刷新令牌，刷新令牌失效则自动移除" data-i18n-title="grokCheckAuthBtnTitle">
+                <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-emerald-500 dark:hover:text-emerald-400 bg-outline-variant/10 hover:bg-emerald-500/10 border border-outline-variant/20 hover:border-emerald-500/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none hidden" id="btnGrokCheckAuth" title="检查 Grok 授权是否过期，过期则刷新令牌，刷新令牌失效则自动停用" data-i18n-title="grokCheckAuthBtnTitle">
                     <span class="material-symbols-outlined text-[14px]">verified_user</span>
                     <span data-i18n="grokCheckAuth">检查授权</span>
                 </button>

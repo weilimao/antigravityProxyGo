@@ -126,17 +126,16 @@ func TestCheckAndPurgeGrokAuth_Refreshed(t *testing.T) {
 	}
 }
 
-// TestCheckAndPurgeGrokAuth_Removed 锁定:刷新命中「永久失败」错误且账号已从池移除时,
-// CheckAndPurgeGrokAuth 返回 removed。
-// 模拟方式:RefreshToken 闭包返回 invalid_grant 错误,并在闭包里直接 RemoveAccount
-// (复刻 refreshXaiToken 永久失败链路的真实副作用),使 GetAccountByID 在 CheckAndPurgeGrokAuth
-// 复检时返回 nil → 判为 removed。
-func TestCheckAndPurgeGrokAuth_Removed(t *testing.T) {
+// TestCheckAndPurgeGrokAuth_Disabled 锁定:刷新命中「永久失败」错误且账号被停用时,
+// CheckAndPurgeGrokAuth 返回 disabled, 且账号依然保留在号池中(Enabled=false)。
+// 模拟方式:RefreshToken 闭包返回 invalid_grant 错误,并在闭包里调用 UpdateAccountEnabled(false)
+// (复刻 refreshXaiToken 永久失败链路的真实副作用),使 CheckAndPurgeGrokAuth 判定为 disabled。
+func TestCheckAndPurgeGrokAuth_Disabled(t *testing.T) {
 	m := newGrokAuthTestManager(t)
 
 	m.RefreshToken = func(acc *Account) (string, error) {
-		// 复刻 refreshXaiToken 永久失败的副作用:移除账号(真实链路在 internal/quota/oauth.go 内做)。
-		m.RemoveAccount(acc.ID)
+		// 复刻 refreshXaiToken 永久失败的副作用:停用账号(真实链路在 internal/quota/oauth.go 内做)。
+		m.UpdateAccountEnabled(acc.ID, false)
 		return "", errors.New("xai token request failed with status 400: invalid_grant")
 	}
 
@@ -148,14 +147,18 @@ func TestCheckAndPurgeGrokAuth_Removed(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d: %+v", len(results), results)
 	}
-	if results[0].Outcome != "removed" {
-		t.Errorf("expected outcome removed, got %q", results[0].Outcome)
+	if results[0].Outcome != "disabled" {
+		t.Errorf("expected outcome disabled, got %q", results[0].Outcome)
 	}
 	if !strings.Contains(results[0].Detail, "invalid_grant") {
 		t.Errorf("expected detail containing invalid_grant, got %q", results[0].Detail)
 	}
-	if m.GetAccountByID("grok-dead") != nil {
-		t.Error("grok-dead should be removed from pool after permanent failure")
+	gotAcc := m.GetAccountByID("grok-dead")
+	if gotAcc == nil {
+		t.Fatal("grok-dead should NOT be removed from pool after permanent failure")
+	}
+	if gotAcc.Enabled {
+		t.Error("grok-dead should be disabled (Enabled=false) after permanent failure")
 	}
 }
 

@@ -42,14 +42,12 @@
   "nvidiaCompressEnabled": false,
   "nvidiaCompressThresholdTokens": 0,
   "nvidiaCompressKeepToolResults": 0,
+  "nvidiaWorkerProxyUrl": "http://127.0.0.1:61842",
   "nvidiaWorkerProxyEnabled": false,
   "promptPrefix": "",
   "customModelOverrideEnabled": false,
   "customModelOverrideID": "",
-  "bypassOverridePrefixes": [
-    "tab",
-    "claude-"
-  ],
+  "bypassOverridePrefixes": null,
   "customThinkingOverrideEnabled": false,
   "customThinkingSupports": false,
   "customThinkingBudget": 0,

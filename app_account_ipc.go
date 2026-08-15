@@ -209,6 +209,7 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 			ModelOpus:    strAt(5),
 			ModelHaiku:   strAt(6),
 			ModelFable:   strAt(7),
+			EgressIP:     strAt(8),
 		}
 		id, err := a.accountMgr.AddNvidiaAccount(in)
 		if err != nil {
@@ -230,7 +231,7 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		return data, true, nil
 
 	case "nvidia:update":
-		// args: [accountId, baseURL, apiKey, label?, defaultModel?, sonnet?, opus?, haiku?, fable?]
+		// args: [accountId, baseURL, apiKey, label?, defaultModel?, sonnet?, opus?, haiku?, fable?, egressIp?]
 		// 与 nvidia:add 位置参数对齐;apiKey 留空表示保持不变。
 		if len(args) < 2 {
 			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "参数不足:至少需要 accountId、baseURL"})
@@ -258,6 +259,7 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 			ModelOpus:    strAtU(6),
 			ModelHaiku:   strAtU(7),
 			ModelFable:   strAtU(8),
+			EgressIP:     strAtU(9),
 		}
 		_, uerr := a.accountMgr.UpdateNvidiaAccount(idU, inU)
 		if uerr != nil {
@@ -375,6 +377,53 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		data, _ := marshalResponse(map[string]interface{}{
 			"success": true,
 			"models":  models,
+		})
+		return data, true, nil
+
+	case "nvidia:get-residential-subnets":
+		subnets := account.GetResidentialSubnets()
+		data, _ := marshalResponse(map[string]interface{}{
+			"success": true,
+			"subnets": subnets,
+		})
+		return data, true, nil
+
+	case "nvidia:batch-assign-egress-ip":
+		// args: [selectedSubnetIds?, overwriteAll?] 或 [jsonString]
+		var opts account.BatchAssignIPOptions
+		opts.OverwriteAll = true
+
+		if len(args) > 0 {
+			if jsonStr, ok := args[0].(string); ok && strings.HasPrefix(strings.TrimSpace(jsonStr), "{") {
+				_ = json.Unmarshal([]byte(jsonStr), &opts)
+			} else {
+				if subnetList, ok := args[0].([]interface{}); ok {
+					for _, item := range subnetList {
+						if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+							opts.SelectedSubnetIDs = append(opts.SelectedSubnetIDs, strings.TrimSpace(s))
+						}
+					}
+				}
+				if len(args) > 1 {
+					if b, ok := args[1].(bool); ok {
+						opts.OverwriteAll = b
+					}
+				}
+			}
+		}
+
+		updatedCount, err := a.accountMgr.BatchAssignNvidiaEgressIP(opts)
+		if err != nil {
+			a.AddLog(fmt.Sprintf("❌ [NVIDIA] 批量分配住宅 IP 失败: %v", err))
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+			return data, true, nil
+		}
+
+		a.emitAccountsRes()
+		a.AddLog(fmt.Sprintf("✅ [NVIDIA] 成功为 %d 个账号分配独立住宅 IP", updatedCount))
+		data, _ := marshalResponse(map[string]interface{}{
+			"success":      true,
+			"updatedCount": updatedCount,
 		})
 		return data, true, nil
 
@@ -824,18 +873,18 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		return data, true, nil
 
 	case "grok:check-auth":
-		// 手动触发一次「Grok 号池授权过期检查→刷新→失效移除」,复用后端 CheckAndPurgeGrokAuth
+		// 手动触发一次「Grok 号池授权过期检查→刷新→失效停用」,复用后端 CheckAndPurgeGrokAuth
 		// (与 1h 定时 tick 同一逻辑)。无参:检查全部 grok OAuth 账号。
 		// 判定主走 access_token(JWT)exp:仍有效 skipped / 临近过期刷新成功 refreshed /
-		// 刷新命中永久失败(invalid_grant 等)已 RemoveAccount removed / 瞬时失败 failed。
-		// 移除已发生在 CheckAndPurgeGrokAuth→RefreshAccountTokenSync→refreshXaiToken 链路内,
-		// 此处汇总计数 + AddLog + emitAccountsRes 广播(可能移除了账号,前端需即时刷新)。
+		// 刷新命中永久失败(invalid_grant 等)已 UpdateAccountEnabled(false) disabled / 瞬时失败 failed。
+		// 停用已发生在 CheckAndPurgeGrokAuth→RefreshAccountTokenSync→refreshXaiToken 链路内,
+		// 此处汇总计数 + AddLog + emitAccountsRes 广播(账号状态变更,前端需即时刷新)。
 		results := a.accountMgr.CheckAndPurgeGrokAuth()
-		var removed, refreshed, skipped, failed int
+		var disabled, refreshed, skipped, failed int
 		for _, r := range results {
 			switch r.Outcome {
-			case "removed":
-				removed++
+			case "disabled", "removed":
+				disabled++
 			case "refreshed":
 				refreshed++
 			case "skipped":
@@ -845,15 +894,15 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 			}
 		}
 		total := len(results)
-		a.AddLog(fmt.Sprintf("🔍 [Grok 检查授权] 完成,共 %d 个 OAuth 账号:刷新 %d / 移除 %d / 跳过 %d / 失败 %d",
-			total, refreshed, removed, skipped, failed))
-		// 移除与否都广播一次:刷新成功的号 token 已变,前端虽不展示 token 但配额/冷却态可能联动;
-		// 移除的号必须广播否则前端看不到消失。broadcast 幂等,无移除也无妨。
+		a.AddLog(fmt.Sprintf("🔍 [Grok 检查授权] 完成,共 %d 个 OAuth 账号:刷新 %d / 停用 %d / 跳过 %d / 失败 %d",
+			total, refreshed, disabled, skipped, failed))
+		// 广播一次让前端卡片即时刷新状态
 		a.emitAccountsRes()
 		data, _ := marshalResponse(map[string]interface{}{
 			"success":   true,
 			"total":     total,
-			"removed":   removed,
+			"disabled":  disabled,
+			"removed":   disabled, // 兼容前端历史解构
 			"refreshed": refreshed,
 			"skipped":   skipped,
 			"failed":    failed,

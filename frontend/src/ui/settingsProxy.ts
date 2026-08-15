@@ -127,6 +127,36 @@ export function bindProxySettings(): void {
             }
         });
     }
+
+    // ===== NVIDIA Cloudflare 代理出口 Worker =====
+    const chkNvidiaWorkerProxyEnabled = document.getElementById('chkNvidiaWorkerProxyEnabled') as HTMLInputElement | null;
+    const txtNvidiaWorkerProxyUrl = document.getElementById('txtNvidiaWorkerProxyUrl') as HTMLInputElement | null;
+    const divNvidiaWorkerProxyUrl = document.getElementById('divNvidiaWorkerProxyUrl');
+
+    if (chkNvidiaWorkerProxyEnabled) {
+        chkNvidiaWorkerProxyEnabled.addEventListener('change', (e: any) => {
+            const enabled = e.target.checked;
+            try {
+                ipcRenderer.send('settings:set-nvidia-worker-proxy-enabled', enabled);
+                if (divNvidiaWorkerProxyUrl) {
+                    divNvidiaWorkerProxyUrl.style.display = enabled ? 'flex' : 'none';
+                }
+            } catch (err) {
+                console.error('[SettingsController] Failed to save nvidia worker proxy enabled:', err);
+            }
+        });
+    }
+
+    if (txtNvidiaWorkerProxyUrl) {
+        txtNvidiaWorkerProxyUrl.addEventListener('change', (e: any) => {
+            const val = e.target.value.trim();
+            try {
+                ipcRenderer.send('settings:set-nvidia-worker-proxy-url', val);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save nvidia worker proxy url:', err);
+            }
+        });
+    }
 }
 
 // 自定义 SOCKS5 + NVIDIA 兜底代理:逐字段 ipcRenderer.sendSync('settings:get-*') 回填。
@@ -211,6 +241,24 @@ export function loadProxyState(): void {
         const ports = ipcRenderer.sendSync('settings:get-fallback-proxy-ports');
         if (ports !== null && ports !== undefined) {
             txtFallbackProxyPorts.value = String(ports);
+        }
+    }
+
+    // ===== NVIDIA Cloudflare 代理出口 Worker 回填 =====
+    const chkNvidiaWorkerProxyEnabled = document.getElementById('chkNvidiaWorkerProxyEnabled') as HTMLInputElement | null;
+    const txtNvidiaWorkerProxyUrl = document.getElementById('txtNvidiaWorkerProxyUrl') as HTMLInputElement | null;
+    const divNvidiaWorkerProxyUrl = document.getElementById('divNvidiaWorkerProxyUrl');
+
+    const workerProxyState = ipcRenderer.sendSync('settings:get-nvidia-worker-proxy');
+    if (workerProxyState) {
+        if (chkNvidiaWorkerProxyEnabled) {
+            chkNvidiaWorkerProxyEnabled.checked = !!workerProxyState.nvidiaWorkerProxyEnabled;
+            if (divNvidiaWorkerProxyUrl) {
+                divNvidiaWorkerProxyUrl.style.display = workerProxyState.nvidiaWorkerProxyEnabled ? 'flex' : 'none';
+            }
+        }
+        if (txtNvidiaWorkerProxyUrl && workerProxyState.nvidiaWorkerProxyUrl !== undefined) {
+            txtNvidiaWorkerProxyUrl.value = String(workerProxyState.nvidiaWorkerProxyUrl);
         }
     }
 }

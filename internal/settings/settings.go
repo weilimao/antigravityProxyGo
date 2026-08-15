@@ -155,6 +155,9 @@ type Config struct {
 	NvidiaCompressEnabled         bool   `json:"nvidiaCompressEnabled"`
 	NvidiaCompressThresholdTokens int    `json:"nvidiaCompressThresholdTokens"`
 	NvidiaCompressKeepToolResults int    `json:"nvidiaCompressKeepToolResults"`
+	// NvidiaWorkerProxyURL 是 NVIDIA 号池专用的 Cloudflare Worker 出口代理 URL (如 https://my-nvidia.workers.dev)
+	NvidiaWorkerProxyURL          string `json:"nvidiaWorkerProxyUrl,omitempty"`
+	NvidiaWorkerProxyEnabled      bool   `json:"nvidiaWorkerProxyEnabled"`
 	PromptPrefix                  string `json:"promptPrefix"`
 	CustomModelOverrideEnabled    bool   `json:"customModelOverrideEnabled"`
 	CustomModelOverrideID         string `json:"customModelOverrideID"`
@@ -373,6 +376,10 @@ type ManagerInterface interface {
 	GetResolvedDebuggerLogPath() string
 	GetNvidiaPreferredModels() []string
 	SetNvidiaPreferredModels(val []string) error
+	GetNvidiaWorkerProxyURL() string
+	SetNvidiaWorkerProxyURL(val string) error
+	IsNvidiaWorkerProxyEnabled() bool
+	SetNvidiaWorkerProxyEnabled(val bool) error
 	// GetAccountLayout/SetAccountLayout: 号池视图布局("grid"|"list"),纯 UI pref,落 config.json。
 	GetAccountLayout() string
 	SetAccountLayout(layout string) error

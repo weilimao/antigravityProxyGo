@@ -16,7 +16,7 @@ import (
 // (Other 号池官方 OpenAI 顶层 reasoning_effort;Anthropic 原生端点无该概念 → ""), 供调用方回填
 // forwardResult.usedReasoningEffort → logCtx.ReasoningEffort 落库, 前端「模型」列追加 (档) 后缀。
 func (pf *passthroughForward) buildUpstreamBody(bodyBytes []byte, upstreamModel string, isStreaming bool,
-	isChat, isResponses, isMessages bool, upstreamFormat string, userSession *RelaySession, allowOCR bool,
+	isChat, isResponses, isMessages bool, upstreamFormat string, userSession *RelaySession, allowOCR bool, userAgent string,
 ) ([]byte, string, error) {
 	// 上游 OpenAI 兼容端点:入站 OpenAI Chat / Responses → OpenAIChatRequest(Responses 转换);入站 Anthropic → AnthropicToOpenAIChat(含 image 降级)。
 	if upstreamFormat == "openai" {
@@ -26,6 +26,7 @@ func (pf *passthroughForward) buildUpstreamBody(bodyBytes []byte, upstreamModel 
 				return nil, "", fmt.Errorf("invalid anthropic request: %w", err)
 			}
 			anthReq.Model = upstreamModel
+			anthReq.UserAgent = userAgent
 			// 本地图片路径自愈(L2.5 预处理):Claude Code 等客户端对未识别模型会剔除 image 块,
 			// 本地截图路径作为纯 text 块发来。allowOCR=true 时先扫 text 块裸路径读图 OCR 注入,
 			// 再交下方 DowngradeAnthropicImagesToText 做结构化 image 块降级。静默 miss 不报错。
@@ -82,6 +83,35 @@ func (pf *passthroughForward) buildUpstreamBody(bodyBytes []byte, upstreamModel 
 		}
 		mb, _ := json.Marshal(upstreamModel)
 		obj["model"] = mb
+
+		// 若为 OpenCode 入站且仅带 output_config.effort(无 thinking 结构体),
+		// 自动补齐符合 Anthropic 上游规范的 thinking 字段(type:"enabled", budget_tokens:N)。
+		if isOpenCodeUA(userAgent) {
+			var anthReq AnthropicRequest
+			if json.Unmarshal(bodyBytes, &anthReq) == nil && anthReq.Thinking == nil {
+				anthReq.UserAgent = userAgent
+				if effort := resolveReasoningEffort(&anthReq); effort != "" {
+					if budget := mapReasoningEffortToAnthropicBudget(effort); budget > 0 {
+						tb, _ := json.Marshal(map[string]interface{}{
+							"type":          "enabled",
+							"budget_tokens": budget,
+						})
+						obj["thinking"] = tb
+						// 守护「max_tokens > budget_tokens」: Anthropic 严格校验
+						curMax := 0
+						if anthReq.MaxTokens != nil {
+							curMax = *anthReq.MaxTokens
+						}
+						if curMax <= budget {
+							raised := budget + ClaudeBudgetMargin
+							rb, _ := json.Marshal(raised)
+							obj["max_tokens"] = rb
+						}
+					}
+				}
+			}
+		}
+
 		body, mErr := json.Marshal(obj)
 		if mErr != nil {
 			return nil, "", mErr

@@ -164,20 +164,39 @@ func anthropicToOpenAIChat(req *AnthropicRequest, preserveImages bool, mappings 
 	return out, nil
 }
 
+// isOpenCodeUA 判定 User-Agent 是否来自 OpenCode 客户端(如 opencode/1.18.18, ai-sdk 等)。
+func isOpenCodeUA(ua string) bool {
+	u := strings.ToLower(strings.TrimSpace(ua))
+	return strings.Contains(u, "opencode")
+}
+
 // thinkingRequested 判定客户端是否显式请求思考(ON)。
-// Claude Code 2.1.220 实测:开思考 body 带 thinking.type=enabled|adaptive;
-// 关思考直接省略 thinking 字段(不发 disabled)。effort(output_config.effort)仅定档,不定 on/off,
-// 故本函数不看 effort。disabled、缺省、未识别 type → 一律 OFF(opt-in:不显式开即不强开)。
+// 规则:
+// 1. 若 req.Thinking != nil:
+//    - type == "enabled" | "adaptive" -> true (ON)
+//    - type == "disabled" -> false (OFF)
+// 2. 若 req.Thinking == nil (缺省):
+//    - OpenCode 客户端 (User-Agent 含 opencode) 仅通过 output_config.effort 传达思考指令:
+//      若 output_config 包含有效 effort (low/medium/high/max) -> true (ON)
+//    - 其余客户端 (如 Claude Code 关思考时 body 残留 output_config.effort:max):
+//      保持 opt-in 默认，返回 false (OFF)
 func thinkingRequested(req *AnthropicRequest) bool {
-	if req == nil || req.Thinking == nil {
+	if req == nil {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(req.Thinking.Type)) {
-	case "enabled", "adaptive":
-		return true
-	default: // disabled / omitted / 未识别
-		return false
+	if req.Thinking != nil {
+		switch strings.ToLower(strings.TrimSpace(req.Thinking.Type)) {
+		case "enabled", "adaptive":
+			return true
+		default: // disabled / omitted / 未识别
+			return false
+		}
 	}
+	// req.Thinking == nil 场景: OpenCode 客户端由 output_config.effort 驱动思考
+	if isOpenCodeUA(req.UserAgent) {
+		return resolveReasoningEffort(req) != ""
+	}
+	return false
 }
 
 // resolveReasoningEffort 从 Anthropic 请求体识别客户端想要的思考等级,
@@ -373,6 +392,9 @@ func isNvidiaModelNoKwargs(model string, mappings ...[]settings.ModelMappingEntr
 // 与 NVIDIA NIM 专属 chat_template_kwargs 区分。无 mapping 命中时返回 false(非 Other,走原 NIM 链路)。
 func isOtherProviderTarget(model string, mappings ...[]settings.ModelMappingEntry) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(m, "other/") {
+		return true
+	}
 	if len(mappings) == 0 {
 		return false
 	}

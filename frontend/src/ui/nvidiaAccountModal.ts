@@ -67,6 +67,7 @@ export function openNvidiaAccountModal() {
     const inputBaseUrl = document.getElementById('inputNvidiaBaseUrl') as HTMLInputElement;
     const inputApiKey = document.getElementById('inputNvidiaApiKey') as HTMLInputElement;
     const inputLabel = document.getElementById('inputNvidiaLabel') as HTMLInputElement;
+    const inputEgressIp = document.getElementById('inputNvidiaEgressIp') as HTMLInputElement;
     const inputModelSonnet = document.getElementById('inputNvidiaModelSonnet') as HTMLInputElement;
     const inputModelOpus = document.getElementById('inputNvidiaModelOpus') as HTMLInputElement;
     const inputModelHaiku = document.getElementById('inputNvidiaModelHaiku') as HTMLInputElement;
@@ -76,6 +77,7 @@ export function openNvidiaAccountModal() {
     if (inputBaseUrl) inputBaseUrl.value = '';
     if (inputApiKey) inputApiKey.value = '';
     if (inputLabel) inputLabel.value = '';
+    if (inputEgressIp) inputEgressIp.value = '';
     if (inputModelSonnet) inputModelSonnet.value = '';
     if (inputModelOpus) inputModelOpus.value = '';
     if (inputModelHaiku) inputModelHaiku.value = '';
@@ -136,6 +138,7 @@ export function openEditNvidiaAccount(acc: any) {
     const inputBaseUrl = document.getElementById('inputNvidiaBaseUrl') as HTMLInputElement;
     const inputApiKey = document.getElementById('inputNvidiaApiKey') as HTMLInputElement;
     const inputLabel = document.getElementById('inputNvidiaLabel') as HTMLInputElement;
+    const inputEgressIp = document.getElementById('inputNvidiaEgressIp') as HTMLInputElement;
     const inputModelSonnet = document.getElementById('inputNvidiaModelSonnet') as HTMLInputElement;
     const inputModelOpus = document.getElementById('inputNvidiaModelOpus') as HTMLInputElement;
     const inputModelHaiku = document.getElementById('inputNvidiaModelHaiku') as HTMLInputElement;
@@ -148,6 +151,7 @@ export function openEditNvidiaAccount(acc: any) {
         inputApiKey.placeholder = latestAcc.maskedKey || 'nvapi-... (留空保持不变)';
     }
     if (inputLabel) inputLabel.value = latestAcc.email || '';
+    if (inputEgressIp) inputEgressIp.value = latestAcc.egressIp || '';
     if (inputModelSonnet) inputModelSonnet.value = latestAcc.modelSonnet || '';
     if (inputModelOpus) inputModelOpus.value = latestAcc.modelOpus || '';
     if (inputModelHaiku) inputModelHaiku.value = latestAcc.modelHaiku || '';
@@ -219,6 +223,8 @@ async function submitNvidiaAccount() {
             btnNvidiaModalSave.textContent = nvidiaEditId ? '正在保存...' : '正在添加...';
         }
 
+        const inputEgressIp = document.getElementById('inputNvidiaEgressIp') as HTMLInputElement;
+
         let res;
         if (nvidiaEditId) {
             // 编辑态:定位既有账号;apiKey 留空保持不变。
@@ -231,7 +237,8 @@ async function submitNvidiaAccount() {
                 inputModelSonnet?.value.trim() || '',
                 inputModelOpus?.value.trim() || '',
                 inputModelHaiku?.value.trim() || '',
-                inputModelFable?.value.trim() || ''
+                inputModelFable?.value.trim() || '',
+                inputEgressIp?.value.trim() || ''
             );
         } else {
             res = await ipcRenderer.invoke('nvidia:add',
@@ -242,7 +249,8 @@ async function submitNvidiaAccount() {
                 inputModelSonnet?.value.trim() || '',
                 inputModelOpus?.value.trim() || '',
                 inputModelHaiku?.value.trim() || '',
-                inputModelFable?.value.trim() || ''
+                inputModelFable?.value.trim() || '',
+                inputEgressIp?.value.trim() || ''
             );
         }
 

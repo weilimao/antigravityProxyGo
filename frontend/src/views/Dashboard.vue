@@ -456,13 +456,13 @@
 <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider w-[13.5%]" data-i18n="colPath">API 接口</th>
 <th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider w-[8%]" data-i18n="colSession">会话 ID</th>
 <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider w-[13.5%]" data-i18n="colModel">模型</th>
-<th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider text-right w-[10%]" data-i18n="tokenConsumption">Token 消耗</th>
-<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-right w-[6.5%]" data-i18n="colPrice">价值</th>
-<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-right w-[6%]" data-i18n="colResponseTime">响应时间</th>
-<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-right w-[5.5%]" data-i18n="colDuration">耗时</th>
-<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-center w-[4.5%]" data-i18n="colCacheRate">缓存</th>
-<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-center w-[4.5%]" data-i18n="colServiceStatus">状态</th>
-<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-center w-[3.5%]" data-i18n="colActions">操作</th>
+<th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider text-left w-[10%]" data-i18n="tokenConsumption">Token 消耗</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-left w-[6.5%]" data-i18n="colPrice">价值</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-left w-[6%]" data-i18n="colResponseTime">首帧响应时间</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-left w-[5.5%]" data-i18n="colDuration">耗时</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-left w-[4.5%]" data-i18n="colCacheRate">缓存</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-left w-[4.5%]" data-i18n="colServiceStatus">状态</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-left w-[3.5%]" data-i18n="colActions">操作</th>
 </tr>
 </thead>
 <tbody class="text-[12px] font-data-mono text-on-surface dark:text-white divide-y divide-outline-variant/20">

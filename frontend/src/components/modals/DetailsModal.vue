@@ -25,7 +25,7 @@
         <span class="font-sans text-on-surface dark:text-white font-semibold" id="modalModel">-</span>
       </div>
       <div class="flex flex-col gap-1">
-        <span class="text-outline" data-i18n="colResponseTime">响应时间</span>
+        <span class="text-outline" data-i18n="colResponseTime">首帧响应时间</span>
         <span class="font-data-mono text-on-surface dark:text-white font-semibold" id="modalFirstByte">-</span>
       </div>
       <div class="flex flex-col gap-1">

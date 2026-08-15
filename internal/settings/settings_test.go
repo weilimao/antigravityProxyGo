@@ -411,3 +411,46 @@ func TestEnableThinkingMode_AutoPersistToDisk(t *testing.T) {
 		t.Errorf("Expected disk config.json to contain \"enableThinkingMode\": true, got:\n%s", diskStr)
 	}
 }
+
+func TestSettings_NvidiaWorkerProxy(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "settings_worker_proxy_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	mgr := NewManager()
+	mgr.Init(tempDir)
+
+	// 初始状态：未配置 URL，应返回 disabled
+	if mgr.IsNvidiaWorkerProxyEnabled() {
+		t.Errorf("Expected IsNvidiaWorkerProxyEnabled == false initially")
+	}
+
+	// 配置 URL 与启用
+	testURL := "https://my-nvidia.workers.dev"
+	if err := mgr.SetNvidiaWorkerProxyURL(testURL); err != nil {
+		t.Fatalf("SetNvidiaWorkerProxyURL failed: %v", err)
+	}
+	if err := mgr.SetNvidiaWorkerProxyEnabled(true); err != nil {
+		t.Fatalf("SetNvidiaWorkerProxyEnabled failed: %v", err)
+	}
+
+	if mgr.GetNvidiaWorkerProxyURL() != testURL {
+		t.Errorf("Expected %s, got %s", testURL, mgr.GetNvidiaWorkerProxyURL())
+	}
+	if !mgr.IsNvidiaWorkerProxyEnabled() {
+		t.Errorf("Expected IsNvidiaWorkerProxyEnabled == true")
+	}
+
+	// 重新加载验证落盘
+	mgr2 := NewManager()
+	mgr2.Init(tempDir)
+	if mgr2.GetNvidiaWorkerProxyURL() != testURL {
+		t.Errorf("Expected reloaded URL %s, got %s", testURL, mgr2.GetNvidiaWorkerProxyURL())
+	}
+	if !mgr2.IsNvidiaWorkerProxyEnabled() {
+		t.Errorf("Expected reloaded IsNvidiaWorkerProxyEnabled == true")
+	}
+}
+

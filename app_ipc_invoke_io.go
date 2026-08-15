@@ -117,7 +117,7 @@ func (a *App) handleIOInvokeIPC(channel string, args []interface{}) (string, boo
 		var content []byte
 		if strings.HasSuffix(filePath, ".csv") {
 			var csv strings.Builder
-			csv.WriteString("\uFEFF时间,模式,账号/用户,请求方式,域名,路径,模型,输入Token,输出Token,缓存Token,总成本,响应时间(ms),耗时(ms),状态码,会话ID\n")
+			csv.WriteString("\uFEFF时间,模式,账号/用户,请求方式,域名,路径,模型,输入Token,输出Token,缓存Token,总成本,首帧响应时间(ms),耗时(ms),状态码,会话ID\n")
 			for _, log := range logs {
 				formattedTime := log.Timestamp
 				if t, err := time.Parse(time.RFC3339, log.Timestamp); err == nil {

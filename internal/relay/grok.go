@@ -275,6 +275,7 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 				return
 			}
 			anthReq.Model = upstreamModel
+			anthReq.UserAgent = r.Header.Get("User-Agent")
 
 			// 识别客户端思考意图(在翻译前, 基于 Anthropic thinking 字段 / 全局总闸)。
 			thinkMode, thinkEffort := grokResolveAnthropicThinking(&anthReq, globalThinkingOn)

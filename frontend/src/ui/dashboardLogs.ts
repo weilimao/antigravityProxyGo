@@ -201,30 +201,30 @@ export function buildLogsRowSlot(): LogsRowSlot {
     modelDiv.appendChild(account);
     modelCell.appendChild(modelDiv);
 
-    const tokensCell = makeTd('py-3 px-3 text-right font-data-mono');
+    const tokensCell = makeTd('py-3 px-3 text-left font-data-mono');
     const tokensDiv = document.createElement('div');
-    tokensDiv.className = 'flex flex-col items-end gap-0.5';
+    tokensDiv.className = 'flex flex-col items-start gap-0.5';
     const inTokens = makeSpan('text-[10px] text-slate-500 dark:text-slate-400 font-medium');
     const outTokens = makeSpan('text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold');
     tokensDiv.appendChild(inTokens);
     tokensDiv.appendChild(outTokens);
     tokensCell.appendChild(tokensDiv);
 
-    const cost = makeTd('py-3 px-2 text-right font-data-mono text-emerald-600 dark:text-emerald-400 font-bold text-[11.5px]');
-    const responseTime = makeTd('py-3 px-2 text-right font-data-mono text-[11.5px]');
-    const duration = makeTd('py-3 px-2 text-right font-data-mono text-[11.5px]');
-    const hitRate = makeTd('py-3 px-2 text-center font-data-mono text-[11.5px]');
+    const cost = makeTd('py-3 px-2 text-left font-data-mono text-emerald-600 dark:text-emerald-400 font-bold text-[11.5px]');
+    const responseTime = makeTd('py-3 px-2 text-left font-data-mono text-[11.5px]');
+    const duration = makeTd('py-3 px-2 text-left font-data-mono text-[11.5px]');
+    const hitRate = makeTd('py-3 px-2 text-left font-data-mono text-[11.5px]');
 
-    const statusCell = makeTd('py-3 px-2 text-center');
+    const statusCell = makeTd('py-3 px-2 text-left');
     const statusDiv = document.createElement('div');
-    statusDiv.className = 'inline-flex flex-col items-center gap-0.5';
+    statusDiv.className = 'inline-flex flex-col items-start gap-0.5';
     const cacheBadge = makeSpan('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide');
     const httpCode = makeSpan('text-[10px] font-mono font-bold leading-tight');
     statusDiv.appendChild(cacheBadge);
     statusDiv.appendChild(httpCode);
     statusCell.appendChild(statusDiv);
 
-    const btnCell = makeTd('py-3 px-2 text-center');
+    const btnCell = makeTd('py-3 px-2 text-left');
     const viewBtn = document.createElement('button');
     viewBtn.className = 'inline-flex items-center justify-center px-2 py-1 text-[11px] font-medium bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-fixed-dim rounded-md border border-primary/20 hover:border-primary/40 transition-all cursor-pointer view-details-btn shadow-2xs';
     btnCell.appendChild(viewBtn);
@@ -304,32 +304,32 @@ export function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
     // 响应时间 (firstByteMs / TTFT 首字到达时长，对应表头「响应时间」)
     slot.responseTime.textContent = formatDuration(log.firstByteMs);
     if (log.firstByteMs && log.firstByteMs >= 15000) {
-        slot.responseTime.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-rose-500 dark:text-rose-400 font-bold';
+        slot.responseTime.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-rose-500 dark:text-rose-400 font-bold';
     } else if (log.firstByteMs && log.firstByteMs >= 5000) {
-        slot.responseTime.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-amber-600 dark:text-amber-400 font-semibold';
+        slot.responseTime.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-amber-600 dark:text-amber-400 font-semibold';
     } else if (log.firstByteMs && log.firstByteMs <= 1000) {
-        slot.responseTime.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-emerald-600 dark:text-emerald-400 font-semibold';
+        slot.responseTime.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-emerald-600 dark:text-emerald-400 font-semibold';
     } else {
-        slot.responseTime.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-slate-700 dark:text-slate-300';
+        slot.responseTime.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-slate-700 dark:text-slate-300';
     }
 
     // 耗时 (durationMs / 流式传输耗时，对应表头「耗时」)
     slot.duration.textContent = formatDuration(log.durationMs);
     if (log.durationMs && log.durationMs >= 10000) {
-        slot.duration.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-rose-500 dark:text-rose-400 font-bold';
+        slot.duration.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-rose-500 dark:text-rose-400 font-bold';
     } else if (log.durationMs && log.durationMs >= 3000) {
-        slot.duration.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-amber-600 dark:text-amber-400 font-semibold';
+        slot.duration.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-amber-600 dark:text-amber-400 font-semibold';
     } else {
-        slot.duration.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-slate-500 dark:text-slate-400';
+        slot.duration.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-slate-500 dark:text-slate-400';
     }
 
     // 缓存率
     const hitRateVal = log.inTokens > 0 ? (log.cachedTokens / log.inTokens * 100).toFixed(1) : '0.0';
     slot.hitRate.textContent = `${hitRateVal}%`;
     if (log.cachedTokens > 0) {
-        slot.hitRate.className = 'py-3 px-2 text-center font-data-mono text-[11.5px] text-emerald-600 dark:text-emerald-400 font-bold';
+        slot.hitRate.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-emerald-600 dark:text-emerald-400 font-bold';
     } else {
-        slot.hitRate.className = 'py-3 px-2 text-center font-data-mono text-[11.5px] text-slate-400 dark:text-slate-500';
+        slot.hitRate.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-slate-400 dark:text-slate-500';
     }
 
     // 状态与 HTTP 码

@@ -404,6 +404,7 @@ func (m *Manager) GetAccounts() []*Account {
 			TokenRefreshedAt: a.GetTokenRefreshedAt(),
 			MaskedKey:        maskedKeyForAccount(a),
 			BaseURL:          a.BaseURL,
+			EgressIP:         a.EgressIP,
 			TokenEndpoint:    a.TokenEndpoint,
 			DefaultModel:     a.DefaultModel,
 			ModelSonnet:      a.ModelSonnet,

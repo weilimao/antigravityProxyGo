@@ -563,7 +563,8 @@ func TranslateAnthropicToGemini(anthReq *AnthropicRequest) *GeminiRequest {
 	// 尊重显式 disabled:thinking.type=="disabled" 时绝不注入。
 	thinkEnabled := anthReq.Thinking != nil && strings.EqualFold(anthReq.Thinking.Type, "enabled")
 	thinkDisabled := anthReq.Thinking != nil && strings.EqualFold(anthReq.Thinking.Type, "disabled")
-	if !thinkDisabled && IsEnableThinkingMode() && (thinkEnabled || geminiModelSupportsThinking(anthReq.Model)) {
+	openCodeThinking := isOpenCodeUA(anthReq.UserAgent) && resolveReasoningEffort(anthReq) != ""
+	if !thinkDisabled && IsEnableThinkingMode() && (thinkEnabled || openCodeThinking || geminiModelSupportsThinking(anthReq.Model)) {
 		if gemReq.GenerationConfig == nil {
 			gemReq.GenerationConfig = &GeminiConfig{}
 		}
@@ -573,6 +574,13 @@ func TranslateAnthropicToGemini(anthReq *AnthropicRequest) *GeminiRequest {
 			gemReq.GenerationConfig.ThinkingConfig = &GeminiThinkingConfig{}
 		}
 		gemReq.GenerationConfig.ThinkingConfig.IncludeThoughts = includeThoughtsTrue()
+		// 若为 OpenCode 显式指定 effort 且未预设预算, 自动映射对应分档预算
+		if openCodeThinking && gemReq.GenerationConfig.ThinkingConfig.ThinkingBudget == 0 {
+			effort := resolveReasoningEffort(anthReq)
+			if budget := mapReasoningEffortToAnthropicBudget(effort); budget > 0 {
+				gemReq.GenerationConfig.ThinkingConfig.ThinkingBudget = budget
+			}
+		}
 	}
 
 	// 守护 claude 路径的 Vertex Anthropic "max_tokens > thinking.budget_tokens" 不变式:

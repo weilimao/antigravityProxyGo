@@ -267,8 +267,8 @@ const grokAuthCheckInterval = 60 * time.Minute
 // Outcome 取值:
 //   - "skipped":access_token 仍有效(exp 距当前 > grokAuthRefreshSkewSec),未刷新;
 //   - "refreshed":临近/已过期,刷新成功,新 token 已写入;
-//   - "removed":刷新命中永久失败(invalid_grant 等),已 RemoveAccount 从号池移除;
-//   - "failed":刷新命中瞬时失败(网络/5xx/超时),未移除,留给下个 tick 重试。
+//   - "disabled":刷新命中永久失败(invalid_grant 等),已自动停用账号(保留在池内);
+//   - "failed":刷新命中瞬时失败(网络/5xx/超时),未停用,留给下个 tick 重试。
 type GrokAuthCheckResult struct {
 	AccountID string `json:"accountId"`
 	Email     string `json:"email"`
@@ -277,7 +277,7 @@ type GrokAuthCheckResult struct {
 }
 
 // StartGrokAuthMonitor 启动 Grok 号池专用 1h tick:每 tick 调 CheckAndPurgeGrokAuth,
-// 对所有 grok OAuth 账号做「过期检查→临近过期刷新→永久失败移除」。
+// 对所有 grok OAuth 账号做「过期检查→临近过期刷新→永久失败自动停用」。
 // 与 StartTokenRefreshMonitor 同构:启停均持锁改 ticker,goroutine 经 stop chan 优雅退出。
 // 幂等:已在运行时再次调用直接返回(不重复起 goroutine)。
 func (m *Manager) StartGrokAuthMonitor() {
@@ -323,15 +323,14 @@ func (m *Manager) StopGrokAuthMonitor() {
 //   - exp > 0 且 (exp - now) > grokAuthRefreshSkewSec:授权仍有效 → skipped;
 //   - exp == 0(非 JWT 或解析失败,OAuth grok 一般是 JWT,此分支兜底)或 (exp - now) <= skew:临近/已过期
 //     → 调 RefreshAccountTokenSync(单账号互斥 + 30s 复用检查,防抖):
-//     成功 → refreshed;失败 → 标 failed(瞬时失败不移除)或 removed(永久失败已在 RefreshToken
-//     内 RemoveAccount,见 internal/quota/oauth.go refreshXaiToken)。
-// 返回每账号结果列表(已移除的号亦在返回中标 removed,供调用方汇总日志/广播前端)。
+//     成功 → refreshed;失败 → 标 failed(瞬时失败仍启用)或 disabled(永久失败已在 RefreshToken
+//     内 UpdateAccountEnabled(false),见 internal/quota/oauth.go refreshXaiToken)。
+// 返回每账号结果列表(已停用的号亦在返回中标 disabled,供调用方汇总日志/广播前端)。
 //
-// 串行逐号刷新(不并发):grok OAuth 号池规模小,串行既避免把多号同时打到 auth.x.ai 触发风控,
-// 又让 RemoveAccount 的内存变更在逐号推进中即时可见,避免切片并发遍历读到已删的尾元素。
+// 串行逐号刷新(不并发):grok OAuth 号池规模小,串行避免把多号同时打到 auth.x.ai 触发风控。
 func (m *Manager) CheckAndPurgeGrokAuth() []GrokAuthCheckResult {
 	nowSec := time.Now().Unix()
-	// 先取一份 grok OAuth 账号快照(RLock 临临界区),逐号串行刷新用 RefreshAccountTokenSync
+	// 先取一份 grok OAuth 账号快照(RLock 临界区),逐号串行刷新用 RefreshAccountTokenSync
 	// 内部自带单账号互斥,不持 Manager 锁打网络。
 	m.RLock()
 	var grokAccounts []*Account
@@ -350,9 +349,8 @@ func (m *Manager) CheckAndPurgeGrokAuth() []GrokAuthCheckResult {
 
 	var results []GrokAuthCheckResult
 	for _, a := range grokAccounts {
-		// 账号可能在上一轮迭代里被 RemoveAccount(永久失败移除语义),逐号重新校验存在性,跳过已删号。
-		// GetAccountByID 内部 RLock,与上面的 RLock 临临界区不重叠,无自死锁。
-		if m.GetAccountByID(a.ID) == nil {
+		curr := m.GetAccountByID(a.ID)
+		if curr == nil {
 			continue
 		}
 
@@ -375,17 +373,18 @@ func (m *Manager) CheckAndPurgeGrokAuth() []GrokAuthCheckResult {
 			continue
 		}
 
-		// 刷新失败:判定是否已被永久失败链路 RemoveAccount。
-		// refreshXaiToken 命中 isPermanent 时已做 RemoveAccount,此处 GetAccountByID==nil 即已移除。
-		if m.GetAccountByID(a.ID) == nil {
-			fmt.Printf("[GrokAuthMonitor] Account %s (id=%s) removed from pool due to permanent refresh failure: %v\n",
+		// 刷新失败:判定是否已被永久失败链路停用。
+		// refreshXaiToken 命中 isPermanent 时已做 UpdateAccountEnabled(false)。
+		currAfter := m.GetAccountByID(a.ID)
+		if currAfter != nil && !currAfter.Enabled {
+			fmt.Printf("[GrokAuthMonitor] Account %s (id=%s) disabled due to permanent refresh failure: %v\n",
 				a.Email, a.ID, refErr)
 			results = append(results, GrokAuthCheckResult{
-				AccountID: a.ID, Email: a.Email, Outcome: "removed",
+				AccountID: a.ID, Email: a.Email, Outcome: "disabled",
 				Detail: refErr.Error(),
 			})
 		} else {
-			// 仍在号池 → 瞬时失败(网络/5xx/超时),未移除,留待下个 tick 重试。
+			// 仍在号池且仍启用 → 瞬时失败(网络/5xx/超时),未停用,留待下个 tick 重试。
 			fmt.Printf("[GrokAuthMonitor] Account %s (id=%s) transient refresh failure, will retry next tick: %v\n",
 				a.Email, a.ID, refErr)
 			results = append(results, GrokAuthCheckResult{

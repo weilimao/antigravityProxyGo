@@ -220,8 +220,10 @@ func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 //
 // 识别优先级(整段 UUID 落地,跨进程重启稳定可对照,与 X-Claude-Code-Session-Id 同口径):
 //  1. X-Claude-Code-Session-Id  → "claude:<UUID>"  (Claude Code CLI/VSCode 原生会话头)
-//  2. Session-Id                → "codex:<UUID>"   (Codex TUI 原生会话头,与 Thread-Id 等值)
-//  3. Thread-Id                 → "codex:<UUID>"   (Codex 会话线程头,兜底同 Session-Id)
+//  2. X-Session-Id              → "opencode:<UUID>" (OpenCode 原生会话头)
+//  3. X-Session-Affinity        → "opencode:<UUID>" (OpenCode 会话亲和性头,兜底同 X-Session-Id)
+//  4. Session-Id                → "codex:<UUID>"   (Codex TUI 原生会话头,与 Thread-Id 等值)
+//  5. Thread-Id                 → "codex:<UUID>"   (Codex 会话线程头,兜底同 Session-Id)
 // 任一命中即返回对应前缀的整段值;全部缺失/纯空白返回空串,调用方据此回退 ExtractSessionKey。
 //
 // 不改 ExtractSessionKey 主体:其 auth/sock/body 兜底口径为既有非客户端头路径(脚本/SDK 直调)
@@ -232,6 +234,12 @@ func (r *Router) ExtractClientSessionHeader(req *http.Request) string {
 	}
 	if sid := strings.TrimSpace(req.Header.Get("X-Claude-Code-Session-Id")); sid != "" {
 		return "claude:" + sid
+	}
+	if sid := strings.TrimSpace(req.Header.Get("X-Session-Id")); sid != "" {
+		return "opencode:" + sid
+	}
+	if sid := strings.TrimSpace(req.Header.Get("X-Session-Affinity")); sid != "" {
+		return "opencode:" + sid
 	}
 	if sid := strings.TrimSpace(req.Header.Get("Session-Id")); sid != "" {
 		return "codex:" + sid
