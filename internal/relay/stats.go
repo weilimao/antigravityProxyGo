@@ -175,11 +175,8 @@ func (s *StatsTracker) RecordUsage(sample RelaySample) {
 	userBucket.TotalInputTokens += inTokens
 	userBucket.TotalOutputTokens += outTokens
 	userBucket.TotalCachedTokens += cachedTokens
-	// 命中率分母: NVIDIA 号池(modelName 带 "nvidia/" 前缀) 不累加——上游 OpenAI Chat 协议
-	// 无 cache, cachedTokens 恒 0, 若计入分母会永久稀释命中率。其余(gemini/claude)累加。
-	// 前缀判定依据 recordNvidiaUsage 落点1 的 pref前缀装配(nvidia_usage.go), 不会误伤
-	// gemini/claude 链路(其 modelName 不含 "nvidia/" 前缀)。
-	if !strings.HasPrefix(sample.ModelName, "nvidia/") && !stats.IsTabModel(sample.ModelName) {
+	// 命中率分母: 仅在命中缓存 (cachedTokens > 0) 且非 nvidia/TAB 时累加, 0 缓存未命中请求不计入分母以防稀释。
+	if cachedTokens > 0 && !strings.HasPrefix(sample.ModelName, "nvidia/") && !stats.IsTabModel(sample.ModelName) {
 		userBucket.TotalCacheEligibleInputTokens += inTokens
 	}
 	userBucket.TotalCost = math.Round((userBucket.TotalCost+cost)*1000000.0) / 1000000.0

@@ -112,7 +112,7 @@ func TestTrackRequestForPool_ThreePools_NoCrossContaminate(t *testing.T) {
 	if ps := pools["antigravity"]; ps == nil || ps.CachedTokens != 10 || ps.CacheEligibleInputTokens != 200 {
 		t.Errorf("antigravity bucket wrong: %+v", ps)
 	}
-	if ps := pools["nvidia"]; ps == nil || ps.CachedTokens != 0 || ps.CacheEligibleInputTokens != 500 {
+	if ps := pools["nvidia"]; ps == nil || ps.CachedTokens != 0 || ps.CacheEligibleInputTokens != 0 {
 		t.Errorf("nvidia bucket wrong: %+v", ps)
 	}
 	if ps := pools["other:deepseek"]; ps == nil || ps.CachedTokens != 30 || ps.CacheEligibleInputTokens != 400 {
@@ -130,7 +130,7 @@ func TestTrackRequestForPool_ThreePools_NoCrossContaminate(t *testing.T) {
 		t.Errorf("other:deepseek hit rate = %.2f%%, want %.2f%%", got, want)
 	}
 
-	// 确认 nvidia 桶也有 inTokens 累加(分母照算, 只是分子恒0)
+	// 确认 nvidia 桶也有 inTokens 累加(总输入照算, 命中率分母因 cached=0 为 0)
 	if pools["nvidia"].InTokens != 500 {
 		t.Errorf("nvidia InTokens = %d, want 500", pools["nvidia"].InTokens)
 	}
@@ -189,7 +189,7 @@ func TestTrackRequestForPool_GroupID_Passthrough_Other(t *testing.T) {
 	if ps := pools["other:openai"]; ps == nil || ps.Requests != 2 || ps.CachedTokens != 30 || ps.CacheEligibleInputTokens != 1500 {
 		t.Errorf("other:openai wrong: %+v", ps)
 	}
-	if ps := pools["other:deepseek"]; ps == nil || ps.Requests != 1 || ps.CachedTokens != 0 || ps.CacheEligibleInputTokens != 300 {
+	if ps := pools["other:deepseek"]; ps == nil || ps.Requests != 1 || ps.CachedTokens != 0 || ps.CacheEligibleInputTokens != 0 {
 		t.Errorf("other:deepseek wrong: %+v", ps)
 	}
 }

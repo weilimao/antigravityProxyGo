@@ -12,6 +12,66 @@ export function formatCompactNumber(number: number): string {
     return number.toFixed(0);
 }
 
+export interface FormatTokenOptions {
+    /** 语言环境，默认取当前系统语言 ('zh' | 'en') */
+    lang?: 'zh' | 'en';
+    /** 小数保留位数，默认为 2 */
+    decimals?: number;
+    /** 是否自动修剪末尾无效的 0 (如 1.50 -> 1.5, 1.00 -> 1)，默认为 true */
+    trimZero?: boolean;
+}
+
+/**
+ * formatTokenCount: 对 Token 计数做多阶梯智能格式化
+ * 超过亿/Billion 级别自动换算为易读单位，支持中英双语自适应
+ *
+ * @param count 原始 Token 数量
+ * @param options 配置项
+ * @returns 格式化后的字符串 (如 "149.92 亿", "14.99 B", "8,923")
+ */
+export function formatTokenCount(count: number, options?: FormatTokenOptions): string {
+    if (typeof count !== 'number' || isNaN(count) || count < 0) {
+        return '0';
+    }
+
+    const lang = options?.lang || (state.currentLanguage === 'zh' ? 'zh' : 'en');
+    const decimals = options?.decimals ?? 2;
+    const trimZero = options?.trimZero ?? true;
+
+    const formatNum = (num: number): string => {
+        let str = num.toFixed(decimals);
+        if (trimZero && str.includes('.')) {
+            str = str.replace(/\.?0+$/, '');
+        }
+        return str;
+    };
+
+    if (lang === 'zh') {
+        // >= 1 亿 (100,000,000)
+        if (count >= 100_000_000) {
+            return `${formatNum(count / 100_000_000)} 亿`;
+        }
+        // >= 1 万 (10,000)
+        if (count >= 10_000) {
+            return `${formatNum(count / 10_000)} 万`;
+        }
+        // 小于 1 万直接显示千分位
+        return Math.floor(count).toLocaleString('zh-CN');
+    } else {
+        // 英文进位体系
+        if (count >= 1_000_000_000) {
+            return `${formatNum(count / 1_000_000_000)} B`;
+        }
+        if (count >= 1_000_000) {
+            return `${formatNum(count / 1_000_000)} M`;
+        }
+        if (count >= 1_000) {
+            return `${formatNum(count / 1_000)} k`;
+        }
+        return Math.floor(count).toLocaleString('en-US');
+    }
+}
+
 // Helper for calculating smooth bezier curves
 export function getBezierPath(points: { x: number; y: number }[]): string {
     if (points.length === 0) return '';
@@ -231,10 +291,22 @@ export function drawTrendChartSVG(trends: any[], range = '7d', animate = true) {
         labelSummaryTotalTokens.textContent = dict[labelKey] || '总 Token:';
     }
 
-    if (valSummaryTotalTokens) valSummaryTotalTokens.textContent = totalTokensVal.toLocaleString();
-    if (valSummaryInputTokens) valSummaryInputTokens.textContent = totalInputTokensVal.toLocaleString();
-    if (valSummaryOutputTokens) valSummaryOutputTokens.textContent = totalOutputTokensVal.toLocaleString();
-    if (valSummaryCachedTokens) valSummaryCachedTokens.textContent = totalCachedTokensVal.toLocaleString();
+    if (valSummaryTotalTokens) {
+        valSummaryTotalTokens.textContent = formatTokenCount(totalTokensVal);
+        valSummaryTotalTokens.title = totalTokensVal.toLocaleString();
+    }
+    if (valSummaryInputTokens) {
+        valSummaryInputTokens.textContent = formatTokenCount(totalInputTokensVal);
+        valSummaryInputTokens.title = totalInputTokensVal.toLocaleString();
+    }
+    if (valSummaryOutputTokens) {
+        valSummaryOutputTokens.textContent = formatTokenCount(totalOutputTokensVal);
+        valSummaryOutputTokens.title = totalOutputTokensVal.toLocaleString();
+    }
+    if (valSummaryCachedTokens) {
+        valSummaryCachedTokens.textContent = formatTokenCount(totalCachedTokensVal);
+        valSummaryCachedTokens.title = totalCachedTokensVal.toLocaleString();
+    }
 
     const N = trends.length;
     const xMin = 0, xMax = 1000;
@@ -486,10 +558,19 @@ export function drawTrendChartSVG(trends: any[], range = '7d', animate = true) {
         const tCost = document.getElementById('tooltipCost');
 
         if (tDate) tDate.textContent = d.time || '';
-        if (tInput) tInput.textContent = (d.input || 0).toLocaleString();
-        if (tOutput) tOutput.textContent = (d.output || 0).toLocaleString();
+        if (tInput) {
+            tInput.textContent = formatTokenCount(d.input || 0);
+            tInput.title = (d.input || 0).toLocaleString();
+        }
+        if (tOutput) {
+            tOutput.textContent = formatTokenCount(d.output || 0);
+            tOutput.title = (d.output || 0).toLocaleString();
+        }
         if (tRequests) tRequests.textContent = (d.requests || 0).toLocaleString();
-        if (tCached) tCached.textContent = (d.cached || 0).toLocaleString();
+        if (tCached) {
+            tCached.textContent = formatTokenCount(d.cached || 0);
+            tCached.title = (d.cached || 0).toLocaleString();
+        }
         if (tCost) tCost.textContent = `$${(d.cost || 0).toFixed(6)}`;
 
         // Coordinate positioning for Tooltip

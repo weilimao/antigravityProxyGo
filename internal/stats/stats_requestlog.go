@@ -29,8 +29,8 @@ func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 	reqLog.RequestBody = TruncateRequestBody(reqLog.RequestBody)
 
 	t.requests = append([]*RequestLog{reqLog}, t.requests...)
-	if len(t.requests) > 50 {
-		t.requests = t.requests[:50]
+	if len(t.requests) > MaxRequestLogs {
+		t.requests = t.requests[:MaxRequestLogs]
 	}
 	t.Unlock()
 
@@ -90,8 +90,8 @@ func (t *Tracker) AddRequestLogForFamily(reqLog *RequestLog) {
 	reqLog.RequestBody = TruncateRequestBody(reqLog.RequestBody)
 
 	t.requests = append([]*RequestLog{reqLog}, t.requests...)
-	if len(t.requests) > 50 {
-		t.requests = t.requests[:50]
+	if len(t.requests) > MaxRequestLogs {
+		t.requests = t.requests[:MaxRequestLogs]
 	}
 	t.Unlock()
 
@@ -151,8 +151,8 @@ func (t *Tracker) AddRequestLogInMemoryOnly(reqLog *RequestLog) {
 	reqLog.RequestBody = TruncateRequestBody(reqLog.RequestBody)
 
 	t.requests = append([]*RequestLog{reqLog}, t.requests...)
-	if len(t.requests) > 50 {
-		t.requests = t.requests[:50]
+	if len(t.requests) > MaxRequestLogs {
+		t.requests = t.requests[:MaxRequestLogs]
 	}
 	t.Unlock()
 

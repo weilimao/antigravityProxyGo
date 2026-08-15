@@ -68,14 +68,18 @@ func TestRecordUsage_TotalCacheEligibleInputTokens_NvidiaExcluded(t *testing.T) 
 	}
 }
 
-// TestRecordUsage_TotalCacheEligibleInputTokens_AccumulatesGemini 验证多次 gemini 请求
-// 在同一用户桶内正确累加分母, 与 TotalInputTokens 同步递增(口径一致, 只差 NVIDIA 排除)。
+// TestRecordUsage_TotalCacheEligibleInputTokens_AccumulatesGemini 验证多次 gemini/claude 请求中,
+// 仅命中缓存 (cachedTokens > 0) 的请求累加分母, 0 缓存请求不计入分母以防稀释。
 func TestRecordUsage_TotalCacheEligibleInputTokens_AccumulatesGemini(t *testing.T) {
 	st := NewStatsTracker(pricing.NewManager())
 	st.persistPath = ""
 
+	// g1: 命中缓存 cached=20 > 0, inTokens=200 -> 分母累加 200
 	st.RecordUsage(RelaySample{ReqID: "g1", UserID: "u", ModelName: "gemini-3.5-flash", InTokens: 200, OutTokens: 50, CachedTokens: 20, StatusCode: 200})
+	// g2: 未命中缓存 cached=0, inTokens=100 -> 分母不累加
 	st.RecordUsage(RelaySample{ReqID: "g2", UserID: "u", ModelName: "claude-opus-4", InTokens: 100, OutTokens: 30, CachedTokens: 0, StatusCode: 200})
+	// g3: 命中缓存 cached=30 > 0, inTokens=150 -> 分母累加 150 (共 350)
+	st.RecordUsage(RelaySample{ReqID: "g3", UserID: "u", ModelName: "gemini-2.5-pro", InTokens: 150, OutTokens: 80, CachedTokens: 30, StatusCode: 200})
 
 	st.RLock()
 	defer st.RUnlock()
@@ -84,11 +88,12 @@ func TestRecordUsage_TotalCacheEligibleInputTokens_AccumulatesGemini(t *testing.
 	if !ok {
 		t.Fatal("user bucket missing")
 	}
-	// 两次 gemini/claude 累加: 200 + 100 = 300, 与 TotalInputTokens 等值(本用例无 NVIDIA)。
-	if bucket.TotalCacheEligibleInputTokens != 300 {
-		t.Errorf("TotalCacheEligibleInputTokens = %d, want 300", bucket.TotalCacheEligibleInputTokens)
+	// 分母只累加 g1(200) + g3(150) = 350, 排除 g2(0 缓存)
+	if bucket.TotalCacheEligibleInputTokens != 350 {
+		t.Errorf("TotalCacheEligibleInputTokens = %d, want 350 (g2 excluded because cachedTokens=0)", bucket.TotalCacheEligibleInputTokens)
 	}
-	if bucket.TotalInputTokens != 300 {
-		t.Errorf("TotalInputTokens = %d, want 300", bucket.TotalInputTokens)
+	// 总输入 Token 包含全部 3 次: 200 + 100 + 150 = 450
+	if bucket.TotalInputTokens != 450 {
+		t.Errorf("TotalInputTokens = %d, want 450", bucket.TotalInputTokens)
 	}
 }

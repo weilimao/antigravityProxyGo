@@ -134,8 +134,8 @@ func (t *Tracker) TrackRequestForPool(modelName string, inTokens, outTokens, cac
 	ps.InTokens += inTokens
 	ps.OutTokens += outTokens
 	ps.CachedTokens += cachedTokens
-	if !IsTabModel(modelName) {
-		ps.CacheEligibleInputTokens += inTokens // 各池/组分母累积，剔除 TAB 补全模型
+	if cachedTokens > 0 && !IsTabModel(modelName) {
+		ps.CacheEligibleInputTokens += inTokens // 各池/组分母累积，仅在命中缓存(cachedTokens > 0)且非 TAB 补全模型时累加
 	}
 	cost := t.pricingMgr.CalculateCost(modelName, inTokens, outTokens, cachedTokens)
 	ps.Cost = math.Round((ps.Cost+cost)*1000000.0) / 1000000.0
@@ -238,7 +238,7 @@ func (t *Tracker) backfillPoolFromModelsForceLocked() {
 		agIn += m.InTokens
 		agOut += m.OutTokens
 		agCached += m.CachedTokens
-		if !IsTabModel(mKey) {
+		if m.CachedTokens > 0 && !IsTabModel(mKey) {
 			agEligibleIn += m.InTokens
 		}
 		agCost += m.Cost
@@ -292,7 +292,7 @@ func (t *Tracker) backfillPoolFromModelsLocked() {
 		agIn += m.InTokens
 		agOut += m.OutTokens
 		agCached += m.CachedTokens
-		if !IsTabModel(mKey) {
+		if m.CachedTokens > 0 && !IsTabModel(mKey) {
 			agEligibleIn += m.InTokens
 		}
 		agCost += m.Cost
@@ -343,7 +343,7 @@ func (t *Tracker) RecalculateCacheEligibleTokensLocked() {
 		if m == nil {
 			continue
 		}
-		if modelIsGooglePoolFamily(mKey) && !IsTabModel(mKey) {
+		if modelIsGooglePoolFamily(mKey) && !IsTabModel(mKey) && m.CachedTokens > 0 {
 			eligibleSum += m.InTokens
 		}
 	}

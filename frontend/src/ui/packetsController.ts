@@ -1,7 +1,7 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import { saveText } from '../shared/fileService';
-import { generateSinglePacketMarkdown, formatJsonText } from './packetFormatter';
+import { generateSinglePacketMarkdown, formatJsonText, resolvePacketSource } from './packetFormatter';
 import i18n from '../shared/i18n';
 
 
@@ -86,35 +86,9 @@ export async function refreshPacketsList() {
         packetsList = [];
     }
 
-    // Resolve sources for all packets (with fallback for historical packets)
+    // Resolve sources for all packets using unified resolver
     packetsList.forEach(p => {
-        let source = p.source;
-        if (!source) {
-            let ua = '';
-            if (p.reqHeaders) {
-                for (const key of Object.keys(p.reqHeaders)) {
-                    if (key.toLowerCase() === 'user-agent') {
-                        ua = p.reqHeaders[key];
-                        break;
-                    }
-                }
-            }
-            const uaLower = ua.toLowerCase();
-            if (uaLower.includes('antigravity/cli') || uaLower.includes('aidev_client')) {
-                source = 'CLI';
-            } else if (uaLower.includes('antigravity/ide') || uaLower.includes('cloudaicompanion') || uaLower.includes('google-api-nodejs-client') || uaLower.includes('go-http-client')) {
-                source = 'IDE';
-            } else if (uaLower.includes('antigravity/hub') || uaLower.includes('antigravityproxy-')) {
-                source = 'Agent';
-            } else {
-                source = '未知';
-            }
-        }
-        // Normalise previous "客户端" string to "Agent" just in case
-        if (source === '客户端') {
-            source = 'Agent';
-        }
-        p._resolvedSource = source;
+        p._resolvedSource = resolvePacketSource(p);
     });
 
     // Apply current classification filter
@@ -320,33 +294,7 @@ export function initPacketsEvents() {
             let filteredList = packetsList;
             if (currentFilter !== 'ALL') {
                 filteredList = packetsList.filter(p => {
-                    let source = p._resolvedSource || p.source;
-                    if (!source) {
-                        let ua = '';
-                        if (p.reqHeaders) {
-                            for (const key of Object.keys(p.reqHeaders)) {
-                                if (key.toLowerCase() === 'user-agent') {
-                                    ua = p.reqHeaders[key];
-                                    break;
-                                }
-                            }
-                        }
-                        const uaLower = ua.toLowerCase();
-                        if (uaLower.includes('antigravity/cli') || uaLower.includes('aidev_client')) {
-                            source = 'CLI';
-                        } else if (uaLower.includes('antigravity/ide') || uaLower.includes('cloudaicompanion') || uaLower.includes('google-api-nodejs-client') || uaLower.includes('go-http-client')) {
-                            source = 'IDE';
-                        } else if (uaLower.includes('antigravity/hub') || uaLower.includes('antigravityproxy-')) {
-                            source = 'Agent';
-                        } else {
-                            source = '未知';
-                        }
-                    }
-                    if (source === '客户端') {
-                        source = 'Agent';
-                    }
-                    p._resolvedSource = source;
-
+                    p._resolvedSource = resolvePacketSource(p);
                     if (currentFilter === 'CLI') return p._resolvedSource === 'CLI';
                     if (currentFilter === 'IDE') return p._resolvedSource === 'IDE';
                     if (currentFilter === 'Agent') return p._resolvedSource === 'Agent';
@@ -486,32 +434,7 @@ export function initPacketsEvents() {
             
             // Re-resolve and filter packet list
             packetsList.forEach(p => {
-                let source = p.source;
-                if (!source) {
-                    let ua = '';
-                    if (p.reqHeaders) {
-                        for (const key of Object.keys(p.reqHeaders)) {
-                            if (key.toLowerCase() === 'user-agent') {
-                                ua = p.reqHeaders[key];
-                                break;
-                            }
-                        }
-                    }
-                    const uaLower = ua.toLowerCase();
-                    if (uaLower.includes('antigravity/cli') || uaLower.includes('aidev_client')) {
-                        source = 'CLI';
-                    } else if (uaLower.includes('antigravity/ide') || uaLower.includes('cloudaicompanion') || uaLower.includes('google-api-nodejs-client') || uaLower.includes('go-http-client')) {
-                        source = 'IDE';
-                    } else if (uaLower.includes('antigravity/hub') || uaLower.includes('antigravityproxy-')) {
-                        source = 'Agent';
-                    } else {
-                        source = '未知';
-                    }
-                }
-                if (source === '客户端') {
-                    source = 'Agent';
-                }
-                p._resolvedSource = source;
+                p._resolvedSource = resolvePacketSource(p);
             });
 
             let filtered = packetsList;

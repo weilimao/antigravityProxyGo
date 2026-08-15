@@ -393,11 +393,36 @@
 <button class="px-4 py-2 text-[13px] font-bold text-outline hover:text-primary transition-colors border-b-2 border-transparent" id="tabPricing" data-i18n="tabPricing">计费配置</button>
 </div>
 <!-- 表格搜索控制条 -->
-<div class="p-3.5 border-b border-outline-variant/30 flex justify-between items-center bg-slate-50/50 dark:bg-white/5" id="logSearchRow">
+<div class="p-3 border-b border-outline-variant/30 flex flex-wrap gap-2.5 justify-between items-center bg-slate-50/60 dark:bg-white/[0.02]" id="logSearchRow">
+<div class="flex items-center gap-2.5 flex-wrap">
 <div class="relative w-64">
-<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[16px]">search</span>
-<input class="w-full pl-9 pr-3 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none transition-shadow" id="logSearchInput" placeholder="Search logs..." type="text">
-</input></div>
+<span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-outline/70 text-[16px] pointer-events-none">search</span>
+<input class="w-full pl-8 pr-7 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] border border-outline-variant/50 rounded-lg focus:border-primary focus:ring-2 focus:ring-primary/15 focus:outline-none transition-all placeholder:text-outline/50" id="logSearchInput" placeholder="搜索日志 (域名 / API / 模型 / 会话)..." data-i18n-placeholder="placeholderSearchLogs" type="text" />
+<button id="btnClearLogSearch" class="hidden absolute right-2 top-1/2 -translate-y-1/2 text-outline hover:text-on-surface dark:hover:text-white p-0.5 rounded-full hover:bg-slate-200 dark:hover:bg-white/10 transition-colors" title="清空搜索">
+<span class="material-symbols-outlined text-[13px] block">close</span>
+</button>
+</div>
+<div class="flex items-center p-0.5 bg-slate-200/60 dark:bg-white/5 rounded-lg border border-outline-variant/30 text-[11px] font-medium select-none" id="logStatusFilterGroup">
+<button data-filter="all" class="px-2.5 py-1 rounded-md transition-all font-semibold bg-white dark:bg-[#1a1f30] text-primary shadow-xs" data-i18n="filterAll">全部</button>
+<button data-filter="success" class="px-2.5 py-1 rounded-md transition-all text-outline hover:text-on-surface dark:hover:text-white" data-i18n="filterSuccess">成功 (2xx)</button>
+<button data-filter="error" class="px-2.5 py-1 rounded-md transition-all text-outline hover:text-on-surface dark:hover:text-white" data-i18n="filterError">异常 (4xx/5xx)</button>
+<button data-filter="hit" class="px-2.5 py-1 rounded-md transition-all text-outline hover:text-on-surface dark:hover:text-white" data-i18n="filterHit">命中 (HIT)</button>
+<button data-filter="miss" class="px-2.5 py-1 rounded-md transition-all text-outline hover:text-on-surface dark:hover:text-white" data-i18n="filterMiss">未命中 (MISS)</button>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<div class="flex items-center gap-1 text-[11px] text-outline">
+<select id="logPageSizeSelect" class="bg-white dark:bg-[#1a1f30] border border-outline-variant/50 rounded-lg px-2 py-1 text-[11px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all cursor-pointer font-medium">
+<option value="10">10 条/页</option>
+<option value="15">15 条/页</option>
+<option value="30">30 条/页</option>
+<option value="50">50 条/页</option>
+</select>
+</div>
+<div id="logCountBadge" class="text-[11px] font-semibold text-primary bg-primary/10 border border-primary/20 px-2.5 py-0.5 rounded-full whitespace-nowrap">
+共 0 条
+</div>
+</div>
 </div>
 <!-- 内容数据框 -->
 <div class="flex-grow overflow-y-auto">
@@ -425,22 +450,22 @@
 <div id="logsContent">
 <table class="w-full text-left table-fixed border-collapse" id="logsTable">
 <thead>
-<tr class="border-b border-outline-variant/50 bg-slate-50/50 dark:bg-white/5">
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[9%]" data-i18n="colTime">请求时间</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[18%]" data-i18n="colMethodHost">请求方式 &amp; 域名</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[14%]" data-i18n="colPath">API 接口</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[8%]" data-i18n="colSession">会话 ID</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider w-[10%]" data-i18n="colModel">所用模型</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[11%]" data-i18n="tokenConsumption">Token 消耗</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[6%]" data-i18n="colPrice">价格</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[6%]" data-i18n="colResponseTime">响应时间</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right w-[5%]" data-i18n="colDuration">耗时</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[5%]" data-i18n="colCacheTitle">缓存</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[4%]" data-i18n="colCacheStatus">状态</th>
-<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-center w-[4%]" data-i18n="colActions">操作</th>
+<tr class="border-b border-outline-variant/40 bg-slate-100/50 dark:bg-white/[0.03] text-outline dark:text-outline-variant select-none">
+<th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider w-[8.5%]" data-i18n="colTime">时间</th>
+<th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider w-[16.5%]" data-i18n="colMethodHost">请求方式 &amp; 域名</th>
+<th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider w-[13.5%]" data-i18n="colPath">API 接口</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider w-[8%]" data-i18n="colSession">会话 ID</th>
+<th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider w-[13.5%]" data-i18n="colModel">模型</th>
+<th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider text-right w-[10%]" data-i18n="tokenConsumption">Token 消耗</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-right w-[6.5%]" data-i18n="colPrice">价值</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-right w-[6%]" data-i18n="colResponseTime">响应时间</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-right w-[5.5%]" data-i18n="colDuration">耗时</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-center w-[4.5%]" data-i18n="colCacheRate">缓存</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-center w-[4.5%]" data-i18n="colServiceStatus">状态</th>
+<th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-center w-[3.5%]" data-i18n="colActions">操作</th>
 </tr>
 </thead>
-<tbody class="text-[13px] font-data-mono text-on-surface dark:text-white divide-y divide-outline-variant/20">
+<tbody class="text-[12px] font-data-mono text-on-surface dark:text-white divide-y divide-outline-variant/20">
 <!-- JS 填充 -->
 </tbody>
 </table>

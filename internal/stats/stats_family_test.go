@@ -171,12 +171,12 @@ func TestAddRequestLogForFamily_SkipsEmptyModel(t *testing.T) {
 	}
 }
 
-// TestAddRequestLogForFamily_TruncatesTo50 验证 requests 内存上限 50 条(FIFO),
-// 与既有 AddRequestLog 同构——避免在高频 NVIDIA 流量下内存列表无界增长。
-func TestAddRequestLogForFamily_TruncatesTo50(t *testing.T) {
+// TestAddRequestLogForFamily_TruncatesTo150 验证 requests 内存上限 MaxRequestLogs (150) 条(FIFO),
+// 与既有 AddRequestLog 同构——避免在高频流量下内存列表无界增长。
+func TestAddRequestLogForFamily_TruncatesTo150(t *testing.T) {
 	tracker := newTestTracker()
 
-	for i := 0; i < 60; i++ {
+	for i := 0; i < 160; i++ {
 		tracker.AddRequestLogForFamily(&RequestLog{
 			ID:         "nv-" + time.Now().Format("150405.000000") + "-" + itoa(i),
 			Timestamp:  time.Now().Format("01/02 15:04:05"),
@@ -195,8 +195,8 @@ func TestAddRequestLogForFamily_TruncatesTo50(t *testing.T) {
 	tracker.RLock()
 	defer tracker.RUnlock()
 
-	if len(tracker.requests) != 50 {
-		t.Errorf("requests should be capped at 50, got %d", len(tracker.requests))
+	if len(tracker.requests) != MaxRequestLogs {
+		t.Errorf("requests should be capped at %d, got %d", MaxRequestLogs, len(tracker.requests))
 	}
 	// 最新的应排在最前(newest first, AddRequestLog 同构的 prepend 语义)。
 	if tracker.requests[0].Family != "nvidia" {

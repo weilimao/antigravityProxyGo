@@ -60,7 +60,10 @@ let tableFooter: HTMLElement | null;
 let modelsTableBody: HTMLElement | null;
 let logsTableBody: HTMLElement | null;
 let logSearchInput: HTMLInputElement | null;
-
+let btnClearLogSearch: HTMLButtonElement | null;
+let logStatusFilterGroup: HTMLElement | null;
+let logPageSizeSelect: HTMLSelectElement | null;
+let logCountBadge: HTMLElement | null;
 
 // Pagination elements
 let valShowingText: HTMLElement | null;
@@ -87,19 +90,76 @@ export function renderLogsTable() {
 
     // Filter requests
     const filtered = state.allRequests.filter(log => {
+        // Status filter
+        if (state.logStatusFilter === 'success') {
+            if (log.statusCode >= 400) return false;
+        } else if (state.logStatusFilter === 'error') {
+            if (log.statusCode < 400) return false;
+        } else if (state.logStatusFilter === 'hit') {
+            if (log.cacheStatus !== 'HIT' && (!log.cachedTokens || log.cachedTokens <= 0)) return false;
+        } else if (state.logStatusFilter === 'miss') {
+            if (log.cacheStatus === 'HIT' || (log.cachedTokens && log.cachedTokens > 0)) return false;
+        }
+
+        // Text search query
         if (!state.searchQuery) return true;
         const q = state.searchQuery.toLowerCase();
-        return log.host.toLowerCase().includes(q) ||
-            log.path.toLowerCase().includes(q) ||
-            log.model.toLowerCase().includes(q) ||
+        return (log.host || '').toLowerCase().includes(q) ||
+            (log.path || '').toLowerCase().includes(q) ||
+            (log.model || '').toLowerCase().includes(q) ||
+            (log.account || '').toLowerCase().includes(q) ||
             (log.sessionId || '').toLowerCase().includes(q) ||
-            log.method.toLowerCase().includes(q);
+            (log.method || '').toLowerCase().includes(q);
     });
+
+    // Toggle clear search button
+    btnClearLogSearch = document.getElementById('btnClearLogSearch') as HTMLButtonElement | null;
+    if (btnClearLogSearch) {
+        if (state.searchQuery) {
+            btnClearLogSearch.classList.remove('hidden');
+        } else {
+            btnClearLogSearch.classList.add('hidden');
+        }
+    }
+
+    // Update log status filter buttons UI
+    logStatusFilterGroup = document.getElementById('logStatusFilterGroup');
+    if (logStatusFilterGroup) {
+        const buttons = logStatusFilterGroup.querySelectorAll('button[data-filter]');
+        buttons.forEach((btn: Element) => {
+            const filterKey = btn.getAttribute('data-filter');
+            if (filterKey === state.logStatusFilter) {
+                btn.className = 'px-2.5 py-1 rounded-md transition-all font-semibold bg-white dark:bg-[#1a1f30] text-primary shadow-xs';
+            } else {
+                btn.className = 'px-2.5 py-1 rounded-md transition-all text-outline hover:text-on-surface dark:hover:text-white font-normal';
+            }
+        });
+    }
+
+    // Update page size select UI
+    logPageSizeSelect = document.getElementById('logPageSizeSelect') as HTMLSelectElement | null;
+    if (logPageSizeSelect && logPageSizeSelect.value !== state.itemsPerPage.toString()) {
+        logPageSizeSelect.value = state.itemsPerPage.toString();
+    }
 
     // 折叠成对 HIT/MISS 重试行(展示层去重,后端落库不动)。同指纹(sessionId+path+model+inTokens)
     // 且 ±3s 时间窗口内的多次客户端重试合并为一行,徽章取 HIT、展示命中那次耗时,并标 ⟳N 角标。
     // 统计/计费仍在后端单条 RequestLog 精确记账,此处不回写 state.allRequests。
     const deduped = mergeRetryRows(filtered);
+
+    // Update total count badge
+    logCountBadge = document.getElementById('logCountBadge');
+    if (logCountBadge) {
+        if (state.searchQuery || state.logStatusFilter !== 'all') {
+            logCountBadge.textContent = state.currentLanguage === 'zh'
+                ? `筛选 ${deduped.length} / 共 ${state.allRequests.length} 条`
+                : `Filtered ${deduped.length} / ${state.allRequests.length}`;
+        } else {
+            logCountBadge.textContent = state.currentLanguage === 'zh'
+                ? `共 ${state.allRequests.length} 条`
+                : `Total ${state.allRequests.length}`;
+        }
+    }
 
     // Pagination bounds
     const totalItems = deduped.length;
@@ -119,17 +179,15 @@ export function renderLogsTable() {
     valShowingText = document.getElementById('valShowingText');
     if (paginated.length === 0) {
         // Empty state: drop the row pool and show a single placeholder row.
-        // (Only on filter transitions / no data, so churn here is acceptable.)
         logsRowSlots.length = 0;
-        logsTableBody.innerHTML = `<tr><td colspan="12" class="p-8 text-center text-outline dark:text-outline-variant italic">${dict.noLogs || '暂无日志'}</td></tr>`;
+        const emptyTip = (state.searchQuery || state.logStatusFilter !== 'all')
+            ? (state.currentLanguage === 'zh' ? '未找到匹配的请求日志' : 'No matching request logs found')
+            : (dict.noLogs || '暂无日志');
+        logsTableBody.innerHTML = `<tr><td colspan="12" class="p-12 text-center text-outline dark:text-outline-variant font-sans text-[13px]"><div class="flex flex-col items-center justify-center gap-2"><span class="material-symbols-outlined text-[32px] text-outline/40">search_off</span><span>${emptyTip}</span></div></td></tr>`;
         if (valShowingText) {
             valShowingText.textContent = state.currentLanguage === 'zh' ? `共 0 条记录` : `Showing 0 entries`;
         }
     } else {
-        // Reuse a fixed pool of <tr> nodes (grown up to itemsPerPage) and patch
-        // cell textContent / classNames in place. This avoids the destroy-and-
-        // recreate churn of `innerHTML =` that inflated Blink's DOM node pools
-        // under sustained traffic.
         if (logsRowSlots.length === 0) {
             logsTableBody.innerHTML = '';
         }
@@ -238,7 +296,14 @@ export function setLanguage(lang: string) {
     });
 
     if (logSearchInput) {
-        logSearchInput.placeholder = lang === 'zh' ? '搜索日志...' : 'Search logs...';
+        logSearchInput.placeholder = dict.placeholderSearchLogs || (lang === 'zh' ? '搜索日志 (域名 / API / 模型 / 会话)...' : 'Search logs (host, path, model, session)...');
+    }
+
+    if (logPageSizeSelect) {
+        const unit = lang === 'zh' ? '条/页' : '/ page';
+        logPageSizeSelect.querySelectorAll('option').forEach(opt => {
+            opt.textContent = `${opt.value} ${unit}`;
+        });
     }
 
     updateStatusLabel();
@@ -533,10 +598,48 @@ export function initDashboardEvents() {
     if (tabLogs) tabLogs.addEventListener('click', () => switchTab('logs'));
     if (tabPricing) tabPricing.addEventListener('click', () => switchTab('pricing'));
 
-    // Log search
+    // Log search input
     if (logSearchInput) {
         logSearchInput.addEventListener('input', (e: any) => {
             state.searchQuery = e.target.value;
+            state.currentPage = 1;
+            renderLogsTable();
+        });
+    }
+
+    // Clear log search button
+    btnClearLogSearch = document.getElementById('btnClearLogSearch') as HTMLButtonElement | null;
+    if (btnClearLogSearch) {
+        btnClearLogSearch.addEventListener('click', () => {
+            if (logSearchInput) logSearchInput.value = '';
+            state.searchQuery = '';
+            state.currentPage = 1;
+            renderLogsTable();
+        });
+    }
+
+    // Status filter chips
+    logStatusFilterGroup = document.getElementById('logStatusFilterGroup');
+    if (logStatusFilterGroup) {
+        logStatusFilterGroup.addEventListener('click', (e: Event) => {
+            const target = e.target as HTMLElement;
+            const btn = target.closest('button[data-filter]') as HTMLButtonElement | null;
+            if (btn) {
+                const filter = btn.getAttribute('data-filter') as any;
+                if (filter) {
+                    state.logStatusFilter = filter;
+                    state.currentPage = 1;
+                    renderLogsTable();
+                }
+            }
+        });
+    }
+
+    // Log page size select
+    logPageSizeSelect = document.getElementById('logPageSizeSelect') as HTMLSelectElement | null;
+    if (logPageSizeSelect) {
+        logPageSizeSelect.addEventListener('change', (e: any) => {
+            state.itemsPerPage = Number(e.target.value) || 10;
             state.currentPage = 1;
             renderLogsTable();
         });
@@ -688,14 +791,14 @@ export function renderModelsTable(stats: any) {
 
             const modelHitRate = data.inTokens > 0 ? (data.cachedTokens / data.inTokens * 100) : 0;
             const avgCost = data.reqs > 0 ? (data.cost / data.reqs) : 0;
-            const totalTokens = data.inTokens + data.outTokens;
+            const totalTokens = (data.inTokens || 0) + (data.outTokens || 0);
 
             tr.innerHTML = `
                 <td class="p-3 font-sans font-semibold text-on-surface dark:text-white">${model}</td>
                 <td class="p-3 text-right">${data.reqs}</td>
-                <td class="p-3 text-right font-semibold">${totalTokens.toLocaleString()}</td>
-                <td class="p-3 text-right text-outline dark:text-outline-variant">${data.inTokens.toLocaleString()}</td>
-                <td class="p-3 text-right text-on-surface dark:text-white">${data.outTokens.toLocaleString()}</td>
+                <td class="p-3 text-right font-semibold" title="${totalTokens.toLocaleString()}">${chartRenderer.formatTokenCount(totalTokens)}</td>
+                <td class="p-3 text-right text-outline dark:text-outline-variant" title="${(data.inTokens || 0).toLocaleString()}">${chartRenderer.formatTokenCount(data.inTokens || 0)}</td>
+                <td class="p-3 text-right text-on-surface dark:text-white" title="${(data.outTokens || 0).toLocaleString()}">${chartRenderer.formatTokenCount(data.outTokens || 0)}</td>
                 <td class="p-3 text-right">${modelHitRate.toFixed(1)}%</td>
                 <td class="p-3 text-right text-primary dark:text-primary-fixed-dim font-bold">$${data.cost.toFixed(4)}</td>
                 <td class="p-3 text-right text-outline dark:text-outline-variant">$${avgCost.toFixed(5)}</td>
@@ -730,7 +833,11 @@ export function renderActiveView() {
             barErrors.style.width = `${100 - successRate}%`;
         }
 
-        if (valTokens) valTokens.textContent = (stats.totalInputTokens + stats.totalOutputTokens).toLocaleString();
+        const grandTotalTokens = (stats.totalInputTokens || 0) + (stats.totalOutputTokens || 0);
+        if (valTokens) {
+            valTokens.textContent = chartRenderer.formatTokenCount(grandTotalTokens);
+            valTokens.title = `${state.currentLanguage === 'zh' ? '精确总数' : 'Exact Total'}: ${grandTotalTokens.toLocaleString()}`;
+        }
 
         const totalIn = stats.totalInputTokens - stats.totalCachedTokens;
         if (valTokensIn) valTokensIn.textContent = chartRenderer.formatCompactNumber(totalIn);

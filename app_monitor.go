@@ -184,7 +184,7 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 				trends = []*stats.HourlyTrend{}
 			}
 
-			dbRequests := db.QueryRecentRequests(cfg.UserKey, "remote", 50)
+			dbRequests := db.QueryRecentRequests(cfg.UserKey, "remote", stats.MaxRequestLogs)
 			var requests []*stats.RequestLog
 			for _, dr := range dbRequests {
 				formattedTime := dr.Timestamp

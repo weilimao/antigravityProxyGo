@@ -426,3 +426,57 @@ func TestCacheEligibleInputTokens_GetPayloadProjection(t *testing.T) {
 	}
 }
 
+// TestTrackRequest_ZeroCacheExcludedFromDenominator 验证未命中缓存 (cachedTokens=0) 的请求不计入分母,
+// 命中缓存 (cachedTokens>0) 的请求正常计入分母, 避免 0 缓存冷请求拉低整体缓存命中率。
+func TestTrackRequest_ZeroCacheExcludedFromDenominator(t *testing.T) {
+	pm := pricing.NewManager()
+	tracker := NewTracker(pm)
+	tracker.persistPath = ""
+
+	// 1. 连续发起两次 cachedTokens = 0 的请求
+	tracker.TrackRequest("gemini-2.5-pro", 1000, 100, 0)
+	tracker.TrackRequest("gemini-2.5-flash", 2000, 200, 0)
+
+	tracker.RLock()
+	if tracker.stats.TotalRequests != 2 {
+		t.Errorf("TotalRequests = %d, want 2", tracker.stats.TotalRequests)
+	}
+	if tracker.stats.TotalInputTokens != 3000 {
+		t.Errorf("TotalInputTokens = %d, want 3000", tracker.stats.TotalInputTokens)
+	}
+	if tracker.stats.TotalCachedTokens != 0 {
+		t.Errorf("TotalCachedTokens = %d, want 0", tracker.stats.TotalCachedTokens)
+	}
+	// 关键断言: 两次 0 缓存请求均不应计入分母
+	if tracker.stats.TotalCacheEligibleInputTokens != 0 {
+		t.Errorf("TotalCacheEligibleInputTokens = %d, want 0 (0 cache requests must be excluded)", tracker.stats.TotalCacheEligibleInputTokens)
+	}
+	tracker.RUnlock()
+
+	// 2. 发起一次 cachedTokens = 500 > 0 的命中请求 (输入 1000)
+	tracker.TrackRequest("gemini-2.5-flash", 1000, 150, 500)
+
+	tracker.RLock()
+	defer tracker.RUnlock()
+
+	if tracker.stats.TotalRequests != 3 {
+		t.Errorf("TotalRequests = %d, want 3", tracker.stats.TotalRequests)
+	}
+	if tracker.stats.TotalInputTokens != 4000 {
+		t.Errorf("TotalInputTokens = %d, want 4000", tracker.stats.TotalInputTokens)
+	}
+	if tracker.stats.TotalCachedTokens != 500 {
+		t.Errorf("TotalCachedTokens = %d, want 500", tracker.stats.TotalCachedTokens)
+	}
+	// 分母只应计入命中缓存的那次请求输入 (1000), 而非全量 4000
+	if tracker.stats.TotalCacheEligibleInputTokens != 1000 {
+		t.Errorf("TotalCacheEligibleInputTokens = %d, want 1000", tracker.stats.TotalCacheEligibleInputTokens)
+	}
+	// 命中率 = 500 / 1000 = 50.0% (若误计入 0 缓存则会被稀释为 500/4000 = 12.5%)
+	hitRate := float64(tracker.stats.TotalCachedTokens) / float64(tracker.stats.TotalCacheEligibleInputTokens) * 100.0
+	if hitRate != 50.0 {
+		t.Errorf("hitRate = %.2f%%, want 50.0%%", hitRate)
+	}
+}
+
+

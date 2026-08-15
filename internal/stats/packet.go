@@ -162,6 +162,65 @@ func (pc *PacketCapturer) IsCaptured(method, host, urlPath string) bool {
 	return false
 }
 
+// ExtractUserAgent 从多种可能的 Header 结构中提取 User-Agent 字符串
+func ExtractUserAgent(reqHeaders interface{}) string {
+	if reqHeaders == nil {
+		return ""
+	}
+	switch headers := reqHeaders.(type) {
+	case map[string][]string:
+		for k, values := range headers {
+			if strings.EqualFold(k, "user-agent") && len(values) > 0 {
+				return values[0]
+			}
+		}
+	case map[string]string:
+		for k, v := range headers {
+			if strings.EqualFold(k, "user-agent") {
+				return v
+			}
+		}
+	case map[string]interface{}:
+		for k, v := range headers {
+			if strings.EqualFold(k, "user-agent") {
+				if valStr, ok := v.(string); ok {
+					return valStr
+				}
+				if valSlice, ok := v.([]interface{}); ok && len(valSlice) > 0 {
+					if firstStr, ok := valSlice[0].(string); ok {
+						return firstStr
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// ResolvePacketSource 根据请求头特征精准推断客户端来源 (Agent, IDE, CLI, 未知)
+func ResolvePacketSource(reqHeaders interface{}) string {
+	ua := ExtractUserAgent(reqHeaders)
+	uaLower := strings.ToLower(ua)
+	if uaLower == "" {
+		return "未知"
+	}
+	// 1. Agent 优先匹配（防止带有 aidev_client 等通用附注的 Hub 请求被误判为 CLI）
+	if strings.Contains(uaLower, "antigravity/hub") || strings.Contains(uaLower, "antigravityproxy-") {
+		return "Agent"
+	}
+	// 2. IDE 识别（包含官方 IDE、VS Code 客户端、JetBrains 插件等）
+	if strings.Contains(uaLower, "antigravity/ide") || strings.Contains(uaLower, "vscode_client") ||
+		strings.Contains(uaLower, "cloudaicompanion") || strings.Contains(uaLower, "google-api-nodejs-client") ||
+		strings.Contains(uaLower, "go-http-client") {
+		return "IDE"
+	}
+	// 3. CLI 识别
+	if strings.Contains(uaLower, "antigravity/cli") {
+		return "CLI"
+	}
+	return "未知"
+}
+
 func (pc *PacketCapturer) SavePacket(method, host, urlPath string, reqHeaders map[string][]string, reqBody []byte, resHeaders map[string][]string, resBody []byte, statusCode int) *CapturedPacket {
 	if pc.enablePacketCapture != nil && !pc.enablePacketCapture() {
 		return nil
@@ -243,23 +302,7 @@ func (pc *PacketCapturer) SavePacket(method, host, urlPath string, reqHeaders ma
 		return res
 	}
 
-	ua := ""
-	for k, values := range reqHeaders {
-		if strings.ToLower(k) == "user-agent" && len(values) > 0 {
-			ua = values[0]
-			break
-		}
-	}
-
-	source := "未知"
-	uaLower := strings.ToLower(ua)
-	if strings.Contains(uaLower, "antigravity/cli") || strings.Contains(uaLower, "aidev_client") {
-		source = "CLI"
-	} else if strings.Contains(uaLower, "antigravity/ide") || strings.Contains(uaLower, "cloudaicompanion") || strings.Contains(uaLower, "google-api-nodejs-client") || strings.Contains(uaLower, "go-http-client") {
-		source = "IDE"
-	} else if strings.Contains(uaLower, "antigravity/hub") || strings.Contains(uaLower, "antigravityproxy-") {
-		source = "Agent"
-	}
+	source := ResolvePacketSource(reqHeaders)
 
 	now := time.Now()
 	timestamp := fmt.Sprintf("%02d/%02d %02d:%02d:%02d", now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second())
@@ -446,38 +489,10 @@ func (pc *PacketCapturer) AnalyzePackets(accountId string, sourceType string) (s
 
 	var targets []*CapturedPacket
 	for _, p := range pc.packets {
-		source := p.Source
-		if source == "" {
-			ua := ""
-			if reqHeadersMap, ok := p.ReqHeaders.(map[string]interface{}); ok {
-				for k, v := range reqHeadersMap {
-					if strings.ToLower(k) == "user-agent" {
-						if valStr, ok := v.(string); ok {
-							ua = valStr
-						}
-						break
-					}
-				}
-			} else if reqHeadersMapString, ok := p.ReqHeaders.(map[string]string); ok {
-				for k, v := range reqHeadersMapString {
-					if strings.ToLower(k) == "user-agent" {
-						ua = v
-						break
-					}
-				}
-			}
-			uaLower := strings.ToLower(ua)
-			if strings.Contains(uaLower, "antigravity/cli") || strings.Contains(uaLower, "aidev_client") {
-				source = "CLI"
-			} else if strings.Contains(uaLower, "antigravity/ide") || strings.Contains(uaLower, "cloudaicompanion") || strings.Contains(uaLower, "google-api-nodejs-client") || strings.Contains(uaLower, "go-http-client") {
-				source = "IDE"
-			} else if strings.Contains(uaLower, "antigravity/hub") || strings.Contains(uaLower, "antigravityproxy-") {
-				source = "Agent"
-			} else {
-				source = "未知"
-			}
+		source := ResolvePacketSource(p.ReqHeaders)
+		if source == "未知" && p.Source != "" && p.Source != "客户端" {
+			source = p.Source
 		}
-
 		if source == "客户端" {
 			source = "Agent"
 		}

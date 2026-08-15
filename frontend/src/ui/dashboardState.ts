@@ -19,6 +19,7 @@ export interface DashboardState {
     currentPoolFilter: string;
     allRequests: any[];
     searchQuery: string;
+    logStatusFilter: 'all' | 'success' | 'error' | 'hit' | 'miss';
     currentRange: string;
     customStartDate: number | null;
     customEndDate: number | null;
@@ -100,6 +101,7 @@ const state: DashboardState = {
     currentPoolFilter: 'antigravity',
     allRequests: [],
     searchQuery: '',
+    logStatusFilter: 'all',
     currentRange: '24h',
     customStartDate: null,
     customEndDate: null,
@@ -118,7 +120,7 @@ const state: DashboardState = {
 
     // Pagination
     currentPage: 1,
-    itemsPerPage: 8,
+    itemsPerPage: 10,
 
     // Account Pool Specific State (Filters & Pagination)
     accountSearchQuery: '',

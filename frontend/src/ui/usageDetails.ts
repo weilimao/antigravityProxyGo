@@ -1,5 +1,6 @@
 import state from './dashboardState';
 import i18n from '../shared/i18n';
+import { formatTokenCount } from './chartRenderer';
 
 const PANEL_ID = 'usageStatsPanel';
 const openAccounts = new Set<string>();
@@ -48,6 +49,11 @@ export function escapeHtml(value: any): string {
 export function formatNumber(value: any): string {
     const n = Number(value) || 0;
     return n.toLocaleString();
+}
+
+export function formatTokens(value: any): string {
+    const n = Number(value) || 0;
+    return formatTokenCount(n);
 }
 
 export function formatMoney(value: any): string {
@@ -171,9 +177,10 @@ export function ensurePanel(): HTMLElement | null {
     return panel;
 }
 
-export function renderSummaryChip(label: string, value: string, tone = 'slate'): string {
+export function renderSummaryChip(label: string, value: string, tone = 'slate', title?: string): string {
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
     return `
-        <div class="flex flex-col gap-0.5 min-w-0">
+        <div class="flex flex-col gap-0.5 min-w-0"${titleAttr}>
             <span class="text-[10px] uppercase tracking-normal text-outline dark:text-outline-variant">${escapeHtml(label)}</span>
             <span class="text-[13px] font-bold ${getToneClasses(tone)}">${escapeHtml(value)}</span>
         </div>
@@ -220,9 +227,9 @@ export function renderModelRows(models: any): string {
             <tr class="border-b border-outline-variant/10 dark:border-white/5">
                 <td class="px-3 py-2 font-semibold text-on-surface dark:text-white">${escapeHtml(model.model || 'unknown')}</td>
                 <td class="px-3 py-2 text-right">${formatNumber(model.requestCount)}</td>
-                <td class="px-3 py-2 text-right text-outline dark:text-outline-variant">${formatNumber(model.inputTokens)}</td>
-                <td class="px-3 py-2 text-right text-on-surface dark:text-white">${formatNumber(model.outputTokens)}</td>
-                <td class="px-3 py-2 text-right text-slate-500 dark:text-slate-400">${formatNumber(model.cachedTokens)}</td>
+                <td class="px-3 py-2 text-right text-outline dark:text-outline-variant" title="${formatNumber(model.inputTokens)}">${formatTokens(model.inputTokens)}</td>
+                <td class="px-3 py-2 text-right text-on-surface dark:text-white" title="${formatNumber(model.outputTokens)}">${formatTokens(model.outputTokens)}</td>
+                <td class="px-3 py-2 text-right text-slate-500 dark:text-slate-400" title="${formatNumber(model.cachedTokens)}">${formatTokens(model.cachedTokens)}</td>
                 <td class="px-3 py-2 text-right">${formatHitRate(model.inputTokens || 0, model.cachedTokens || 0, model.requestCount || 0, model.cacheHitRequests || 0)}</td>
                 <td class="px-3 py-2 text-right text-amber-600 dark:text-amber-400 font-semibold">${formatMoney(model.inputCost)}</td>
                 <td class="px-3 py-2 text-right text-sky-600 dark:text-sky-400 font-semibold">${formatMoney(model.outputCost)}</td>
@@ -265,11 +272,11 @@ export function renderAccountBlock(account: any): string {
                     </div>
                     <div class="flex flex-col">
                         <span class="text-outline dark:text-outline-variant">Tokens</span>
-                        <span class="font-bold text-on-surface dark:text-white">${formatNumber(tokens)}</span>
+                        <span class="font-bold text-on-surface dark:text-white" title="${formatNumber(tokens)}">${formatTokens(tokens)}</span>
                     </div>
                     <div class="flex flex-col">
                         <span class="text-outline dark:text-outline-variant">${dict.usage_cache || '缓存'}</span>
-                        <span class="font-bold text-on-surface dark:text-white">${formatNumber(account.cachedTokens)}</span>
+                        <span class="font-bold text-on-surface dark:text-white" title="${formatNumber(account.cachedTokens)}">${formatTokens(account.cachedTokens)}</span>
                     </div>
                     <div class="flex flex-col">
                         <span class="text-outline dark:text-outline-variant">${dict.usage_hitRate || '命中率'}</span>
@@ -426,7 +433,7 @@ export function render(usage?: any) {
                     <div class="flex items-center gap-4 text-right" id="usageSummaryChips">
                         ${renderSummaryChip(dict.usage_accounts || '账号数', String(totalItems), TAB_TONE[currentTab] || 'primary')}
                         ${renderSummaryChip(dict.usage_callsCount || '调用次数', formatNumber(totals.requestCount), 'slate')}
-                        ${renderSummaryChip(dict.usage_totalTokens || 'Token 总数', formatNumber(totals.totalTokens), 'slate')}
+                        ${renderSummaryChip(dict.usage_totalTokens || 'Token 总数', formatTokens(totals.totalTokens), 'slate', formatNumber(totals.totalTokens))}
                         ${renderSummaryChip(dict.usage_totalCost || '总成本', formatMoney(totals.totalCost), 'emerald')}
                         ${renderSummaryChip(dict.usage_hitRate || '命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
                     </div>
@@ -483,7 +490,7 @@ export function render(usage?: any) {
             chipsEl.innerHTML = `
                 ${renderSummaryChip(dict.usage_accounts || '账号数', String(totalItems), TAB_TONE[currentTab] || 'primary')}
                 ${renderSummaryChip(dict.usage_callsCount || '调用次数', formatNumber(totals.requestCount), 'slate')}
-                ${renderSummaryChip(dict.usage_totalTokens || 'Token 总数', formatNumber(totals.totalTokens), 'slate')}
+                ${renderSummaryChip(dict.usage_totalTokens || 'Token 总数', formatTokens(totals.totalTokens), 'slate', formatNumber(totals.totalTokens))}
                 ${renderSummaryChip(dict.usage_totalCost || '总成本', formatMoney(totals.totalCost), 'emerald')}
                 ${renderSummaryChip(dict.usage_hitRate || '命中率', `${tokenHits.toFixed(1)}% / ${requestHits.toFixed(1)}%`, 'amber')}
             `;

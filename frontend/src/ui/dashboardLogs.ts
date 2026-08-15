@@ -130,17 +130,15 @@ export interface LogsRowSlot {
     path: HTMLTableCellElement;
     sessionId: HTMLTableCellElement;
     modelName: HTMLSpanElement;
+    reasoningBadge: HTMLSpanElement;
+    nvidiaBadge: HTMLSpanElement;
     account: HTMLSpanElement;
     modelCell: HTMLTableCellElement;
-    // nvidiaBadge: NVIDIA 号池链路请求(family==="nvidia")的专属绿色标识, 在模型名行右侧显示。
-    // 预创建(初始 hidden)并在 updateLogsRowSlot 切换显隐, 避免在重流量下动态增删 DOM 节点
-    // 触发 Blink DOM 节点池膨胀(与项目 row-pool 内存优化口径一致)。
-    nvidiaBadge: HTMLSpanElement;
     inTokens: HTMLSpanElement;
     outTokens: HTMLSpanElement;
     cost: HTMLTableCellElement;
-    responseTime: HTMLTableCellElement;
     duration: HTMLTableCellElement;
+    responseTime: HTMLTableCellElement;
     hitRate: HTMLTableCellElement;
     cacheBadge: HTMLSpanElement;
     httpCode: HTMLSpanElement;
@@ -157,7 +155,7 @@ export const viewBtnLogMap = new WeakMap<HTMLButtonElement, any>();
 
 export function buildLogsRowSlot(): LogsRowSlot {
     const tr = document.createElement('tr');
-    tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors';
+    tr.className = 'hover:bg-slate-50/80 dark:hover:bg-white/[0.04] transition-colors border-b border-outline-variant/15';
 
     const makeTd = (className: string): HTMLTableCellElement => {
         const td = document.createElement('td');
@@ -170,57 +168,65 @@ export function buildLogsRowSlot(): LogsRowSlot {
         return s;
     };
 
-    const timestamp = makeTd('p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] whitespace-nowrap');
+    const timestamp = makeTd('py-3 px-3 text-slate-500 dark:text-slate-400 font-data-mono text-[11px] whitespace-nowrap');
 
-    const methodHostCell = makeTd('p-3 font-data-mono truncate');
-    const method = makeSpan('text-[#0ea5e9] font-bold mr-2');
-    const host = makeSpan('text-on-surface dark:text-white');
-    methodHostCell.appendChild(method);
-    methodHostCell.appendChild(host);
+    const methodHostCell = makeTd('py-3 px-3 font-data-mono truncate');
+    const methodHostDiv = document.createElement('div');
+    methodHostDiv.className = 'flex items-center min-w-0';
+    const method = makeSpan('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold font-mono tracking-wide mr-1.5 flex-none');
+    const host = makeSpan('text-[11.5px] text-slate-700 dark:text-slate-200 truncate font-medium');
+    methodHostDiv.appendChild(method);
+    methodHostDiv.appendChild(host);
+    methodHostCell.appendChild(methodHostDiv);
 
-    const path = makeTd('p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate');
-    const sessionId = makeTd('p-3 text-outline dark:text-outline-variant font-data-mono text-[12px] truncate');
+    const path = makeTd('py-3 px-3 text-slate-500 dark:text-slate-400 font-data-mono text-[11px] truncate');
+    const sessionId = makeTd('py-3 px-2 text-slate-400 dark:text-slate-500 font-data-mono text-[11px] truncate');
 
-    const modelCell = makeTd('p-3 font-sans font-medium text-on-surface dark:text-white truncate');
+    const modelCell = makeTd('py-3 px-3 min-w-0');
     const modelDiv = document.createElement('div');
-    modelDiv.className = 'flex flex-col min-w-0';
-    // 模型名行(横向): 模型名 + 可选 NVIDIA badge, badge 默认 hidden, 由 updateLogsRowSlot 切换。
+    modelDiv.className = 'flex flex-col min-w-0 gap-0.5';
     const modelNameRow = document.createElement('div');
-    modelNameRow.className = 'flex items-center gap-1 min-w-0';
-    const modelName = makeSpan('font-semibold text-on-surface dark:text-white truncate');
-    const nvidiaBadge = makeSpan('inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/40 flex-none');
+    modelNameRow.className = 'flex items-center gap-1.5 min-w-0';
+    const modelName = makeSpan('font-semibold text-[11.5px] text-slate-800 dark:text-slate-100 truncate');
+    const reasoningBadge = makeSpan('inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800/40 flex-none');
+    reasoningBadge.style.display = 'none';
+    const nvidiaBadge = makeSpan('inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/40 flex-none');
     nvidiaBadge.style.display = 'none';
     nvidiaBadge.textContent = 'NVIDIA';
     modelNameRow.appendChild(modelName);
+    modelNameRow.appendChild(reasoningBadge);
     modelNameRow.appendChild(nvidiaBadge);
-    const account = makeSpan('text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5');
+    const account = makeSpan('text-[10px] text-slate-400 dark:text-slate-500 font-data-mono truncate');
     modelDiv.appendChild(modelNameRow);
     modelDiv.appendChild(account);
     modelCell.appendChild(modelDiv);
 
-    const tokensCell = makeTd('p-3 text-right font-data-mono');
+    const tokensCell = makeTd('py-3 px-3 text-right font-data-mono');
     const tokensDiv = document.createElement('div');
-    tokensDiv.className = 'flex flex-col items-end';
-    const inTokens = makeSpan('text-[10px] text-outline dark:text-outline-variant');
-    const outTokens = makeSpan('text-on-surface dark:text-white');
+    tokensDiv.className = 'flex flex-col items-end gap-0.5';
+    const inTokens = makeSpan('text-[10px] text-slate-500 dark:text-slate-400 font-medium');
+    const outTokens = makeSpan('text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold');
     tokensDiv.appendChild(inTokens);
     tokensDiv.appendChild(outTokens);
     tokensCell.appendChild(tokensDiv);
 
-    const cost = makeTd('p-3 text-right font-data-mono text-emerald-600 dark:text-emerald-400 font-bold');
-    const responseTime = makeTd('p-3 text-right font-data-mono');
-    const duration = makeTd('p-3 text-right font-data-mono');
-    const hitRate = makeTd('p-3 text-center font-data-mono');
+    const cost = makeTd('py-3 px-2 text-right font-data-mono text-emerald-600 dark:text-emerald-400 font-bold text-[11.5px]');
+    const responseTime = makeTd('py-3 px-2 text-right font-data-mono text-[11.5px]');
+    const duration = makeTd('py-3 px-2 text-right font-data-mono text-[11.5px]');
+    const hitRate = makeTd('py-3 px-2 text-center font-data-mono text-[11.5px]');
 
-    const statusCell = makeTd('p-3 text-center');
-    const cacheBadge = makeSpan('inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium');
-    const httpCode = makeSpan('block text-[10px] font-bold mt-1');
-    statusCell.appendChild(cacheBadge);
-    statusCell.appendChild(httpCode);
+    const statusCell = makeTd('py-3 px-2 text-center');
+    const statusDiv = document.createElement('div');
+    statusDiv.className = 'inline-flex flex-col items-center gap-0.5';
+    const cacheBadge = makeSpan('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide');
+    const httpCode = makeSpan('text-[10px] font-mono font-bold leading-tight');
+    statusDiv.appendChild(cacheBadge);
+    statusDiv.appendChild(httpCode);
+    statusCell.appendChild(statusDiv);
 
-    const btnCell = makeTd('p-3 text-center');
+    const btnCell = makeTd('py-3 px-2 text-center');
     const viewBtn = document.createElement('button');
-    viewBtn.className = 'px-2 py-1 text-[11px] bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-fixed-dim rounded font-medium transition-all view-details-btn';
+    viewBtn.className = 'inline-flex items-center justify-center px-2 py-1 text-[11px] font-medium bg-primary/10 hover:bg-primary/20 text-primary dark:text-primary-fixed-dim rounded-md border border-primary/20 hover:border-primary/40 transition-all cursor-pointer view-details-btn shadow-2xs';
     btnCell.appendChild(viewBtn);
 
     tr.appendChild(timestamp);
@@ -236,34 +242,41 @@ export function buildLogsRowSlot(): LogsRowSlot {
     tr.appendChild(statusCell);
     tr.appendChild(btnCell);
 
-    return { tr, timestamp, method, host, methodHostCell, path, sessionId, modelName, account, modelCell, nvidiaBadge, inTokens, outTokens, cost, responseTime, duration, hitRate, cacheBadge, httpCode, viewBtn };
+    return { tr, timestamp, method, host, methodHostCell, path, sessionId, modelName, reasoningBadge, nvidiaBadge, account, modelCell, inTokens, outTokens, cost, responseTime, duration, hitRate, cacheBadge, httpCode, viewBtn };
 }
 
 export function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
     slot.timestamp.textContent = log.timestamp;
 
-    slot.method.textContent = log.method;
-    slot.host.textContent = log.host;
-    slot.methodHostCell.setAttribute('title', `${log.method} ${log.host}`);
+    const method = log.method || 'POST';
+    slot.method.textContent = method;
+    if (method === 'GET') {
+        slot.method.className = 'inline-flex items-center px-1.5 py-0.5 rounded text-[9.5px] font-bold font-mono tracking-wide mr-1.5 flex-none bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20';
+    } else {
+        slot.method.className = 'inline-flex items-center px-1.5 py-0.5 rounded text-[9.5px] font-bold font-mono tracking-wide mr-1.5 flex-none bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20';
+    }
+    slot.host.textContent = log.host || '-';
+    slot.methodHostCell.setAttribute('title', `${method} ${log.host || ''}`);
 
-    slot.path.textContent = log.path;
-    slot.path.setAttribute('title', log.path);
+    slot.path.textContent = log.path || '-';
+    slot.path.setAttribute('title', log.path || '');
 
     slot.sessionId.textContent = log.sessionId || '-';
     slot.sessionId.setAttribute('title', log.sessionId || '-');
 
-    // 模型名: 命中思考等级时追加后缀(如 z-ai/glm-5.2(max)), 后缀取「命中上游」的映射折叠值
-    // (NVIDIA-NIM deepseek 模式 low/medium→high、max→max;Grok off→none/on→档;Other 走官方值)。
-    // 空串(客户端未开思考/全局关/上游无该概念)与 'none'(Grok 显式关思考)→ 不渲染后缀,
-    // 仅显示原模型名, 避免「grok-4.3(none)」噪音。格式化逻辑收敛到 formatDisplayModel 纯函数,
-    // 供 dashboardModal.showModal 复用以杜绝两处展示逻辑漂移。textContent 安全无需转义。
-    const displayModel = formatDisplayModel(log.model, log.reasoningEffort);
-    slot.modelName.textContent = displayModel;
-    slot.modelCell.setAttribute('title', displayModel);
+    slot.modelName.textContent = log.model || '-';
+    slot.modelCell.setAttribute('title', formatDisplayModel(log.model, log.reasoningEffort));
 
-    // NVIDIA 号池链路请求(family==="nvidia")在模型名行右侧显示绿色 NVIDIA badge, 便于在
-    // 合并的请求日志列表里一眼区分英伟达号池来源(gemini/claude 直连日志无此 badge)。
-    // 仅切换显隐, 不增删 DOM 节点, 与 row-pool 内存优化口径一致。
+    // 思考等级微标签 (high / max / low 等)
+    if (log.reasoningEffort && log.reasoningEffort !== 'none') {
+        slot.reasoningBadge.style.display = '';
+        slot.reasoningBadge.textContent = log.reasoningEffort;
+        slot.reasoningBadge.setAttribute('title', `思考等级: ${log.reasoningEffort}`);
+    } else {
+        slot.reasoningBadge.style.display = 'none';
+    }
+
+    // NVIDIA 号池专属标签
     if (log.family === 'nvidia') {
         slot.nvidiaBadge.style.display = '';
     } else {
@@ -273,55 +286,87 @@ export function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
     if (log.account) {
         slot.account.textContent = log.account;
         slot.account.setAttribute('title', log.account);
-        slot.account.className = 'text-[10px] text-outline dark:text-outline-variant font-data-mono truncate mt-0.5';
+        slot.account.className = 'text-[10px] text-slate-400 dark:text-slate-500 font-data-mono truncate mt-0.5';
     } else {
-        slot.account.textContent = state.currentLanguage === 'zh' ? '直连' : 'Direct';
+        slot.account.textContent = state.currentLanguage === 'zh' ? '直连分发' : 'Direct';
         slot.account.className = 'text-[10px] text-slate-400 dark:text-slate-500 font-data-mono truncate mt-0.5';
     }
 
-    slot.inTokens.textContent = `${dict.input || '输入'}: ${log.inTokens.toLocaleString()}`;
-    slot.outTokens.textContent = `${dict.output || '输出'}: ${log.outTokens.toLocaleString()}`;
+    const inVal = typeof log.inTokens === 'number' ? log.inTokens.toLocaleString() : '0';
+    const outVal = typeof log.outTokens === 'number' ? log.outTokens.toLocaleString() : '0';
+    slot.inTokens.textContent = `↑ ${inVal}`;
+    slot.inTokens.setAttribute('title', `${dict.colInputTokens || '输入 Tokens'}: ${inVal}`);
+    slot.outTokens.textContent = `↓ ${outVal}`;
+    slot.outTokens.setAttribute('title', `${dict.colOutputTokens || '输出 Tokens'}: ${outVal}`);
 
     slot.cost.textContent = `$${(log.cost || 0).toFixed(6)}`;
+
+    // 响应时间 (firstByteMs / TTFT 首字到达时长，对应表头「响应时间」)
     slot.responseTime.textContent = formatDuration(log.firstByteMs);
+    if (log.firstByteMs && log.firstByteMs >= 15000) {
+        slot.responseTime.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-rose-500 dark:text-rose-400 font-bold';
+    } else if (log.firstByteMs && log.firstByteMs >= 5000) {
+        slot.responseTime.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-amber-600 dark:text-amber-400 font-semibold';
+    } else if (log.firstByteMs && log.firstByteMs <= 1000) {
+        slot.responseTime.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-emerald-600 dark:text-emerald-400 font-semibold';
+    } else {
+        slot.responseTime.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-slate-700 dark:text-slate-300';
+    }
+
+    // 耗时 (durationMs / 流式传输耗时，对应表头「耗时」)
     slot.duration.textContent = formatDuration(log.durationMs);
+    if (log.durationMs && log.durationMs >= 10000) {
+        slot.duration.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-rose-500 dark:text-rose-400 font-bold';
+    } else if (log.durationMs && log.durationMs >= 3000) {
+        slot.duration.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-amber-600 dark:text-amber-400 font-semibold';
+    } else {
+        slot.duration.className = 'py-3 px-2 text-right font-data-mono text-[11.5px] text-slate-500 dark:text-slate-400';
+    }
 
+    // 缓存率
     const hitRateVal = log.inTokens > 0 ? (log.cachedTokens / log.inTokens * 100).toFixed(1) : '0.0';
-    const hitRateColor = log.cachedTokens > 0 ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-slate-400 dark:text-slate-500';
     slot.hitRate.textContent = `${hitRateVal}%`;
-    slot.hitRate.className = `p-3 text-center font-data-mono ${hitRateColor}`;
+    if (log.cachedTokens > 0) {
+        slot.hitRate.className = 'py-3 px-2 text-center font-data-mono text-[11.5px] text-emerald-600 dark:text-emerald-400 font-bold';
+    } else {
+        slot.hitRate.className = 'py-3 px-2 text-center font-data-mono text-[11.5px] text-slate-400 dark:text-slate-500';
+    }
 
-    let statusClass = 'bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-900/40 dark:text-slate-400 dark:border-slate-800';
+    // 状态与 HTTP 码
+    let statusClass = 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-500/20';
     let statusLabel = dict.statusMiss || 'MISS';
     if (log.cacheStatus === 'HIT') {
-        statusClass = 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/30';
+        statusClass = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/25';
         statusLabel = dict.statusHit || 'HIT';
     } else if (log.cacheStatus === 'NONE') {
-        statusClass = 'bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/20 dark:text-purple-400 dark:border-purple-900/30';
+        statusClass = 'bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/25';
         statusLabel = dict.statusNone || 'NONE';
     }
     slot.cacheBadge.textContent = statusLabel;
-    slot.cacheBadge.className = `inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${statusClass}`;
+    slot.cacheBadge.className = `inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide ${statusClass}`;
 
-    // 折叠成对 HIT/MISS 重试行后:__retryN>1 表示本行由同指纹(±3s 内)的多条重试合并而来,
-    // 徽章文本追加 ⟳N 角标 + tooltip(文案 retryMerged,模板 {n} 替换)。不增删 DOM 节点,
-    // 仅改 textContent/title,与 row-pool 内存优化口径一致。
     const retryN: number = log.__retryN || 0;
     if (retryN > 1) {
-        slot.cacheBadge.textContent = `${statusLabel}  ⟳${retryN}`;
+        slot.cacheBadge.textContent = `${statusLabel} ⟳${retryN}`;
         const tmpl = dict.retryMerged || 'Client retried {n} time(s); merged';
         slot.cacheBadge.title = tmpl.replace('{n}', String(retryN));
     } else {
         slot.cacheBadge.title = '';
     }
 
-    const statusColor = log.statusCode >= 400 ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400';
+    const isError = log.statusCode >= 400;
+    const statusColor = isError ? 'text-rose-500 font-bold' : 'text-emerald-600 dark:text-emerald-400 font-semibold';
     slot.httpCode.textContent = `HTTP ${log.statusCode}`;
-    slot.httpCode.className = `block text-[10px] font-bold mt-1 ${statusColor}`;
+    slot.httpCode.className = `text-[9.5px] font-mono leading-tight ${statusColor}`;
+
+    // 如果是错误行，整行高亮微红
+    if (isError) {
+        slot.tr.className = 'bg-rose-500/[0.03] hover:bg-rose-500/[0.07] transition-colors border-b border-rose-500/20';
+    } else {
+        slot.tr.className = 'hover:bg-slate-50/80 dark:hover:bg-white/[0.04] transition-colors border-b border-outline-variant/15';
+    }
 
     slot.viewBtn.setAttribute('data-log-id', log.id);
-    // 渲染时把当前 lite 日志对象捕获到按钮上,点击委托优先用它直接开弹窗,
-    // 绕开「id 须在 state.allRequests 里」的脆弱前提(OCR 行等查表落空场景)。
     viewBtnLogMap.set(slot.viewBtn, log);
     slot.viewBtn.textContent = state.currentLanguage === 'zh' ? '查看' : 'View';
 }

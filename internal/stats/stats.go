@@ -9,6 +9,9 @@ import (
 	"antigravity-proxy/internal/pricing"
 )
 
+// MaxRequestLogs 定义内存与轻量投影中请求日志保留的最大条数。
+const MaxRequestLogs = 150
+
 type ModelStats struct {
 	Reqs         int     `json:"reqs"`
 	InTokens     int     `json:"inTokens"`
@@ -247,9 +250,10 @@ func (t *Tracker) TrackRequest(modelName string, inTokens, outTokens, cachedToke
 	t.stats.TotalInputTokens += inTokens
 	t.stats.TotalOutputTokens += outTokens
 	t.stats.TotalCachedTokens += cachedTokens
-	// 命中率分母: 仅 gemini/claude 直连链路(本方法)且非 TAB 补全模型累加, NVIDIA 经 TrackRequestForModel
-	// 走专属方法不触达此行, TAB 经 IsTabModel 过滤不触达此行, 均不会稀释缓存命中率。
-	if !IsTabModel(modelName) {
+	// 命中率分母: 仅 gemini/claude 直连链路(本方法)、命中缓存(cachedTokens > 0)且非 TAB 补全模型累加,
+	// 0 缓存未命中请求不计入分母以防稀释缓存命中率, NVIDIA 经 TrackRequestForModel
+	// 走专属方法不触达此行, TAB 经 IsTabModel 过滤不触达此行。
+	if cachedTokens > 0 && !IsTabModel(modelName) {
 		t.stats.TotalCacheEligibleInputTokens += inTokens
 	}
 	t.stats.TotalCost = math.Round((t.stats.TotalCost+cost)*1000000.0) / 1000000.0
