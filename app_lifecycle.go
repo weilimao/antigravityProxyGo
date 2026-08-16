@@ -7,6 +7,7 @@ import (
 	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/diagserver"
 	"antigravity-proxy/internal/dialogs"
+	"antigravity-proxy/internal/externalconfig"
 	"antigravity-proxy/internal/patch"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/proxy"
@@ -548,6 +549,17 @@ func (a *App) startup(ctx context.Context) {
 
 	a.initTray()
 
+	// 初始化外部 Agent 配置管理器:管理 OpenCode / Claude Code 等 CLI Agent 的配置文件。
+	// 后端只做文件 I/O(读 JSON 字符串返回前端、前端写 JSON 字符串落盘)。
+	// 扩展新 Agent 只需在此追加一行 RegisterAgent + 前端新增一个 schema 文件。
+	a.externalConfigMgr = externalconfig.NewManager()
+	a.externalConfigMgr.RegisterAgent("opencode", "OpenCode",
+		filepath.Join(homeDir, ".config", "opencode", "opencode.json"))
+	a.externalConfigMgr.RegisterAgent("claude-code", "Claude Code",
+		filepath.Join(homeDir, ".claude", "settings.json"))
+	a.externalConfigMgr.RegisterAgent("codex", "Codex",
+		filepath.Join(homeDir, ".codex", "config.toml"))
+
 	// 启动网络连通性监听:网络从断→通时触发连接池重置 + 远程中继自动重连,
 	// 从根本修复"网络断开后程序废了、再联网也无法使用中继服务"的问题。
 	a.startNetWatch()
@@ -716,6 +728,12 @@ func (a *App) domReady(ctx context.Context) {
 		"settings:get-nvidia-worker-proxy": map[string]interface{}{
 			"nvidiaWorkerProxyUrl":     a.settingsMgr.GetNvidiaWorkerProxyURL(),
 			"nvidiaWorkerProxyEnabled": a.settingsMgr.IsNvidiaWorkerProxyEnabled(),
+		},
+		"settings:get-nvidia-dedicated-proxy": map[string]interface{}{
+			"address":  a.settingsMgr.GetNvidiaDedicatedProxyAddress(),
+			"enabled":  a.settingsMgr.GetNvidiaDedicatedProxyEnabled(),
+			"username": a.settingsMgr.GetNvidiaDedicatedProxyUsername(),
+			"password": a.settingsMgr.GetNvidiaDedicatedProxyPassword(),
 		},
 	}
 

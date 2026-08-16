@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/netutil"
 )
 
 // defaultNvidiaFallbackModelIDs 返回号池空/上游失败时的兜底模型 id 清单(上游 id 命名空间)。
@@ -207,7 +208,7 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 
 	// 构造发往上游的 URL：剥离 /nvidia 本地路由前缀，强匹配上游 /v1/models
 	baseURL := strings.TrimRight(poolAccount.BaseURL, "/")
-	if h.isNvidiaWorkerProxyEnabledSafe() {
+	if !h.isNvidiaDedicatedProxyEnabledSafe() && h.isNvidiaWorkerProxyEnabledSafe() {
 		workerURL := strings.TrimRight(h.getNvidiaWorkerProxyURLSafe(), "/")
 		if workerURL != "" {
 			baseURL = workerURL
@@ -240,7 +241,15 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 			return t
 		}())
 
-	resp, errDo := h.client.Do(req)
+	httpClient := h.client
+	if h.isNvidiaDedicatedProxyEnabledSafe() {
+		dAddr, dUser, dPass := h.getNvidiaDedicatedProxyParamsSafe()
+		if dc, err := netutil.GetNvidiaDedicatedClient(dAddr, dUser, dPass); err == nil && dc != nil {
+			httpClient = dc
+		}
+	}
+
+	resp, errDo := httpClient.Do(req)
 	if errDo != nil {
 		h.log("❌ [NVIDIA 模型列表透传] 上游网络请求失败: %v | 目标: %s", errDo, targetURL)
 		writeJSON(w, http.StatusOK, buildFallbackNvidiaModels(isAnthropic, preferred))

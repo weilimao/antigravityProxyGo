@@ -7,8 +7,8 @@
  * (dashboardLogs.updateLogsRowSlot)与详情弹窗(dashboardModal.showModal)共同复用,
  * 杜绝两处展示逻辑漂移。
  */
-export function formatDuration(ms: number | undefined): string {
-    if (ms === undefined || ms === null || ms === 0) return '-';
+export function formatDuration(ms: number | undefined | null): string {
+    if (ms === undefined || ms === null || typeof ms !== 'number' || isNaN(ms) || ms < 0) return '-';
     if (ms < 1000) return `${ms}ms`;
     return `${(ms / 1000).toFixed(2)}s`;
 }

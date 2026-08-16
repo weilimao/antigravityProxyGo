@@ -194,7 +194,16 @@
 
         <!-- 当前 Tab 绑定账号池配置区 -->
         <div class="bg-slate-50 dark:bg-white/5 p-3 rounded-lg border border-outline-variant/15 flex flex-wrap items-center justify-between gap-3 mb-4">
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-3 flex-wrap">
+                <!-- 搜索筛选输入框 (带清除图标) -->
+                <div class="relative w-56">
+                    <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-outline/70 text-[16px] pointer-events-none">search</span>
+                    <input type="text" id="inputRelayModelMappingSearch" class="w-full pl-8 pr-7 py-1 text-[12px] bg-white dark:bg-[#1e2538] border border-outline-variant/30 rounded-lg focus:border-primary focus:ring-2 focus:ring-primary/15 focus:outline-none transition-all placeholder:text-outline/50 text-on-surface dark:text-white" placeholder="搜索模型映射..." data-i18n-placeholder="relayModelMappingSearchPlaceholder" />
+                    <button id="btnClearRelayModelMappingSearch" class="hidden absolute right-2 top-1/2 -translate-y-1/2 text-outline hover:text-on-surface dark:hover:text-white p-0.5 rounded-full hover:bg-slate-200 dark:hover:bg-white/10 transition-colors cursor-pointer" title="清空搜索" data-i18n-title="relayModelMappingClearSearch">
+                        <span class="material-symbols-outlined text-[13px] block">close</span>
+                    </button>
+                </div>
+
                 <span class="text-[12px] font-bold text-on-surface dark:text-white flex items-center gap-1">
                     <span class="material-symbols-outlined text-[16px] text-primary">hub</span>
                     <span>路由目标账号池 (Target Provider):</span>

@@ -30,7 +30,7 @@ const result = await build({
             // 互相覆盖(后者会吞掉 formatDuration 的导出)。
             const stubs = {
                 dashboardState: 'export default { currentLanguage: "zh" };',
-                dashboardUtils: 'export function formatDuration(m){return (m===undefined||m===null||m===0)?"-":(m<1000?m+"ms":(m/1000).toFixed(2)+"s")};',
+                dashboardUtils: 'export function formatDuration(m){return (m===undefined||m===null||typeof m!=="number"||isNaN(m)||m<0)?"-":(m<1000?m+"ms":(m/1000).toFixed(2)+"s")}; export function formatDisplayModel(m, r){return !m?"-":(r&&r!=="none"?`${m}(${r})`:m);};',
             };
             b.onResolve({ filter: /^\.\/dashboard(State|Utils)$/ }, args => ({
                 path: args.path, namespace: 'stub',
@@ -123,5 +123,30 @@ console.log('mergeRetryRows 冒烟测试:');
     eq('E 异指纹不合并', r.length, 2);
 }
 
+// F: formatDuration 边缘情况验证(0ms/正常毫秒/秒级/异常值)
+console.log('\nformatDuration 纯函数测试:');
+const UTILS_SRC = pathResolve(__dirname, 'dashboardUtils.ts');
+const utilsRes = await build({
+    entryPoints: [UTILS_SRC],
+    bundle: true,
+    format: 'esm',
+    write: false,
+    platform: 'browser',
+    logLevel: 'silent',
+});
+const utilsOutPath = pathResolve(tmpDir, 'bundle-utils.mjs');
+writeFileSync(utilsOutPath, utilsRes.outputFiles[0].text);
+const { formatDuration } = await import(pathToFileURL(utilsOutPath).href);
+
+eq('0ms 正常格式化为 0ms(不吞成横杠)', formatDuration(0), '0ms');
+eq('1ms 格式化为 1ms', formatDuration(1), '1ms');
+eq('500ms 格式化为 500ms', formatDuration(500), '500ms');
+eq('1500ms 格式化为 1.50s', formatDuration(1500), '1.50s');
+eq('undefined 兜底为 -', formatDuration(undefined), '-');
+eq('null 兜底为 -', formatDuration(null), '-');
+eq('负数 兜底为 -', formatDuration(-10), '-');
+eq('NaN 兜底为 -', formatDuration(NaN), '-');
+
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);
 process.exit(fail ? 1 : 0);
+

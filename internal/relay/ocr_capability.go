@@ -54,14 +54,17 @@ var multimodalModelPrefixes = []string{
 	"claude-3.5-sonnet", // Anthropic Claude 3.5 Sonnet(Vision;2.0 同款,但前缀不与 text-only 族相撞)
 	"claude-3-5-sonnet", // Anthropic Claude 3.5 Sonnet 旧写法(连字符变体)
 	"claude-3.7-sonnet", // Anthropic Claude 3.7 Sonnet(Vision)
+	"claude-3-7-sonnet", // Anthropic Claude 3.7 Sonnet 连字符变体
 	"claude-sonnet-4",   // Claude Sonnet 4 / 4.5(Vision)
 	"claude-opus-4",     // Claude Opus 4 / 4.5(Vision)
 	"claude-3-opus",     // Anthropic Claude 3 Opus(Vision)
 	"kimi-k2",           // Moonshot Kimi K2 视觉系(k2 多模态)
+	"kimi-k2.5",         // Moonshot Kimi K2.5 视觉系
 	"step-1v",           // 阶跃星辰 Step-1V
 	"step-1.5v",         // 阶跃星辰 Step-1.5V
 	"yi-vl",             // 零一万物 Yi-VL
 	"deepseek-vl",       // DeepSeek VL 视觉系
+	"deepseek-vl2",      // DeepSeek VL2 视觉系
 	"o4-mini",           // OpenAI o4-mini(多模态推理)
 }
 

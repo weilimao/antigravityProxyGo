@@ -103,7 +103,24 @@ func (h *APICompatHandler) buildExposedModelMap(includePrefixed bool) []exposedM
 		if entry.MaxInputTokens != nil && *entry.MaxInputTokens > 0 {
 			maxInputTokens = *entry.MaxInputTokens
 		}
-		out = append(out, exposedModel{ID: entry.ClientModel, OwnedBy: ownedBy, MaxInputTokens: maxInputTokens})
+		clientModel := strings.TrimSpace(entry.ClientModel)
+		// 主条目:裸 ClientModel 一项(原有行为不变)。
+		out = append(out, exposedModel{ID: clientModel, OwnedBy: ownedBy, MaxInputTokens: maxInputTokens})
+		// 变体虚项:对每条 mapping 携带的 VariantEfforts 清单,额外展开
+		// {ClientModel}-{effort} 形式的暴露项,让客户端菜单看到带思考等级后缀的可选项。
+		// 这些虚项与主条目共享 OwnedBy / MaxInputTokens(同一上游模型的窗口声明)。
+		// 空字符串的 effort 跳过(不会生成与主条目重复的 "ClientModel-"空尾项)。
+		for _, effort := range entry.VariantEfforts {
+			effort = strings.TrimSpace(effort)
+			if effort == "" {
+				continue
+			}
+			out = append(out, exposedModel{
+				ID:             clientModel + "-" + effort,
+				OwnedBy:        ownedBy,
+				MaxInputTokens: maxInputTokens,
+			})
+		}
 	}
 	return out
 }

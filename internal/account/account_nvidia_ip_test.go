@@ -119,3 +119,182 @@ func TestGetResidentialSubnets(t *testing.T) {
 		}
 	}
 }
+
+// TestBatchAssignNvidiaEgressIP_SingleMode_ManualIP 验证统一分配单 IP 模式（手动指定特定 IP）。
+func TestBatchAssignNvidiaEgressIP_SingleMode_ManualIP(t *testing.T) {
+	tmp := t.TempDir()
+	m := NewManager()
+	m.Init(tmp)
+
+	for i := 1; i <= 5; i++ {
+		existing := ""
+		if i == 1 {
+			existing = "99.99.99.99"
+		}
+		_, err := m.AddNvidiaAccount(NvidiaAccountInput{
+			BaseURL:  "https://integrate.api.nvidia.com/v1",
+			APIKey:   "nvapi-test",
+			Label:    fmt.Sprintf("acc-%d", i),
+			EgressIP: existing,
+		})
+		if err != nil {
+			t.Fatalf("AddNvidiaAccount failed: %v", err)
+		}
+	}
+
+	// 1. 保留模式 (OverwriteAll = false)，为 4 个空白账号赋 108.85.12.34
+	manualIP := "108.85.12.34"
+	updated, err := m.BatchAssignNvidiaEgressIP(BatchAssignIPOptions{
+		Mode:         "single",
+		SingleIP:     manualIP,
+		OverwriteAll: false,
+	})
+	if err != nil {
+		t.Fatalf("BatchAssignNvidiaEgressIP single mode failed: %v", err)
+	}
+	if updated != 4 {
+		t.Fatalf("Expected 4 updated accounts, got %d", updated)
+	}
+
+	accs := m.GetAccounts()
+	if accs[0].EgressIP != "99.99.99.99" {
+		t.Errorf("Expected acc 0 to preserve 99.99.99.99, got %s", accs[0].EgressIP)
+	}
+	for i := 1; i < 5; i++ {
+		if accs[i].EgressIP != manualIP {
+			t.Errorf("Expected acc %d to be %s, got %s", i, manualIP, accs[i].EgressIP)
+		}
+	}
+
+	// 2. 覆盖模式 (OverwriteAll = true)，全部 5 个账号统一设置为 71.222.88.99
+	newManualIP := "71.222.88.99"
+	updatedAll, err := m.BatchAssignNvidiaEgressIP(BatchAssignIPOptions{
+		Mode:         "single",
+		SingleIP:     newManualIP,
+		OverwriteAll: true,
+	})
+	if err != nil {
+		t.Fatalf("BatchAssignNvidiaEgressIP single mode overwrite failed: %v", err)
+	}
+	if updatedAll != 5 {
+		t.Fatalf("Expected 5 updated accounts, got %d", updatedAll)
+	}
+
+	// 验证落盘持久化
+	m2 := NewManager()
+	m2.Init(tmp)
+	for i, acc := range m2.GetAccounts() {
+		if acc.EgressIP != newManualIP {
+			t.Errorf("Reloaded account %d expected %s, got %s", i, newManualIP, acc.EgressIP)
+		}
+	}
+}
+
+// TestBatchAssignNvidiaEgressIP_SingleMode_FromSubnet 验证选择指定网段随机生成统一单 IP 并分配。
+func TestBatchAssignNvidiaEgressIP_SingleMode_FromSubnet(t *testing.T) {
+	tmp := t.TempDir()
+	m := NewManager()
+	m.Init(tmp)
+
+	for i := 1; i <= 4; i++ {
+		_, _ = m.AddNvidiaAccount(NvidiaAccountInput{
+			BaseURL: "https://integrate.api.nvidia.com/v1",
+			APIKey:  "nvapi-test",
+			Label:   fmt.Sprintf("acc-%d", i),
+		})
+	}
+
+	// 指定 tw-cht-taipei (114.34.0.0/16) 网段
+	updated, err := m.BatchAssignNvidiaEgressIP(BatchAssignIPOptions{
+		Mode:              "single",
+		SelectedSubnetIDs: []string{"tw-cht-taipei"},
+		OverwriteAll:      true,
+	})
+	if err != nil {
+		t.Fatalf("BatchAssignNvidiaEgressIP single subnet mode failed: %v", err)
+	}
+	if updated != 4 {
+		t.Fatalf("Expected 4 updated accounts, got %d", updated)
+	}
+
+	accs := m.GetAccounts()
+	assignedIP := accs[0].EgressIP
+	if assignedIP == "" {
+		t.Fatalf("Assigned IP is empty")
+	}
+	_, ipnet, _ := net.ParseCIDR("114.34.0.0/16")
+	if !ipnet.Contains(net.ParseIP(assignedIP)) {
+		t.Fatalf("Assigned IP %s not in CIDR 114.34.0.0/16", assignedIP)
+	}
+
+	// 验证所有账号被赋上了完全相同的 IP
+	for i, acc := range accs {
+		if acc.EgressIP != assignedIP {
+			t.Errorf("Account %d IP mismatch: want %s, got %s", i, assignedIP, acc.EgressIP)
+		}
+	}
+}
+
+// TestBatchAssignNvidiaEgressIP_InvalidSingleIP 验证非法 IP 地址被正确拒绝拦截。
+func TestBatchAssignNvidiaEgressIP_InvalidSingleIP(t *testing.T) {
+	tmp := t.TempDir()
+	m := NewManager()
+	m.Init(tmp)
+
+	_, _ = m.AddNvidiaAccount(NvidiaAccountInput{
+		BaseURL: "https://integrate.api.nvidia.com/v1",
+		APIKey:  "nvapi-test",
+		Label:   "acc-1",
+	})
+
+	_, err := m.BatchAssignNvidiaEgressIP(BatchAssignIPOptions{
+		Mode:         "single",
+		SingleIP:     "999.888.777.666",
+		OverwriteAll: true,
+	})
+	if err == nil {
+		t.Fatalf("Expected error for invalid IP, got nil")
+	}
+}
+
+// TestGenerateRandomIPFromSubnet 验证单网段随机生成 IP 函数。
+func TestGenerateRandomIPFromSubnet(t *testing.T) {
+	ip, err := GenerateRandomIPFromSubnet("uk-bt-london")
+	if err != nil {
+		t.Fatalf("GenerateRandomIPFromSubnet failed: %v", err)
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil {
+		t.Fatalf("Invalid IP generated: %s", ip)
+	}
+	_, ipnet, _ := net.ParseCIDR("86.154.0.0/16")
+	if !ipnet.Contains(parsed) {
+		t.Fatalf("Generated IP %s not in 86.154.0.0/16", ip)
+	}
+}
+
+// TestParseBatchAssignIPOptions 验证各类参数形态的解析。
+func TestParseBatchAssignIPOptions(t *testing.T) {
+	// 1. JSON 字符串
+	opts1 := ParseBatchAssignIPOptions([]interface{}{`{"mode":"single","singleIp":"1.2.3.4","overwriteAll":false}`})
+	if opts1.Mode != "single" || opts1.SingleIP != "1.2.3.4" || opts1.OverwriteAll != false {
+		t.Fatalf("JSON parse mismatch: %+v", opts1)
+	}
+
+	// 2. map 对象
+	opts2 := ParseBatchAssignIPOptions([]interface{}{map[string]interface{}{
+		"mode":         "single",
+		"singleIp":     "5.6.7.8",
+		"overwriteAll": true,
+	}})
+	if opts2.Mode != "single" || opts2.SingleIP != "5.6.7.8" || opts2.OverwriteAll != true {
+		t.Fatalf("Map parse mismatch: %+v", opts2)
+	}
+
+	// 3. 兼容旧位置参数
+	opts3 := ParseBatchAssignIPOptions([]interface{}{[]interface{}{"us-comcast-ca"}, false})
+	if len(opts3.SelectedSubnetIDs) != 1 || opts3.SelectedSubnetIDs[0] != "us-comcast-ca" || opts3.OverwriteAll != false {
+		t.Fatalf("Legacy args parse mismatch: %+v", opts3)
+	}
+}
+

@@ -76,20 +76,34 @@ func (r *FirstByteRecorder) FirstByteMs(durationMs int64) int64 {
 // StreamDurationMs 返回「首帧 → end 结束时刻」的流式耗时(毫秒)。
 // 这是请求日志「耗时」列的正确口径: 不含 TTFT(请求→首帧), 即 耗时 = 第一帧 → 流结束。
 //   - 已触发 MarkFirstByte(): 返回 end.Sub(firstByte), 即第一帧到结束时刻的间隔。
+//     若流在 <1ms 极短时间内完成 (如单包短响应), 保底返回 1ms 避免毫秒向下截断为 0。
 //   - 未触发 MarkFirstByte()(请求错误/中断/非流式未打点): 兜底返回端到端 end.Sub(start),
-//     与改造前 DurationMs 数值一致, 避免信息丢失。
+//     与改造前 DurationMs 数值一致, 避免信息丢失。若耗时 <1ms 同样保底返回 1ms。
 //   - nil receiver: 防御性兜底返回 0(无法计算)。
-//
-// 恒 ≥ 0: 结束时刻早于首帧(时钟漂移/边界)时截断为 0。
+//   - 结束时刻早于首帧/开始时刻 (时钟漂移/异常): 截断为 0。
 func (r *FirstByteRecorder) StreamDurationMs(end time.Time) int64 {
-	var ms int64
-	if r != nil && r.hasFirstByte {
-		ms = end.Sub(r.firstByte).Milliseconds()
-	} else if r != nil && !r.start.IsZero() {
-		ms = end.Sub(r.start).Milliseconds()
+	if r == nil {
+		return 0
 	}
-	if ms < 0 {
-		ms = 0
+	if r.hasFirstByte {
+		if end.Before(r.firstByte) {
+			return 0
+		}
+		ms := end.Sub(r.firstByte).Milliseconds()
+		if ms <= 0 {
+			return 1
+		}
+		return ms
 	}
-	return ms
+	if !r.start.IsZero() {
+		if end.Before(r.start) {
+			return 0
+		}
+		ms := end.Sub(r.start).Milliseconds()
+		if ms <= 0 {
+			return 1
+		}
+		return ms
+	}
+	return 0
 }

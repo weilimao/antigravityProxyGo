@@ -232,6 +232,10 @@
 <span class="font-medium" data-i18n="summaryCachedTokens">缓存命中 Token:</span>
 <span class="font-data-mono font-bold text-purple-600 dark:text-purple-400" id="valSummaryCachedTokens">0</span>
 </span>
+<span class="flex items-center gap-1.5 bg-slate-100/50 dark:bg-white/5 border border-outline-variant/20 px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] whitespace-nowrap text-slate-600 dark:text-slate-400 shadow-sm">
+<span class="font-medium" data-i18n="summaryHitRate">缓存命中率:</span>
+<span class="font-data-mono font-bold text-emerald-600 dark:text-emerald-400" id="valSummaryHitRate">0.0%</span>
+</span>
 </div>
 <!-- 多维度筛选折叠面板 -->
 <div class="hidden border-b border-outline-variant/30 pb-4 mb-4 mt-1 bg-slate-50/50 dark:bg-white/5 p-4 rounded-xl flex flex-col gap-4 transition-all duration-200" id="chartFilterPanel">

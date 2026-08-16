@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/netutil"
 	"antigravity-proxy/internal/settings"
 	"antigravity-proxy/internal/stats"
 )
@@ -452,9 +453,11 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			upstreamReq = &chatReq
 		}
 
-		// 构造上游 URL：优先使用全局 Worker 代理出口（若启用），否则回退账号本身的 BaseURL
+		// 构造上游 URL：
+		// 运行时互斥与防套娃：专属 SOCKS5 代理优先级最高。若启用专属 SOCKS5，则直连官方 BaseURL，
+		// 绝不套用 Worker URL；仅在未开启专属 SOCKS5 且启用了 Worker 代理时才使用 Worker URL。
 		baseURL := strings.TrimRight(poolAccount.BaseURL, "/")
-		if h.isNvidiaWorkerProxyEnabledSafe() {
+		if !h.isNvidiaDedicatedProxyEnabledSafe() && h.isNvidiaWorkerProxyEnabledSafe() {
 			workerURL := strings.TrimRight(h.getNvidiaWorkerProxyURLSafe(), "/")
 			if workerURL != "" {
 				baseURL = workerURL
@@ -489,7 +492,10 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		// NVIDIA 上游不识别 anthropic 头，不注入
 
 		proxyTag := ""
-		if h.isNvidiaWorkerProxyEnabledSafe() {
+		if h.isNvidiaDedicatedProxyEnabledSafe() {
+			dAddr, _, _ := h.getNvidiaDedicatedProxyParamsSafe()
+			proxyTag = fmt.Sprintf(" [专属代理: %s]", dAddr)
+		} else if h.isNvidiaWorkerProxyEnabledSafe() {
 			proxyTag = " [Worker 代理出口]"
 		}
 		egressTag := ""
@@ -501,6 +507,12 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		httpClient := h.client
 		if isStreaming {
 			httpClient = h.streamClient
+		}
+		if h.isNvidiaDedicatedProxyEnabledSafe() {
+			dAddr, dUser, dPass := h.getNvidiaDedicatedProxyParamsSafe()
+			if dc, err := netutil.GetNvidiaDedicatedClient(dAddr, dUser, dPass); err == nil && dc != nil {
+				httpClient = dc
+			}
 		}
 
 		// 单账号针对 429 尝试最多 5 次，重试 5 次均 429 失败才切下一个账号
@@ -771,4 +783,28 @@ func (h *APICompatHandler) getNvidiaWorkerProxyURLSafe() (url string) {
 		}
 	}()
 	return h.settingsMgr.GetNvidiaWorkerProxyURL()
+}
+
+func (h *APICompatHandler) isNvidiaDedicatedProxyEnabledSafe() (enabled bool) {
+	if h == nil || h.settingsMgr == nil {
+		return false
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			enabled = false
+		}
+	}()
+	return h.settingsMgr.GetNvidiaDedicatedProxyEnabled()
+}
+
+func (h *APICompatHandler) getNvidiaDedicatedProxyParamsSafe() (addr, user, pass string) {
+	if h == nil || h.settingsMgr == nil {
+		return "", "", ""
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			addr, user, pass = "", "", ""
+		}
+	}()
+	return h.settingsMgr.GetNvidiaDedicatedProxyAddress(), h.settingsMgr.GetNvidiaDedicatedProxyUsername(), h.settingsMgr.GetNvidiaDedicatedProxyPassword()
 }

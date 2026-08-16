@@ -159,3 +159,32 @@ func TestFirstByteRecorder_StreamDurationMs_Nil(t *testing.T) {
 		t.Fatalf("expected nil receiver StreamDurationMs=0, got %d", got)
 	}
 }
+
+// TestFirstByteRecorder_StreamDurationMs_FastSubMillisecond 打点后极快完成(<1ms / 同毫秒)保底返回 1ms。
+func TestFirstByteRecorder_StreamDurationMs_FastSubMillisecond(t *testing.T) {
+	start := time.Now().Add(-500 * time.Millisecond)
+	rec := NewFirstByteRecorder(start)
+	rec.MarkFirstByte()
+	// end 与 firstByte 相同时刻(0ms 差值)
+	end := rec.firstByte
+	if got := rec.StreamDurationMs(end); got != 1 {
+		t.Fatalf("expected StreamDurationMs=1 for sub-millisecond finish, got %d", got)
+	}
+
+	// 微秒级差值 (< 1ms)
+	endMicro := rec.firstByte.Add(200 * time.Microsecond)
+	if got := rec.StreamDurationMs(endMicro); got != 1 {
+		t.Fatalf("expected StreamDurationMs=1 for 200us finish, got %d", got)
+	}
+}
+
+// TestFirstByteRecorder_StreamDurationMs_Unmarked_FastSubMillisecond 未打点同时刻完成(<1ms)保底返回 1ms。
+func TestFirstByteRecorder_StreamDurationMs_Unmarked_FastSubMillisecond(t *testing.T) {
+	start := time.Now()
+	rec := NewFirstByteRecorder(start)
+	end := start
+	if got := rec.StreamDurationMs(end); got != 1 {
+		t.Fatalf("expected unmarked StreamDurationMs=1 for sub-millisecond finish, got %d", got)
+	}
+}
+

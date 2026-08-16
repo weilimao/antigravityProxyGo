@@ -120,13 +120,35 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// 变体后缀虚项感知: 若 inModel 形如 "{ClientModel}-{effort}" 且 stripping 出的 baseModel
+	// 与 effort 均已在 mapping 表的 VariantEfforts 集合内声明, 视为客户端选择了思考等级变体虚项。
+	// 剥离出 baseModel 作为路由查找依据, effort 作为请求体思考强度兜底注入(仅当客户端未显式带时);
+	// 未命中(无 VariantEfforts 配置/strip 不命中已知 effort/baseModel)则保持原 inModel 行为不变。
+	routeModel := inModel
+	strippedEffort := ""
+	if baseModel, effort, variantMatched := h.resolveVariantEffort(inModel); variantMatched {
+		routeModel = baseModel
+		strippedEffort = effort
+	}
+
 	// 解析规则表 → 目标 Provider 与上游模型。
-	provider, targetGroupID, upstreamModel, matched := h.resolveRoutedTarget(inModel)
+	provider, targetGroupID, upstreamModel, matched := h.resolveRoutedTarget(routeModel)
 	if !matched {
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error": "no route rule matched for model: " + inModel,
 		})
 		return
+	}
+
+	// 变体后缀兜底注入: 仅在剥离出 strippedEffort 非空(客户端通过变体虚项表达思考强度)时,
+	// 把 effort 写回请求体(anthropic: thinking.type=adaptive + output_config.effort;
+	// openai chat: reasoning_effort 顶层; openai responses: reasoning.effort)。
+	// 客户端已显式带任何思考信号时尊重不动, 仍以原客户端值为准。
+	if strippedEffort != "" {
+		newBody := maybeInjectEffortFallback(bodyBytes, strippedEffort)
+		if len(newBody) != len(bodyBytes) || string(newBody) != string(bodyBytes) {
+			bodyBytes = newBody
+		}
 	}
 
 	h.log("🔀 [路由转发] model %s → provider %s (group %s) (upstream %s) | stream=%v | user %s", inModel, provider, targetGroupID, upstreamModel, isStreaming, userSession.UserKey)

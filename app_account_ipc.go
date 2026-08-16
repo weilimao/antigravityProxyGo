@@ -388,39 +388,32 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		})
 		return data, true, nil
 
-	case "nvidia:batch-assign-egress-ip":
-		// args: [selectedSubnetIds?, overwriteAll?] 或 [jsonString]
-		var opts account.BatchAssignIPOptions
-		opts.OverwriteAll = true
-
+	case "nvidia:generate-subnet-ip":
+		subnetID := ""
 		if len(args) > 0 {
-			if jsonStr, ok := args[0].(string); ok && strings.HasPrefix(strings.TrimSpace(jsonStr), "{") {
-				_ = json.Unmarshal([]byte(jsonStr), &opts)
-			} else {
-				if subnetList, ok := args[0].([]interface{}); ok {
-					for _, item := range subnetList {
-						if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-							opts.SelectedSubnetIDs = append(opts.SelectedSubnetIDs, strings.TrimSpace(s))
-						}
-					}
-				}
-				if len(args) > 1 {
-					if b, ok := args[1].(bool); ok {
-						opts.OverwriteAll = b
-					}
-				}
+			if s, ok := args[0].(string); ok {
+				subnetID = strings.TrimSpace(s)
 			}
 		}
+		ip, err := account.GenerateRandomIPFromSubnet(subnetID)
+		if err != nil {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+			return data, true, nil
+		}
+		data, _ := marshalResponse(map[string]interface{}{"success": true, "ip": ip})
+		return data, true, nil
 
+	case "nvidia:batch-assign-egress-ip":
+		opts := account.ParseBatchAssignIPOptions(args)
 		updatedCount, err := a.accountMgr.BatchAssignNvidiaEgressIP(opts)
 		if err != nil {
-			a.AddLog(fmt.Sprintf("❌ [NVIDIA] 批量分配住宅 IP 失败: %v", err))
+			a.AddLog(fmt.Sprintf("❌ [NVIDIA] 批量分配出口 IP 失败: %v", err))
 			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 			return data, true, nil
 		}
 
 		a.emitAccountsRes()
-		a.AddLog(fmt.Sprintf("✅ [NVIDIA] 成功为 %d 个账号分配独立住宅 IP", updatedCount))
+		a.AddLog(fmt.Sprintf("✅ [NVIDIA] 成功为 %d 个账号分配出口 IP", updatedCount))
 		data, _ := marshalResponse(map[string]interface{}{
 			"success":      true,
 			"updatedCount": updatedCount,

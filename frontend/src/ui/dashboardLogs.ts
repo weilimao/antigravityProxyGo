@@ -314,14 +314,9 @@ export function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
     }
 
     // 耗时 (durationMs / 流式传输耗时，对应表头「耗时」)
+    // 单一中性灰, 不分级着色; 响应时间列(responseTime)才按阈值分色。
     slot.duration.textContent = formatDuration(log.durationMs);
-    if (log.durationMs && log.durationMs >= 10000) {
-        slot.duration.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-rose-500 dark:text-rose-400 font-bold';
-    } else if (log.durationMs && log.durationMs >= 3000) {
-        slot.duration.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-amber-600 dark:text-amber-400 font-semibold';
-    } else {
-        slot.duration.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-slate-500 dark:text-slate-400';
-    }
+    slot.duration.className = 'py-3 px-2 text-left font-data-mono text-[11.5px] text-slate-500 dark:text-slate-400';
 
     // 缓存率
     const hitRateVal = log.inTokens > 0 ? (log.cachedTokens / log.inTokens * 100).toFixed(1) : '0.0';

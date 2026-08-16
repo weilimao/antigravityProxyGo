@@ -3,6 +3,7 @@ package account
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"net"
@@ -62,22 +63,121 @@ func GetResidentialSubnets() []ResidentialSubnetInfo {
 
 // BatchAssignIPOptions 批量分配住宅 IP 选项。
 type BatchAssignIPOptions struct {
-	SelectedSubnetIDs []string `json:"selectedSubnetIds"` // 选中的网段 ID 列表，留空表示全选
+	Mode              string   `json:"mode"`              // "unique" (默认独立打散) | "single" (统一分配同一 IP)
+	SingleIP          string   `json:"singleIp"`          // single 模式下指定的 IP（若未传则从选定网段生成）
+	SelectedSubnetIDs []string `json:"selectedSubnetIds"` // unique 模式下选中的网段列表，或 single 模式下单选的网段
 	OverwriteAll      bool     `json:"overwriteAll"`      // true: 覆盖所有账号; false: 仅为空白账号分配
 }
 
-// BatchAssignNvidiaEgressIP 为号池中的 NVIDIA 账号批量分配独立无重复的住宅 IP。
+// ParseBatchAssignIPOptions 从各种 IPC 参数形态中解析 BatchAssignIPOptions。
+func ParseBatchAssignIPOptions(args []interface{}) BatchAssignIPOptions {
+	opts := BatchAssignIPOptions{OverwriteAll: true}
+	if len(args) == 0 {
+		return opts
+	}
+	if jsonStr, ok := args[0].(string); ok && strings.HasPrefix(strings.TrimSpace(jsonStr), "{") {
+		_ = json.Unmarshal([]byte(jsonStr), &opts)
+		return opts
+	}
+	if m, ok := args[0].(map[string]interface{}); ok {
+		b, _ := json.Marshal(m)
+		_ = json.Unmarshal(b, &opts)
+		return opts
+	}
+	if subnetList, ok := args[0].([]interface{}); ok {
+		for _, item := range subnetList {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				opts.SelectedSubnetIDs = append(opts.SelectedSubnetIDs, strings.TrimSpace(s))
+			}
+		}
+	}
+	if len(args) > 1 {
+		if b, ok := args[1].(bool); ok {
+			opts.OverwriteAll = b
+		}
+	}
+	return opts
+}
+
+// GenerateRandomIPFromSubnet 从指定的住宅网段 ID 中随机生成一个合法公网 IP。
+// 若 subnetID 为空或找不到，则从预设网段中随机挑选一个网段生成。
+func GenerateRandomIPFromSubnet(subnetID string) (string, error) {
+	var targetSubnet *ResidentialSubnetInfo
+	if trimmed := strings.TrimSpace(subnetID); trimmed != "" {
+		for i := range DefaultResidentialSubnets {
+			if DefaultResidentialSubnets[i].ID == trimmed {
+				targetSubnet = &DefaultResidentialSubnets[i]
+				break
+			}
+		}
+	}
+	if targetSubnet == nil {
+		if len(DefaultResidentialSubnets) == 0 {
+			return "", fmt.Errorf("no default subnets available")
+		}
+		nBig, err := rand.Int(rand.Reader, big.NewInt(int64(len(DefaultResidentialSubnets))))
+		if err != nil {
+			targetSubnet = &DefaultResidentialSubnets[0]
+		} else {
+			targetSubnet = &DefaultResidentialSubnets[nBig.Int64()]
+		}
+	}
+	return generateUniqueIPFromCIDR(targetSubnet.CIDR, nil)
+}
+
+// BatchAssignNvidiaEgressIP 为号池中的 NVIDIA 账号批量分配独立无重复或统一相同的住宅 IP。
 // 返回成功分配/更新的账号数量与可能的错误。
 func (m *Manager) BatchAssignNvidiaEgressIP(opts BatchAssignIPOptions) (int, error) {
 	m.Lock()
 
-	// 1. 筛选出有效的目标网段
+	// 1. 统一分配单 IP 模式 (Single Mode)
+	if strings.ToLower(strings.TrimSpace(opts.Mode)) == "single" {
+		targetIP := strings.TrimSpace(opts.SingleIP)
+		if targetIP != "" {
+			parsed := net.ParseIP(targetIP)
+			if parsed == nil || parsed.To4() == nil {
+				m.Unlock()
+				return 0, fmt.Errorf("invalid IPv4 address: %s", targetIP)
+			}
+		} else {
+			selectedID := ""
+			if len(opts.SelectedSubnetIDs) > 0 {
+				selectedID = opts.SelectedSubnetIDs[0]
+			}
+			genIP, err := GenerateRandomIPFromSubnet(selectedID)
+			if err != nil {
+				m.Unlock()
+				return 0, fmt.Errorf("failed to generate random IP: %w", err)
+			}
+			targetIP = genIP
+		}
+
+		updatedCount := 0
+		for _, a := range m.accounts {
+			if a.Provider != "nvidia" {
+				continue
+			}
+			if opts.OverwriteAll || strings.TrimSpace(a.EgressIP) == "" {
+				a.EgressIP = targetIP
+				updatedCount++
+			}
+		}
+
+		m.Unlock()
+		if err := m.SaveAccountsFor(false, "nvidia"); err != nil {
+			return updatedCount, fmt.Errorf("save nvidia accounts failed: %w", err)
+		}
+		return updatedCount, nil
+	}
+
+	// 2. 独立打散分配模式 (Unique Mode)
+	// 筛选出有效的目标网段
 	subnets := filterSubnets(opts.SelectedSubnetIDs)
 	if len(subnets) == 0 {
 		subnets = DefaultResidentialSubnets
 	}
 
-	// 2. 收集已使用的 IP（如果是保留模式）
+	// 收集已使用的 IP（如果是保留模式）
 	usedIPs := make(map[string]bool)
 	var targets []*Account
 
@@ -98,7 +198,7 @@ func (m *Manager) BatchAssignNvidiaEgressIP(opts BatchAssignIPOptions) (int, err
 		return 0, nil
 	}
 
-	// 3. 为目标账号轮流从所选网段中随机选取唯一 IP
+	// 为目标账号轮流从所选网段中随机选取唯一 IP
 	updatedCount := 0
 	for i, acc := range targets {
 		subnet := subnets[i%len(subnets)]
@@ -111,7 +211,7 @@ func (m *Manager) BatchAssignNvidiaEgressIP(opts BatchAssignIPOptions) (int, err
 		updatedCount++
 	}
 
-	// 4. 释放写锁后执行定向落盘
+	// 释放写锁后执行定向落盘
 	m.Unlock()
 	if err := m.SaveAccountsFor(false, "nvidia"); err != nil {
 		return updatedCount, fmt.Errorf("save nvidia accounts failed: %w", err)

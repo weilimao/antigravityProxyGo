@@ -65,6 +65,15 @@ type ModelMappingEntry struct {
 	// 供客户端模型列表按官方 Models API schema 对齐;零值(缺省)表示不声明,沿用 Anthropic 官方
 	// 对未知模型名的默认窗口认知。指针类型与 Multimodal 同款,nil/0 视作"未配置"。
 	MaxInputTokens *int64 `json:"maxInputTokens,omitempty"`
+	// VariantEfforts 是该模型对客户端暴露的「可选思考等级变体清单」,如 ["high","max"]。
+	// /v1/models 端点会按此清单在裸 ClientModel 之外额外列出 {ClientModel}-{effort} 形式的虚项,
+	// 让客户端(OpenCode / Claude Code 等)的模型选择菜单直接呈现这些带后缀的思考等级选项。
+	// 客户端选这些虚项后请求时,按惯例在请求体里带 output_config.effort=<对应等级> 或
+	// thinking.type=adaptive,enabling 中继现有的 thinkingRequested / normalizeEffort 思考注入链路。
+	// 同时 router 缺省命中失败时,会尝试剥离 "-{effort}" 后缀再查本表并回填 effort,
+	// 供转发层在客户端未显式带 output_config.effort 时兜底注入到上游。
+	// 不配置或空则不展开,保持原有仅暴露裸 ClientModel 一项的行为。
+	VariantEfforts []string `json:"variantEfforts,omitempty"`
 }
 
 // IsMultimodal 返回该映射项是否声明为多模态模型。
@@ -158,6 +167,11 @@ type Config struct {
 	// NvidiaWorkerProxyURL 是 NVIDIA 号池专用的 Cloudflare Worker 出口代理 URL (如 https://my-nvidia.workers.dev)
 	NvidiaWorkerProxyURL          string `json:"nvidiaWorkerProxyUrl,omitempty"`
 	NvidiaWorkerProxyEnabled      bool   `json:"nvidiaWorkerProxyEnabled"`
+	// NvidiaDedicatedProxy* 是 NVIDIA 号池专用的出站代理 (支持 SOCKS5/HTTP)
+	NvidiaDedicatedProxyAddress  string `json:"nvidiaDedicatedProxyAddress,omitempty"`
+	NvidiaDedicatedProxyEnabled  bool   `json:"nvidiaDedicatedProxyEnabled"`
+	NvidiaDedicatedProxyUsername string `json:"nvidiaDedicatedProxyUsername,omitempty"`
+	NvidiaDedicatedProxyPassword string `json:"nvidiaDedicatedProxyPassword,omitempty"`
 	PromptPrefix                  string `json:"promptPrefix"`
 	CustomModelOverrideEnabled    bool   `json:"customModelOverrideEnabled"`
 	CustomModelOverrideID         string `json:"customModelOverrideID"`
@@ -380,6 +394,14 @@ type ManagerInterface interface {
 	SetNvidiaWorkerProxyURL(val string) error
 	IsNvidiaWorkerProxyEnabled() bool
 	SetNvidiaWorkerProxyEnabled(val bool) error
+	GetNvidiaDedicatedProxyAddress() string
+	SetNvidiaDedicatedProxyAddress(val string) error
+	GetNvidiaDedicatedProxyEnabled() bool
+	SetNvidiaDedicatedProxyEnabled(val bool) error
+	GetNvidiaDedicatedProxyUsername() string
+	SetNvidiaDedicatedProxyUsername(val string) error
+	GetNvidiaDedicatedProxyPassword() string
+	SetNvidiaDedicatedProxyPassword(val string) error
 	// GetAccountLayout/SetAccountLayout: 号池视图布局("grid"|"list"),纯 UI pref,落 config.json。
 	GetAccountLayout() string
 	SetAccountLayout(layout string) error

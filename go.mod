@@ -6,6 +6,7 @@ require (
 	github.com/energye/systray v1.0.3
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/mattn/go-ieproxy v0.0.12
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/wailsapp/wails/v2 v2.12.0
 	golang.org/x/crypto v0.33.0
 	golang.org/x/net v0.35.0

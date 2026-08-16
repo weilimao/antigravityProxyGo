@@ -247,8 +247,21 @@ func (h *ProxyHandler) logRequestToTracker(
 		SessionID:      logSession,
 		// DurationMs 采用「第一帧→流结束」的流式耗时(StreamDurationMs, 不含 TTFT);
 		// FirstByteMs 仍为请求→首帧的 TTFT, 以端到端为截断上界。end 取同一时刻保证两列自洽。
-		DurationMs:     firstByteRec.StreamDurationMs(time.Now()),
-		FirstByteMs:    firstByteRec.FirstByteMs(time.Since(startTime).Milliseconds()),
+		// 极快请求下限保底 1ms, 避免毫秒向下截断为 0。
+		DurationMs: func() int64 {
+			d := firstByteRec.StreamDurationMs(time.Now())
+			if d <= 0 {
+				return 1
+			}
+			return d
+		}(),
+		FirstByteMs: func() int64 {
+			fb := firstByteRec.FirstByteMs(time.Since(startTime).Milliseconds())
+			if fb <= 0 {
+				return 1
+			}
+			return fb
+		}(),
 	})
 }
 

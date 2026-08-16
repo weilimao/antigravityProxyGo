@@ -240,6 +240,16 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			sessionID = "compat-api"
 		}
 
+		end := time.Now()
+		durationMs := firstByteRec.StreamDurationMs(end)
+		if durationMs <= 0 {
+			durationMs = 1
+		}
+		firstByteMs := firstByteRec.FirstByteMs(end.Sub(startTime).Milliseconds())
+		if firstByteMs <= 0 {
+			firstByteMs = 1
+		}
+
 		dbItem := &db.RequestLog{
 			ReqID:        reqID,
 			Timestamp:    time.Now().Format(time.RFC3339),
@@ -255,8 +265,8 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			CachedCost:   cachedCost,
 			// DurationMs 采用「第一帧→流结束」的流式耗时(StreamDurationMs, 不含 TTFT);
 			// FirstByteMs 仍为请求→首帧的 TTFT, 以端到端为截断上界。
-			DurationMs:   firstByteRec.StreamDurationMs(time.Now()),
-			FirstByteMs:  firstByteRec.FirstByteMs(time.Since(startTime).Milliseconds()),
+			DurationMs:   durationMs,
+			FirstByteMs:  firstByteMs,
 			StatusCode:   resp.StatusCode,
 			Method:       logMethod,
 			Host:         targetHost,
@@ -298,8 +308,8 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			SessionID:      sessionID,
 			// DurationMs 采用「第一帧→流结束」的流式耗时(StreamDurationMs, 不含 TTFT);
 			// FirstByteMs 仍为请求→首帧的 TTFT, 以端到端为截断上界。
-			DurationMs:     firstByteRec.StreamDurationMs(time.Now()),
-			FirstByteMs:    firstByteRec.FirstByteMs(time.Since(startTime).Milliseconds()),
+			DurationMs:     durationMs,
+			FirstByteMs:    firstByteMs,
 		})
 
 		// Record usage locally so the client UI can reflect the remote quota consumption

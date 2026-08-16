@@ -14,6 +14,7 @@ import (
 	"antigravity-proxy/internal/autotrigger"
 	"antigravity-proxy/internal/corelog"
 	"antigravity-proxy/internal/dialogs"
+	"antigravity-proxy/internal/externalconfig"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/proxy"
 	"antigravity-proxy/internal/quota"
@@ -74,6 +75,9 @@ type App struct {
 	netWatch *proxy.NetWatch
 	// reloginMu 防止自动重连与网络恢复回调并发重复 Login 同一远端。
 	reloginMu sync.Mutex
+
+	// externalConfigMgr 管理外部 Agent(如 OpenCode / Claude Code 等)的配置文件读写。
+	externalConfigMgr *externalconfig.Manager
 }
 
 func NewApp() *App {

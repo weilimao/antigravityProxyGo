@@ -11,6 +11,7 @@
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabNvidia" data-i18n="settingsTabNvidia">NVIDIA设置</button>
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" data-i18n="settingsTabRelay" id="btnSettingsTabRelay">中继服务器</button>
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabNetwork" data-i18n="settingsTabNetwork">网络监控</button>
+<button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabAgentConfig" data-i18n="settingsTabAgentConfig">Agent配置</button>
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabHelp" data-i18n="settingsTabHelp">使用说明</button>
 <button class="px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200" id="btnSettingsTabAbout" data-i18n="settingsTabAbout">关于</button>
 </div>
@@ -26,6 +27,9 @@
 <!-- 网络监控面板 -->
 <NetworkPanel />
 
+<!-- Agent 配置管理面板 -->
+<AgentConfigPanel />
+
 <!-- 关于面板 -->
 <AboutPanel />
 <!-- 中继服务器管理面板 -->
@@ -39,6 +43,7 @@
 import GeneralPanel from '../components/settings/panels/GeneralPanel.vue';
 import NvidiaPanel from '../components/settings/panels/NvidiaPanel.vue';
 import NetworkPanel from '../components/settings/panels/NetworkPanel.vue';
+import AgentConfigPanel from '../components/settings/panels/AgentConfigPanel.vue';
 import AboutPanel from '../components/settings/panels/AboutPanel.vue';
 import RelayPanel from '../components/settings/panels/RelayPanel.vue';
 import { onMounted } from 'vue';

@@ -193,7 +193,48 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 			}
 		}
 		_ = a.settingsMgr.SetNvidiaWorkerProxyEnabled(enabled)
+		if enabled {
+			// 后端互斥保护：开启 Worker 代理出口时，自动关闭专属 SOCKS5 代理
+			_ = a.settingsMgr.SetNvidiaDedicatedProxyEnabled(false)
+		}
 		a.AddLog(fmt.Sprintf("⚙️ NVIDIA Cloudflare Worker 代理出口启用状态: %v", a.settingsMgr.IsNvidiaWorkerProxyEnabled()))
+		return true
+
+	case "settings:get-nvidia-dedicated-proxy":
+		wailsRuntime.EventsEmit(a.ctx, "settings:nvidia-dedicated-proxy-res", map[string]interface{}{
+			"address":  a.settingsMgr.GetNvidiaDedicatedProxyAddress(),
+			"enabled":  a.settingsMgr.GetNvidiaDedicatedProxyEnabled(),
+			"username": a.settingsMgr.GetNvidiaDedicatedProxyUsername(),
+			"password": a.settingsMgr.GetNvidiaDedicatedProxyPassword(),
+		})
+		return true
+
+	case "settings:set-nvidia-dedicated-proxy-address":
+		addr := getStringArg(0)
+		_ = a.settingsMgr.SetNvidiaDedicatedProxyAddress(addr)
+		a.AddLog(fmt.Sprintf("⚙️ NVIDIA 专属出站代理地址已更新: %s", addr))
+		return true
+
+	case "settings:set-nvidia-dedicated-proxy-enabled":
+		enabled := getBoolArg(0)
+		_ = a.settingsMgr.SetNvidiaDedicatedProxyEnabled(enabled)
+		if enabled {
+			// 后端互斥保护：开启专属 SOCKS5 代理时，自动关闭 Worker 代理出口
+			_ = a.settingsMgr.SetNvidiaWorkerProxyEnabled(false)
+		}
+		a.AddLog(fmt.Sprintf("⚙️ NVIDIA 专属出站代理启用状态: %v", a.settingsMgr.GetNvidiaDedicatedProxyEnabled()))
+		return true
+
+	case "settings:set-nvidia-dedicated-proxy-username":
+		user := getStringArg(0)
+		_ = a.settingsMgr.SetNvidiaDedicatedProxyUsername(user)
+		a.AddLog("⚙️ NVIDIA 专属出站代理用户名已更新")
+		return true
+
+	case "settings:set-nvidia-dedicated-proxy-password":
+		pass := getStringArg(0)
+		_ = a.settingsMgr.SetNvidiaDedicatedProxyPassword(pass)
+		a.AddLog("⚙️ NVIDIA 专属出站代理密码已更新")
 		return true
 
 	case "settings:get-network-status":

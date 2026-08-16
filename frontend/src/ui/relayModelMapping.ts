@@ -16,6 +16,7 @@ let poolTabs: PoolTabInfo[] = [];
 let activeTabId: string = 'google';
 let availableChannels: string[] = ['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok'];
 let channelModelsCache: Record<string, string[]> = {};
+let modelMappingSearchQuery: string = '';
 
 // ========== 动态号池 Tab 与模型映射配置交互 ==========
 interface PoolTabInfo {
@@ -48,10 +49,10 @@ function makeMappingEntry(clientModel: string, targetModel: string, provider: st
         targetProvider: provider,
         expose,
         ownedBy: '',
-        injectChatTemplateKwargs: provider !== 'other'
+        injectChatTemplateKwargs: provider !== 'other',
+        variantEfforts: []
     };
 }
-
 
 export async function loadModelMappings() {
     try {
@@ -234,13 +235,11 @@ function getTabMappings(): any[] {
     return allMappings.filter(m => getMappingTab(m) === activeTabId);
 }
 
-
 function updateDatalist(models: string[]) {
     const datalist = document.getElementById('channelModelsDatalist');
     if (!datalist) return;
     datalist.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
 }
-
 
 // getOtherGroups:从后端 accounts-res 广播的 lastBackendData 读取 Other 号池组列表,
 // 兼容直接调 other:list-groups 的回退。返回 [{groupId, groupName, formats}]。
@@ -456,7 +455,40 @@ function renderCurrentTabTable() {
         updateDatalist(fetchedModels);
     }
 
-    currentTabMappings.forEach((item, index) => {
+    // 联动控制清空搜索按钮显隐状态
+    const btnClearSearch = document.getElementById('btnClearRelayModelMappingSearch') as HTMLButtonElement | null;
+    if (btnClearSearch) {
+        btnClearSearch.classList.toggle('hidden', !modelMappingSearchQuery);
+    }
+
+    // 应用关键词搜索筛选 (匹配 ClientModel / TargetModel / TargetProvider / TargetGroupId / VariantEfforts)
+    const filteredMappings = modelMappingSearchQuery
+        ? currentTabMappings.filter(item => {
+            const cm = (item.clientModel || '').toLowerCase();
+            const tm = (item.targetModel || '').toLowerCase();
+            const tp = (item.targetProvider || '').toLowerCase();
+            const gid = (item.targetGroupId || '').toLowerCase();
+            const effs = Array.isArray(item.variantEfforts) ? item.variantEfforts.join(' ').toLowerCase() : '';
+            return cm.includes(modelMappingSearchQuery) ||
+                   tm.includes(modelMappingSearchQuery) ||
+                   tp.includes(modelMappingSearchQuery) ||
+                   gid.includes(modelMappingSearchQuery) ||
+                   effs.includes(modelMappingSearchQuery);
+        })
+        : currentTabMappings;
+
+    if (filteredMappings.length === 0) {
+        const tr = document.createElement('tr');
+        tr.className = 'border-b border-outline-variant/10 text-outline/60 text-center';
+        const emptyMsg = currentTabMappings.length === 0
+            ? '暂无模型映射，点击上方「添加映射模型」或「获取号池模型」'
+            : `未找到匹配「<span class="text-primary font-bold">${escapeHtmlLocal(modelMappingSearchQuery)}</span>」的模型映射`;
+        tr.innerHTML = `<td colspan="${isNvidiaTab ? 6 : 5}" class="py-8 text-[12px]">${emptyMsg}</td>`;
+        tbody.appendChild(tr);
+        return;
+    }
+
+    filteredMappings.forEach((item, index) => {
         const tr = document.createElement('tr');
         tr.className = 'border-b border-outline-variant/15 hover:bg-slate-50 dark:hover:bg-white/5';
         // Other Tab:按行所属组解析下拉模型(other/{groupId}/{model} 三段前缀取组缓存);
@@ -510,7 +542,8 @@ function renderCurrentTabTable() {
     tbody.querySelectorAll('.btn-delete-mapping').forEach(btn => {
         btn.addEventListener('click', (e) => {
             const idx = parseInt((e.currentTarget as HTMLElement).getAttribute('data-index') || '0');
-            const targetItem = currentTabMappings[idx];
+            const targetItem = filteredMappings[idx];
+            if (!targetItem) return;
             const mainIdx = allMappings.indexOf(targetItem);
             if (mainIdx !== -1) {
                 allMappings.splice(mainIdx, 1);
@@ -524,7 +557,9 @@ function renderCurrentTabTable() {
         input.addEventListener('input', (e) => {
             const target = e.target as HTMLInputElement;
             const idx = parseInt(target.getAttribute('data-index') || '0');
-            currentTabMappings[idx].clientModel = target.value.trim();
+            if (filteredMappings[idx]) {
+                filteredMappings[idx].clientModel = target.value.trim();
+            }
         });
     });
 
@@ -532,8 +567,9 @@ function renderCurrentTabTable() {
         const handleTargetModelChange = async (e: Event) => {
             const target = e.target as HTMLInputElement;
             const idx = parseInt(target.getAttribute('data-index') || '0');
+            if (!filteredMappings[idx]) return;
             const val = target.value.trim();
-            currentTabMappings[idx].targetModel = val;
+            filteredMappings[idx].targetModel = val;
 
             // 若 Client Model 为空，自动联动填入 Client Model。
             // 非 Google 族号池(NVIDIA/DeepSeek/自定义)需带 "{provider}/" 前缀以经 /route/* 精准路由,
@@ -545,13 +581,13 @@ function renderCurrentTabTable() {
                 if (provider === 'other') {
                     // Other 号池:三段前缀 other/{groupId}/{model}。groupId 来自映射行的 targetGroupId,
                     // 缺失则弹窗选组并写回;选组失败(无组/取消)保留裸名,等用户先去账号池建组。
-                    const gid = await ensureOtherEntryGroupId(currentTabMappings[idx]);
+                    const gid = await ensureOtherEntryGroupId(filteredMappings[idx]);
                     const autoClient = gid ? `other/${gid}/${val}` : val;
-                    currentTabMappings[idx].clientModel = autoClient;
+                    filteredMappings[idx].clientModel = autoClient;
                     clientInput.value = autoClient;
                 } else {
                     const autoClient = !isGoogleProviderKind(provider) ? `${provider}/${val}` : val;
-                    currentTabMappings[idx].clientModel = autoClient;
+                    filteredMappings[idx].clientModel = autoClient;
                     clientInput.value = autoClient;
                 }
             }
@@ -565,10 +601,11 @@ function renderCurrentTabTable() {
         sel.addEventListener('change', async (e) => {
             const target = e.target as HTMLSelectElement;
             const idx = parseInt(target.getAttribute('data-index') || '0');
+            if (!filteredMappings[idx]) return;
             const val = target.value;
             if (val) {
                 // 1. 填入 Target Model 文本框与底层数据
-                currentTabMappings[idx].targetModel = val;
+                filteredMappings[idx].targetModel = val;
                 const targetInput = tbody.querySelector(`.target-model-input[data-index="${idx}"]`) as HTMLInputElement | null;
                 if (targetInput) targetInput.value = val;
 
@@ -579,13 +616,13 @@ function renderCurrentTabTable() {
                     const provider = currentTab?.targetProvider || '';
                     if (provider === 'other') {
                         // Other 号池:三段前缀 other/{groupId}/{model},groupId 同上从行内或弹窗取。
-                        const gid = await ensureOtherEntryGroupId(currentTabMappings[idx]);
+                        const gid = await ensureOtherEntryGroupId(filteredMappings[idx]);
                         const autoClient = gid ? `other/${gid}/${val}` : val;
-                        currentTabMappings[idx].clientModel = autoClient;
+                        filteredMappings[idx].clientModel = autoClient;
                         clientInput.value = autoClient;
                     } else {
                         const autoClient = !isGoogleProviderKind(provider) ? `${provider}/${val}` : val;
-                        currentTabMappings[idx].clientModel = autoClient;
+                        filteredMappings[idx].clientModel = autoClient;
                         clientInput.value = autoClient;
                     }
                 }
@@ -597,16 +634,19 @@ function renderCurrentTabTable() {
         sel.addEventListener('change', (e) => {
             const target = e.target as HTMLSelectElement;
             const idx = parseInt(target.getAttribute('data-index') || '0');
+            if (!filteredMappings[idx]) return;
             const val = target.value;
             if (val === 'true') {
-                currentTabMappings[idx].multimodal = true;
+                filteredMappings[idx].multimodal = true;
             } else if (val === 'false') {
-                currentTabMappings[idx].multimodal = false;
+                filteredMappings[idx].multimodal = false;
             } else {
-                currentTabMappings[idx].multimodal = undefined; // 默认自动判定模式
+                filteredMappings[idx].multimodal = undefined; // 默认自动判定模式
             }
         });
     });
+
+
 
     tbody.onclick = (e) => {
         const target = (e.target as HTMLElement).closest('input[type="checkbox"]') as HTMLInputElement | null;
@@ -614,23 +654,49 @@ function renderCurrentTabTable() {
             return;
         }
         const idx = parseInt(target.getAttribute('data-index') || '-1');
-        if (idx < 0 || idx >= currentTabMappings.length) return;
+        if (idx < 0 || idx >= filteredMappings.length) return;
 
         if (target.classList.contains('expose-checkbox')) {
-            currentTabMappings[idx].expose = target.checked;
+            filteredMappings[idx].expose = target.checked;
         } else if (target.classList.contains('inject-kwargs-checkbox')) {
-            currentTabMappings[idx].injectChatTemplateKwargs = target.checked;
+            filteredMappings[idx].injectChatTemplateKwargs = target.checked;
         }
     };
 }
 
 export function initRelayModelMapping() {
-    // 重置 5 个模块级 let 到初始值(模拟原闭包每次 initRelayEvents 重建语义),避免跨 mount 状态残留。
+    // 重置 6 个模块级 let 到初始值(模拟原闭包每次 initRelayEvents 重建语义),避免跨 mount 状态残留。
     allMappings = [];
     poolTabs = [];
     activeTabId = 'google';
     availableChannels = ['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok'];
     channelModelsCache = {};
+    modelMappingSearchQuery = '';
+
+    // 绑定搜索输入框与清除按钮事件
+    const searchInput = document.getElementById('inputRelayModelMappingSearch') as HTMLInputElement | null;
+    const btnClearSearch = document.getElementById('btnClearRelayModelMappingSearch') as HTMLButtonElement | null;
+    if (searchInput) {
+        searchInput.value = '';
+        searchInput.oninput = () => {
+            modelMappingSearchQuery = searchInput.value.trim().toLowerCase();
+            if (btnClearSearch) {
+                btnClearSearch.classList.toggle('hidden', !modelMappingSearchQuery);
+            }
+            renderCurrentTabTable();
+        };
+    }
+    if (btnClearSearch) {
+        btnClearSearch.onclick = () => {
+            modelMappingSearchQuery = '';
+            if (searchInput) {
+                searchInput.value = '';
+                searchInput.focus();
+            }
+            btnClearSearch.classList.add('hidden');
+            renderCurrentTabTable();
+        };
+    }
 
     (window as any)._relayFetchChannelModels = async () => {
         const btnFetch = document.getElementById('btnFetchChannelModels');
@@ -769,6 +835,15 @@ export function initRelayModelMapping() {
         const currentTab = poolTabs.find(t => t.id === activeTabId);
         const targetProv = currentTab ? currentTab.targetProvider : '';
 
+        // 如果当前有搜索关键词，重置搜索以确保新添加的行处于可见状态
+        if (modelMappingSearchQuery) {
+            modelMappingSearchQuery = '';
+            const searchInput = document.getElementById('inputRelayModelMappingSearch') as HTMLInputElement | null;
+            const btnClearSearch = document.getElementById('btnClearRelayModelMappingSearch') as HTMLButtonElement | null;
+            if (searchInput) searchInput.value = '';
+            if (btnClearSearch) btnClearSearch.classList.add('hidden');
+        }
+
         allMappings.unshift({
             clientModel: '',
             targetModel: '',
@@ -778,7 +853,8 @@ export function initRelayModelMapping() {
             // 故 Other 号池新增映射默认关闭注入(后端 isNvidiaModelNoKwargs 也会兜底抑制, 此处保持 UI 一致)。
             injectChatTemplateKwargs: targetProv !== 'other',
             ownedBy: activeTabId,
-            targetProvider: targetProv
+            targetProvider: targetProv,
+            variantEfforts: []
         });
 
         renderCurrentTabTable();
@@ -839,23 +915,15 @@ export function initRelayModelMapping() {
 
         try {
             const res = await ipcRenderer.invoke('relay:set-model-mapping', mappingsToSave);
-            if (res && res.success) {
-                btnSaveModelMapping.innerHTML = `<span class="material-symbols-outlined text-[16px]">done</span><span>${dict.relaySaveSuccess || '保存成功'}</span>`;
-                setTimeout(() => {
-                    btnSaveModelMapping.innerHTML = originalText;
-                }, 2000);
-            } else {
-                btnSaveModelMapping.innerHTML = `<span class="material-symbols-outlined text-[16px]">error</span><span>${dict.relaySaveFailed || '保存失败'}</span>`;
-                setTimeout(() => {
-                    btnSaveModelMapping.innerHTML = originalText;
-                }, 2000);
-            }
+            const isSuccess = res && res.success;
+            btnSaveModelMapping.innerHTML = isSuccess
+                ? `<span class="material-symbols-outlined text-[16px]">done</span><span>${dict.relaySaveSuccess || '保存成功'}</span>`
+                : `<span class="material-symbols-outlined text-[16px]">error</span><span>${dict.relaySaveFailed || '保存失败'}</span>`;
+            setTimeout(() => { btnSaveModelMapping.innerHTML = originalText; }, 2000);
         } catch (err) {
             console.error('[RelayController] Failed to save model mappings:', err);
             btnSaveModelMapping.innerHTML = `<span class="material-symbols-outlined text-[16px]">error</span><span>${dict.relaySaveFailed || '保存失败'}</span>`;
-            setTimeout(() => {
-                btnSaveModelMapping.innerHTML = originalText;
-            }, 2000);
+            setTimeout(() => { btnSaveModelMapping.innerHTML = originalText; }, 2000);
         }
     };
 }

@@ -1,5 +1,11 @@
 import state from './dashboardState';
 import i18n from '../shared/i18n';
+import * as trendAggregator from './trendAggregator';
+import * as chartAnimation from './chartAnimation';
+
+export { trendAggregator, chartAnimation };
+export const parseTrendsTime = trendAggregator.parseTrendsTime;
+export const formatTrendsTime = trendAggregator.formatTrendsHourTime;
 
 // Format Numbers
 export function formatCompactNumber(number: number): string {
@@ -159,12 +165,16 @@ export function clearTrendChart() {
         const g = document.getElementById(id);
         if (g) g.textContent = '';
     }
-    const valIds = ['valSummaryTotal', 'valSummaryInput', 'valSummaryOutput', 'valSummaryCached', 'valSummaryTotalRequests', 'valSummaryTotalTokens', 'valSummaryInputTokens', 'valSummaryOutputTokens', 'valSummaryCachedTokens'];
-    // 成本类汇总(以 $ 前缀显示)归零为 '$0.0000'; 计数类(请求数/Token)归零为 '0'。
+    const valIds = ['valSummaryTotal', 'valSummaryInput', 'valSummaryOutput', 'valSummaryCached', 'valSummaryTotalRequests', 'valSummaryTotalTokens', 'valSummaryInputTokens', 'valSummaryOutputTokens', 'valSummaryCachedTokens', 'valSummaryHitRate'];
+    // 成本类汇总(以 $ 前缀显示)归零为 '$0.0000'; 命中率类(百分比)归零为 '0.0%'; 计数类(请求数/Token)归零为 '0'。
     const costValIds = new Set(['valSummaryTotal', 'valSummaryInput', 'valSummaryOutput', 'valSummaryCached']);
+    const percentValIds = new Set(['valSummaryHitRate']);
     for (const id of valIds) {
         const el = document.getElementById(id);
-        if (el) el.textContent = costValIds.has(id) ? '$0.0000' : '0';
+        if (!el) continue;
+        if (costValIds.has(id)) el.textContent = '$0.0000';
+        else if (percentValIds.has(id)) el.textContent = '0.0%';
+        else el.textContent = '0';
     }
 }
 
@@ -308,6 +318,14 @@ export function drawTrendChartSVG(trends: any[], range = '7d', animate = true) {
         valSummaryCachedTokens.title = totalCachedTokensVal.toLocaleString();
     }
 
+    // 缓存命中率汇总(口径: 缓存命中 Token / 输入总 Token, input 已包含 cached, 见 stats.go:239)。
+    // 与「指标 3 缓存命中率」卡片互相独立: 卡片按池桶 cacheEligibleInputTokens 分母, 本汇总
+    // 按「使用趋势」当前 trends 序列(综合/NVIDIA)与时间范围(24h/今日/3/7/30/筛选)实时汇总,
+    // 切换时随 drawTrendChartSVG 自动刷新。
+    const totalHitRateVal = totalInputTokensVal > 0 ? (totalCachedTokensVal / totalInputTokensVal * 100) : 0;
+    const valSummaryHitRate = document.getElementById('valSummaryHitRate');
+    if (valSummaryHitRate) valSummaryHitRate.textContent = totalHitRateVal.toFixed(1) + '%';
+
     const N = trends.length;
     const xMin = 0, xMax = 1000;
     const yMin = 20, yMax = 265;
@@ -391,11 +409,11 @@ export function drawTrendChartSVG(trends: any[], range = '7d', animate = true) {
     }
 
     // 2. Draw X Labels in HTML using absolute percentages with element reuse
+    const granularity = trendAggregator.getTrendGranularity(range, state.customStartDate, state.customEndDate);
     let isSingleDay = range === 'today';
-    if (range === 'custom' && trends.length > 0) {
-        // 抽稀 slot 与后端桶命中点均为 "MM/DD HH:00" (无年), 首末日 key 同形可直接比较。
-        const firstDay = trends[0].time.split(' ')[0];
-        const lastDay = trends[trends.length - 1].time.split(' ')[0];
+    if (granularity === 'hour' && trends.length > 0) {
+        const firstDay = trends[0].time ? trends[0].time.split(' ')[0] : '';
+        const lastDay = trends[trends.length - 1].time ? trends[trends.length - 1].time.split(' ')[0] : '';
         if (firstDay && firstDay === lastDay) {
             isSingleDay = true;
         }
@@ -404,6 +422,14 @@ export function drawTrendChartSVG(trends: any[], range = '7d', animate = true) {
     const indices: number[] = [];
     if (N <= 7) {
         for (let i = 0; i < N; i++) indices.push(i);
+    } else if (N <= 31) {
+        // 日粒度 (如 30d 或 14d) 精选 6 个左右均匀分布的刻度标签
+        indices.push(0);
+        const steps = 5;
+        for (let i = 1; i < steps; i++) {
+            indices.push(Math.round((i / steps) * (N - 1)));
+        }
+        indices.push(N - 1);
     } else {
         indices.push(0);
         for (let i = 1; i < 6; i++) {
@@ -429,14 +455,24 @@ export function drawTrendChartSVG(trends: any[], range = '7d', animate = true) {
             label = existingXLabels[i] as HTMLElement;
         } else {
             label = document.createElement('div');
-            label.className = 'absolute -translate-x-1/2 text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap font-sans';
+            label.className = 'absolute text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap font-sans select-none';
             xAxis.appendChild(label);
         }
 
         label.style.left = `${percent}%`;
+        // 首尾刻度防溢出与居中微调
+        if (percent <= 0) {
+            label.style.transform = 'translateX(0%)';
+        } else if (percent >= 100) {
+            label.style.transform = 'translateX(-100%)';
+        } else {
+            label.style.transform = 'translateX(-50%)';
+        }
         
         let textVal = '';
-        if (range === '24h') {
+        if (granularity === 'day') {
+            textVal = d.time ? d.time.split(' ')[0] : '';
+        } else if (range === '24h') {
             if (idx === 0) {
                 textVal = d.time || '';
             } else {
@@ -557,7 +593,29 @@ export function drawTrendChartSVG(trends: any[], range = '7d', animate = true) {
         const tCached = document.getElementById('tooltipCached');
         const tCost = document.getElementById('tooltipCost');
 
-        if (tDate) tDate.textContent = d.time || '';
+        if (tDate) {
+            if (granularity === 'day') {
+                const rawTime = d.time || '';
+                const isZH = state.currentLanguage === 'zh';
+                tDate.textContent = isZH ? `${rawTime} (当日汇总)` : `${rawTime} (Daily Total)`;
+            } else {
+                tDate.textContent = d.time || '';
+            }
+        }
+        if (tInput) {
+            tInput.textContent = formatTokenCount(d.input || 0);
+            tInput.title = (d.input || 0).toLocaleString();
+        }
+        if (tOutput) {
+            tOutput.textContent = formatTokenCount(d.output || 0);
+            tOutput.title = (d.output || 0).toLocaleString();
+        }
+        if (tRequests) tRequests.textContent = (d.requests || 0).toLocaleString();
+        if (tCached) {
+            tCached.textContent = formatTokenCount(d.cached || 0);
+            tCached.title = (d.cached || 0).toLocaleString();
+        }
+        if (tCost) tCost.textContent = `$${(d.cost || 0).toFixed(6)}`;
         if (tInput) {
             tInput.textContent = formatTokenCount(d.input || 0);
             tInput.title = (d.input || 0).toLocaleString();
@@ -608,145 +666,14 @@ export function drawTrendChartSVG(trends: any[], range = '7d', animate = true) {
     };
 }
 
-// Helper: parse time string
-export function parseTrendsTime(timeStr: string): Date {
-    if (!timeStr) return new Date();
-    const currentYear = new Date().getFullYear();
-    const parts = timeStr.split(' ');
-    if (parts.length < 2) return new Date();
-    const dateParts = parts[0].split('/');
-    const timeParts = parts[1].split(':');
-    return new Date(
-        currentYear,
-        parseInt(dateParts[0]) - 1,
-        parseInt(dateParts[1]),
-        parseInt(timeParts[0]),
-        parseInt(timeParts[1] || '0')
-    );
-}
-
-// Helper: format Date to "MM/DD HH:00"
-export function formatTrendsTime(date: Date): string {
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const hh = String(date.getHours()).padStart(2, '0');
-    return `${m}/${d} ${hh}:00`;
-}
-
-// Helper: generate hourly slots
-function generateHourlySlots(hoursCount: number): string[] {
-    const slots: string[] = [];
-    const now = new Date();
-    const nowMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), 0, 0, 0).getTime();
-    for (let i = hoursCount - 1; i >= 0; i--) {
-        const t = new Date(nowMs - i * 3600 * 1000);
-        slots.push(formatTrendsTime(t));
-    }
-    return slots;
-}
-
-// Helper: generate today slots
-function generateTodaySlots(): string[] {
-    const slots: string[] = [];
-    const now = new Date();
-    const currentHour = now.getHours();
-    for (let h = 0; h <= currentHour; h++) {
-        const t = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, 0, 0, 0);
-        slots.push(formatTrendsTime(t));
-    }
-    return slots;
-}
-
-// Helper: generate custom slots
-// 生成自定义区间 [startObj, endObj] 的小时级 slot。
-// 背景: 后端 appendTrendBucket (stats_trends.go) 对每个趋势桶硬性保留最近 720 小时
-// (超过即 `(*target)[1:]` 丢弃最旧), 故 stats.json 里 trends 最早只到约 30 天前。
-// 原实现 `Math.min(720, hoursDiff)` 直接把长区间截断成只画最后 720 小时, 5/1~8/9 这种
-// 3 个多月区间会把前段整段丢弃, X 轴也只显示末段日期 —— 用户看到"开始时间 5/1"却只画出
-// 6 月以后的曲线, 体验割裂(对应截图里 X 轴只到 05/31、折线平铺在 0 处的现象)。
-// 新方案: 区间超 720 小时时不再截断时间轴, 改为等间隔抽稀成 720 个点, x 轴按真实起止日期
-// 完整覆盖; 前段无数据的 slot 由 getFilteredTrends 的补零逻辑填 0 平铺 —— 即"那天没数据当 0
-// 处理", 而不是"查不到不显示"。slot 取 floor 到整点并以 "MM/DD HH:00" 输出, 与后端桶 key
-// 同形可直接命中; 月日同形不同年的桶在长跨度下冲突概率极低(后端桶保留窗口仅 30 天), 故
-// 抽稀 slot 无需注入年份, parseTrendsTime 仍按当前年解析(x 轴位置由数组索引决定, 非日期)。
-function generateCustomSlots(startObj: Date, endObj: Date): string[] {
-    // 与后端桶保留上限对齐 (stats_trends.go LIMIT 720), 超过才抽稀, 未超过原样枚举。
-    const MAX_HOURS = 720;
-    const startMs = new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate(), startObj.getHours(), 0, 0, 0).getTime();
-    const endMs = new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate(), endObj.getHours(), 0, 0, 0).getTime();
-
-    const rawHours = Math.ceil((endMs - startMs) / (3600 * 1000));
-    if (rawHours <= MAX_HOURS) {
-        const slots: string[] = [];
-        for (let i = 0; i <= rawHours; i++) {
-            slots.push(formatTrendsTime(new Date(startMs + i * 3600 * 1000)));
-        }
-        return slots;
-    }
-
-    // 长区间抽稀: 首尾两点固定包含, 中间按等间隔取 MAX_HOURS-2 个点, 保证时间标尺均匀。
-    // slot 仍为 "MM/DD HH:00" (formatTrendsTime 取 floor 到 hour), 与后端桶 key 同形可直接命中。
-    const slots: string[] = [];
-    for (let i = 0; i < MAX_HOURS; i++) {
-        const frac = i / (MAX_HOURS - 1);
-        const ts = Math.round(startMs + frac * (endMs - startMs));
-        slots.push(formatTrendsTime(new Date(ts)));
-    }
-    return slots;
-}
-
-// Helper: get filtered trends with slot auto-completion
+// Helper: 趋势数据过滤与自适应聚合 (支持小时与日级多粒度)
 export function getFilteredTrends(trends: any[], range: string): any[] {
-    if (!trends) trends = [];
-    
-    let slots: string[] = [];
-    if (range === 'today') {
-        slots = generateTodaySlots();
-    } else if (range === '24h') {
-        slots = generateHourlySlots(24);
-    } else if (range === '3d') {
-        slots = generateHourlySlots(72);
-    } else if (range === '7d') {
-        slots = generateHourlySlots(168);
-    } else if (range === '30d') {
-        slots = generateHourlySlots(720);
-    } else if (range === 'custom') {
-        if (!state.customStartDate || !state.customEndDate) {
-            slots = generateHourlySlots(168); // Fallback 7d
-        } else {
-            slots = generateCustomSlots(new Date(state.customStartDate), new Date(state.customEndDate));
-        }
-    } else {
-        slots = generateHourlySlots(168); // Fallback 7d
-    }
-    
-    // Index trends by their time key once (O(n)) so each slot lookup is O(1).
-    // The previous slots.map(slot => trends.find(...)) was O(slots * trends),
-    // i.e. up to 720 * 720 comparisons on the 30d range, every chart redraw.
-    // generateCustomSlots 的抽稀 slot 已 floor 到 hour 并以 "MM/DD HH:00" 格式输出,
-    // 与后端桶 key 同形, 可直接命中, 无需做年份前缀剥离。
-    const trendsByTime = new Map<string, any>();
-    for (const item of trends) {
-        trendsByTime.set(item.time, item);
-    }
-
-    const result = slots.map(slot => {
-        const found = trendsByTime.get(slot);
-        if (found) {
-            return found;
-        } else {
-            return {
-                time: slot,
-                input: 0,
-                output: 0,
-                cached: 0,
-                requests: 0,
-                cost: 0
-            };
-        }
-    });
-
-    return result;
+    return trendAggregator.getFilteredTrends(
+        trends,
+        range,
+        state.customStartDate,
+        state.customEndDate
+    );
 }
 
 // Init chart Range selectors and Custom Filter Modal
@@ -891,210 +818,7 @@ export function initChartFilters() {
     }
 }
 
-// ============================================================================
-// 趋势图"左到右画线"动画（类 ECharts line drawing），纯 SVG/CSS，零依赖。
-// 原理：SVG path.getTotalLength() 得路径总长 L；设 stroke-dasharray=L、
-//   stroke-dashoffset=L（整条线被 dash 藏到看不见）→ 强制 reflow →
-//   stroke-dashoffset=0，可见段从起点平移到全显，视觉即从左到右"画出"。
-// Cost 虚线本身 break 成 3,3，不能动它的 dasharray，改走 clipPath：
-//   在 trendSvg 动态挂一个 clipPath 包一个 rect，rect 宽度从 0 过渡到
-//   viewBox 宽度，把虚线从左到右"擦出来"；动画结束卸载 clip-path 还原虚线。
-// 面积块：动画启动置 opacity=0，线条画完（800ms）后加 area-shown 类淡入。
-// ============================================================================
-
-const CHART_DRAW_DURATION = 1400; // ms，与 dashboard.css 中 .chart-line-draw transition 一致（放慢，类 ECharts 舒展感）
-const CHART_AREA_FADE_DURATION = 420; // ms，与 .chart-area-anim transition 一致
-
-// 模块级持久 timer id：每次重画前清掉上一次未触发的面积淡入回调，避免快速切范围时
-// 旧 timer 把已经清零的面积又拉亮，造成闪烁残留。
-let chartAreaFadeTimer: ReturnType<typeof setTimeout> | null = null;
-let chartCostClipCleanupTimer: ReturnType<typeof setTimeout> | null = null;
-
-interface DrawInConfig {
-    solidPaths: SVGPathElement[];   // 实线（走 dashoffset 方案）
-    clipPath: SVGPathElement;       // Cost 虚线（走 clipPath 方案）
-    areas: SVGPathElement[];        // 渐变面积块（画完后淡入）
-    clipViewWidth: number;          // clipRect 目标宽度（viewBox 宽，1000）
-}
-
-export function animatePathsDrawIn(cfg: DrawInConfig) {
-    // 1. 复位/清理上轮动画
-    if (chartAreaFadeTimer !== null) {
-        clearTimeout(chartAreaFadeTimer);
-        chartAreaFadeTimer = null;
-    }
-    if (chartCostClipCleanupTimer !== null) {
-        clearTimeout(chartCostClipCleanupTimer);
-        chartCostClipCleanupTimer = null;
-    }
-
-    // 2. 实线：设 dasharray/dashoffset 初始隐藏，强制 reflow 后归零触发过渡。
-    //    复用路径下 .chart-line-draw 的 transition 始终挂着，直接写 strokeDashoffset=len
-    //    会触发 0→len 反向过渡（线先缩成隐藏），再写 0 又过渡回来，整条线先消失再画出 =
-    //    闪屏。故：设初始隐藏值前临时关 transition，reflow 提交“静止隐藏”状态后再开
-    //    transition 并设归零目标，保证只有这一次 len→0 的正向“画出”过渡。
-    const solidInit: { path: SVGPathElement; len: number }[] = [];
-    for (const path of cfg.solidPaths) {
-        let len = 0;
-        try {
-            len = path.getTotalLength();
-        } catch {
-            len = 0;
-        }
-        if (len <= 0) {
-            // 空路径或异常：直接显示，跳过动画（不破坏渲染）
-            path.style.removeProperty('stroke-dasharray');
-            path.style.removeProperty('stroke-dashoffset');
-            continue;
-        }
-        const prevTransition = path.style.transition;
-        path.style.transition = 'none';
-        path.style.strokeDasharray = String(len);
-        path.style.strokeDashoffset = String(len);
-        void path.getBBox(); // 强制提交“静止隐藏”状态
-        path.style.transition = prevTransition;
-        solidInit.push({ path, len });
-    }
-    // 强制同步布局回流：读取几何属性迫使浏览器提交上面两步样式，否则
-    // 后面的归零会被合并、过渡跳过、动画不出现。
-    for (const { path, len } of solidInit) {
-        if (len > 0) void path.getBBox();
-    }
-    for (const { path, len } of solidInit) {
-        if (len > 0) path.style.strokeDashoffset = '0';
-    }
-
-    // 3. Cost 虚线：clipPath 从左到右擦出
-    setupCostClip(cfg.clipPath, cfg.clipViewWidth);
-
-    // 4. 面积块：先归无（CSS .chart-area-anim 已 opacity:0），画完后淡入。
-    //    复用路径下 .chart-area-anim 的 opacity transition 始终挂着，直接 remove('area-shown')
-    //    会触发 1→0 过渡（面积先淡出），800ms 后再 add 又过渡回来，视觉为“淡出再淡入”。
-    //    故复位时临时关 transition，瞬时归零，确保只有结尾一次 0→1 的正向淡入。
-    for (const area of cfg.areas) {
-        const prevTransition = area.style.transition;
-        area.style.transition = 'none';
-        area.classList.remove('area-shown');
-        void area.getBBox(); // 强制提交“静止隐藏”
-        area.style.transition = prevTransition;
-    }
-    chartAreaFadeTimer = setTimeout(() => {
-        for (const area of cfg.areas) {
-            area.classList.add('area-shown');
-        }
-        chartAreaFadeTimer = null;
-    }, CHART_DRAW_DURATION);
-
-    // 5. 动画结束后清理实线 dash 内联样式（避免长期占用 stroke-dashoffset 导致
-    //    后续 hover/重画时样式残留；虚线 clipPath 也在此时卸载还原 3,3 虚线）
-    const cleanupTotal = Math.max(CHART_DRAW_DURATION, CHART_DRAW_DURATION + 50);
-    chartCostClipCleanupTimer = setTimeout(() => {
-        for (const { path, len } of solidInit) {
-            if (len > 0) {
-                path.style.removeProperty('stroke-dasharray');
-                path.style.removeProperty('stroke-dashoffset');
-            }
-        }
-        teardownCostClip(cfg.clipPath);
-        chartCostClipCleanupTimer = null;
-    }, cleanupTotal);
-}
-
-// 静默复位：轮询 stats-updated 增量刷新时（animate=false）不播左到右动画，
-// 但必须把上次动画可能残留的"隐藏/dashoffset/clip/未淡入"状态瞬时清为全显，
-// 否则会留半截隐藏线或一直不可见的面积。复位采用"临时关 transition → 改属性 →
-// reflow 提交 → 开回 transition"手法，避免复位动作本身触发过渡抖动。
-function resetChartToStatic(cfg: DrawInConfig) {
-    // 取消可能正在排队的面积淡入回调，避免它把刚复位的面积又改一次
-    if (chartAreaFadeTimer !== null) {
-        clearTimeout(chartAreaFadeTimer);
-        chartAreaFadeTimer = null;
-    }
-    if (chartCostClipCleanupTimer !== null) {
-        clearTimeout(chartCostClipCleanupTimer);
-        chartCostClipCleanupTimer = null;
-    }
-
-    // 4 条实线：清掉 dasharray/dashoffset 内联样式（回到 path 默认全显）
-    for (const path of cfg.solidPaths) {
-        const prevTransition = path.style.transition;
-        path.style.transition = 'none';
-        path.style.removeProperty('stroke-dasharray');
-        path.style.removeProperty('stroke-dashoffset');
-        void path.getBBox(); // 强制提交“静止全显”，避免开回 transition 时反向过渡
-        path.style.transition = prevTransition;
-    }
-
-    // Cost 虚线：移除 clip-path，还原其 3,3 虚线
-    teardownCostClip(cfg.clipPath);
-
-    // 2 个面积块：直接置 opacity=1（加 area-shown），瞬时无过渡
-    for (const area of cfg.areas) {
-        const prevTransition = area.style.transition;
-        area.style.transition = 'none';
-        area.classList.add('area-shown');
-        void area.getBBox();
-        area.style.transition = prevTransition;
-    }
-}
-
-// Cost 虚线 clipPath 动画：在 trendSvg 内动态创建/复用 clipPath + rect，
-// rect 宽度从 0 过渡到 clipViewWidth。
-function setupCostClip(costPath: SVGPathElement, clipViewWidth: number) {
-    const svg = document.getElementById('trendSvg') as SVGSVGElement | null;
-    if (!svg) return;
-
-    const CLIP_ID = 'chartCostClipRuntime';
-    let clip = svg.querySelector(`#${CLIP_ID}`) as SVGClipPathElement | null;
-    let rect: SVGRectElement | null;
-
-    if (!clip) {
-        // 首次：创建 clipPath + rect，挂到 svg 顶部（无须 <defs>，SVG 规范允许
-        // clipPath 定义在 svg 任意子树位置）。
-        clip = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath') as SVGClipPathElement;
-        clip.setAttribute('id', CLIP_ID);
-        rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect') as SVGRectElement;
-        rect.setAttribute('x', '0');
-        rect.setAttribute('y', '0');
-        rect.setAttribute('height', '300');
-        rect.setAttribute('width', '0');
-        // rect width 过渡：CSS 控制不到 SVG attribute 在所有引擎下的解析，
-        // 这里直接对 rect 的 width 属性用 transition（现代浏览器支持 SVG
-        // presentation attribute 的 CSS 过渡；为兼容性同时用 style.width 兜底无效，
-        // 故只设 attribute + CSS transition）。
-        rect.style.transition = `width ${CHART_DRAW_DURATION}ms cubic-bezier(0.25,0.46,0.45,0.94)`;
-        clip.appendChild(rect);
-        svg.appendChild(clip);
-    } else {
-        rect = clip.querySelector('rect');
-        if (!rect) {
-            rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect') as SVGRectElement;
-            rect.setAttribute('x', '0');
-            rect.setAttribute('y', '0');
-            rect.setAttribute('height', '300');
-            rect.setAttribute('width', '0');
-            rect.style.transition = `width ${CHART_DRAW_DURATION}ms cubic-bezier(0.25,0.46,0.45,0.94)`;
-            clip.appendChild(rect);
-        }
-    }
-
-    // 复位 width=0 → 强制 reflow → 设目标宽度触发过渡。
-    // 注意：rect 上的 transition 在复用路径下会一直挂着。直接 setAttribute('width','0')
-    // 会触发一次 1000→0 的反向过渡，紧接着设目标宽度时浏览器因中间 reflow 合并两次
-    // 赋值，动画丢失。故复位前先关掉 transition，复位并 reflow 后再挂上 transition，
-    // 最后设目标宽度，确保只有这一次 0→1000 的正向过渡。
-    const prevTransition = rect!.style.transition;
-    rect!.style.transition = 'none';
-    rect!.setAttribute('width', '0');
-    void (rect as any).getBBox();                                  // 强制提交复位
-    rect!.style.transition = prevTransition || `width ${CHART_DRAW_DURATION}ms cubic-bezier(0.25,0.46,0.45,0.94)`;
-    costPath.setAttribute('clip-path', `url(#${CLIP_ID})`);
-    void (rect as any).getBBox();                                  // 强制提交"无过渡"状态，下一帧才设目标
-    rect!.setAttribute('width', String(clipViewWidth));
-}
-
-// 动画结束后卸载 clip-path，还原 Cost 虚线本身的 3,3 效果（clipPath 节点留作下次复用）。
-function teardownCostClip(costPath: SVGPathElement) {
-    costPath.removeAttribute('clip-path');
-}
+// 趋势图动画系统已抽离至 chartAnimation.ts
+export const animatePathsDrawIn = chartAnimation.animatePathsDrawIn;
+export const resetChartToStatic = chartAnimation.resetChartToStatic;
 

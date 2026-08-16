@@ -16,14 +16,20 @@ import (
 	"testing"
 )
 
-// assertOcrFidelityClauses 断言一段 OCR prompt 文案同时含铁律核心句与不确定标注条款
-// 的两个固定锚点子串。集中断言避免每个测试函数重复同一串 Contains 模板。
+// assertOcrFidelityClauses 断言一段 OCR prompt 文案同时含铁律核心句、微观视觉线索、
+// 拓扑空间条款与不确定标注条款的固定锚点子串。
 func assertOcrFidelityClauses(t *testing.T, label, prompt string) {
 	t.Helper()
 	// 铁律核心句:严禁改写字形 + 给出 l/I、0/O、1/l 典型示例(抑制 OCR 模型按经验重写)。
 	for _, want := range []string{"逐字符可见", "严禁改写字形", "`l` 写成 `I`", "`0` 写成 `O`", "`1` 写成 `l`"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("%s 缺少铁律核心句子串 %q:\n%s", label, want, prompt)
+		}
+	}
+	// 微观视觉线索与状态条款。
+	for _, want := range []string{"微观视觉与状态线索", "波浪红线", "未保存小圆点"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("%s 缺少视觉线索条款子串 %q:\n%s", label, want, prompt)
 		}
 	}
 	// 不确定标注条款:固定前缀 + 严禁编造剩余字符。
@@ -85,7 +91,7 @@ func TestBuildBatchOcrPrompt_NoPromptCtxStillHasFidelityClauses(t *testing.T) {
 }
 
 // TestBuildSingleOcrPrompt_AndBatchShareFidelitySource 锁定单图与批量 prompt 消费
-// 同一 ocrFidelityCore / ocrUncertaintyClause 常量:二者分别构造的 prompt 都精确包含
+// 同一组保真与视觉理解常量:二者分别构造的 prompt 都精确包含
 // 该常量原文(而非语义近似的另写),从而"改一处即同步"的单一信息源契约成立。
 func TestBuildSingleOcrPrompt_AndBatchShareFidelitySource(t *testing.T) {
 	singleTargeted := buildSingleOcrPrompt("ctx")
@@ -102,6 +108,12 @@ func TestBuildSingleOcrPrompt_AndBatchShareFidelitySource(t *testing.T) {
 	} {
 		if !strings.Contains(pmpt.val, ocrFidelityCore) {
 			t.Errorf("%s prompt 未逐字包含 ocrFidelityCore,单图/批量单一信息源破裂:\n%s", pmpt.name, pmpt.val)
+		}
+		if !strings.Contains(pmpt.val, ocrVisualCuesClause) {
+			t.Errorf("%s prompt 未逐字包含 ocrVisualCuesClause,单图/批量单一信息源破裂:\n%s", pmpt.name, pmpt.val)
+		}
+		if !strings.Contains(pmpt.val, ocrTopologyClause) {
+			t.Errorf("%s prompt 未逐字包含 ocrTopologyClause,单图/批量单一信息源破裂:\n%s", pmpt.name, pmpt.val)
 		}
 		if !strings.Contains(pmpt.val, ocrUncertaintyClause) {
 			t.Errorf("%s prompt 未逐字包含 ocrUncertaintyClause,单图/批量单一信息源破裂:\n%s", pmpt.name, pmpt.val)

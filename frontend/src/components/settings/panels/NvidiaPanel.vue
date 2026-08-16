@@ -93,6 +93,45 @@
 </div>
 </div>
 
+<!-- NVIDIA 专属出站代理 (支持 SOCKS5/HTTP，可指定本地 Clash 独立端口实现单号池极速分流) -->
+<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">lan</span>
+<span data-i18n="nvidiaDedicatedProxyTitle">NVIDIA 专属出站代理 (支持 SOCKS5/HTTP)</span>
+</h2>
+<p class="text-xs text-outline leading-relaxed" data-i18n="nvidiaDedicatedProxyTip">
+为 NVIDIA 号池单独配置独立的出站代理（如 Clash 独立端口 socks5://127.0.0.1:7891 或专属 VPS 代理），直接走机场专线享受 1.1s 极速响应，而其他号池继续走默认住宅 IP，实现号池级精准物理分流。
+</p>
+<div class="flex flex-col gap-3 border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex items-center justify-between">
+<div class="flex flex-col gap-0.5">
+<label class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="nvidiaDedicatedProxyEnableLabel">启用 NVIDIA 专属出站代理</label>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="nvidiaDedicatedProxyEnableDesc">开启后 NVIDIA 请求将强行且仅通过此代理访问，不走全局系统代理与 TUN 虚拟网卡。</span>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="chkNvidiaDedicatedProxyEnabled" type="checkbox"/>
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
+<div class="flex flex-col gap-3 mt-1" id="divNvidiaDedicatedProxyAddress" style="display: none;">
+<div class="flex flex-col gap-1.5">
+<label class="text-[12px] font-bold text-outline" data-i18n="nvidiaDedicatedProxyAddressLabel">专属代理地址 (协议必须显式配置，如 socks5:// 或 http://)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-mono" id="txtNvidiaDedicatedProxyAddress" placeholder="例如：socks5://127.0.0.1:7891 或 http://127.0.0.1:7890" data-i18n-placeholder="nvidiaDedicatedProxyAddressPlaceholder" type="text"/>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+<div class="flex flex-col gap-1.5">
+<label class="text-[12px] font-bold text-outline" data-i18n="nvidiaDedicatedProxyUsernameLabel">专属代理用户名 (可选)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white" id="txtNvidiaDedicatedProxyUsername" placeholder="无" data-i18n-placeholder="optionalPlaceholder" type="text"/>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="text-[12px] font-bold text-outline" data-i18n="nvidiaDedicatedProxyPasswordLabel">专属代理密码 (可选)</label>
+<PasswordInput inputId="txtNvidiaDedicatedProxyPassword" placeholder="无" dataI18nPlaceholder="optionalPlaceholder" inputClass="w-full px-3 py-2 pr-9 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white"/>
+</div>
+</div>
+</div>
+</div>
+</div>
+
 <!-- NVIDIA Cloudflare 代理出口 Worker 卡片 (通过 Anycast 边缘节点打散出口，避免单 IP 触发 429) -->
 <div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
@@ -136,12 +175,12 @@
 <div class="flex flex-col gap-1.5">
 <div class="text-[11px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
   <span class="material-symbols-outlined text-[16px] text-amber-500">code</span>
-  <span>Worker 脚本代码（支持流式 SSE、防流锁定重试与 X-Egress-IP 伪装，可直接编辑与一键复制）：</span>
+  <span>Worker 脚本代码（支持流式 SSE、双工零缓冲边收边发与 X-Egress-IP 伪装，可直接编辑与一键复制）：</span>
 </div>
 <CodeEditor
-  v-model="workerScriptCode"
-  :defaultCode="defaultWorkerScriptCode"
-  fileName="cloudflare-worker.js"
+  v-model="workerScript"
+  :default-code="defaultWorkerScriptCode"
+  file-name="nvidia-worker-egress.js"
   language="JavaScript"
 />
 </div>
@@ -206,41 +245,64 @@ const defaultWorkerScriptCode = `export default {
     }
     newHeaders.delete("x-egress-ip");
 
-    // 4. 优化请求体转发与 429 智能重试
-    let bodyBytes = null;
+    // 4. 双工流零拷贝转发 (Zero-Buffer Duplex Pipeline) 与异步惰性重试
+    let primaryBody = null;
+    let retryBufferPromise = null;
+
     if (request.body && request.method !== "GET" && request.method !== "HEAD") {
-      bodyBytes = await request.arrayBuffer();
+      const [stream1, stream2] = request.body.tee();
+      primaryBody = stream1;
+      // 备用流异步克隆至内存备用，完全不阻塞主流向 NVIDIA 边推边发
+      retryBufferPromise = new Response(stream2).arrayBuffer();
     }
 
-    const maxRetries = 2;
+    // 极速首发直通通道 (Fast-Path)
     let response;
-
-    for (let i = 0; i <= maxRetries; i++) {
-      try {
-        response = await fetch(targetUrl, {
-          method: request.method,
-          headers: newHeaders,
-          body: bodyBytes,
-          redirect: "follow",
-          cf: {
-            cacheEverything: false,
-            cacheTtl: 0
-          }
-        });
-
-        // 遇到正常响应 (2xx/3xx/4xx除429外) 直接跳出重试循环，进入极速返回通道
-        if (![429, 500, 502, 503, 504].includes(response.status)) {
-          break;
+    try {
+      response = await fetch(targetUrl, {
+        method: request.method,
+        headers: newHeaders,
+        body: primaryBody,
+        duplex: "half",
+        keepalive: true,
+        cf: {
+          cacheEverything: false,
+          cacheTtl: 0
         }
+      });
+    } catch (e) {
+      response = null;
+    }
 
-        // 仅在 429/5xx 且未耗尽重试次数时进行毫秒级退避重试 (100ms * (i + 1))
-        if (i < maxRetries) {
-          await new Promise(r => setTimeout(r, 100 * (i + 1)));
-        }
-      } catch (err) {
-        if (i === maxRetries) throw err;
+    // 仅在首发遇到 429 或 5xx 异常时，才提取已就绪的 retryBuffer 进行快速重试
+    if (!response || [429, 500, 502, 503, 504].includes(response.status)) {
+      const fallbackBytes = retryBufferPromise ? await retryBufferPromise : null;
+      for (let i = 0; i < 2; i++) {
         await new Promise(r => setTimeout(r, 100 * (i + 1)));
+        try {
+          response = await fetch(targetUrl, {
+            method: request.method,
+            headers: newHeaders,
+            body: fallbackBytes,
+            redirect: "follow",
+            keepalive: true,
+            cf: {
+              cacheEverything: false,
+              cacheTtl: 0
+            }
+          });
+          if (![429, 500, 502, 503, 504].includes(response.status)) {
+            break;
+          }
+        } catch (err) {}
       }
+    }
+
+    if (!response) {
+      return new Response(JSON.stringify({ error: "Upstream connection failed" }), {
+        status: 502,
+        headers: { "content-type": "application/json", "access-control-allow-origin": "*" }
+      });
     }
 
     // 5. 构造下游响应（透传 SSE 流式传输，禁用 Cloudflare 边缘缓存与压缩缓冲）
@@ -257,5 +319,5 @@ const defaultWorkerScriptCode = `export default {
   }
 };`;
 
-const workerScriptCode = ref(defaultWorkerScriptCode);
+const workerScript = ref(defaultWorkerScriptCode);
 </script>

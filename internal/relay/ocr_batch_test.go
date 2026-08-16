@@ -808,6 +808,50 @@ func TestDowngradeGeminiImagesToText_MultipleImages_NTo1(t *testing.T) {
 	}
 }
 
+// TestOcrImageBatch_ByteBudgetSplitting 验证多图 Base64 总字节数超过 ocrBatchMaxBytes (15MB) 时的自动切批行为。
+// 构造 3 张 6MB 的图(总 18MB > 15MB 预算):即使总张数 3 < 8,仍会被拆分为两批(第 1 批 2 张=12MB,第 2 批 1 张=6MB)。
+func TestOcrImageBatch_ByteBudgetSplitting(t *testing.T) {
+	var hitUpstream atomic.Int64
+	ts := newBatchGeminiCountingMock(t, &hitUpstream)
+	defer ts.Close()
+
+	origAddr := localProxyAddr
+	localProxyAddr = strings.TrimPrefix(ts.URL, "http://")
+	t.Cleanup(func() { localProxyAddr = origAddr })
+
+	svc := NewOCRService(nil, &http.Client{Timeout: 5 * time.Second}, func(string) {})
+	svc.cache = newOcrLRUCache(0, 0, 0)
+
+	// 构造 3 张 6MB 的不同 b64 图
+	bigB64_1 := strings.Repeat("A", 6<<20) + "1"
+	bigB64_2 := strings.Repeat("B", 6<<20) + "2"
+	bigB64_3 := strings.Repeat("C", 6<<20) + "3"
+
+	items := []OcrBatchItem{
+		{B64: bigB64_1, Mime: "image/png", PromptCtx: "大图1"},
+		{B64: bigB64_2, Mime: "image/png", PromptCtx: "大图2"},
+		{B64: bigB64_3, Mime: "image/png", PromptCtx: "大图3"},
+	}
+
+	results := svc.OcrImageBatch(&RelaySession{UserID: "u_big", UserKey: "k_big"}, items)
+	if len(results) != 3 {
+		t.Fatalf("results len want 3, got %d", len(results))
+	}
+	// 期望触达 2 次批量上游 (批 1: 2 张, 批 2: 1 张)
+	if got := hitUpstream.Load(); got != 2 {
+		t.Fatalf("upstream hits want 2 due to byte budget splitting, got %d", got)
+	}
+	for i, r := range results {
+		if !r.Ok || r.Err != nil {
+			t.Errorf("result[%d] should be ok, err: %v", i, r.Err)
+		}
+		if r.Text == "" {
+			t.Errorf("result[%d] text should not be empty", i)
+		}
+	}
+}
+
 // 占位:确保 context 包在合成 attempt 闭包被需要时编译(目前 batch 重试经真实 httptest,
 // 但保留 import 以便后续扩展合成 RT 测试)。
 var _ = context.Background
+

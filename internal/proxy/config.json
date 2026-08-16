@@ -43,6 +43,7 @@
   "nvidiaCompressThresholdTokens": 0,
   "nvidiaCompressKeepToolResults": 0,
   "nvidiaWorkerProxyEnabled": false,
+  "nvidiaDedicatedProxyEnabled": false,
   "promptPrefix": "",
   "customModelOverrideEnabled": false,
   "customModelOverrideID": "",

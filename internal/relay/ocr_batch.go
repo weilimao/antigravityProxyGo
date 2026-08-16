@@ -69,6 +69,11 @@ type OcrBatchResult struct {
 // 单消息超此数的罕见,L2 仍按本上限分批调(本文件对超限不报错,只是 L2 循环分批)。
 const ocrBatchMaxImages = 8
 
+// ocrBatchMaxBytes 是单次批量上游一次最多携带的 Base64 字节数预算上界(15MB)。
+// 兼顾多图合并收益与请求体体积安全,防止单条消息携带数张 4K 大截图时合并导致上游 413 (Payload Too Large)
+// 或网络传输超时。当图片数 < 8 但总字节超 15MB 时,自动切为多批。
+const ocrBatchMaxBytes = 15 << 20
+
 // batchImageMarkerPrefix 是批量回译标记前缀,格式为「[[图k]]」(k 为 1 起的图序号)。
 // 模型在批量 prompt 里被要求按此格式顺序输出每张图的分析;splitBatchOcrText 据此切片。
 // 单一标记格式 + 强 prompt 最可靠,避免鲁棒变体([[1]]/[图1])误切。
@@ -78,7 +83,7 @@ const batchImageMarkerPrefix = "[[图"
 //
 // 行为:
 //  1. 逐项查 ocrCache:命中直接回填 OcrBatchResult{CachedHit:true, Ok:true, Text},不进批量上游;
-//  2. miss 项(去重同 b64)按 ocrBatchMaxImages 分批:每批 ≤ ocrBatchMaxImages,
+//  2. miss 项(去重同 b64)按 ocrBatchMaxImages (8 张) 与 ocrBatchMaxBytes (15MB) 双重预算分批:
 //     合并一次上游调用(Google 族 Gemini 多 InlineData / 非 Google 族 /route 多 image_url);
 //  3. 上游响应按 [[图k]] 标记拆 N 段:全拆出 → 逐张 set success 长 TTL + 回填;拆不全 →
 //     ok=false,该批整体回退逐图(本文件内逐项调 s.OcrImage,保证不劣于现状)。
@@ -120,14 +125,23 @@ func (s *OCRService) OcrImageBatch(userSession *RelaySession, items []OcrBatchIt
 		return results
 	}
 
-	// 2) 按 ocrBatchMaxImages 分批送上游。pendingIdx 内是全 miss 的原始下标,按顺序切片。
-	for start := 0; start < len(pendingIdx); start += ocrBatchMaxImages {
-		end := start + ocrBatchMaxImages
-		if end > len(pendingIdx) {
-			end = len(pendingIdx)
+	// 2) 按 ocrBatchMaxImages (8 张) 与 ocrBatchMaxBytes (15MB) 双重预算分批送上游。
+	start := 0
+	for start < len(pendingIdx) {
+		batchBytes := 0
+		end := start
+		for end < len(pendingIdx) && (end-start) < ocrBatchMaxImages {
+			itBytes := len(items[pendingIdx[end]].B64)
+			// 若加入该图会超过字节上限且当前批次已有至少 1 张图，则切批；若是当前批首张图即使单图超过也至少放入 1 张
+			if (end > start) && (batchBytes+itBytes > ocrBatchMaxBytes) {
+				break
+			}
+			batchBytes += itBytes
+			end++
 		}
 		batchPos := pendingIdx[start:end] // 该批对应 items 的原始下标集合
 		s.ocrBatchOne(userSession, ocrModel, ownerKey, items, results, batchPos)
+		start = end
 	}
 	return results
 }
@@ -273,18 +287,21 @@ func buildBatchOcrPrompt(promptCtx string, n int) string {
 	return header
 }
 
-// batchMarkerRule 返回批量输出格式约定的尾部说明(含精确转写铁律 / 不确定标注 / 空间
-// 结构三保真技能,供 buildBatchOcrPrompt 拼接)。铁律与不确定标注与单图 prompt 共享
-// 常量,空间结构因批量内联括号排版与单图列表不同而模板内联锚定两者的协调一致。
+// batchMarkerRule 返回批量输出格式约定的尾部说明(含精确转写铁律 / 微观视觉状态线索 /
+// 不确定标注 / 空间拓扑结构技能,供 buildBatchOcrPrompt 拼接)。各项条款与单图 prompt 共享
+// 常量,保持单图与批量单一信息源。
 func batchMarkerRule(n int) string {
 	return fmt.Sprintf(`
 请按以下要求逐张输出:
 
 0. 精确转写铁律:%s
 1. 输出格式:为每张图单独输出一段,且必须以形如「[[图k]]」的标记行作为该段的开头(k 为该图的序号,从 1 到 %d,严格按顺序)。例如第 1 张图的分析以「[[图1]]」开头,第 2 张以「[[图2]]」开头,依此类推。
-2. 每段内容包括:该图的图像总体概览 + 图中所有文字/代码/终端命令/报错堆栈的原样逐字提取(保持原始缩进与换行,不要自动修正错别字,代码与报错用 Markdown 代码块包裹;%s)+ 视觉布局与逻辑关系描述(若含 UI 或 IDE,注明高亮项、报错弹窗、按钮状态及其位置关系;若含流程图/表格,还原节点连线方向或行列表格数据)。
+2. 每段内容包括:
+   - 图像总体概览与微观视觉状态线索(%s);
+   - 图中所有文字/代码/终端命令/报错堆栈的原样逐字提取(保持原始缩进与换行,不要自动修正错别字,代码与报错用 Markdown 代码块包裹;%s);
+   - 空间结构与逻辑拓扑描述(%s)。
 3. 严格顺序:必须按 1,2,...,%d 的顺序输出所有 %d 段,不得跳号、不得合并、不得遗漏任何一张。
-4. 严禁包含任何前言、引言或客套话(包括"好的"等开场白),直接从「[[图1]]」开始输出。`, ocrFidelityCore, n, ocrUncertaintyClause, n, n)
+4. 严禁包含任何前言、引言或客套话(包括"好的"等开场白),直接从「[[图1]]」开始输出。`, ocrFidelityCore, n, ocrVisualCuesClause, ocrUncertaintyClause, ocrTopologyClause, n, n)
 }
 
 // buildBatchGeminiRequest 构造 Google 族批量 Gemini generateContent 请求体:

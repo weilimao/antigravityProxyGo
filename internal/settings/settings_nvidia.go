@@ -61,6 +61,56 @@ func (m *Manager) SetNvidiaWorkerProxyEnabled(val bool) error {
 	return setSetting(m, func(c *Config, v bool) { c.NvidiaWorkerProxyEnabled = v }, val)
 }
 
+// ============ NVIDIA 专属 SOCKS5/HTTP 出口代理配置 ============
+
+// GetNvidiaDedicatedProxyAddress 返回 NVIDIA 专属出站代理地址
+func (m *Manager) GetNvidiaDedicatedProxyAddress() string {
+	return getSetting(m, func(c *Config) string {
+		return strings.TrimSpace(c.NvidiaDedicatedProxyAddress)
+	})
+}
+
+// SetNvidiaDedicatedProxyAddress 持久化 NVIDIA 专属出站代理地址
+func (m *Manager) SetNvidiaDedicatedProxyAddress(val string) error {
+	return setSetting(m, func(c *Config, v string) { c.NvidiaDedicatedProxyAddress = strings.TrimSpace(v) }, val)
+}
+
+// GetNvidiaDedicatedProxyEnabled 返回是否启用 NVIDIA 专属出站代理
+func (m *Manager) GetNvidiaDedicatedProxyEnabled() bool {
+	return getSetting(m, func(c *Config) bool {
+		return c.NvidiaDedicatedProxyEnabled && strings.TrimSpace(c.NvidiaDedicatedProxyAddress) != ""
+	})
+}
+
+// SetNvidiaDedicatedProxyEnabled 持久化是否启用 NVIDIA 专属出站代理
+func (m *Manager) SetNvidiaDedicatedProxyEnabled(val bool) error {
+	return setSetting(m, func(c *Config, v bool) { c.NvidiaDedicatedProxyEnabled = v }, val)
+}
+
+// GetNvidiaDedicatedProxyUsername 返回 NVIDIA 专属出站代理用户名
+func (m *Manager) GetNvidiaDedicatedProxyUsername() string {
+	return getSetting(m, func(c *Config) string {
+		return strings.TrimSpace(c.NvidiaDedicatedProxyUsername)
+	})
+}
+
+// SetNvidiaDedicatedProxyUsername 持久化 NVIDIA 专属出站代理用户名
+func (m *Manager) SetNvidiaDedicatedProxyUsername(val string) error {
+	return setSetting(m, func(c *Config, v string) { c.NvidiaDedicatedProxyUsername = strings.TrimSpace(v) }, val)
+}
+
+// GetNvidiaDedicatedProxyPassword 返回 NVIDIA 专属出站代理密码
+func (m *Manager) GetNvidiaDedicatedProxyPassword() string {
+	return getSetting(m, func(c *Config) string {
+		return c.NvidiaDedicatedProxyPassword
+	})
+}
+
+// SetNvidiaDedicatedProxyPassword 持久化 NVIDIA 专属出站代理密码
+func (m *Manager) SetNvidiaDedicatedProxyPassword(val string) error {
+	return setSetting(m, func(c *Config, v string) { c.NvidiaDedicatedProxyPassword = v }, val)
+}
+
 // ============ OCR 模型(含 trim 兜底,泛型 + trim 回调) ============
 
 // GetOcrModel 读取入站 image 自愈降级使用的本地 Gemini OCR 模型名。

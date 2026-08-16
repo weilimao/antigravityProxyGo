@@ -141,6 +141,14 @@ export function bindProxySettings(): void {
                 if (divNvidiaWorkerProxyUrl) {
                     divNvidiaWorkerProxyUrl.style.display = enabled ? 'flex' : 'none';
                 }
+                // 智能互斥：开启 Worker 代理出口时，自动关闭并收起专属 SOCKS5 代理
+                if (enabled && chkNvidiaDedicatedProxyEnabled && chkNvidiaDedicatedProxyEnabled.checked) {
+                    chkNvidiaDedicatedProxyEnabled.checked = false;
+                    if (divNvidiaDedicatedProxyAddress) {
+                        divNvidiaDedicatedProxyAddress.style.display = 'none';
+                    }
+                    ipcRenderer.send('settings:set-nvidia-dedicated-proxy-enabled', false);
+                }
             } catch (err) {
                 console.error('[SettingsController] Failed to save nvidia worker proxy enabled:', err);
             }
@@ -154,6 +162,68 @@ export function bindProxySettings(): void {
                 ipcRenderer.send('settings:set-nvidia-worker-proxy-url', val);
             } catch (err) {
                 console.error('[SettingsController] Failed to save nvidia worker proxy url:', err);
+            }
+        });
+    }
+
+    // ===== NVIDIA 专属 SOCKS5/HTTP 出口代理 =====
+    const chkNvidiaDedicatedProxyEnabled = document.getElementById('chkNvidiaDedicatedProxyEnabled') as HTMLInputElement | null;
+    const txtNvidiaDedicatedProxyAddress = document.getElementById('txtNvidiaDedicatedProxyAddress') as HTMLInputElement | null;
+    const txtNvidiaDedicatedProxyUsername = document.getElementById('txtNvidiaDedicatedProxyUsername') as HTMLInputElement | null;
+    const txtNvidiaDedicatedProxyPassword = document.getElementById('txtNvidiaDedicatedProxyPassword') as HTMLInputElement | null;
+    const divNvidiaDedicatedProxyAddress = document.getElementById('divNvidiaDedicatedProxyAddress');
+
+    if (chkNvidiaDedicatedProxyEnabled) {
+        chkNvidiaDedicatedProxyEnabled.addEventListener('change', (e: any) => {
+            const enabled = e.target.checked;
+            try {
+                ipcRenderer.send('settings:set-nvidia-dedicated-proxy-enabled', enabled);
+                if (divNvidiaDedicatedProxyAddress) {
+                    divNvidiaDedicatedProxyAddress.style.display = enabled ? 'flex' : 'none';
+                }
+                // 智能互斥：开启专属 SOCKS5 代理时，自动关闭并收起 Worker 代理出口
+                if (enabled && chkNvidiaWorkerProxyEnabled && chkNvidiaWorkerProxyEnabled.checked) {
+                    chkNvidiaWorkerProxyEnabled.checked = false;
+                    if (divNvidiaWorkerProxyUrl) {
+                        divNvidiaWorkerProxyUrl.style.display = 'none';
+                    }
+                    ipcRenderer.send('settings:set-nvidia-worker-proxy-enabled', false);
+                }
+            } catch (err) {
+                console.error('[SettingsController] Failed to save nvidia dedicated proxy enabled:', err);
+            }
+        });
+    }
+
+    if (txtNvidiaDedicatedProxyAddress) {
+        txtNvidiaDedicatedProxyAddress.addEventListener('change', (e: any) => {
+            const val = e.target.value.trim();
+            try {
+                ipcRenderer.send('settings:set-nvidia-dedicated-proxy-address', val);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save nvidia dedicated proxy address:', err);
+            }
+        });
+    }
+
+    if (txtNvidiaDedicatedProxyUsername) {
+        txtNvidiaDedicatedProxyUsername.addEventListener('change', (e: any) => {
+            const val = e.target.value.trim();
+            try {
+                ipcRenderer.send('settings:set-nvidia-dedicated-proxy-username', val);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save nvidia dedicated proxy username:', err);
+            }
+        });
+    }
+
+    if (txtNvidiaDedicatedProxyPassword) {
+        txtNvidiaDedicatedProxyPassword.addEventListener('change', (e: any) => {
+            const val = e.target.value.trim();
+            try {
+                ipcRenderer.send('settings:set-nvidia-dedicated-proxy-password', val);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save nvidia dedicated proxy password:', err);
             }
         });
     }
@@ -259,6 +329,32 @@ export function loadProxyState(): void {
         }
         if (txtNvidiaWorkerProxyUrl && workerProxyState.nvidiaWorkerProxyUrl !== undefined) {
             txtNvidiaWorkerProxyUrl.value = String(workerProxyState.nvidiaWorkerProxyUrl);
+        }
+    }
+
+    // ===== NVIDIA 专属 SOCKS5 出口代理回填 =====
+    const chkNvidiaDedicatedProxyEnabled = document.getElementById('chkNvidiaDedicatedProxyEnabled') as HTMLInputElement | null;
+    const txtNvidiaDedicatedProxyAddress = document.getElementById('txtNvidiaDedicatedProxyAddress') as HTMLInputElement | null;
+    const txtNvidiaDedicatedProxyUsername = document.getElementById('txtNvidiaDedicatedProxyUsername') as HTMLInputElement | null;
+    const txtNvidiaDedicatedProxyPassword = document.getElementById('txtNvidiaDedicatedProxyPassword') as HTMLInputElement | null;
+    const divNvidiaDedicatedProxyAddress = document.getElementById('divNvidiaDedicatedProxyAddress');
+
+    const dedicatedProxyState = ipcRenderer.sendSync('settings:get-nvidia-dedicated-proxy');
+    if (dedicatedProxyState) {
+        if (chkNvidiaDedicatedProxyEnabled) {
+            chkNvidiaDedicatedProxyEnabled.checked = !!dedicatedProxyState.enabled;
+            if (divNvidiaDedicatedProxyAddress) {
+                divNvidiaDedicatedProxyAddress.style.display = dedicatedProxyState.enabled ? 'flex' : 'none';
+            }
+        }
+        if (txtNvidiaDedicatedProxyAddress && dedicatedProxyState.address !== undefined) {
+            txtNvidiaDedicatedProxyAddress.value = String(dedicatedProxyState.address);
+        }
+        if (txtNvidiaDedicatedProxyUsername && dedicatedProxyState.username !== undefined) {
+            txtNvidiaDedicatedProxyUsername.value = String(dedicatedProxyState.username);
+        }
+        if (txtNvidiaDedicatedProxyPassword && dedicatedProxyState.password !== undefined) {
+            txtNvidiaDedicatedProxyPassword.value = String(dedicatedProxyState.password);
         }
     }
 }
