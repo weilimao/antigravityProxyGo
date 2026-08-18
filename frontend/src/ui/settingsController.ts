@@ -12,6 +12,16 @@ export function deactivateSettings() {
     }
 }
 
+export function onSettingsTabChanged(cb: (tab: string) => void): () => void {
+    const handler = (e: any) => {
+        if (e && e.detail && e.detail.activePanel) {
+            cb(e.detail.activePanel);
+        }
+    };
+    window.addEventListener('settings:tab-change', handler);
+    return () => window.removeEventListener('settings:tab-change', handler);
+}
+
 function updatePacketCaptureVisibility(enabled: boolean) {
     const ids = ['navPacketsLink', 'navPacketsLinkDropdown'];
     ids.forEach(id => {
@@ -72,6 +82,7 @@ export function initSettings() {
             const settingsPanelHelp = document.getElementById('settings-panel-help');
             const settingsPanelNvidia = document.getElementById('settings-panel-nvidia');
             const settingsPanelAgentConfig = document.getElementById('settings-panel-agentconfig');
+            const settingsPanelWallpaper = document.getElementById('settings-panel-wallpaper');
 
             const btnSettingsTabGeneral = document.getElementById('btnSettingsTabGeneral');
             const btnSettingsTabAbout = document.getElementById('btnSettingsTabAbout');
@@ -80,6 +91,7 @@ export function initSettings() {
             const btnSettingsTabHelp = document.getElementById('btnSettingsTabHelp');
             const btnSettingsTabNvidia = document.getElementById('btnSettingsTabNvidia');
             const btnSettingsTabAgentConfig = document.getElementById('btnSettingsTabAgentConfig');
+            const btnSettingsTabWallpaper = document.getElementById('btnSettingsTabWallpaper');
 
             if (settingsPanelGeneral) settingsPanelGeneral.style.setProperty('display', activePanel === 'general' ? 'flex' : 'none', 'important');
             if (settingsPanelAbout) settingsPanelAbout.style.setProperty('display', activePanel === 'about' ? 'flex' : 'none', 'important');
@@ -88,6 +100,7 @@ export function initSettings() {
             if (settingsPanelHelp) settingsPanelHelp.style.setProperty('display', activePanel === 'help' ? 'flex' : 'none', 'important');
             if (settingsPanelNvidia) settingsPanelNvidia.style.setProperty('display', activePanel === 'nvidia' ? 'flex' : 'none', 'important');
             if (settingsPanelAgentConfig) settingsPanelAgentConfig.style.setProperty('display', activePanel === 'agentconfig' ? 'flex' : 'none', 'important');
+            if (settingsPanelWallpaper) settingsPanelWallpaper.style.setProperty('display', activePanel === 'wallpaper' ? 'flex' : 'none', 'important');
 
             if (btnSettingsTabGeneral) btnSettingsTabGeneral.className = activePanel === 'general' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabAbout) btnSettingsTabAbout.className = activePanel === 'about' ? activeTabClass : inactiveTabClass;
@@ -96,6 +109,7 @@ export function initSettings() {
             if (btnSettingsTabHelp) btnSettingsTabHelp.className = activePanel === 'help' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabNvidia) btnSettingsTabNvidia.className = activePanel === 'nvidia' ? activeTabClass : inactiveTabClass;
             if (btnSettingsTabAgentConfig) btnSettingsTabAgentConfig.className = activePanel === 'agentconfig' ? activeTabClass : inactiveTabClass;
+            if (btnSettingsTabWallpaper) btnSettingsTabWallpaper.className = activePanel === 'wallpaper' ? activeTabClass : inactiveTabClass;
 
             if (activePanel === 'network') {
                 try {
@@ -108,6 +122,12 @@ export function initSettings() {
             } else {
                 stopNetworkLogsAutoRefresh();
             }
+
+            try {
+                window.dispatchEvent(new CustomEvent('settings:tab-change', { detail: { activePanel } }));
+            } catch (e) {
+                // ignore
+            }
         }
 
         (window as any).switchSettingsTab = switchSettingsTab;
@@ -119,6 +139,7 @@ export function initSettings() {
         const btnSettingsTabHelp = document.getElementById('btnSettingsTabHelp');
         const btnSettingsTabNvidia = document.getElementById('btnSettingsTabNvidia');
         const btnSettingsTabAgentConfig = document.getElementById('btnSettingsTabAgentConfig');
+        const btnSettingsTabWallpaper = document.getElementById('btnSettingsTabWallpaper');
 
         if (btnSettingsTabGeneral) btnSettingsTabGeneral.addEventListener('click', () => switchSettingsTab('general'));
         if (btnSettingsTabAbout) btnSettingsTabAbout.addEventListener('click', () => switchSettingsTab('about'));
@@ -127,6 +148,7 @@ export function initSettings() {
         if (btnSettingsTabHelp) btnSettingsTabHelp.addEventListener('click', () => switchSettingsTab('help'));
         if (btnSettingsTabNvidia) btnSettingsTabNvidia.addEventListener('click', () => switchSettingsTab('nvidia'));
         if (btnSettingsTabAgentConfig) btnSettingsTabAgentConfig.addEventListener('click', () => switchSettingsTab('agentconfig'));
+        if (btnSettingsTabWallpaper) btnSettingsTabWallpaper.addEventListener('click', () => switchSettingsTab('wallpaper'));
 
         const btnRefreshNetLogs = document.getElementById('btnRefreshNetLogs');
         if (btnRefreshNetLogs) {

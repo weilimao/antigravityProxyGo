@@ -17,3 +17,9 @@ scripts/.secret_token copy
 
 # 代码拆分提取器(split_*.py / extract_*.py)dry-run 预览产物,非产物代码,不纳入版本控制
 *.preview
+
+# 临时提取/调试的反编译产物
+constants.js
+languageServer.js
+main.js
+preload.js

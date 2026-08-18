@@ -4,6 +4,8 @@ package stats
 
 import "runtime"
 
+func TrimProcessWorkingSet() {}
+
 func GetAppMemoryStats() (uint64, int, float64, error) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)

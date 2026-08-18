@@ -68,7 +68,7 @@
             :field="field"
             :value="formData[field.key]"
             :availableModels="props.availableModels"
-            @update:value="onFieldUpdate(field.key, $event)"
+            @update:value="onFieldUpdate(field, $event)"
           />
         </div>
       </template>
@@ -436,10 +436,23 @@ watch(() => props.formData, (newVal) => {
   localFormData.value = { ...newVal };
 }, { deep: false });
 
+function cleanModelName(val: any): string {
+  if (val === undefined || val === null) return '';
+  const str = String(val).trim();
+  return str.replace(/\[1M\]$/i, '').trim();
+}
+
 // Emit changes directly from event handlers, NOT from a watch on localFormData
 // (which would create an infinite loop: child watch → emit → parent update → child watch)
-function onFieldUpdate(key: string, value: any) {
-  localFormData.value[key] = value;
+function onFieldUpdate(field: ConfigField, value: any) {
+  localFormData.value[field.key] = value;
+  if (field.syncTargetKey) {
+    if (value !== undefined && value !== null && value !== '') {
+      localFormData.value[field.syncTargetKey] = cleanModelName(value);
+    } else {
+      localFormData.value[field.syncTargetKey] = '';
+    }
+  }
   emit('update:formData', { ...localFormData.value });
 }
 
@@ -531,6 +544,14 @@ function getRepeatableFieldValue(field: ConfigField, name: string): any {
 function onRepeatableFieldUpdate(field: ConfigField, name: string, value: any) {
   const resolvedKey = resolveKey(field.key, name);
   localFormData.value[resolvedKey] = value;
+  if (field.syncTargetKey) {
+    const resolvedTargetKey = resolveKey(field.syncTargetKey, name);
+    if (value !== undefined && value !== null && value !== '') {
+      localFormData.value[resolvedTargetKey] = cleanModelName(value);
+    } else {
+      localFormData.value[resolvedTargetKey] = '';
+    }
+  }
   emit('update:formData', { ...localFormData.value });
 }
 
@@ -684,6 +705,14 @@ function getRepeatableObjectChildValue(field: ConfigField, parentName: string, c
 function onRepeatableObjectChildUpdate(field: ConfigField, parentName: string, childName: string, childField: ConfigField, value: any) {
   const key = resolveChildKey(field, parentName, childName, childField);
   localFormData.value[key] = value;
+  if (childField.syncTargetKey) {
+    const targetKey = resolveChildKey(field, parentName, childName, { ...childField, key: childField.syncTargetKey });
+    if (value !== undefined && value !== null && value !== '') {
+      localFormData.value[targetKey] = cleanModelName(value);
+    } else {
+      localFormData.value[targetKey] = '';
+    }
+  }
   emit('update:formData', { ...localFormData.value });
 }
 

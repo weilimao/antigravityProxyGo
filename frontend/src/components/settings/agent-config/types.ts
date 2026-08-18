@@ -35,6 +35,8 @@ export interface ConfigField {
   with1mSuffix?: boolean;
   // select: 是否允许切换为自定义文本输入模式
   allowCustom?: boolean;
+  // 联动同步：当本字段值变更时，自动同步更新到目标字段 key
+  syncTargetKey?: string;
 }
 
 export interface ConfigSection {

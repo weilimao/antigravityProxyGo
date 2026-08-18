@@ -2,6 +2,7 @@ package main
 
 import (
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/antigravitybg"
 	"antigravity-proxy/internal/autotrigger"
 	"antigravity-proxy/internal/corelog"
 	"antigravity-proxy/internal/db"
@@ -26,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -560,6 +562,9 @@ func (a *App) startup(ctx context.Context) {
 	a.externalConfigMgr.RegisterAgent("codex", "Codex",
 		filepath.Join(homeDir, ".codex", "config.toml"))
 
+	// 初始化 Antigravity 桌面端壁纸与外观管理器
+	a.antigravityBgMgr = antigravitybg.NewManager(a.settingsMgr.GetActiveDataDirectory())
+
 	// 启动网络连通性监听:网络从断→通时触发连接池重置 + 远程中继自动重连,
 	// 从根本修复"网络断开后程序废了、再联网也无法使用中继服务"的问题。
 	a.startNetWatch()
@@ -757,4 +762,11 @@ func (a *App) domReady(ctx context.Context) {
 		// 双层 go 无害且确保启动时序不阻塞 domReady 回调本身。
 		go a.showMainWindow()
 	}
+
+	// 启动 3 秒自愈修剪：首屏 DOM 与图表全部加载渲染完毕后，主动修剪前端与 Go 启动阶段产生的临时 JIT 与内存脏页
+	go func() {
+		time.Sleep(3 * time.Second)
+		debug.FreeOSMemory()
+		stats.TrimProcessWorkingSet()
+	}()
 }

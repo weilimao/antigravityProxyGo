@@ -28,9 +28,56 @@ type PROCESS_MEMORY_COUNTERS struct {
 var (
 	psapi                = windows.NewLazySystemDLL("psapi.dll")
 	getProcessMemoryInfo = psapi.NewProc("GetProcessMemoryInfo")
+	emptyWorkingSet      = psapi.NewProc("EmptyWorkingSet")
 	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
 	getProcessTimes      = kernel32.NewProc("GetProcessTimes")
 )
+
+// TrimProcessWorkingSet 主动修剪 Go 主进程及其所有 WebView2 子进程的未引用物理内存页，迫使操作系统回收闲置内存
+func TrimProcessWorkingSet() {
+	myPid := uint32(os.Getpid())
+
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return
+	}
+	defer windows.CloseHandle(snapshot)
+
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+
+	parentToChildren := make(map[uint32][]uint32)
+
+	err = windows.Process32First(snapshot, &entry)
+	for err == nil {
+		parentToChildren[entry.ParentProcessID] = append(parentToChildren[entry.ParentProcessID], entry.ProcessID)
+		err = windows.Process32Next(snapshot, &entry)
+	}
+
+	pidsToQuery := []uint32{myPid}
+	queue := []uint32{myPid}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if children, exists := parentToChildren[current]; exists {
+			for _, child := range children {
+				pidsToQuery = append(pidsToQuery, child)
+				queue = append(queue, child)
+			}
+		}
+	}
+
+	for _, pid := range pidsToQuery {
+		h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_QUERY_INFORMATION, false, pid)
+		if err != nil {
+			continue
+		}
+		_, _, _ = emptyWorkingSet.Call(uintptr(h))
+		windows.CloseHandle(h)
+	}
+}
 
 type processCpuRecord struct {
 	kernelTime uint64

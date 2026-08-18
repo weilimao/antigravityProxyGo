@@ -188,6 +188,7 @@ const modelSlots: ConfigSection = {
       label: 'Sonnet 槽位模型 ID',
       type: 'model-select',
       with1mSuffix: true,
+      syncTargetKey: 'env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME',
       description: '日常编码主力 Sonnet 槽位对应的实际模型（右侧可声明 1M 上下文）',
     },
     {
@@ -211,6 +212,7 @@ const modelSlots: ConfigSection = {
       label: 'Opus 槽位模型 ID',
       type: 'model-select',
       with1mSuffix: true,
+      syncTargetKey: 'env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME',
       description: '复杂推理 Opus 槽位对应的实际模型（右侧可声明 1M 上下文）',
     },
     {
@@ -234,6 +236,7 @@ const modelSlots: ConfigSection = {
       label: 'Fable 槽位模型 ID',
       type: 'model-select',
       with1mSuffix: true,
+      syncTargetKey: 'env.ANTHROPIC_DEFAULT_FABLE_MODEL_NAME',
       description: 'Fable 槽位对应的实际模型（右侧可声明 1M 上下文）',
     },
     {
@@ -257,6 +260,7 @@ const modelSlots: ConfigSection = {
       label: 'Haiku 槽位模型 ID',
       type: 'model-select',
       with1mSuffix: true,
+      syncTargetKey: 'env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME',
       description: '轻量/低延迟 Haiku 槽位对应的实际模型（右侧可声明 1M 上下文）',
     },
     {

@@ -34,15 +34,15 @@ func (a *App) startMemoryMonitor(ctx context.Context) {
 			}
 
 			trendCounter++
-			if trendCounter >= 6 { // 6 * 10s = 60s
+			if trendCounter >= 3 { // 3 * 10s = 30s
 				trendCounter = 0
 				if a.IsWindowVisibleAndActive() {
 					wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 				}
 				// Periodically force the Go runtime to release unused heap
-				// memory back to the OS. Under heavy concurrent traffic the
-				// runtime may retain freed pages; this caps RSS growth.
+				// memory and trim WebView2 working set back to the OS.
 				debug.FreeOSMemory()
+				stats.TrimProcessWorkingSet()
 			}
 		}
 	}

@@ -11,6 +11,7 @@ package main
 
 import (
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/antigravitybg"
 	"antigravity-proxy/internal/autotrigger"
 	"antigravity-proxy/internal/corelog"
 	"antigravity-proxy/internal/dialogs"
@@ -78,6 +79,9 @@ type App struct {
 
 	// externalConfigMgr 管理外部 Agent(如 OpenCode / Claude Code 等)的配置文件读写。
 	externalConfigMgr *externalconfig.Manager
+
+	// antigravityBgMgr 管理 Antigravity 桌面端壁纸与外观调谐。
+	antigravityBgMgr *antigravitybg.Manager
 }
 
 func NewApp() *App {

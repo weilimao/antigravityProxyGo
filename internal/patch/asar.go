@@ -88,17 +88,11 @@ func PatchAsar(asarPath, caCertPath string, logCallback func(string)) error {
 
 	bakPath := asarPath + ".bak"
 	if _, err := os.Stat(bakPath); os.IsNotExist(err) {
-		// Create backup
+		// Create backup if it does not exist
 		if err := copyFile(asarPath, bakPath); err != nil {
 			return fmt.Errorf("创建 app.asar 备份失败: %v", err)
 		}
 		logCallback("💾 Created backup of original app.asar.")
-	} else {
-		// Restore from backup to work on a clean original
-		if err := copyFile(bakPath, asarPath); err != nil {
-			return fmt.Errorf("从备份恢复 app.asar 失败: %v", err)
-		}
-		logCallback("⏪ Restored original app.asar from backup before patching.")
 	}
 
 	asarData, err := os.ReadFile(asarPath)

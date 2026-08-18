@@ -24,6 +24,9 @@ func (a *App) IPCSend(channel string, argsJSON string) {
 	if a.handleExternalConfigIPCSend(channel, args) {
 		return
 	}
+	if a.handleAntigravityBgIPCSend(channel, args) {
+		return
+	}
 	if a.handleMiscSendIPC(channel, args) {
 		return
 	}
@@ -99,6 +102,9 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 		return res, err
 	}
 	if res, handled, err := a.handleExternalConfigInvokeIPC(channel, args); handled {
+		return res, err
+	}
+	if res, handled, err := a.handleAntigravityBgIPCInvoke(channel, args); handled {
 		return res, err
 	}
 	if res, handled, err := a.handleAccountsInvokeIPC(channel, args); handled {

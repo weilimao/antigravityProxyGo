@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+func TrimProcessWorkingSet() {}
+
 func GetAppMemoryStats() (uint64, int, float64, error) {
 	myPid := os.Getpid()
 
