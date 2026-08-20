@@ -236,7 +236,7 @@ func (m *Manager) SetRelayModelMapping(val []ModelMappingEntry) error {
 	}, val)
 }
 
-// LookupModelMultimodalFlag 按入站 ClientModel 名在 RelayModelMapping 中查映射项的 Multimodal 声明位。
+// LookupModelMultimodalFlag 按模型名在 RelayModelMapping 中查映射项的 Multimodal 声明位。
 // 返回 (declared *bool, found bool)——用 *bool 表达三态,与 OCR 降级闸的"配置优先"语义对齐:
 //   - found=false:未命中任何映射项(或模型名/表为空)。调用方走启发式兜底。
 //   - found=true, declared=nil:命中映射项但用户未显式声明 Multimodal(默认项即此态)。
@@ -244,24 +244,39 @@ func (m *Manager) SetRelayModelMapping(val []ModelMappingEntry) error {
 //   - found=true, declared=&true:用户显式声明多模态,跳过 OCR 降级,图块原样透传。
 //   - found=true, declared=&false:用户显式声明非多模态,即使名字命中启发式白名单仍强制降级。
 //
-// 匹配顺序与 MapClientModelToGemini 一致:精确 → 大小写不敏感(经 GetRelayModelMapping 落盘的项原样,
-// 不做归一化,故大小写不敏感是查名字时的兼容兜底)。空配置无删除记录时 GetRelayModelMapping
-// 返回默认映射,故对默认 gemini-*/gpt-* 等也能命中(默认项未显式设 Multimodal → 同样走 nil 兜底)。
-func LookupModelMultimodalFlag(mappings []ModelMappingEntry, clientModel string) (declared *bool, found bool) {
-	name := strings.TrimSpace(clientModel)
+// 匹配口径:OCR 降级闸 modelSupportsImage 传入的是**上游模型名**(经 ResolveNvidiaModel /
+// TargetModel 解析后的值),而非入站 ClientModel。故本函数按两级口径查找,ClientModel 优先:
+//   1. ClientModel 精确 → 2. ClientModel 大小写不敏感(与 MapClientModelToGemini 一致);
+//   3. TargetModel 精确 → 4. TargetModel 大小写不敏感(覆盖 ClientModel≠上游名 的场景)。
+// 空配置无删除记录时 GetRelayModelMapping 返回默认映射,故对默认 gemini-*/gpt-* 等也能命中
+// (默认项未显式设 Multimodal → 同样走 nil 兜底)。
+func LookupModelMultimodalFlag(mappings []ModelMappingEntry, model string) (declared *bool, found bool) {
+	name := strings.TrimSpace(model)
 	if name == "" || len(mappings) == 0 {
 		return nil, false
 	}
-	// 精确匹配。
+	// 1. ClientModel 精确匹配。
 	for _, e := range mappings {
 		if e.ClientModel == name {
 			return e.Multimodal, true
 		}
 	}
-	// 大小写不敏感。
+	// 2. ClientModel 大小写不敏感。
 	lower := strings.ToLower(name)
 	for _, e := range mappings {
 		if strings.ToLower(e.ClientModel) == lower {
+			return e.Multimodal, true
+		}
+	}
+	// 3. TargetModel 精确匹配(覆盖上游模型名查询场景)。
+	for _, e := range mappings {
+		if e.TargetModel == name {
+			return e.Multimodal, true
+		}
+	}
+	// 4. TargetModel 大小写不敏感。
+	for _, e := range mappings {
+		if strings.ToLower(e.TargetModel) == lower {
 			return e.Multimodal, true
 		}
 	}

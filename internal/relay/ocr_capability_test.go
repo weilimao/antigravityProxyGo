@@ -221,6 +221,52 @@ func TestLookupModelMultimodalFlag_ThreeStates(t *testing.T) {
 	}
 }
 
+// ===== 3b. LookupModelMultimodalFlag TargetModel 口径(修复:上游名查询场景) =====
+
+// TestLookupModelMultimodalFlag_TargetModelHit 验证:当传入的是上游模型名(TargetModel)而非
+// 入站名(ClientModel)时,配置位仍能命中。这是修复的核心:OCR 降级闸 modelSupportsImage
+// 传入的是 ResolveNvidiaModel 等解析后的上游名,旧实现只查 ClientModel 导致 found=false →
+// 走启发式 → 非多模态上游被误降级(即"设置了强制多模态但仍走 OCR"的根因)。
+func TestLookupModelMultimodalFlag_TargetModelHit(t *testing.T) {
+	mappings := []settings.ModelMappingEntry{
+		{ClientModel: "my-vision-alias", TargetModel: "deepseek-vl-plus", Multimodal: boolPtr(true)},
+		{ClientModel: "my-text-alias", TargetModel: "deepseek-chat", Multimodal: boolPtr(false)},
+	}
+
+	// 按上游名(TargetModel)精确命中强制多模态。
+	d, found := settings.LookupModelMultimodalFlag(mappings, "deepseek-vl-plus")
+	if !found || d == nil || !*d {
+		t.Errorf("TargetModel exact true: want found=true &true; got found=%v d=%v", found, d)
+	}
+
+	// 按上游名精确命中强制非多模态。
+	d, found = settings.LookupModelMultimodalFlag(mappings, "deepseek-chat")
+	if !found || d == nil || *d {
+		t.Errorf("TargetModel exact false: want found=true &false; got found=%v d=%v", found, d)
+	}
+
+	// 大小写不敏感。
+	d, found = settings.LookupModelMultimodalFlag(mappings, "DeepSeek-VL-Plus")
+	if !found || d == nil || !*d {
+		t.Errorf("TargetModel case-insensitive true: want found=true &true; got found=%v d=%v", found, d)
+	}
+}
+
+// TestLookupModelMultimodalFlag_ClientModelPriorityOverTargetModel 验证:当 ClientModel 和
+// TargetModel 都能匹配同一个查询名时,ClientModel 优先(保持与 MapClientModelToGemini 一致的
+// 优先级语义,避免 TargetModel 侧的歧义覆盖入站侧的显式声明)。
+func TestLookupModelMultimodalFlag_ClientModelPriorityOverTargetModel(t *testing.T) {
+	mappings := []settings.ModelMappingEntry{
+		// 入站名 == 上游名(自映射),配为非多模态
+		{ClientModel: "gpt-4o", TargetModel: "gpt-4o", Multimodal: boolPtr(false)},
+	}
+	// 查询 "gpt-4o" 时应命中 ClientModel 侧(显式 false),而非被启发式白名单覆盖
+	d, found := settings.LookupModelMultimodalFlag(mappings, "gpt-4o")
+	if !found || d == nil || *d {
+		t.Errorf("ClientModel priority: want found=true &false; got found=%v d=%v", found, d)
+	}
+}
+
 // ===== 4. 端到端:NVIDIA 池入口,上游为多模态模型时跳过降级、图块原样透传 =====
 
 // nvidiaChatUpstreamAssertingImageURL 构造一个 mock NVIDIA(OpenAI Chat 兼容)上游,
