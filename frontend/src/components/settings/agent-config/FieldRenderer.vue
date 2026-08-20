@@ -102,14 +102,13 @@
 
       <!-- model-select (dynamically populated from relay model mapping, with optional 1M switch) -->
       <div v-else-if="field.type === 'model-select'" class="flex items-center gap-2 w-full">
-        <select
-          :value="baseModelValue"
-          @change="onModelSelect(($event.target as HTMLSelectElement).value)"
-          class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white flex-1 font-medium min-w-0"
-        >
-          <option value="">未设置</option>
-          <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
-        </select>
+        <ModelSearchSelect
+          :model-value="baseModelValue"
+          :options="modelOptions"
+          :placeholder="field.placeholder || '搜索或选择模型...'"
+          @update:model-value="onModelSelect"
+          class="flex-1 min-w-0"
+        />
         <label
           v-if="field.with1mSuffix !== false"
           class="flex items-center gap-1.5 px-2.5 py-2 bg-slate-100 dark:bg-white/5 border border-outline-variant/40 rounded-md cursor-pointer hover:bg-slate-200 dark:hover:bg-white/10 transition-colors shrink-0 select-none"
@@ -156,6 +155,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { ConfigField } from './types';
+import ModelSearchSelect from './ModelSearchSelect.vue';
 
 const props = defineProps<{
   field: ConfigField;

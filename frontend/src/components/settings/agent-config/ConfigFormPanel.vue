@@ -139,20 +139,13 @@
                       <span class="material-symbols-outlined text-[13px] text-primary">list</span>
                       从已有可用模型选择：
                     </label>
-                    <select
-                      :value="addingObjectChildState[getObjectChildStateKey(field, item)].selectedModel"
-                      @change="onSelectAvailableModel(field, item, ($event.target as HTMLSelectElement).value)"
-                      class="w-full px-2.5 py-1.5 text-[12px] rounded-md bg-white dark:bg-[#1a1f30] border border-outline-variant/40 focus:border-primary focus:outline-none text-on-surface dark:text-white cursor-pointer"
-                    >
-                      <option value="">-- 选择已有模型 (快速填入) --</option>
-                      <option
-                        v-for="m in (props.availableModels || [])"
-                        :key="m"
-                        :value="m"
-                      >
-                        {{ m }}
-                      </option>
-                    </select>
+                    <ModelSearchSelect
+                      :model-value="addingObjectChildState[getObjectChildStateKey(field, item)].selectedModel"
+                      :options="props.availableModels || []"
+                      placeholder="搜索或选择已有模型..."
+                      @update:model-value="(val) => onSelectAvailableModel(field, item, val)"
+                      class="w-full"
+                    />
                   </div>
 
                   <!-- 方式2：自定义输入模型名称 -->
@@ -369,6 +362,7 @@
 import { ref, watch } from 'vue';
 import { AgentSchema, ConfigField, ConfigSection } from './types';
 import FieldRenderer from './FieldRenderer.vue';
+import ModelSearchSelect from './ModelSearchSelect.vue';
 
 const props = defineProps<{
   schema: AgentSchema;
