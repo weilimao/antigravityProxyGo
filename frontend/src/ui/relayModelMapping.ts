@@ -9,6 +9,10 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
+import {
+    buildLiveSetLower, buildStaleConfirmPrompt, computeRemoteAddedLower,
+    computeStaleMappings, MappingLike, mappingBadgeHTML, shouldMarkNew, shouldMarkStale,
+} from './relayModelDiff';
 
 // ===== 模块作用域状态(每次 initRelayModelMapping 显式重置,保持闭包语义) =====
 let allMappings: any[] = [];
@@ -16,7 +20,17 @@ let poolTabs: PoolTabInfo[] = [];
 let activeTabId: string = 'google';
 let availableChannels: string[] = ['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok'];
 let channelModelsCache: Record<string, string[]> = {};
+// Other 组上次拉取的「远端全集」缓存,作为 Other 组「新增」diff 的小快照基准
+// (Other 走独立 IPC 无后端快照,前端自持。全局 Tab 走后端 snapshot 字段,无需此)。
+let channelModelsCachePrev: Record<string, string[]> = {};
 let modelMappingSearchQuery: string = '';
+// diff 标记集合(按号池 channel 缓存,跨「获取号池模型」刷新覆盖):
+//   channelAddedLower[channel] —— 该号池本轮「新增」模型的小写集合(本次远端 − 上次快照);
+//   channelStaleLower[channel] —— 该号池「远端已删除」模型的小写集合(TargetModel 不在本次远端全集)。
+// 拉取失败/未拉取时各自为空集(不下判,防误标/误删)。供 renderCurrentTabTable 逐行挂徽章 +
+// 「清除失效模型」按钮计算可删行。
+let channelAddedLower: Record<string, Set<string>> = {};
+let channelStaleLower: Record<string, Set<string>> = {};
 
 // ========== 动态号池 Tab 与模型映射配置交互 ==========
 interface PoolTabInfo {
@@ -307,8 +321,19 @@ async function fetchOtherGroupModels(groupId: string, groupName: string, btn: HT
         if (res && res.success && Array.isArray(res.models)) {
             channelModelsCache[`other/${groupId}`] = res.models;
             updateDatalist(res.models);
+            // diff:Other 组按组键 other/{groupId} 单独存「新增/失效」。other:fetch-models 走 app_account_ipc
+            // (独立于 relay:fetch-channel-models,暂未返回 snapshot/added),故「新增」用前端按 res.models
+            // 与本组上次缓存现场算(退化但可用),「失效」用本次全集(与全局 Tab 同口径,最稳)。
+            const grpKey = `other/${groupId}`;
+            const prevCache = channelModelsCachePrev[grpKey];
+            channelAddedLower[grpKey] = prevCache
+                ? computeRemoteAddedLower(res.models, prevCache)
+                : new Set(res.models.map((s: string) => (s || '').trim().toLowerCase()).filter(Boolean));
+            channelModelsCachePrev[grpKey] = res.models.slice();
+            channelStaleLower[grpKey] = buildLiveSetLower(res.models);
             if (lblCount) {
-                lblCount.textContent = `✅ [${groupName}] 已获取 ${res.models.length} 个模型`;
+                const newCount = channelAddedLower[grpKey].size;
+                lblCount.textContent = `✅ [${groupName}] 已获取 ${res.models.length} 个模型${newCount > 0 ? ` · 新增 ${newCount}` : ''}`;
                 lblCount.classList.remove('hidden');
             }
             // 自动补全:Other 组每个新模型生成三段前缀 other/{groupId}/{model} 单条映射。
@@ -429,6 +454,13 @@ function renderCurrentTabTable() {
     const fetchedModels = isOtherTab
         ? []
         : (channelModelsCache[currentTab.targetProvider || currentTab.id] || []);
+    // diff 标记集:按当前 Tab 的号池 channel 取「新增/失效」小写集合(Other 按 group 键,口径与下方 rowModels 一致)。
+    // 用一个小写集合代表「本 Tab 视角下的远端全集」——失效比对就基于 fetchedModels(Other 时按行重解,故本键对 Other 不生效)。
+    const channelKey = (currentTab.targetProvider || currentTab.id || '').toLowerCase();
+    const addedSet = channelAddedLower[channelKey] || new Set<string>();
+    const staleSet = channelStaleLower[channelKey] || new Set<string>();
+    // 同步「清除失效模型」按钮可点性:仅当本 Tab 有失效标记时启用(其余禁用 + tooltip 提示需先拉取)。
+    syncClearStaleBtn(staleSet.size);
     const thInjectKwargs = document.getElementById('thInjectKwargs');
     if (thInjectKwargs) {
         if (isNvidiaTab) {
@@ -503,17 +535,37 @@ function renderCurrentTabTable() {
         if (rowModels.length > 0) {
             updateDatalist(rowModels);
         }
+        // diff 徽章:失效(红)标在 TargetModel 列——按本行所属 group/号池的远端全集判 TargetModel 是否下架;
+        // 新增(绿)标在 TargetModel 列——TargetModel 命中本轮「新增」集合(本次远端 − 上次快照)。
+        // Other Tab 按行 group 重解 stale(口径与 rowModels 一致),「新增」沿用本 channel 集合(够用:同 group 同源拉取)。
+        let rowStaleSet = staleSet;
+        let rowAddedSet = addedSet;
+        if (isOtherTab) {
+            const cm = (item.clientModel || '').trim();
+            const m = cm.match(/^other\/([^/]+)\//);
+            const gid = m ? m[1] : '';
+            const grpKey = gid ? `other/${gid}` : '';
+            rowStaleSet = grpKey ? (channelStaleLower[grpKey] || new Set<string>()) : new Set<string>();
+            rowAddedSet = grpKey ? (channelAddedLower[grpKey] || new Set<string>()) : new Set<string>();
+        }
+        const tmLower = ((item.targetModel || '') || '').trim().toLowerCase();
+        const isStale = rowStaleSet.size > 0 && !!tmLower && rowStaleSet.has(tmLower);
+        const isNew = rowAddedSet.size > 0 && !!tmLower && rowAddedSet.has(tmLower);
+        const staleBadge = isStale ? mappingBadgeHTML('stale') : '';
+        const newBadge = isNew ? mappingBadgeHTML('new') : '';
+        const targetExtraClass = isStale ? 'text-red-500 dark:text-red-400 line-through opacity-70' : '';
         tr.innerHTML = `
             <td class="py-2 px-1">
                 <input type="text" class="w-full px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white client-model-input" value="${item.clientModel || ''}" data-index="${index}" placeholder="例如: gpt-4o" />
             </td>
             <td class="py-2 px-1">
                 <div class="flex items-center gap-1.5">
-                    <input type="text" class="w-full px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent text-on-surface dark:text-white target-model-input" value="${item.targetModel || ''}" data-index="${index}" list="channelModelsDatalist" placeholder="例如: gemini-1.5-pro" />
+                    <input type="text" class="w-full px-2 py-1 text-[12px] rounded border border-outline-variant/30 bg-transparent ${targetExtraClass} target-model-input" value="${item.targetModel || ''}" data-index="${index}" list="channelModelsDatalist" placeholder="例如: gemini-1.5-pro" />
                     <select class="px-2 py-1 text-[11px] font-mono rounded border border-outline-variant/30 bg-slate-100 dark:bg-white/10 text-on-surface dark:text-white target-model-quick-select cursor-pointer w-32 flex-shrink-0" data-index="${index}">
                         <option value="">${rowModels.length > 0 ? '选择模型...' : '未拉取模型'}</option>
                         ${rowModels.map(m => `<option value="${m}" ${m === item.targetModel ? 'selected' : ''}>${m}</option>`).join('')}
                     </select>
+                    ${newBadge}${staleBadge}
                 </div>
             </td>
             <td class="py-2 text-center inject-kwargs-cell ${isNvidiaTab ? '' : 'hidden'}">
@@ -664,6 +716,32 @@ function renderCurrentTabTable() {
     };
 }
 
+// syncClearStaleBtn 按「本 Tab 失效映射数」同步「清除失效模型」按钮可点性 + 文案计数。
+// staleCount==0(未拉取/拉取失败/无失效)禁用并提示需先拉取;>0 启用并夹带计数。避免误导。
+function syncClearStaleBtn(staleCount: number): void {
+    const btn = document.getElementById('btnClearStaleModels') as HTMLButtonElement | null;
+    if (!btn) return;
+    const dict = i18n[state.currentLanguage] || i18n.zh || {};
+    btn.disabled = staleCount <= 0;
+    if (staleCount > 0) {
+        const tpl = (dict.relayClearStaleModels || '清除失效模型');
+        btn.textContent = `${tpl} (${staleCount})`;
+        btn.title = '';
+    } else {
+        btn.textContent = (dict.relayClearStaleModels || '清除失效模型');
+        const fetchedOnce = !!channelStaleLower[(activeTabChannelKey())];
+        btn.title = fetchedOnce
+            ? (dict.relayClearStaleEmpty || '当前号池无失效模型映射')
+            : (dict.relayClearStaleNeedFetch || '请先成功「获取号池模型」以核对远端全集');
+    }
+}
+
+// activeTabChannelKey 返回当前 Tab 的 channel key(小写),供 diff 集合按号池定位。
+function activeTabChannelKey(): string {
+    const currentTab = poolTabs.find(t => t.id === activeTabId) || poolTabs[0];
+    return (currentTab ? (currentTab.targetProvider || currentTab.id) : '').toLowerCase();
+}
+
 export function initRelayModelMapping() {
     // 重置 6 个模块级 let 到初始值(模拟原闭包每次 initRelayEvents 重建语义),避免跨 mount 状态残留。
     allMappings = [];
@@ -671,7 +749,10 @@ export function initRelayModelMapping() {
     activeTabId = 'google';
     availableChannels = ['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok'];
     channelModelsCache = {};
+    channelModelsCachePrev = {};
     modelMappingSearchQuery = '';
+    channelAddedLower = {};
+    channelStaleLower = {};
 
     // 绑定搜索输入框与清除按钮事件
     const searchInput = document.getElementById('inputRelayModelMappingSearch') as HTMLInputElement | null;
@@ -714,8 +795,22 @@ export function initRelayModelMapping() {
             if (res && res.success && Array.isArray(res.models)) {
                 channelModelsCache[channel] = res.models;
                 updateDatalist(res.models);
+                // diff:后端新增 added/snapshot 字段(向后兼容缺失即空)。按 channel 落「新增/失效」小写集合,
+                // 供 renderCurrentTabTable 行徽章与「清除失效模型」按钮读取。失效用本次全集现场对比本 Tab 映射。
+                const snapshot: string[] = Array.isArray(res.snapshot) ? res.snapshot : [];
+                const addedRaw: string[] = Array.isArray(res.added) ? res.added : [];
+                const chKey = (channel || '').toLowerCase();
+                channelAddedLower[chKey] = computeRemoteAddedLower(res.models, snapshot);
+                // 「本轮新增」也按后端 added 校准(后端用快照算更准,前端缓存 snapshot 可能因切 Tab 不全)。
+                if (addedRaw.length > 0) {
+                    channelAddedLower[chKey] = new Set(addedRaw.map((s: string) => (s || '').trim().toLowerCase()).filter(Boolean));
+                }
+                channelStaleLower[chKey] = buildLiveSetLower(res.models);
+                // 失效集合应是「不在远端全集的 TargetModel」。buildLiveSetLower 返回的是「远端全集小写」,
+                // 行渲染时用 shouldMarkStale(tm, liveSet) 判不在即失效。此处直接存 liveSet 即可。
                 if (lblCount) {
-                    lblCount.textContent = `✅ 已获取 ${res.models.length} 个模型`;
+                    const newCount = channelAddedLower[chKey].size;
+                    lblCount.textContent = `✅ 已获取 ${res.models.length} 个模型${newCount > 0 ? ` · 新增 ${newCount}` : ''}`;
                     lblCount.classList.remove('hidden');
                 }
                 // 拉取成功后,自动为当前 Tab 批量补全映射条目,免去逐条手动添加 + 保存再补前缀的两步操作。
@@ -925,5 +1020,53 @@ export function initRelayModelMapping() {
             btnSaveModelMapping.innerHTML = `<span class="material-symbols-outlined text-[16px]">error</span><span>${dict.relaySaveFailed || '保存失败'}</span>`;
             setTimeout(() => { btnSaveModelMapping.innerHTML = originalText; }, 2000);
         }
+    };
+
+    // _relayClearStaleMappings:删除当前 Tab(或本 Tab 全部子组)中「真实目标模型已从远端下架」的映射行。
+    // 安全边界(用户决策):仅删远端拉取确认失效的 → 需先成功拉取(channelStaleLower 该键非空)。
+    // 拉取前/失败:key 缺失 → channelStaleLower 为空 → computeStaleMappings 借「本次远端全集」现场判,
+    // liveRemote 为 undefined 则返回空(绝不下判),按钮已禁用做双保险。确认后从 allMappings 删除,
+    // 不立即落盘(走既有「保存映射配置」按钮,误删可被「不保存」挽回),与单行删除一致挽回路径。
+    (window as any)._relayClearStaleMappings = () => {
+        const currentTab = poolTabs.find(t => t.id === activeTabId) || poolTabs[0];
+        if (!currentTab) return;
+        const provider = (currentTab.targetProvider || currentTab.id || '').trim();
+        const isOtherTab = (currentTab.targetProvider === 'other' || currentTab.id === 'other');
+        const dict = i18n[state.currentLanguage] || i18n.zh || {};
+
+        // 收集本 Tab 待删映射:按 channel/group 各自的「本次远端全集」判 TargetModel 是否下架。
+        const staleToRemove: any[] = [];
+        for (const m of allMappings) {
+            const cm = (m.clientModel || '').trim();
+            const tm = (m.targetModel || '').trim();
+            if (!cm || !tm) continue;
+            let liveKey = provider.toLowerCase();
+            if (isOtherTab) {
+                // Other:按行 group 解析键 other/{groupId}(与 fetchOtherGroupModels 写入口径一致)。
+                const mtch = cm.match(/^other\/([^/]+)\//);
+                const gid = mtch ? mtch[1] : '';
+                if (mtch) liveKey = `other/${gid}`; else continue; // 非三段前缀的 Other 行不判(无对应上游缓存)
+            }
+            const live = channelModelsCache[liveKey];
+            if (!live || live.length === 0) continue; // 该组未成功拉取过,跳过(不误删)
+            const liveSet = buildLiveSetLower(live);
+            if (shouldMarkStale(m, liveSet)) staleToRemove.push(m);
+        }
+        if (staleToRemove.length === 0) {
+            // 无失效(或未拉取)→ 友好提示而非静默。
+            const chKey = provider.toLowerCase();
+            const fetchedOnce = !!channelStaleLower[chKey] || (isOtherTab && Object.keys(channelStaleLower).some(k => k.startsWith('other/')));
+            const msg = fetchedOnce
+                ? (dict.relayClearStaleEmpty || '当前号池无失效模型映射')
+                : (dict.relayClearStaleNeedFetch || '请先成功「获取号池模型」以核对远端全集');
+            window.alert(msg);
+            return;
+        }
+        const promptText = buildStaleConfirmPrompt(staleToRemove as MappingLike[]);
+        if (!window.confirm(promptText)) return;
+        // 删除:用引用比对从 allMappings 移除。删除后失效标记随之清空(这些 TargetModel 已不在列表)。
+        const removeSet = new Set(staleToRemove);
+        allMappings = allMappings.filter(m => !removeSet.has(m));
+        renderCurrentTabTable();
     };
 }

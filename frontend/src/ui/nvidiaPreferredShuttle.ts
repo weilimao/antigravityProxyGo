@@ -9,6 +9,7 @@
 import { ipcRenderer } from '../shared/ipc';
 import i18n from '../shared/i18n';
 import state from './dashboardState';
+import { computeStaleLower, createDiffBadge, diffSummaryText, DiffKind } from './nvidiaPreferredDiff';
 
 // ===== NVIDIA 全局专属模型清单 Modal (双列穿梭框) =====
 let btnNvidiaPreferredModels: HTMLButtonElement | null;
@@ -44,6 +45,14 @@ let nvidiaPreferredSourceRespEventBound = false;
 // 穿梭框内存态:跨 Modal 打开/远端刷新保留。左列=已选(给客户端的清单),右列=上游候选全集。
 let nvidiaPreferredLeftIDs: string[] = [];
 let nvidiaPreferredRightIDs: string[] = [];
+// diff 标记集合(跨 Modal 打开保留,随下次远端刷新整体覆盖):
+//   addedSetLower —— 本轮「新增」(本次远端 − 上次快照)id 的小写集合,标在右列候选行;
+//   staleSetLower —— 「已选但远端已删除」id 的小写集合,标在左列已选行;
+//   lastRemoteFull —— 最近一次成功拉取的远端全集(用作「失效」比对基准,拉取失败/未拉时为 null → 不下失效判定)。
+// 三者由 fetchAndRenderNvidiaPreferredModels 在远端返回后更新,render 路径读取后给行挂徽章。
+let addedSetLower: Set<string> = new Set();
+let staleSetLower: Set<string> = new Set();
+let lastRemoteFull: string[] | null = null;
 
 // 绑定 DOM 句柄（由 accountsController.initAccountsEvents 委托调用，避免命名冲突）
 function initNvidiaPreferredShuttleHandles(): void {
@@ -103,6 +112,9 @@ function initNvidiaPreferredShuttleEvents(): void {
     if (inputNvidiaPreferredSearchRight) inputNvidiaPreferredSearchRight.addEventListener('input', applyNvidiaPreferredSearchRight);
     if (chkNvidiaPreferredSelectAllLeft) chkNvidiaPreferredSelectAllLeft.addEventListener('change', toggleNvidiaPreferredSelectAllLeft);
     if (chkNvidiaPreferredSelectAllRight) chkNvidiaPreferredSelectAllRight.addEventListener('change', toggleNvidiaPreferredSelectAllRight);
+    // 「移除失效已选」按钮:从已选清单移除所有「远端已删除」(stale)的行。仅在有失效标记时可点。
+    const btnRemoveStale = document.getElementById('btnNvidiaPreferredRemoveStale');
+    if (btnRemoveStale) btnRemoveStale.addEventListener('click', removeStaleNvidiaPreferredSelected);
 }
 
 // 穿梭框 Modal 统一初始化套口：DOM 句柄赋值、事件绑定、首屏徽标回读。
@@ -224,6 +236,9 @@ async function fetchAndRenderNvidiaPreferredModels(isOpening: boolean, force?: '
         }
         const models: string[] = Array.isArray(res.models) ? res.models : [];
         const source: string = res.source || (force === 'remote' ? 'remote' : 'cache');
+        // 后端新增 diff 字段(向后兼容:缺失即空,不破坏旧后端)。
+        const snapshot: string[] = Array.isArray(res.snapshot) ? res.snapshot : [];
+        const addedFromBackend: string[] = Array.isArray(res.added) ? res.added : [];
 
         if (lblNvidiaPreferredSource) {
             const dict = i18n[state.currentLanguage] || i18n.zh || {};
@@ -235,19 +250,30 @@ async function fetchAndRenderNvidiaPreferredModels(isOpening: boolean, force?: '
         }
 
         if (source === 'cache') {
-            // 本地清单命中:左列=清单本身(已选回显),右列保持现状(没拉上游)
+            // 本地清单命中:左列=清单本身(已选回显),右列保持现状(没拉上游)。
+            // cache 分支无本轮新增(added=空),但保留历史 added 标记以复原「上次新增」观感:
+            // 后端 cache 分支返回上次快照,据其与本地清单关系重算失效(若曾拉过远端)。
             nvidiaPreferredLeftIDs = models.slice();
+            // 失效比对需要「最近一次成功远端全集」,cache 命中时用 snapshot 作比基准(若有)。
+            // 首次/clean(无快照)时 snapshot 为空 → 不下失效判定,符合「未真相核对不下红标」原则。
+            lastRemoteFull = snapshot.length > 0 ? snapshot.slice() : lastRemoteFull;
+            staleSetLower = lastRemoteFull ? computeStaleLower(nvidiaPreferredLeftIDs, lastRemoteFull) : new Set();
             renderNvidiaPreferredListLeft(nvidiaPreferredLeftIDs);
             renderNvidiaPreferredListRight(nvidiaPreferredRightIDs);
             // 本地清单命中即把"已保存计数"刷到入口徽标 + Modal 顶部计数
             // 避免长时间停留在 HTML 写死的初值 0、与磁盘里实际保存的清单不同步
             updateNvidiaPreferredBadge(models.length);
         } else {
-            // 远端全量候选:进右列,剔除已在左列的 id;左列已选不重置
+            // 远端全量候选:进右列,剔除已在左列的 id;左列已选不重置。
+            // 更新本轮 diff:added 取后端算好的(本次−上次快照);stale 用本次全集现场对比已选。
+            lastRemoteFull = models.slice();
+            addedSetLower = new Set(addedFromBackend.map((s: string) => (s || '').trim().toLowerCase()).filter(Boolean));
+            staleSetLower = computeStaleLower(nvidiaPreferredLeftIDs, lastRemoteFull);
             nvidiaPreferredRightIDs = models.filter(m => !nvidiaPreferredLeftIDs.includes(m));
             renderNvidiaPreferredListRight(nvidiaPreferredRightIDs);
             renderNvidiaPreferredListLeft(nvidiaPreferredLeftIDs);
         }
+        refreshNvidiaPreferredDiffSummary();
     } catch (err: any) {
         showNvidiaPreferredError(err?.message || '获取模型失败');
     } finally {
@@ -280,14 +306,18 @@ function renderNvidiaPreferredListLeft(models: string[]): void {
         if (nvidiaPreferredEmptyLeft) nvidiaPreferredEmptyLeft.classList.remove('hidden');
         if (lblNvidiaPreferredVisibleLeft) lblNvidiaPreferredVisibleLeft.textContent = '0 / 0';
         if (chkNvidiaPreferredSelectAllLeft) chkNvidiaPreferredSelectAllLeft.checked = false;
+        refreshNvidiaPreferredDiffSummary();
         return;
     }
     if (nvidiaPreferredEmptyLeft) nvidiaPreferredEmptyLeft.classList.add('hidden');
     for (const m of models) {
-        nvidiaPreferredModelsListLeft.appendChild(buildNvidiaPreferredRow(m, false));
+        // 左列只标「失效」(远端已删除),不标新增;新增标在右列候选。
+        const badgeKind: DiffKind | null = staleSetLower.has(m.trim().toLowerCase()) ? 'stale' : null;
+        nvidiaPreferredModelsListLeft.appendChild(buildNvidiaPreferredRow(m, false, badgeKind));
     }
     applyNvidiaPreferredSearchLeft();
     syncNvidiaPreferredSelectAllLeft();
+    refreshNvidiaPreferredDiffSummary();
 }
 
 // 渲染右列(上游候选),checkedSet 为空=不勾选
@@ -302,14 +332,50 @@ function renderNvidiaPreferredListRight(models: string[]): void {
     }
     if (nvidiaPreferredEmptyRight) nvidiaPreferredEmptyRight.classList.add('hidden');
     for (const m of models) {
-        nvidiaPreferredModelsListRight.appendChild(buildNvidiaPreferredRow(m, false));
+        // 右列标「新增」(本次远端新增);失效标在左列已选。
+        const badgeKind: DiffKind | null = addedSetLower.has(m.trim().toLowerCase()) ? 'new' : null;
+        nvidiaPreferredModelsListRight.appendChild(buildNvidiaPreferredRow(m, false, badgeKind));
     }
     applyNvidiaPreferredSearchRight();
     syncNvidiaPreferredSelectAllRight();
 }
 
+// refreshNvidiaPreferredDiffSummary 刷新 Modal 顶部「新增 N / 失效 M」摘要区。
+// 避免空集时残留文案;据当前 addedSetLower/staleSetLower 实时算数,跨 Modal / re-render 安全。
+function refreshNvidiaPreferredDiffSummary(): void {
+    const node = document.getElementById('nvidiaPreferredDiffSummary');
+    const newCount = addedSetLower.size;
+    const staleCount = staleSetLower.size;
+    if (node) {
+        if (newCount === 0 && staleCount === 0) {
+            node.textContent = '';
+            node.classList.add('hidden');
+        } else {
+            const parts: string[] = [];
+            if (newCount > 0) parts.push(diffSummaryText('new', newCount));
+            if (staleCount > 0) parts.push(diffSummaryText('stale', staleCount));
+            node.textContent = parts.join(' · ');
+            node.classList.remove('hidden');
+        }
+    }
+    // 同步「移除失效已选」按钮可点性:仅当存在失效标记(staleCount>0)时启用,否则禁用。
+    const btnRemoveStale = document.getElementById('btnNvidiaPreferredRemoveStale') as HTMLButtonElement | null;
+    if (btnRemoveStale) {
+        btnRemoveStale.disabled = staleCount === 0;
+        const dl = (window as any).__nvidiaPreferredDict || {};
+        const dict = i18n[state.currentLanguage] || i18n.zh || {};
+        if (staleCount > 0) {
+            const tpl = (dl.nvidiaPreferredRemoveStaleCountBtn || dict.nvidiaPreferredRemoveStaleCountBtn || '移除失效已选 ({n})');
+            btnRemoveStale.textContent = tpl.replace('{n}', String(staleCount));
+        } else {
+            btnRemoveStale.textContent = (dl.nvidiaPreferredRemoveStale || dict.nvidiaPreferredRemoveStale || '移除失效已选');
+        }
+    }
+}
+
 // 构造一行:label>input[data-model-id]+span.mono;change 事件同步该列全选框
-function buildNvidiaPreferredRow(modelId: string, checked: boolean): HTMLLabelElement {
+// badgeKind 非 null 时在行尾追加一个 diff 徽章(新增=绿/失效=红),便于用户一眼定位本轮变化项。
+function buildNvidiaPreferredRow(modelId: string, checked: boolean, badgeKind: DiffKind | null = null): HTMLLabelElement {
     const row = document.createElement('label');
     row.dataset.modelId = modelId;
     row.className = 'flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-slate-50/60 dark:hover:bg-white/5 transition-colors select-none';
@@ -327,6 +393,11 @@ function buildNvidiaPreferredRow(modelId: string, checked: boolean): HTMLLabelEl
 
     row.appendChild(chk);
     row.appendChild(span);
+    if (badgeKind) {
+        // 失效已选行用红字弱视觉效果提醒(不阻断勾选/移出);新增候选用绿徽章。
+        if (badgeKind === 'stale') span.classList.add('line-through', 'text-red-500', 'dark:text-red-400', 'opacity-70');
+        row.appendChild(createDiffBadge(badgeKind));
+    }
     return row;
 }
 
@@ -499,4 +570,31 @@ function submitNvidiaPreferredModels(): void {
     } finally {
         btnNvidiaPreferredSave.disabled = false;
     }
+}
+
+// removeStaleNvidiaPreferredSelected:从左列已选一次性移除所有「远端已删除」(staleSetLower 命中)的行。
+// 仅在 staleSetLower 非空(即曾成功拉取远端并发现失效)时可点,且用户确认后再动。
+// 移除后失效标记自然清空,新增标记不变;未保存不落盘(走「保存清单」按钮,与既有移出一致挽回路径)。
+function removeStaleNvidiaPreferredSelected(): void {
+    if (staleSetLower.size === 0) return;
+    const dict = i18n[state.currentLanguage] || i18n.zh || {};
+    const dl = (window as any).__nvidiaPreferredDict || {};
+    const staleIds = nvidiaPreferredLeftIDs.filter(id => staleSetLower.has((id || '').trim().toLowerCase()));
+    if (staleIds.length === 0) return;
+    const tpl = (dl.nvidiaPreferredRemoveStaleCountBtn || dict.nvidiaPreferredRemoveStaleCountBtn || '移除失效已选 ({n})');
+    const promptMsg = tpl.replace('{n}', String(staleIds.length)) + '\n' + staleIds.join('\n');
+    // eslint-disable-next-line no-alert
+    if (!window.confirm(promptMsg)) return;
+    const removeLower = new Set(staleIds.map(s => s.trim().toLowerCase()));
+    nvidiaPreferredLeftIDs = nvidiaPreferredLeftIDs.filter(id => !removeLower.has((id || '').trim().toLowerCase()));
+    // 移除后失效标记自然清空(这些 id 已不在已选);移出的 id 回到右列候选(若远端仍存在则在右列可见,
+    // 若远端已删则两边都没有——这正是「失效」的语义,不必特殊处理)。
+    for (const id of staleIds) {
+        if (!nvidiaPreferredRightIDs.includes(id) && (lastRemoteFull?.includes(id) ?? false)) {
+            nvidiaPreferredRightIDs.push(id);
+        }
+    }
+    staleSetLower = new Set();
+    renderNvidiaPreferredListLeft(nvidiaPreferredLeftIDs);
+    renderNvidiaPreferredListRight(nvidiaPreferredRightIDs);
 }

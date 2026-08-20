@@ -217,6 +217,15 @@
                     <span>获取号池模型</span>
                 </button>
                 <span id="lblFetchedModelsCount" class="text-[11px] text-primary font-medium hidden"></span>
+                <!-- 清除失效模型:删除「真实目标模型已从远端下架」的映射行。默认禁用,需先成功获取号池模型核对远端全集后才可点。 -->
+                <button id="btnClearStaleModels" disabled
+                    class="flex items-center gap-1 px-2.5 py-1 text-[12px] font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 rounded-lg transition-colors cursor-pointer border border-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-red-500/10"
+                    onclick="window._relayClearStaleMappings()"
+                    data-i18n="relayClearStaleModels" data-i18n-title="relayClearStaleTip"
+                    title="删除「真实目标模型」已从远端下架的映射行(需先成功获取号池模型)">
+                    <span class="material-symbols-outlined text-[15px]">cleaning_services</span>
+                    <span>清除失效模型</span>
+                </button>
                 <!-- Other 号池多组获取按钮容器:切到 Other Tab 时由 relayController 动态渲染按组按钮,默认隐藏 -->
                 <div id="otherGroupFetchContainer" class="hidden flex flex-wrap items-center gap-2 ml-1"></div>
             </div>

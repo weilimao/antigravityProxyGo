@@ -76,10 +76,15 @@ func (a *App) handleSettingsInvokeIPC(channel string, args []interface{}) (strin
 		cached := a.settingsMgr.GetNvidiaPreferredModels()
 		if len(cached) > 0 && !forceRemote {
 			a.AddLog(fmt.Sprintf("🔍 [NVIDIA 专属模型] 命中缓存清单,%d 个模型,直接返回", len(cached)))
+			// 附带返回上次远端快照,供前端复原「上次新增」标记(若存在)。
+			// 快照缺失(首次/旧配置)时返回空切片,前端当无新增处理。
+			snap := a.settingsMgr.GetNvidiaPreferredModelsSnapshot()
 			return marshalResponse(map[string]interface{}{
-				"success": true,
-				"source":  "cache",
-				"models":  cached,
+				"success":  true,
+				"source":   "cache",
+				"models":   cached,
+				"snapshot": snap,
+				"added":     []string{},
 			})
 		}
 		if forceRemote {
@@ -144,10 +149,18 @@ func (a *App) handleSettingsInvokeIPC(channel string, args []interface{}) (strin
 			})
 		}
 		a.AddLog(fmt.Sprintf("✅ [NVIDIA 专属模型] 复用账号 %s 拉取到远端 %d 个候选模型", firstAcc.Email, len(remoteModels)))
+		// diff:本次远端全集 − 上次落盘快照 = 本轮新增。新增即整体覆盖快照。
+		oldSnap := a.settingsMgr.GetNvidiaPreferredModelsSnapshot()
+		added := diffRemoteAdded(remoteModels, oldSnap)
+		if err := a.settingsMgr.SetNvidiaPreferredModelsSnapshot(remoteModels); err != nil {
+			a.AddLog(fmt.Sprintf("⚠️ [NVIDIA 专属模型] 快照落盘失败(不影响本次返回): %v", err))
+		}
 		return marshalResponse(map[string]interface{}{
-			"success": true,
-			"source":  "remote",
-			"models":  remoteModels,
+			"success":  true,
+			"source":   "remote",
+			"models":   remoteModels,
+			"snapshot": oldSnap,
+			"added":    added,
 		})
 
 	case "settings:change-dir":

@@ -193,6 +193,15 @@ type Config struct {
 	// NvidiaPreferredModels 是全局级"NVIDIA 专属模型清单",所有 NVIDIA 账号共用。
 	// 配置后,前端"获取模型"直接返回该清单(不请求远端);为空时才请求远端 /v1/models。
 	NvidiaPreferredModels []string `json:"nvidiaPreferredModels"`
+	// NvidiaPreferredModelsSnapshot 记录「上次成功拉取到的 NVIDIA 上游模型全集」,
+	// 供前端「获取上游模型」后与本次全集做 diff,提示本轮新增模型。omitempty 容旧配置零迁移。
+	// 拉取成功即整体覆盖落盘(见 app_ipc_invoke_settings.go),非累积语义。
+	NvidiaPreferredModelsSnapshot []string `json:"nvidiaPreferredModelsSnapshot,omitempty"`
+	// RelayChannelModelsSnapshot 按 channel 维度记录「上次成功拉取到的上游模型全集」,
+	// 供中继「模型映射」面板「获取号池模型」后与本次全集做 diff,提示本轮新增模型。
+	// 键为 lowercase channel(如 "nvidia"/"google"/"deepseek"),值为去重规整后的模型 id 切片。
+	// omitempty 容旧配置零迁移。某 channel 拉取成功即整体覆盖该键的值(非累积)。
+	RelayChannelModelsSnapshot map[string][]string `json:"relayChannelModelsSnapshot,omitempty"`
 	// AccountLayout/AccountGridColumns 是号池网格视图的纯 UI 偏好(grid|list 布局 + 3|4|5 列数)。
 	// 落 config.json 而非前端 localStorage,规避 WebView2 localStorage 按 exe 构建隔离导致的重启回退。
 	AccountLayout      string `json:"accountLayout"`
@@ -390,6 +399,14 @@ type ManagerInterface interface {
 	GetResolvedDebuggerLogPath() string
 	GetNvidiaPreferredModels() []string
 	SetNvidiaPreferredModels(val []string) error
+	// GetNvidiaPreferredModelsSnapshot/SetNvidiaPreferredModelsSnapshot: 上次成功拉取的 NVIDIA
+	// 上游模型全集。供前端「获取上游模型」后与本次全集 diff 提示本轮新增(见 app_ipc_invoke_settings.go)。
+	GetNvidiaPreferredModelsSnapshot() []string
+	SetNvidiaPreferredModelsSnapshot(val []string) error
+	// GetRelayChannelModelsSnapshot/SetRelayChannelModelsSnapshot: 按 channel 维度的上次上游模型全集快照。
+	// 供中继「模型映射」面板「获取号池模型」后 diff 提示本轮新增。key=channel(lowercase)。
+	GetRelayChannelModelsSnapshot() map[string][]string
+	SetRelayChannelModelsSnapshot(channel string, val []string) error
 	GetNvidiaWorkerProxyURL() string
 	SetNvidiaWorkerProxyURL(val string) error
 	IsNvidiaWorkerProxyEnabled() bool

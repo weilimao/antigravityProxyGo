@@ -17,7 +17,11 @@
         <span class="font-bold text-primary dark:text-primary-fixed-dim" id="lblNvidiaPreferredCount">0</span>
         <span data-i18n="nvidiaPreferredModelsUnit">个专属模型</span>
       </div>
-      <div id="lblNvidiaPreferredSource" class="hidden text-[11px] px-2 py-0.5 rounded-md bg-primary/10 text-primary dark:text-primary-fixed-dim"></div>
+      <div class="flex items-center gap-2">
+        <!-- diff 摘要:本次新增 N 个 / M 个已选在远端删除。空集时由 shuttle 隐藏。 -->
+        <span id="nvidiaPreferredDiffSummary" class="hidden text-[11px] px-2 py-0.5 rounded-md bg-outline/10 text-outline dark:text-outline/80 font-medium"></span>
+        <div id="lblNvidiaPreferredSource" class="hidden text-[11px] px-2 py-0.5 rounded-md bg-primary/10 text-primary dark:text-primary-fixed-dim"></div>
+      </div>
     </div>
 
     <!-- 来源切换条 -->
@@ -42,10 +46,17 @@
       <!-- 左列:已选清单(给客户端用) -->
       <div class="flex-1 flex flex-col min-w-0 border border-outline-variant/30 rounded-lg overflow-hidden">
         <div class="flex items-center justify-between px-3 py-1.5 bg-slate-50/60 dark:bg-white/5 border-b border-outline-variant/20 shrink-0">
-          <label class="flex items-center gap-1.5 text-[11px] font-medium text-on-surface dark:text-white cursor-pointer select-none">
-            <input type="checkbox" id="chkNvidiaPreferredSelectAllLeft" class="w-3.5 h-3.5 rounded border-outline-variant/40 dark:border-white/20 text-primary focus:ring-primary cursor-pointer" />
-            <span data-i18n="nvidiaPreferredColSelected">已选清单(给客户端用)</span>
-          </label>
+          <div class="flex items-center gap-1.5">
+            <label class="flex items-center gap-1.5 text-[11px] font-medium text-on-surface dark:text-white cursor-pointer select-none">
+              <input type="checkbox" id="chkNvidiaPreferredSelectAllLeft" class="w-3.5 h-3.5 rounded border-outline-variant/40 dark:border-white/20 text-primary focus:ring-primary cursor-pointer" />
+              <span data-i18n="nvidiaPreferredColSelected">已选清单(给客户端用)</span>
+            </label>
+            <!-- 失效已选一键移除:仅当有 stale 标记时启用(由 shuttle 按 staleSetLower 动态控制)。默认禁用 + tooltip 提示需先拉取。 -->
+            <button type="button" id="btnNvidiaPreferredRemoveStale" disabled
+              class="px-2 py-0.5 text-[10px] font-bold rounded text-red-500 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-red-500/10 cursor-pointer"
+              data-i18n="nvidiaPreferredRemoveStale" data-i18n-title="nvidiaPreferredRemoveStaleTip"
+              title="从已选清单移除所有「远端已删除」的模型(需先成功获取上游模型)">移除失效已选</button>
+          </div>
           <span class="text-[11px] text-outline" id="lblNvidiaPreferredVisibleLeft">- / -</span>
         </div>
         <div class="px-2 py-1.5 border-b border-outline-variant/20 shrink-0">

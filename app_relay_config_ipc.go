@@ -101,7 +101,20 @@ func (a *App) handleRelayConfigIPC(channel string, args []interface{}) (string, 
 		if err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
-		return marshalResponse(map[string]interface{}{"success": true, "models": models})
+		// diff:本次远端全集 − 该 channel 上次快照 = 本轮新增。新增即整体覆盖该 channel 快照。
+		// 快照缺失(首次/旧配置)时返回空切片,前端当无新增处理;本次全集则整体落盘为下次基准。
+		oldSnapByCh := a.settingsMgr.GetRelayChannelModelsSnapshot()
+		oldSnap := oldSnapByCh[strings.ToLower(channel)]
+		added := diffRemoteAdded(models, oldSnap)
+		if err := a.settingsMgr.SetRelayChannelModelsSnapshot(channel, models); err != nil {
+			a.AddLog(fmt.Sprintf("⚠️ [中继模型映射] %s 快照落盘失败(不影响本次返回): %v", channel, err))
+		}
+		return marshalResponse(map[string]interface{}{
+			"success":  true,
+			"models":   models,
+			"snapshot": oldSnap,
+			"added":    added,
+		})
 
 	case "relay:get-model-routes":
 		// 「按模型路由到号池」规则表(/route/* 入口按入站 model 分发到对应 Provider 号池)。
