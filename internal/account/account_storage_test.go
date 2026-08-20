@@ -467,6 +467,7 @@ func TestRoundTrip_LoadSaveLoad(t *testing.T) {
 	m1.SetOtherMaxConcurrency("openai", 5)
 	m1.SetGrokCliVersion("0.1.202")
 	m1.SetGrokQuotaCooldownHours(48)
+	m1.SetAntigravityCliVersion("2.3.9")
 	m1.SetProjectMaxConcurrency(13) // 另一非默认池配置项,验证多字段往返
 
 	// 第二实例从同目录加载。
@@ -495,6 +496,9 @@ func TestRoundTrip_LoadSaveLoad(t *testing.T) {
 	}
 	if got := m2.GetProjectMaxConcurrency(); got != 13 {
 		t.Fatalf("m2 ProjectMaxConcurrency = %d, want 13", got)
+	}
+	if got := m2.GetAntigravityCliVersion(); got != "2.3.9" {
+		t.Fatalf("m2 AntigravityCliVersion = %q, want 2.3.9", got)
 	}
 	if got := m2.GetGrokCliVersion(); got != "0.1.202" {
 		t.Fatalf("m2 GrokCliVersion = %q, want 0.1.202", got)

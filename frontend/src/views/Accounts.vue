@@ -49,6 +49,12 @@
                     <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="maxConcurrencyLabel">并发上限</span>
                     <input type="number" min="0" max="1000" id="poolMaxConcurrency" class="w-14 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="maxConcurrencyTip" title="0=未配置(默认10);超过自动换号" />
                 </div>
+                <!-- Antigravity 池全局 Hub 客户端版本号(号池单值,对仗并发上限):用于发往 Google 上游的
+                     User-Agent 身份头(如 antigravity/hub/<ver> (aidev_client; os_type=windows; arch=amd64))。留空回退默认 2.3.1。 -->
+                <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20" id="antigravityCliVersionWrap">
+                    <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="antigravityCliVersionLabel">Hub版本</span>
+                    <input type="text" id="antigravityCliVersion" placeholder="2.3.1" class="w-20 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="antigravityCliVersionTip" title="Antigravity Hub 版本号(发往 Google 上游的 User-Agent 伪装版本);默认 2.3.1,留空回退默认" />
+                </div>
             </div>
 
             <div class="flex items-center gap-2 bg-slate-50/50 dark:bg-white/5 px-3 py-1.5 rounded-lg border border-outline-variant/30 flex-shrink-0 hidden" id="nvidiaLBModeContainer">

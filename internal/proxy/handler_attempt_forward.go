@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"antigravity-proxy/internal/account"
 	"bytes"
 	"context"
 	"errors"
@@ -68,8 +69,12 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 
 	// 统一伪装 User-Agent 为正规官方客户端格式 (与图一完全一致)
 	ua := ro.customHeaders.Get("User-Agent")
-	if ua == "" || strings.Contains(strings.ToLower(ua), "go-http-client") || strings.Contains(ua, "2.2.1") {
-		ro.customHeaders.Set("User-Agent", "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)")
+	if ua == "" || strings.Contains(strings.ToLower(ua), "go-http-client") || strings.Contains(ua, "2.2.1") || strings.HasPrefix(ua, "antigravity/hub/") {
+		if sc.h.accountMgr != nil {
+			ro.customHeaders.Set("User-Agent", sc.h.accountMgr.GetAntigravityUserAgent())
+		} else {
+			ro.customHeaders.Set("User-Agent", account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion))
+		}
 	}
 
 	timeoutSec := 300

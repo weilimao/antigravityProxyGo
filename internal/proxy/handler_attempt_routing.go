@@ -472,7 +472,11 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 						if wrappedBytes, err := json.Marshal(wrappedReq); err == nil {
 							finalReqBody = wrappedBytes
 							customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
-							customHeaders.Set("User-Agent", "antigravity/hub/2.2.1 windows/amd64")
+							if sc.h.accountMgr != nil {
+								customHeaders.Set("User-Agent", sc.h.accountMgr.GetAntigravityUserAgent())
+							} else {
+								customHeaders.Set("User-Agent", account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion))
+							}
 						}
 					}
 

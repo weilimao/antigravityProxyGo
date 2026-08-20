@@ -177,6 +177,10 @@ type AccountsData struct {
 	AntigravityMaxConcurrency int            `json:"antigravityMaxConcurrency,omitempty"`
 	ProjectMaxConcurrency     int            `json:"projectMaxConcurrency,omitempty"`
 	OtherMaxConcurrency       map[string]int `json:"otherMaxConcurrency,omitempty"`
+	// AntigravityCliVersion 持久化 Antigravity 号池全局 Hub/客户端版本号(号池单值,对仗 AntigravityMaxConcurrency)。
+	// 用于发往 Google 上游的 User-Agent 身份头(如 antigravity/hub/<ver> (aidev_client; os_type=windows; arch=amd64))。
+	// 空串=未配置, GetAntigravityCliVersion 回退默认 DefaultAntigravityCliVersion("2.3.1")。
+	AntigravityCliVersion string `json:"antigravityCliVersion,omitempty"`
 	// GrokMaxConcurrency 持久化 Grok 号池单账号在途并发上限(单池单值,与 NvidiaMaxConcurrency 同口径)。
 	GrokMaxConcurrency int `json:"grokMaxConcurrency,omitempty"`
 	// GrokCliVersion 持久化 Grok 号池全局 CLI 客户端版本号(号池单值,对仗 GrokMaxConcurrency)。
@@ -217,6 +221,9 @@ type Manager struct {
 	antigravityMaxConcurrency int
 	projectMaxConcurrency     int
 	otherMaxConcurrency       map[string]int
+	// antigravityCliVersion 持久化 Antigravity 号池全局 Hub/客户端版本号(单池单值,对仗 antigravityMaxConcurrency);
+	// 空串=未配置, GetAntigravityCliVersion 回退默认 DefaultAntigravityCliVersion("2.3.1")。
+	antigravityCliVersion string
 	// grokMaxConcurrency 是 Grok 号池单账号在途并发上限(单池单值,与 nvidiaMaxConcurrency 同口径);
 	// 0/负数=未配置,Get 时回退默认 10。
 	grokMaxConcurrency int

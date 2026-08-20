@@ -76,6 +76,9 @@ let nvidiaLBModeSelect: HTMLSelectElement | null;
 // otherMaxConcurrency:Other 按组配置(选中具体组时显示)。
 let nvidiaMaxConcurrency: HTMLInputElement | null;
 let poolMaxConcurrency: HTMLInputElement | null;
+// Antigravity 池全局 Hub 客户端版本号(号池单值,对仗 poolMaxConcurrency):发往 Google 上游 User-Agent 身份头,默认 2.3.1。
+let antigravityCliVersionWrap: HTMLDivElement | null;
+let antigravityCliVersion: HTMLInputElement | null;
 let btnAddNvidiaAccount: HTMLButtonElement | null;
 let btnAddGrokAccount: HTMLButtonElement | null;
 // Grok 池控件:LB 算法 select + 单池单值并发上限(与 NVIDIA 同构,无总开关 toggle)。
@@ -216,6 +219,10 @@ export function updateViewTabUI() {
             if (poolMaxConcurrency && state.lastBackendData) {
                 poolMaxConcurrency.value = String(state.lastBackendData.antigravityMaxConcurrency ?? 10);
             }
+            if (antigravityCliVersionWrap) antigravityCliVersionWrap.classList.remove('hidden');
+            if (antigravityCliVersion && state.lastBackendData) {
+                antigravityCliVersion.value = state.lastBackendData.antigravityCliVersion || '2.3.1';
+            }
         /* } else if (state.currentViewTab === 'gemini-cli') {
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = activeClass;
             btnChannelAntigravity.className = inactiveClass;
@@ -316,6 +323,7 @@ export function updateViewTabUI() {
             if (poolModeToggle && state.lastBackendData) {
                 poolModeToggle.checked = state.lastBackendData.projectPoolMode;
             }
+            if (antigravityCliVersionWrap) antigravityCliVersionWrap.classList.add('hidden');
             // project Tab:并发上限 input 用 projectMaxConcurrency 回填(?? 10 兜底)。
             if (poolMaxConcurrency && state.lastBackendData) {
                 poolMaxConcurrency.value = String(state.lastBackendData.projectMaxConcurrency ?? 10);
@@ -471,6 +479,8 @@ export function initAccountsEvents() {
     // antigravity/project 两 Tab 共用 poolMaxConcurrency 按 currentViewTab 分流,Other 用 otherMaxConcurrency)。
     nvidiaMaxConcurrency = document.getElementById('nvidiaMaxConcurrency') as HTMLInputElement | null;
     poolMaxConcurrency = document.getElementById('poolMaxConcurrency') as HTMLInputElement | null;
+    antigravityCliVersionWrap = document.getElementById('antigravityCliVersionWrap') as HTMLDivElement | null;
+    antigravityCliVersion = document.getElementById('antigravityCliVersion') as HTMLInputElement | null;
     btnAddNvidiaAccount = document.getElementById('btnAddNvidiaAccount') as HTMLButtonElement | null;
     btnAddOtherAccount = document.getElementById('btnAddOtherAccount') as HTMLButtonElement | null;
     btnAddGrokAccount = document.getElementById('btnAddGrokAccount') as HTMLButtonElement | null;
@@ -781,6 +791,19 @@ export function initAccountsEvents() {
             if (gqcDebounce) clearTimeout(gqcDebounce);
             gqcDebounce = setTimeout(() => {
                 ipcRenderer.send('grok:set-quota-cooldown-hours', v);
+            }, 300);
+        });
+    }
+
+    // Antigravity 池全局 Hub 客户端版本号(号池单值,对仗并发上限):300ms debounce。空串回退默认 2.3.1
+    if (antigravityCliVersion) {
+        let acvDebounce: ReturnType<typeof setTimeout> | null = null;
+        antigravityCliVersion.addEventListener('change', (e: any) => {
+            const v = (e.target.value || '').trim() || '2.3.1';
+            e.target.value = v;
+            if (acvDebounce) clearTimeout(acvDebounce);
+            acvDebounce = setTimeout(() => {
+                ipcRenderer.send('antigravity:set-cli-version', v);
             }, 300);
         });
     }

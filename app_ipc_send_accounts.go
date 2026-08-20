@@ -195,6 +195,16 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		a.emitAccountsRes()
 		return true
 
+	case "antigravity:set-cli-version":
+		// Antigravity 号池全局 Hub 客户端版本号(单池单值,对仗 antigravity:set-max-concurrency)。
+		// 用于发往 Google 上游的 User-Agent 身份头(如 antigravity/hub/<ver> (aidev_client; os_type=windows; arch=amd64))。
+		// 空串=未配置,GetAntigravityCliVersion 回退默认 DefaultAntigravityCliVersion("2.3.1")。
+		v := getStringArg(0)
+		a.accountMgr.SetAntigravityCliVersion(v)
+		a.AddLog("🔄 Antigravity Hub Version → " + a.accountMgr.GetAntigravityCliVersion())
+		a.emitAccountsRes()
+		return true
+
 	case "project:set-max-concurrency":
 		v := getIntArg(0)
 		a.accountMgr.SetProjectMaxConcurrency(v)

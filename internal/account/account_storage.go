@@ -101,6 +101,7 @@ type poolConfigOnDisk struct {
 	GrokLBMode                string          `json:"grokLbMode,omitempty"`
 	NvidiaMaxConcurrency      int             `json:"nvidiaMaxConcurrency,omitempty"`
 	AntigravityMaxConcurrency int             `json:"antigravityMaxConcurrency,omitempty"`
+	AntigravityCliVersion     string          `json:"antigravityCliVersion,omitempty"`
 	ProjectMaxConcurrency     int             `json:"projectMaxConcurrency,omitempty"`
 	OtherMaxConcurrency       map[string]int  `json:"otherMaxConcurrency,omitempty"`
 	GrokMaxConcurrency        int             `json:"grokMaxConcurrency,omitempty"`
@@ -224,6 +225,7 @@ func (m *Manager) marshalPoolConfig() ([]byte, error) {
 		GrokLBMode:                m.grokLBMode,
 		NvidiaMaxConcurrency:      m.nvidiaMaxConcurrency,
 		AntigravityMaxConcurrency: m.antigravityMaxConcurrency,
+		AntigravityCliVersion:     m.antigravityCliVersion,
 		ProjectMaxConcurrency:     m.projectMaxConcurrency,
 		OtherMaxConcurrency:       m.otherMaxConcurrency,
 		GrokMaxConcurrency:        m.grokMaxConcurrency,
@@ -321,6 +323,7 @@ func (m *Manager) loadPoolConfigIntoMemory() {
 		m.grokQuotaCooldownHours = 0
 	}
 	m.antigravityMaxConcurrency = cfg.AntigravityMaxConcurrency
+	m.antigravityCliVersion = strings.TrimSpace(cfg.AntigravityCliVersion)
 	m.projectMaxConcurrency = cfg.ProjectMaxConcurrency
 	if cfg.OtherMaxConcurrency != nil {
 		m.otherMaxConcurrency = make(map[string]int, len(cfg.OtherMaxConcurrency))
@@ -449,6 +452,7 @@ func (m *Manager) migrateLegacyFile() error {
 		GrokLBMode:                parsed.GrokLBMode,
 		NvidiaMaxConcurrency:      parsed.NvidiaMaxConcurrency,
 		AntigravityMaxConcurrency: parsed.AntigravityMaxConcurrency,
+		AntigravityCliVersion:     parsed.AntigravityCliVersion,
 		ProjectMaxConcurrency:     parsed.ProjectMaxConcurrency,
 		OtherMaxConcurrency:       parsed.OtherMaxConcurrency,
 		GrokMaxConcurrency:        parsed.GrokMaxConcurrency,

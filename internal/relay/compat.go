@@ -143,7 +143,11 @@ func NewAPICompatHandler(
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+acc.GetAccessToken())
-		req.Header.Set("User-Agent", "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)")
+		if h.accountMgr != nil {
+			req.Header.Set("User-Agent", h.accountMgr.GetAntigravityUserAgent())
+		} else {
+			req.Header.Set("User-Agent", account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion))
+		}
 		httpClient := h.client
 		if strings.Contains(targetURL, "alt=sse") || strings.Contains(targetURL, "streamGenerateContent") {
 			httpClient = h.streamClient

@@ -30,6 +30,7 @@ func (a *App) emitAccountsRes() {
 		"activeChannel":             a.accountMgr.GetActiveChannel(),
 		"nvidiaMaxConcurrency":      a.accountMgr.GetNvidiaMaxConcurrency(),
 		"antigravityMaxConcurrency": a.accountMgr.GetAntigravityMaxConcurrency(),
+		"antigravityCliVersion":     a.accountMgr.GetAntigravityCliVersion(),
 		"projectMaxConcurrency":     a.accountMgr.GetProjectMaxConcurrency(),
 	})
 }

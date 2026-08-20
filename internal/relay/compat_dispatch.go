@@ -345,7 +345,11 @@ func (h *APICompatHandler) dispatchToGemini(
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)")
+	if h.accountMgr != nil {
+		req.Header.Set("User-Agent", h.accountMgr.GetAntigravityUserAgent())
+	} else {
+		req.Header.Set("User-Agent", account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion))
+	}
 	// 将用户的凭证传递给本地代理，本地代理将据此提取 sessionKey 自动粘性绑定账号池并执行扣费统计
 	req.Header.Set("Authorization", "Bearer "+userSession.UserKey)
 	req.Header.Set("X-Relay-User-Id", userSession.UserID)
