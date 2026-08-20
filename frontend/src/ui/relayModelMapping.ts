@@ -548,9 +548,11 @@ function renderCurrentTabTable() {
             rowStaleSet = grpKey ? (channelStaleLower[grpKey] || new Set<string>()) : new Set<string>();
             rowAddedSet = grpKey ? (channelAddedLower[grpKey] || new Set<string>()) : new Set<string>();
         }
-        const tmLower = ((item.targetModel || '') || '').trim().toLowerCase();
-        const isStale = rowStaleSet.size > 0 && !!tmLower && rowStaleSet.has(tmLower);
-        const isNew = rowAddedSet.size > 0 && !!tmLower && rowAddedSet.has(tmLower);
+        // 失效判定经 shouldMarkStale(内部对 liveSet 取反):rowStaleSet 实为「远端全集小写集合」,
+        // TargetModel 不在远端全集才算下架。此前直接 .has(tmLower) 漏了取反 → 远端明明有却误标删除线。
+        // 新增判定经 shouldMarkNew:rowAddedSet 为「本轮新增」集合,在集合内即新增,极性正确无需取反。
+        const isStale = shouldMarkStale(item, rowStaleSet);
+        const isNew = shouldMarkNew(item.targetModel, rowAddedSet);
         const staleBadge = isStale ? mappingBadgeHTML('stale') : '';
         const newBadge = isNew ? mappingBadgeHTML('new') : '';
         const targetExtraClass = isStale ? 'text-red-500 dark:text-red-400 line-through opacity-70' : '';

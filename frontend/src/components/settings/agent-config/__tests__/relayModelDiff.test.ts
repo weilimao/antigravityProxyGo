@@ -110,6 +110,34 @@ async function runRelayDiffTests() {
     if (buildLiveSetLower(null).size !== 0) throw new Error('测试 6 失败: null 应空集');
     console.log('✓ 测试 6 通过\n');
 
+    // 测试 7: 失效极性回归 ——「在远端全集里」应判非失效(防 renderCurrentTabTable 直接 .has() 漏取反误标删除线)。
+    // 历史 bug:渲染处拿 liveSet 直接 `rowStaleSet.has(tmLower)` 判 isStale,极性反了 → 远端明明有却标删除线。
+    // 正确写法走 shouldMarkStale(内部 `!liveSet.has(tm)` 取反):在全集里 = 非失效;不在 = 失效。
+    console.log('测试 7: 失效极性 —— 在 liveSet 里应非失效、不在应失效...');
+    {
+        const polarLive = buildLiveSetLower(['z-ai/glm-5.2', 'moonshotai/kimi-k2.5']);
+        // 在远端全集里的 TargetModel:绝不应判失效
+        if (shouldMarkStale({ targetModel: 'z-ai/glm-5.2' }, polarLive)) {
+            throw new Error('测试 7a 失败: 远端存在却判失效 —— 渲染侧疑似漏了取反(删 \"!\" 就挂这)');
+        }
+        if (shouldMarkStale({ targetModel: 'Z-AI/GLM-5.2' }, polarLive)) {
+            throw new Error('测试 7b 失败: 大小写不敏感,远端存在却判失效');
+        }
+        // 不在远端全集里的(已下架):应判失效
+        if (!shouldMarkStale({ targetModel: 'old-removed-model' }, polarLive)) {
+            throw new Error('测试 7c 失败: 已下架模型未判失效 —— 失效集合构建可能反了');
+        }
+        // 对比佐证:错误写法(直接 .has 漏取反)会把「存在」判成失效 —— 此断言锁死正确极性
+        const inflightPresent = 'z-ai/glm-5.2';
+        if (polarLive.has(inflightPresent.toLowerCase())) {
+            // .has() 命中只是「在全集里」,不能直接当 stale —— 须取反才是正确的 shouldMarkStale 口径
+            if (shouldMarkStale({ targetModel: inflightPresent }, polarLive)) {
+                throw new Error('测试 7d 失败: .has() 命中却判失效,与正确极性矛盾');
+            }
+        }
+    }
+    console.log('✓ 测试 7 通过\n');
+
     console.log('>>> relayModelDiff 测试全部绿灯通过！ <<<\n');
 }
 
