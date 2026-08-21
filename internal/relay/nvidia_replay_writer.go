@@ -166,7 +166,9 @@ type liveStreamState struct {
 //     原样回放。
 //   - text 块:上游 index 在 prevState.liveIdxMap 中 → 整块(start/delta/stop)全跳(已 live);
 //     否则(尾随 text,或无推理模型首轮 text 未推 live 的兜底)remap 到 liveMaxIdx+1 后回放。
-//   - tool_use 块:从未 live,remap 到 liveMaxIdx+1 后整块回放(防错误工具调用约束要求 tool 段走 replay)。
+//   - tool_use 块:与 text 同权——上游 index 在 prevState.liveIdxMap 中 → 整块全跳(已实时推 live);
+//     否则 remap 到 liveMaxIdx+1 后回放。断流重试的 tool ID 一致性由 sseBlockStates.pinnedToolIDs
+//     在翻译层强制保证(重试轮复用首轮 tool_use ID),不再依赖"tool 段只蓄流"的旧约束。
 //   - message_delta/message_stop:补发一次(取 replay 尾帧数据,stop_reason/usage 与成功轮一致)。
 //
 // 该函数统一服务纯 text 回复(只补尾帧)、含 tool_use 回复(补 tool 块+尾帧)、续传成功(补未 live 段+尾帧)
@@ -203,21 +205,13 @@ func (r *replayWriter) replayFollowingInto(liveSink sseEventSink, prevState *liv
 				skippingThinking = false
 			}
 			upIdx := contentBlockIndex(f.data)
-			if kind == "text" {
+			if kind == "text" || kind == "tool_use" {
 				if _, alreadyLive := prevState.liveIdxMap[upIdx]; alreadyLive {
-					// 已 live 的 text 块:整块跳过(start/delta/stop 全跳),记录"跳过态"避免 stop 误回放
+					// 已 live 的 text/tool 块:整块跳过(start/delta/stop 全跳),记录"跳过态"避免 stop 误回放
 					remap[upIdx] = -1 // -1 哨兵:后续 delta/stop 见 -1 即跳过
 					continue
 				}
-				// 尾随 text:尚未 live,remap 后回放
-				ci := nextIdx
-				remap[upIdx] = ci
-				nextIdx++
-				liveSink.writeEvent("content_block_start", rewriteContentBlockIndex(f.data, ci))
-				continue
-			}
-			// tool_use:从未 live,remap 后整块回放
-			if kind == "tool_use" {
+				// 尾随 text/tool:尚未 live,remap 后回放
 				ci := nextIdx
 				remap[upIdx] = ci
 				nextIdx++

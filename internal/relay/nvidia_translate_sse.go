@@ -38,7 +38,7 @@ import (
 func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.ReadCloser, writer *bufio.Writer, model string, inputTokens int, flusher ...http.Flusher) (input, output, cached int, err error) {
 	streamID := fmt.Sprintf("msg_nvidia_%d", time.Now().UnixNano())
 	fw := newFlushWriter(streamID, writer, flusher...)
-	input, output, cached, _, _, err = openAIChatSSEToAnthropicSSEInto(ctx, reader, body, fw, streamID, model, inputTokens)
+	input, output, cached, _, _, _, err = openAIChatSSEToAnthropicSSEIntoPinned(ctx, reader, body, fw, streamID, model, inputTokens, nil)
 	return input, output, cached, err
 }
 
@@ -59,6 +59,18 @@ func OpenAIChatSSEToAnthropicSSE(ctx context.Context, reader io.Reader, body io.
 // inputTokens 写入 message_start.usage.input_tokens(保底 1),让客户端流首即有非零 ↑;
 // 真实累计值由末帧 message_delta.usage 覆盖。参见 OpenAIChatSSEToAnthropicSSE 的 inputTokens 注释。
 func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body io.ReadCloser, sink sseEventSink, streamID, model string, inputTokens int) (input, output, cached int, finishEmitted, streamTerminated bool, err error) {
+	input, output, cached, finishEmitted, streamTerminated, _, err = openAIChatSSEToAnthropicSSEIntoPinned(ctx, reader, body, sink, streamID, model, inputTokens, nil)
+	return
+}
+
+// openAIChatSSEToAnthropicSSEIntoPinned 是 openAIChatSSEToAnthropicSSEInto 的带 pin 变体:
+//   - pinnedToolIDs 非 nil(重试轮)时注入 sseBlockStates,强制 tool_use 复用首轮 ID,保证断流前后
+//     客户端看到的 Anthropic tool_use id 不变,杜绝"半截旧 ID tool 块 + 新 ID 补发"的错乱场景。
+//   - pinnedToolIDs 为 nil(首轮)时,函数内部会把翻译过程中生成的 tool_index→ID 映射累积起来,
+//     成功时通过返回值 emitted 透传给调用方,供后续重试轮 pin。
+//
+// 返回最后一个值 emitted:首轮成功时返回 generated map(可能为空 map,表示本轮无 tool);重试轮原样透传 pinned。
+func openAIChatSSEToAnthropicSSEIntoPinned(ctx context.Context, reader io.Reader, body io.ReadCloser, sink sseEventSink, streamID, model string, inputTokens int, pinnedToolIDs map[int]string) (input, output, cached int, finishEmitted, streamTerminated bool, emitted map[int]string, err error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
@@ -71,7 +83,11 @@ func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body
 	// message_start
 	sink.writeEvent("message_start", messageStartPayload(streamID, model, inputTokens))
 
-	blockStates := &sseBlockStates{blocks: map[int]*sseBlock{}}
+	blockStates := &sseBlockStates{
+		blocks:         map[int]*sseBlock{},
+		pinnedToolIDs:  pinnedToolIDs,
+		emittedToolIDs: map[int]string{},
+	}
 	stopReason := ""
 
 	for scanner.Scan() {
@@ -200,7 +216,13 @@ func openAIChatSSEToAnthropicSSEInto(ctx context.Context, reader io.Reader, body
 	sink.writeEvent("message_delta", messageDeltaPayload(stopReason, output, finalInput))
 	sink.writeEvent("message_stop", `{"type":"message_stop"}`)
 	sink.flush()
-	return finalInput, output, cached, finishEmitted, streamTerminated, err
+	// emitted 快照:首轮(无 pin)时把本轮生成的 tool_index→ID 映射回传给调用方;
+	// 重试轮(有 pin)原样透传 pinned,方便调用方跨多轮保持同一份 pinned map。
+	emitted = blockStates.snapshotEmittedToolIDs()
+	if pinnedToolIDs != nil {
+		emitted = pinnedToolIDs
+	}
+	return finalInput, output, cached, finishEmitted, streamTerminated, emitted, err
 }
 
 // sseBlock 记录当前打开的内容块(文本或工具调用)在 Anthropic 流中的索引与身份。
@@ -223,6 +245,17 @@ type sseBlockStates struct {
 	next        int
 	textEmitted bool
 	hasToolCall bool
+	// pinnedToolIDs 实现"断流重试时 tool_use ID 一致性":
+	//   - 非 nil 时(重试轮),emitToolCallDelta 优先用 pinnedToolIDs[tc.Index] 作为 tool_use 的 Anthropic ID,
+	//     忽略上游 tc.ID——因为首轮已把 tc.Index 对应的 toolu_xxx 实时推给 live,客户端持有该 ID,
+	//     重试轮若用新 ID 会导致同一 message 内出现两个不同 ID 的半截 tool 块,Claude Code 按旧 ID 拿残缺 JSON。
+	//   - nil 时(首轮/单次流),按原逻辑用 tc.ID(空则补 toolu_nvidia_N),并在生成后写入
+	//     emittedToolIDs 供调用方(pullAnthropicStreamWithRetry)快照,供后续重试轮 pin。
+	// 该字段由 openAIChatSSEToAnthropicSSEInto 的变体在构造 blockStates 时注入。
+	pinnedToolIDs map[int]string
+	// emittedToolIDs 记录本轮已生成的 tool_index(上游 tc.Index)→ Anthropic tool_use ID 映射。
+	// 非 nil 时由调用方持有,首轮成功后快照进 pinnedToolIDs,供重试轮复用。
+	emittedToolIDs map[int]string
 }
 
 // nextFreeIndex 返回当前 blocks 中未占用的最小 index,供 text/tool 块分配使用。
@@ -337,6 +370,13 @@ func (s *sseBlockStates) emitThinkingDelta(text string, fw sseEventSink) {
 
 // emitToolCallDelta 处理 OpenAI tool_calls 增量(index 指向上游分块的工具调用编号)，
 // 映射成 Anthropic 的 content_block_start(tool_use) + content_block_delta(input_json_delta)。
+//
+// tool_use ID 生成策略(断流重试"ID 一致性"的关键):
+//   - 若 s.pinnedToolIDs 非 nil 且含 tc.Index 条目(重试轮):强制复用 pinnedToolIDs[tc.Index] 作为
+//     content_block_start(tool_use) 的 id 字段。理由是首轮已把该 ID 实时推给 live,客户端持有该 ID;
+//     若重试轮用新 ID,客户端会见到两个不同 ID 的半截 tool 块,按旧 ID 拿残缺 JSON 执行错误调用。
+//   - 否则(首轮或无 pin):按原逻辑取 tc.ID(空则补 toolu_nvidia_N),并写入 s.emittedToolIDs 供
+//     调用方在首轮成功后快照,作为后续重试轮的 pinnedToolIDs。
 func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -360,20 +400,54 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 	key := base + tc.Index
 	b, ok := s.blocks[key]
 	if !ok {
-		b = &sseBlock{index: key, kind: "tool_use", toolID: tc.ID, toolName: tc.Function.Name}
+		// 生成 Anthropic tool_use id:优先 pin 复用首轮 ID,否则用上游 ID/兜底名生成。
+		toolID := ""
+		pinned := false
+		if s.pinnedToolIDs != nil {
+			if p, has := s.pinnedToolIDs[tc.Index]; has && p != "" {
+				toolID = p
+				pinned = true
+			}
+		}
+		if toolID == "" {
+			toolID = tc.ID
+		}
+		if toolID == "" {
+			toolID = fmt.Sprintf("toolu_nvidia_%d", tc.Index)
+		}
+		b = &sseBlock{index: key, kind: "tool_use", toolID: toolID, toolName: tc.Function.Name}
 		s.blocks[key] = b
+		// 同步累积 emitted 快照(首轮无 pin 时被调用方取走,后续重试轮据此 pin)。
+		// 关键:重试轮若遇到 pinned 未覆盖的新 index(罕见的工具列表变化/上游对同一 index
+		// 重命名),必须把它并进 pinnedToolIDs,保证后续轮次仍能复用同一 ID——避免"本轮用新 ID、
+		// 下轮再换 ID"导致同一 message 内出现多个半截 tool 块。emittedToolIDs 同步供观测/测试。
+		if s.emittedToolIDs != nil {
+			s.emittedToolIDs[tc.Index] = toolID
+		}
+		if s.pinnedToolIDs != nil && !pinned {
+			s.pinnedToolIDs[tc.Index] = toolID
+		}
 	}
 	if !b.toolStarted {
 		b.toolStarted = true
-		if b.toolID == "" {
-			b.toolID = fmt.Sprintf("toolu_nvidia_%d", tc.Index)
-		}
 		fw.writeEvent("content_block_start", contentBlockStartPayload(b.index, "tool_use", b.toolID, b.toolName))
 	}
 	// OpenAI 流式 tool_calls 的 arguments 是增量字符串，Anthropic 用 input_json_delta 直传
 	if tc.Function.Arguments != "" {
 		fw.writeEvent("content_block_delta", contentBlockInputJSONDeltaPayload(b.index, tc.Function.Arguments))
 	}
+}
+
+// snapshotEmittedToolIDs 返回 emittedToolIDs 的浅拷贝,供调用方在首轮成功后快照为下一轮的 pinnedToolIDs。
+// 返回 map 永不为 nil(无 tool 调用时为空 map),便于调用方无需判空直接传递。
+func (s *sseBlockStates) snapshotEmittedToolIDs() map[int]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[int]string{}
+	for k, v := range s.emittedToolIDs {
+		out[k] = v
+	}
+	return out
 }
 
 // closeAll 关闭所有已打开但尚未 closed 的文本/工具/思考块,发出 content_block_stop。

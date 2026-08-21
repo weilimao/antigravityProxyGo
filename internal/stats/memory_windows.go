@@ -148,8 +148,10 @@ func GetAppMemoryStats() (uint64, int, float64, error) {
 		)
 
 		if r1 != 0 {
-			// Using PrivateUsage instead of WorkingSetSize to avoid shared DLL double counting.
-			totalMemory += uint64(counters.PrivateUsage)
+			// 使用 WorkingSetSize(物理工作集, 与任务管理器"内存"列一致) 而非 PrivateUsage(提交内存)。
+			// 注意: 会轻微重复计算多进程共享 DLL 的共享页(每个进程都计入同一份共享页),
+			// 但对 WebView2 进程树(约 6-7 个进程)的误差仅十几 MB, 换来与系统观感的严格一致。
+			totalMemory += uint64(counters.WorkingSetSize)
 			count++
 		}
 

@@ -252,6 +252,14 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 	httpClient := h.streamClient
 	ctx := r.Context()
 
+	// pinnedToolIDs 实现 tool_use ID 跨重试轮一致性:首轮(attempt==0)翻译时生成并快照进该 map,
+	// 后续所有重试轮/兜底轮在翻译时强制复用首轮 ID(经 openAIChatSSEToAnthropicSSEIntoPinned 注入),
+	// 断流前后客户端看到的 tool_use id 不变,杜绝"半截旧 ID + 新 ID"的错乱调用。
+	// 首轮开始前为 nil(由翻译层在首个 tool 时按需生成);首轮及后续轮次翻译过程中若遇到 map 未覆盖的
+	// 新 tc.Index(罕见:工具列表跨轮变化),翻译层会把新条目追加到同一份 pinnedToolIDs(写发生在翻译
+	// 锁内,翻译与主循环同 goroutine,无并发风险),确保任意一轮的 tool index 都有稳定的 ID 锚。
+	var pinnedToolIDs map[int]string
+
 	// 混合模式 tee:首轮(attempt==0)双写——思考 + 纯 text 正文逐块实时透传 liveFW,tool 段只蓄流;
 	// 尾帧只蓄流不推 live(由调用方整体成功后经 replayFollowingInto 一次性补发)。
 	// liveFW==nil(上游不支持 Flusher 的降级路径)时退化为纯蓄流,等同旧行为。
@@ -318,16 +326,27 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 			if cycle == 0 && attempt == 0 {
 				sink = tee
 			} else {
-				if resume == nil {
-					resume = newResumeSink(liveFW, tee.replay, tee.liveThinkingOpen, tee.liveBodyOpenIdx, tee.liveMaxUsedIdx, tee.liveThinkingPushed)
-				} else {
-					resume.reset()
-				}
+			if resume == nil {
+				resume = newResumeSink(liveFW, tee.replay, tee.liveThinkingOpen, tee.liveBodyOpenIdx, tee.liveMaxUsedIdx, tee.liveThinkingPushed)
+				// 注入首轮已实时推 live 的 tool_use 上游 index 集合:重试轮 resumeSink 据此跳过这些
+				// tool 块(start/delta/stop 整块不推),防"同一 tool_use.id 出现在两个 index"协议违规。
+				resume.setLiveToolUpIdxs(tee.liveToolUpIdxs)
+			} else {
+				resume.reset()
+			}
 				tee.replay.reset() // 蓄流缓冲复用:重试轮重蓄整条上游内容(由 resumeSink.replay 写入)
 				sink = resume
 			}
-			attemptIn, attemptOut, attemptCached, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, activeBody, activeBody, sink, streamID, model, inboundInputTokens)
+			var attemptEmitted map[int]string
+			attemptIn, attemptOut, attemptCached, finishEmitted, streamTerminated, attemptEmitted, sseErr := openAIChatSSEToAnthropicSSEIntoPinned(ctx, activeBody, activeBody, sink, streamID, model, inboundInputTokens, pinnedToolIDs)
 			activeBody.Close() // 本轮上游响应体读完即关,下一轮(若有)重拉会拿到全新 body
+			// ID 一致性锚定:首轮(无 pin)之后,持续持有 emitted 作为后续轮的 pin。
+			// 注:无论 emitted 是否为空 map,都用同一份引用——后续轮翻译层会把新 index 追加进来,
+			// 形成跨轮单调递增的稳定 ID 锚。即便 attempt 失败,pinnedToolIDs 也是"截至本轮已生成 ID"
+			// 的最权威记录,下一轮自然延续。
+			if pinnedToolIDs == nil {
+				pinnedToolIDs = attemptEmitted
+			}
 
 			// 完整性判定:收到 finish_reason 帧或上游流以 [DONE]/正常 EOF 正常终止,且无上游错误/未 ctx 取消 → 整条 ready。
 			// streamTerminated 兜底 NIM 等上游"不发 finish_reason、仅 usage+[DONE]"的合法收尾形态,
@@ -407,7 +426,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				h.log("🛟 [NVIDIA Anthropic 流式] 周期 %d/%d 直连重试耗尽,切兜底代理 %s 再试 1 轮 账号 %s", cycle+1, maxCycles, fbAddr, poolAccount.Email)
 				resume.reset()
 				tee.replay.reset()
-				fbReplay, fbIn, fbOut, fbCached, fbFinalErr := h.pullAnthropicStreamOneRoundInto(ctx, fbClient, poolAccount, targetURL, upstreamBody, streamID, model, inboundInputTokens, resume)
+				fbReplay, fbIn, fbOut, fbCached, fbFinalErr := h.pullAnthropicStreamOneRoundInto(ctx, fbClient, poolAccount, targetURL, upstreamBody, streamID, model, inboundInputTokens, resume, pinnedToolIDs)
 				if fbFinalErr == nil && fbReplay != nil {
 					resume.commitPending() // 兜底轮整条 ready:提交重启段落 live + 回填持久态
 					return fbReplay, &liveStreamState{
@@ -458,7 +477,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 // roundLabel 仅用于日志。调用方需在调用前对 sink 做 reset() 并 tee.replay.reset()。
 // inboundInputTokens 透传给 message_start.usage.input_tokens(保底 1),与直连轮同口径。
 // cached 透传上游末帧 usage 的缓存命中 token 数,当前 NVIDIA 官方 NIM 不回报 cache,恒 0。
-func (h *APICompatHandler) pullAnthropicStreamOneRoundInto(ctx context.Context, httpClient *http.Client, poolAccount *account.Account, targetURL string, upstreamBody []byte, streamID, model string, inboundInputTokens int, sink sseEventSink) (*replayWriter, int, int, int, error) {
+func (h *APICompatHandler) pullAnthropicStreamOneRoundInto(ctx context.Context, httpClient *http.Client, poolAccount *account.Account, targetURL string, upstreamBody []byte, streamID, model string, inboundInputTokens int, sink sseEventSink, pinnedToolIDs map[int]string) (*replayWriter, int, int, int, error) {
 	roundLabel := "兜底"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
 	if err != nil {
@@ -475,7 +494,7 @@ func (h *APICompatHandler) pullAnthropicStreamOneRoundInto(ctx context.Context, 
 		resp.Body.Close()
 		return nil, 0, 0, 0, fmt.Errorf("nvidia upstream (%s) status %d", roundLabel, resp.StatusCode)
 	}
-	attemptIn, attemptOut, attemptCached, finishEmitted, streamTerminated, sseErr := openAIChatSSEToAnthropicSSEInto(ctx, resp.Body, resp.Body, sink, streamID, model, inboundInputTokens)
+	attemptIn, attemptOut, attemptCached, finishEmitted, streamTerminated, _, sseErr := openAIChatSSEToAnthropicSSEIntoPinned(ctx, resp.Body, resp.Body, sink, streamID, model, inboundInputTokens, pinnedToolIDs)
 	resp.Body.Close()
 	// 完整性判定:收到 finish_reason 或 [DONE]/正常 EOF 正常终止,且无上游错误/未 ctx 取消 → 整条 ready。
 	if sseErr == nil && (finishEmitted || streamTerminated) {

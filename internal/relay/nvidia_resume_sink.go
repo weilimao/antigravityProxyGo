@@ -19,11 +19,11 @@ import (
 //   - message_start 全跳(首轮已发,不能重复发)。
 //   - 思考段(content_block_start thinking / thinking_delta / signature_delta / content_block_stop thinking)
 //     全跳——首轮实时推到客户端的思考是草稿,重试轮不重发(避免重复 message_start 外的 index 冲突)。
-//   - tool_use 段:与首轮一样不实时推 live(只随 replayWriter 蓄流,功能正确性约束)。重试轮若上游又生成
-//     tool_use,本 sink 把 tool_use 帧只写 replay 不推 live。但含工具回复的整条回放由调用方在成功时
-//     replayBodyInto 处理(同首轮含工具链路)。纯 text 回复的重试轮不会有 tool_use。
+//   - tool_use 段:实时推 live(经 pending 缓冲,提交时落盘)。断流重试的 tool ID 一致性由
+//     sseBlockStates.pinnedToolIDs 在翻译层强制保证——重试轮复用首轮 tool_use ID,客户端不会因 ID 变化
+//     拿半截旧 JSON 执行错误工具调用。
 //   - 正文 text 块:首个正文 content_block_start 到达时惰性补闭合客户端残留的未闭合块(先思考→再正文),
-//     然后用 liveMaxUsedIdx+1 开新块(index 重映射),后续 text_delta/stop 改写 index 后实时推 live。
+//     然后用 liveMaxUsedIdx+1 开新块(index 重映射),后续 text_delta/stop 改写 index 后经 pending 推 live。
 //   - message_delta/message_stop:直接推 live(首轮不推两尾帧,故不重复)。
 //
 // 同步写 replay:供 pull 的完整性判定(finishEmitted||streamTerminated 需看 replay 是否收到 finish_reason)。
@@ -49,14 +49,25 @@ type resumeSink struct {
 	liveThinkingOpen   bool
 	liveBodyOpenIdx    int
 	liveThinkingPushed bool
+	// liveToolUpIdxs 首轮 tee 的 tool_use 块上游 index 集合(上游 block index → 客户端 index)。
+	// 重试/续传轮见到该集合内的 tool_use start/delta/stop,整块跳过不推 live——客户端首轮已实时
+	// 收到该 tool 的完整闭环(content_block_start + content_block_stop,即便 arguments 可能是半截,
+	// 但 closeAll 会发 stop,协议合规)。若不跳过,resumeSink 会先用 closeDanglingBlocks 补 stop 关掉
+	// 首轮那个半截 tool 块、再开新 index 新块(id 被 pinnedToolIDs 复用),导致同一 message 内同一
+	// tool_use.id 出现在两个 index 上,客户端 SDK 会报 "tool_use ids must be unique"。
+	// 由调用方在构造后通过 setLiveToolUpIdxs 注入(从首轮 tee 拷贝)。
+	liveToolUpIdxs map[int]int
+	// skippedToolUpIdxs 本轮已被跳过的 tool_use 上游 index 集合(start 命中跳过即记录),
+	// content_block_delta/stop 据此判断"是否属于已跳过的 tool 块",是则同步跳过。
+	// reset 时保留(跨轮单调,与 liveToolUpIdxs 一致)。
+	skippedToolUpIdxs map[int]bool
 
 	// 本轮运行期态(reset 每轮清零):
 	closedDangling   bool // 惰性补闭合标志:首个正文 start/tool_use 前补一次;reset 复位
-	toolSeen         bool // 见过 tool_use:此后所有帧只 replay 不推 live
 	messageStartSeen bool
 	stopSent         bool
 	indexMap         map[int]int  // 本轮"上游 idx → 客户端 idx"重映射(成功快照回传给 replayFollowingInto)
-	pending          bytes.Buffer // 本轮待提交给 live 的字节(补闭合帧 + 重映射正文 start/delta/stop);断流轮 reset 丢弃
+	pending          bytes.Buffer // 本轮待提交给 live 的字节(补闭合帧 + 重映射正文/tool start/delta/stop);断流轮 reset 丢弃
 	// pend* 是跨轮持久态的本轮镜像:轮内分配/补闭合改写 pend*,提交时回填到 liveMaxUsedIdx 等。
 	// 失败轮 reset 后 pend* 重新从持久态初始化,故失败轮的 index 分配/块开闭全被丢弃,客户端态零变更。
 	pendMaxIdx       int  // 本轮已分配的最大 index(从 liveMaxUsedIdx 起步)
@@ -68,6 +79,10 @@ type resumeSink struct {
 // (惰性补闭合与新块 index 分配起点);thinkingPushed 为首轮 tee.liveThinkingPushed(客户端 live 是否曾推过
 // 思考块,Once true 永不复位),重试/续传成功时透传进 liveStreamState.thinkingLive 供 replayFollowingInto
 // 决定是否跳过成功轮 replay 思考头。跨重试轮复用时 reset 保留 thinkingPushed 不复位。
+//
+// 构造后调用方需按需调 setLiveToolUpIdxs 注入"首轮已实时推 live 的 tool_use 上游 index 集合",
+// 供重试轮跳过这些 tool 块(start/delta/stop 整块不推 live,见该字段注释)——防"同一 tool_use.id
+// 在同一 message 内出现在两个不同 index"的协议违规。
 func newResumeSink(live *flushWriter, replay *replayWriter, thinkingOpen bool, bodyOpenIdx, maxUsedIdx int, thinkingPushed bool) *resumeSink {
 	return &resumeSink{
 		live:               live,
@@ -77,17 +92,29 @@ func newResumeSink(live *flushWriter, replay *replayWriter, thinkingOpen bool, b
 		liveBodyOpenIdx:    bodyOpenIdx,
 		liveThinkingPushed: thinkingPushed,
 		indexMap:           map[int]int{},
+		liveToolUpIdxs:     map[int]int{},
+		skippedToolUpIdxs:  map[int]bool{},
 	}
 }
 
-// reset 跨重试轮复用前的复位:清本轮运行期态(pending/indexMap/closedDangling/toolSeen/尾帧标志 +
+// setLiveToolUpIdxs 注入首轮 tee 已实时推 live 的 tool_use 上游 index 集合(独占拷贝,不再共享底层 map)。
+// 应在首个非首轮 attempt 进入本 sink 前调用;空/nil 时等价于"首轮未实时推过任何 tool"(行为回退到旧路径)。
+func (r *resumeSink) setLiveToolUpIdxs(src map[int]int) {
+	if r.liveToolUpIdxs == nil {
+		r.liveToolUpIdxs = map[int]int{}
+	}
+	for k, v := range src {
+		r.liveToolUpIdxs[k] = v
+	}
+}
+
+// reset 跨重试轮复用前的复位:清本轮运行期态(pending/indexMap/closedDangling/尾帧标志 +
 // pend* 镜像回退到持久值),保留 liveMaxUsedIdx/liveThinkingOpen/liveBodyOpenIdx——它们反映"截至上一轮
 // 成功提交,客户端 live 上的协议态",本轮据此惰性补闭合并分配新块 index。
 // 失败轮(未到 message_stop)的 pending/index 分配随 reset 全部丢弃,客户端态零变更。
 func (r *resumeSink) reset() {
 	r.indexMap = map[int]int{}
 	r.closedDangling = false
-	r.toolSeen = false
 	r.messageStartSeen = false
 	r.stopSent = false
 	r.pending.Reset()
@@ -135,17 +162,33 @@ func (r *resumeSink) writeEvent(event, data string) {
 			return
 		}
 		if kind == "tool_use" {
-			// 工具块本身不实时推 live(功能正确性约束);锁定此后只 replay。
-			// 但仍需惰性补闭合客户端残留的未闭合块(首轮实时推的思考/正文 text 若未闭合断流),
-			// closeDanglingBlocks 在首个正文 start 或首个 tool_use start 时都会执行(幂等,只补一次)。
+			// 工具块:实时推 live(经 pending)。先判定"是否首轮已实时推过 live 的同一 tool 上游块":
+			upIdx := contentBlockIndex(data)
+			if upIdx < 0 {
+				upIdx = 0
+			}
+			if _, alreadyLive := r.liveToolUpIdxs[upIdx]; alreadyLive {
+				// 协议正确性关键路径:首轮已把该 tool 块实时推 live 且被 closeAll 完整闭环(start+stop)。
+				// 重试轮必须整块跳过该 tool 的 start/delta/stop——否则 resumeSink 会:
+				//   ① closeDanglingBlocks 补 stop 关掉首轮的半截块(该块首轮已 closeAll,不应再补);
+				//   ② pendMaxIdx+1 开新 index 新块,id 被 pinnedToolIDs 复用成同一个 toolu_xxx;
+				//   → 客户端在同一 message 内见到同一 tool_use.id 但不同 index 的两个块,触发 SDK
+				//     "tool_use ids must be unique" 报错。
+				// 此处标记 skippedToolUpIdxs,后续 delta/stop 同步跳过(不进 indexMap,不进 pending)。
+				r.skippedToolUpIdxs[upIdx] = true
+				return
+			}
+			// 新 tool(首轮未实时推过):惰性补闭合 → 新 index 映射 → 改写 index 后写 pending(提交时落 live)。
+			// tool ID 一致性由翻译层 pinnedToolIDs 强制保证,无需再锁 replay。
 			r.closeDanglingBlocks()
-			r.toolSeen = true
+			newIdx := r.pendMaxIdx + 1
+			r.indexMap[upIdx] = newIdx
+			r.pendMaxIdx = newIdx
+			r.pendBodyOpenIdx = newIdx // tool 块也占用 bodyOpenIdx(stop 时清 -1)
+			writePendingEvent(&r.pending, "content_block_start", rewriteContentBlockIndex(data, newIdx))
 			return
 		}
 		// text 块:惰性补闭合 → 新 index 映射 → 改写 index 后写 pending(提交时落 live)
-		if r.toolSeen {
-			return
-		}
 		r.closeDanglingBlocks()
 		upIdx := contentBlockIndex(data)
 		if upIdx < 0 {
@@ -158,33 +201,38 @@ func (r *resumeSink) writeEvent(event, data string) {
 		writePendingEvent(&r.pending, "content_block_start", rewriteContentBlockIndex(data, newIdx))
 		return
 	case "content_block_delta":
-		if r.toolSeen {
-			return
-		}
-		// 思考段的 delta(thinking_delta/signature_delta)全跳;正文 text_delta 改写 index 后写 pending
-		if deltaTypeForContentBlockDelta(data) != "text_delta" {
+		dtype := deltaTypeForContentBlockDelta(data)
+		// 思考段的 delta(thinking_delta/signature_delta)全跳
+		if dtype == "thinking_delta" || dtype == "signature_delta" {
 			return
 		}
 		upIdx := contentBlockIndex(data)
+		// 首轮已 live 的 tool 块,start 同步跳过(见 writeEvent content_block_start/tool_use 分支),
+		// 其 delta 也必须跳过——否则客户端会见"无对应 start 的孤儿 input_json_delta"。
+		if r.skippedToolUpIdxs[upIdx] {
+			return
+		}
 		newIdx, ok := r.indexMap[upIdx]
 		if !ok {
-			// 无对应开块的 delta:防御丢弃(不应出现——text 块必先有 start 建 map)
+			// 无对应开块的 delta:防御丢弃(不应出现——text/tool 块必先有 start 建 map)
 			return
 		}
 		writePendingEvent(&r.pending, "content_block_delta", rewriteContentBlockIndex(data, newIdx))
 		return
 	case "content_block_stop":
-		if r.toolSeen {
+		upIdx := contentBlockIndex(data)
+		// 首轮已 live 的 tool 块 start 已跳过,其 stop 也同步跳过(避免重复 stop、避免 indexMap 查不到时
+		// 误落到"非 body"分支而漏跳过)。
+		if r.skippedToolUpIdxs[upIdx] {
 			return
 		}
-		upIdx := contentBlockIndex(data)
-		// 思考段 stop(index 0 且 indexMap 无该 idx):全跳
+		// 思考段 stop(indexMap 无该 idx):全跳
 		newIdx, isBody := r.indexMap[upIdx]
 		if !isBody {
 			return
 		}
 		if r.pendBodyOpenIdx == newIdx {
-			r.pendBodyOpenIdx = -1 // 本轮正文块已闭合,清回 -1
+			r.pendBodyOpenIdx = -1 // 本轮块已闭合,清回 -1
 		}
 		writePendingEvent(&r.pending, "content_block_stop", rewriteContentBlockIndex(data, newIdx))
 		return

@@ -11,7 +11,7 @@ import state from './dashboardState';
 import i18n from '../shared/i18n';
 import {
     buildLiveSetLower, buildStaleConfirmPrompt, computeRemoteAddedLower,
-    computeStaleMappings, MappingLike, mappingBadgeHTML, shouldMarkNew, shouldMarkStale,
+    MappingLike, mappingBadgeHTML, shouldMarkNew, shouldMarkStale,
 } from './relayModelDiff';
 
 // ===== 模块作用域状态(每次 initRelayModelMapping 显式重置,保持闭包语义) =====
@@ -459,8 +459,12 @@ function renderCurrentTabTable() {
     const channelKey = (currentTab.targetProvider || currentTab.id || '').toLowerCase();
     const addedSet = channelAddedLower[channelKey] || new Set<string>();
     const staleSet = channelStaleLower[channelKey] || new Set<string>();
-    // 同步「清除失效模型」按钮可点性:仅当本 Tab 有失效标记时启用(其余禁用 + tooltip 提示需先拉取)。
-    syncClearStaleBtn(staleSet.size);
+    // 同步「清除失效模型」按钮:计数改走「当前 Tab 真实待删映射数」(collectStaleMappingsInTab),
+    // 杜绝旧逻辑直接传 staleSet.size —— staleSet 实为「远端全集小写集合」(buildLiveSetLower 返回),
+    // size 等于远端模型总数(如 103),与「新增 N」同源于一次拉取 → 数字恒等,且即便本 Tab 一条
+    // 失效都没有(新增即全集,全在 liveSet 非失效)也会启用按钮 → 严重误导。此处改传真实失效数。
+    // hasFetchedStaleBasis 供 staleCount==0 时区分「无失效」与「未拉取」两种 tooltip 文案。
+    syncClearStaleBtn(collectStaleMappingsInTab(activeTabId).length, hasFetchedStaleBasis(activeTabId));
     const thInjectKwargs = document.getElementById('thInjectKwargs');
     if (thInjectKwargs) {
         if (isNvidiaTab) {
@@ -718,9 +722,10 @@ function renderCurrentTabTable() {
     };
 }
 
-// syncClearStaleBtn 按「本 Tab 失效映射数」同步「清除失效模型」按钮可点性 + 文案计数。
-// staleCount==0(未拉取/拉取失败/无失效)禁用并提示需先拉取;>0 启用并夹带计数。避免误导。
-function syncClearStaleBtn(staleCount: number): void {
+// syncClearStaleBtn 按「本 Tab 真实待删映射数」同步「清除失效模型」按钮可点性 + 文案计数。
+// staleCount 为 collectStaleMappingsInTab 现算的真实失效条数;hasFetched 区分 staleCount==0 时
+// 「已拉取无失效」与「未拉取」两类 tooltip。杜绝旧逻辑传 staleSet.size(=远端全集数,与新增同源)。
+function syncClearStaleBtn(staleCount: number, hasFetched: boolean): void {
     const btn = document.getElementById('btnClearStaleModels') as HTMLButtonElement | null;
     if (!btn) return;
     const dict = i18n[state.currentLanguage] || i18n.zh || {};
@@ -731,17 +736,57 @@ function syncClearStaleBtn(staleCount: number): void {
         btn.title = '';
     } else {
         btn.textContent = (dict.relayClearStaleModels || '清除失效模型');
-        const fetchedOnce = !!channelStaleLower[(activeTabChannelKey())];
-        btn.title = fetchedOnce
+        btn.title = hasFetched
             ? (dict.relayClearStaleEmpty || '当前号池无失效模型映射')
             : (dict.relayClearStaleNeedFetch || '请先成功「获取号池模型」以核对远端全集');
     }
 }
 
-// activeTabChannelKey 返回当前 Tab 的 channel key(小写),供 diff 集合按号池定位。
-function activeTabChannelKey(): string {
-    const currentTab = poolTabs.find(t => t.id === activeTabId) || poolTabs[0];
-    return (currentTab ? (currentTab.targetProvider || currentTab.id) : '').toLowerCase();
+// collectStaleMappingsInTab 收集「指定 Tab 下、真实目标模型已从远端下架」的映射条目引用。
+// 与 _relayClearStaleMappings 删除动作 + renderCurrentTabTable 按钮计数共享同一失效筛选真源,
+// 保证「按钮显示的待删数」与「确认后实际删除数」逐字节一致。三重安全:
+//   1) Tab 隔离:经 getMappingTab 只处理归属该 Tab 的映射,杜绝跨号池误判(历史缺陷根因);
+//   2) 缓存键隔离:Other 按行 group 解析 other/{groupId},非 Other 用 provider 小写;
+//   3) 未拉取跳过:对应缓存缺失/为空时不判(不误删)。仅当远端确认下架(不在本次全集)才入列。
+// 由此迁出为独立函数(原逻辑内联在 _relayClearStaleMappings 闭包内),供两处复用、消除口径漂移。
+function collectStaleMappingsInTab(tabId: string): any[] {
+    const currentTab = poolTabs.find(t => t.id === tabId) || poolTabs[0];
+    if (!currentTab) return [];
+    const provider = (currentTab.targetProvider || currentTab.id || '').trim();
+    const isOtherTab = (currentTab.targetProvider === 'other' || currentTab.id === 'other');
+    const staleToRemove: any[] = [];
+    for (const m of allMappings) {
+        if (getMappingTab(m) !== tabId) continue; // Tab 隔离:仅处理归属该 Tab 的映射
+        const cm = (m.clientModel || '').trim();
+        const tm = (m.targetModel || '').trim();
+        if (!cm || !tm) continue;
+        let liveKey = provider.toLowerCase();
+        if (isOtherTab) {
+            // Other:按行 group 解析键 other/{groupId}(与 fetchOtherGroupModels 写入口径一致)。
+            const mtch = cm.match(/^other\/([^/]+)\//);
+            const gid = mtch ? mtch[1] : '';
+            if (mtch) liveKey = `other/${gid}`; else continue; // 非三段前缀的 Other 行不判(无对应上游缓存)
+        }
+        const live = channelModelsCache[liveKey];
+        if (!live || live.length === 0) continue; // 该组未成功拉取过,跳过(不误删)
+        const liveSet = buildLiveSetLower(live);
+        if (shouldMarkStale(m, liveSet)) staleToRemove.push(m);
+    }
+    return staleToRemove;
+}
+
+// hasFetchedStaleBasis 判断指定 Tab 是否已成功拉取过远端模型(作为失效判定的基准是否就绪)。
+// Other Tab 走 group 键(任一 other/{groupId} 已拉取即视为该 Tab 有基准);非 Other 走 provider 小写键。
+// true=「已拉取,staleCount==0 是真无失效」;false=「未拉取,需先点获取号池模型」。
+function hasFetchedStaleBasis(tabId: string): boolean {
+    const currentTab = poolTabs.find(t => t.id === tabId) || poolTabs[0];
+    if (!currentTab) return false;
+    const isOtherTab = (currentTab.targetProvider === 'other' || currentTab.id === 'other');
+    if (isOtherTab) {
+        return Object.keys(channelStaleLower).some(k => k.startsWith('other/'));
+    }
+    const chKey = (currentTab.targetProvider || currentTab.id || '').toLowerCase();
+    return !!channelStaleLower[chKey];
 }
 
 export function initRelayModelMapping() {
@@ -1024,41 +1069,18 @@ export function initRelayModelMapping() {
         }
     };
 
-    // _relayClearStaleMappings:删除当前 Tab(或本 Tab 全部子组)中「真实目标模型已从远端下架」的映射行。
-    // 安全边界(用户决策):仅删远端拉取确认失效的 → 需先成功拉取(channelStaleLower 该键非空)。
-    // 拉取前/失败:key 缺失 → channelStaleLower 为空 → computeStaleMappings 借「本次远端全集」现场判,
-    // liveRemote 为 undefined 则返回空(绝不下判),按钮已禁用做双保险。确认后从 allMappings 删除,
-    // 不立即落盘(走既有「保存映射配置」按钮,误删可被「不保存」挽回),与单行删除一致挽回路径。
     (window as any)._relayClearStaleMappings = () => {
         const currentTab = poolTabs.find(t => t.id === activeTabId) || poolTabs[0];
         if (!currentTab) return;
-        const provider = (currentTab.targetProvider || currentTab.id || '').trim();
-        const isOtherTab = (currentTab.targetProvider === 'other' || currentTab.id === 'other');
         const dict = i18n[state.currentLanguage] || i18n.zh || {};
 
-        // 收集本 Tab 待删映射:按 channel/group 各自的「本次远端全集」判 TargetModel 是否下架。
-        const staleToRemove: any[] = [];
-        for (const m of allMappings) {
-            const cm = (m.clientModel || '').trim();
-            const tm = (m.targetModel || '').trim();
-            if (!cm || !tm) continue;
-            let liveKey = provider.toLowerCase();
-            if (isOtherTab) {
-                // Other:按行 group 解析键 other/{groupId}(与 fetchOtherGroupModels 写入口径一致)。
-                const mtch = cm.match(/^other\/([^/]+)\//);
-                const gid = mtch ? mtch[1] : '';
-                if (mtch) liveKey = `other/${gid}`; else continue; // 非三段前缀的 Other 行不判(无对应上游缓存)
-            }
-            const live = channelModelsCache[liveKey];
-            if (!live || live.length === 0) continue; // 该组未成功拉取过,跳过(不误删)
-            const liveSet = buildLiveSetLower(live);
-            if (shouldMarkStale(m, liveSet)) staleToRemove.push(m);
-        }
+        // 复用 collectStaleMappingsInTab:与 renderCurrentTabTable 按钮计数共享同一失效筛选真源,
+        // 保证「按钮显示的待删数」与「确认后实际删除数」逐字节一致,杜绝两处口径漂移。
+        // 该函数内部已按 getMappingTab 隔离当前 Tab + 按组解析缓存键 + 未拉取跳过(不误删)。
+        const staleToRemove = collectStaleMappingsInTab(activeTabId);
         if (staleToRemove.length === 0) {
-            // 无失效(或未拉取)→ 友好提示而非静默。
-            const chKey = provider.toLowerCase();
-            const fetchedOnce = !!channelStaleLower[chKey] || (isOtherTab && Object.keys(channelStaleLower).some(k => k.startsWith('other/')));
-            const msg = fetchedOnce
+            // 无失效(或未拉取)→ 友好提示而非静默。区分「已拉取但无失效」与「未拉取」两种语义。
+            const msg = hasFetchedStaleBasis(activeTabId)
                 ? (dict.relayClearStaleEmpty || '当前号池无失效模型映射')
                 : (dict.relayClearStaleNeedFetch || '请先成功「获取号池模型」以核对远端全集');
             window.alert(msg);
