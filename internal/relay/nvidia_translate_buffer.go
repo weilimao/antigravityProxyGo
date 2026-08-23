@@ -66,4 +66,13 @@ type sseEventSink interface {
 	writeEvent(event, data string)
 	writeRaw(s string)
 	flush()
+	// pingFrame 发送一个 Anthropic SSE 已知但语义为空的 "ping" 事件，
+	// 用于在「上游长时间未产出新字节」期间向客户端注入合法心跳，
+	// 让 Claude Code 等带秒级 inactivity 看门狗的 SDK 重置计时器、
+	// 不把当前 tool_use 段判为 "interrupted"。
+	//
+	// 心跳帧不携带业务数据，不参与 message_delta 累计，不改变任何 block 状态。
+	// flushWriter(实时) 真正把字节推到 socket; tee/resume 视生命周期转发或吞掉;
+	// replayWriter(蓄流) 记录但可被调用方在回放时丢弃,以保证回放语义纯净。
+	pingFrame()
 }

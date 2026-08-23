@@ -8,7 +8,9 @@ import (
 	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/diagserver"
 	"antigravity-proxy/internal/dialogs"
+	"antigravity-proxy/internal/eventsgate"
 	"antigravity-proxy/internal/externalconfig"
+	"antigravity-proxy/internal/lifecycle"
 	"antigravity-proxy/internal/patch"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/proxy"
@@ -215,7 +217,7 @@ func (a *App) startup(ctx context.Context) {
 
 		sendUpdate := func() {
 			if a.IsWindowVisibleAndActive() {
-				wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(true))
+				a.emitEvent("stats-updated", a.getStatsPayload(true))
 			}
 			lastEmitTime = time.Now()
 			if pendingTimer != nil {
@@ -449,7 +451,7 @@ func (a *App) startup(ctx context.Context) {
 	proxyHandler.SettingsMgr = a.settingsMgr
 
 	a.proxyEngine = proxy.NewProxyEngine(proxyHandler, a.AddLog, func(isRunning bool) {
-		wailsRuntime.EventsEmit(a.ctx, "state", isRunning)
+		a.emitEvent("state", isRunning)
 	})
 
 	// 7. Initialize Update Manager
@@ -543,13 +545,27 @@ func (a *App) startup(ctx context.Context) {
 				a.pendingLogsMu.Unlock()
 
 				if a.IsWindowVisibleAndActive() {
-					wailsRuntime.EventsEmit(a.ctx, "logs:batch", batch)
+					a.emitEvent("logs:batch", batch)
 				}
 			}
 		}
 	}(monitorCtx)
 
 	a.initTray()
+
+	// 构造节流派发门:1s 滑窗 + 窗口不可见即丢,主要用于
+	// stats-updated/logs:batch/state/memory-stats-updated 等高频周期事件,
+	// 避免主线程 PostMessage 队列被洪峰挤爆。
+	a.eventsGate = eventsgate.New(
+		func(name string, payload any) {
+			if a.ctx == nil {
+				return
+			}
+			wailsRuntime.EventsEmit(a.ctx, name, payload)
+		},
+		a.IsWindowVisibleAndActive,
+		eventsgate.WithMinInterval(1*time.Second),
+	)
 
 	// 初始化外部 Agent 配置管理器:管理 OpenCode / Claude Code 等 CLI Agent 的配置文件。
 	// 后端只做文件 I/O(读 JSON 字符串返回前端、前端写 JSON 字符串落盘)。
@@ -627,54 +643,149 @@ func (a *App) reconnectRemoteSafely(host, port, path, key, pwd string) error {
 	return a.connectRemote(host, port, path, key, pwd)
 }
 
+// shutdown 关闭流程 — lifecycle.Coordinator 两阶段并发执行。
+//
+// 阶段1 (并发, 单任务 ≤1.5s): 停所有"接收新工作"端点
+//   - tray / netWatch / autoTriggerScheduler / monitorCancel / relay / proxyEngine
+//   任一单点卡 1.5s 会被该任务自身超时切断,不再拖累其他关闭项。
+//
+// 阶段2 (并发, 单任务 ≤1s): 落盘/写文件等"完成后即安全退出"的动作
+//   - sessionRouter.SaveToDisk / account.Stop*Monitor / PatchAll(false) / corelog.Stop /
+//     sigcache.StopGlobal / diagserver.Stop
+//
+// 整体预算 ≤ 3s,到点未完成任务由 lifecycle.Coordinator 返回"未完成清单"供 main 末尾
+// 的 os.Exit(0) 兜底终结进程。源头上消除"右键退出后任务管理器残留"。
 func (a *App) shutdown() {
-	tray.QuitTray()
-
-	// 停止网络监听,释放后台探测 goroutine
-	if a.netWatch != nil {
-		a.netWatch.Stop()
+	coord := &lifecycle.Coordinator{
+		OverallBudget: 3 * time.Second,
+		Logf: func(format string, args ...interface{}) {
+			// 静默即可,失败信息已通过 lifecycle 内部 Logf 注入
+			_ = fmt.Sprintf(format, args...)
+		},
 	}
 
-	if a.autoTriggerScheduler != nil {
-		a.autoTriggerScheduler.Stop()
+	// 阶段1:并发停所有"接收新工作"端点
+	stage1 := []lifecycle.Task{
+		{
+			Name:    "tray",
+			Timeout: 800 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				tray.QuitTray()
+				return nil
+			},
+		},
+		{
+			Name:    "netWatch",
+			Timeout: 500 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				if a.netWatch != nil {
+					a.netWatch.Stop()
+				}
+				return nil
+			},
+		},
+		{
+			Name:    "autoTrigger",
+			Timeout: 1500 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				if a.autoTriggerScheduler != nil {
+					a.autoTriggerScheduler.Stop()
+				}
+				return nil
+			},
+		},
+		{
+			Name:    "monitorCancel",
+			Timeout: 200 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				if a.monitorCancel != nil {
+					a.monitorCancel()
+				}
+				return nil
+			},
+		},
+		{
+			Name:    "relay",
+			Timeout: 1200 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				a.stopRelayServer()
+				return nil
+			},
+		},
+		{
+			Name:    "proxyEngine",
+			Timeout: 1500 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				if a.proxyEngine != nil {
+					a.proxyEngine.Stop()
+				}
+				return nil
+			},
+		},
 	}
+	_ = coord.Run(context.Background(), stage1)
 
-	if a.monitorCancel != nil {
-		a.monitorCancel()
+	// 阶段2:并发落盘/收尾(任一慢 ≠ 拖累其他)
+	stage2 := []lifecycle.Task{
+		{
+			Name:    "session.SaveToDisk",
+			Timeout: 800 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				if a.sessionRouter != nil {
+					a.sessionRouter.SaveToDisk()
+				}
+				return nil
+			},
+		},
+		{
+			Name:    "account.StopMonitors",
+			Timeout: 500 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				if a.accountMgr != nil {
+					a.accountMgr.StopCooldownMonitor()
+					a.accountMgr.StopTokenRefreshMonitor()
+					a.accountMgr.StopGrokAuthMonitor()
+				}
+				return nil
+			},
+		},
+		{
+			Name:    "patch.Unpatch",
+			Timeout: 1000 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				homeDir, _ := os.UserHomeDir()
+				activeDir := a.settingsMgr.GetActiveDataDirectory()
+				caCertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
+				_ = patch.PatchAll(false, a.settingsMgr.GetDefaultUserDataPath(), homeDir, caCertPath, func(s string) {})
+				return nil
+			},
+		},
+		{
+			Name:    "corelog.Stop",
+			Timeout: 500 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				corelog.Stop()
+				return nil
+			},
+		},
+		{
+			Name:    "sigcache.StopGlobal",
+			Timeout: 300 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				sigcache.StopGlobal()
+				return nil
+			},
+		},
+		{
+			Name:    "diagserver.Stop",
+			Timeout: 500 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				diagserver.Stop()
+				return nil
+			},
+		},
 	}
-
-	a.stopRelayServer()
-	if a.proxyEngine != nil {
-		a.proxyEngine.Stop()
-	}
-	if a.sessionRouter != nil {
-		a.sessionRouter.SaveToDisk()
-	}
-
-	// 停止账号冷静期/Token 刷新监控 goroutine,避免进程退出后仍持 ticker 句柄残留。
-	// 此前这两个 Stop 方法从未被调用,是进程退出后"任务管理器残留不消失"的孤儿协程来源之一。
-	if a.accountMgr != nil {
-		a.accountMgr.StopCooldownMonitor()
-		a.accountMgr.StopTokenRefreshMonitor()
-		a.accountMgr.StopGrokAuthMonitor()
-	}
-
-	// Clean up patches on exit
-	homeDir, _ := os.UserHomeDir()
-	activeDir := a.settingsMgr.GetActiveDataDirectory()
-	caCertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
-	_ = patch.PatchAll(false, a.settingsMgr.GetDefaultUserDataPath(), homeDir, caCertPath, func(s string) {})
-
-	// 通知 corelog 消费者排空残留日志并退出，避免进程结束时日志被截断，
-	// 也释放唯一向 os.Stdout 写入的后台 goroutine。
-	corelog.Stop()
-
-	// 通知签名缓存的清理协程退出，释放后台 goroutine。
-	sigcache.StopGlobal()
-
-	// 关闭 pprof 诊断服务,释放其 listener 句柄与后台 serve goroutine,
-	// 避免"退出窗口后 18765 端口仍被占用、进程残留"。
-	diagserver.Stop()
+	_ = coord.Run(context.Background(), stage2)
 }
 
 func (a *App) domReady(ctx context.Context) {

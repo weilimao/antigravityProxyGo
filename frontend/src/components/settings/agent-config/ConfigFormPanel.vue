@@ -69,6 +69,7 @@
             :value="formData[field.key]"
             :availableModels="props.availableModels"
             @update:value="onFieldUpdate(field, $event)"
+            @refresh-models="emit('refresh-models')"
           />
         </div>
       </template>
@@ -143,7 +144,9 @@
                       :model-value="addingObjectChildState[getObjectChildStateKey(field, item)].selectedModel"
                       :options="props.availableModels || []"
                       placeholder="搜索或选择已有模型..."
+                      :refresh-on-open="true"
                       @update:model-value="(val) => onSelectAvailableModel(field, item, val)"
+                      @refresh="emit('refresh-models')"
                       class="w-full"
                     />
                   </div>
@@ -320,6 +323,7 @@
                           :value="getNestedRepeatableObjectChildValue(field, item, childName, childField, variantName, variantField)"
                           :availableModels="props.availableModels"
                           @update:value="onNestedRepeatableObjectChildUpdate(field, item, childName, childField, variantName, variantField, $event)"
+                          @refresh-models="emit('refresh-models')"
                         />
                       </div>
                     </div>
@@ -333,6 +337,7 @@
                       :value="getRepeatableObjectChildValue(field, item, childName, childField)"
                       :availableModels="props.availableModels"
                       @update:value="onRepeatableObjectChildUpdate(field, item, childName, childField, $event)"
+                      @refresh-models="emit('refresh-models')"
                     />
                   </template>
                   </div>
@@ -348,6 +353,7 @@
                 :value="getRepeatableFieldValue(field, item)"
                 :availableModels="props.availableModels"
                 @update:value="onRepeatableFieldUpdate(field, item, $event)"
+                @refresh-models="emit('refresh-models')"
               />
             </template>
            </div>
@@ -372,6 +378,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:formData': [data: Record<string, any>];
+  /** 模型下拉打开时上抛，请求父级刷新中继模型映射 */
+  'refresh-models': [];
 }>();
 
 const localFormData = ref<Record<string, any>>({ ...props.formData });
@@ -713,11 +721,10 @@ function onRepeatableObjectChildUpdate(field: ConfigField, parentName: string, c
 // ===== Repeatable Object (模型列表) 内联新增操作 =====
 function openAddObjectChild(field: ConfigField, parentName: string) {
   const key = getObjectChildStateKey(field, parentName);
-  const defaultSelect = (props.availableModels && props.availableModels.length > 0) ? props.availableModels[0] : '';
   addingObjectChildState.value[key] = {
     open: true,
-    selectedModel: defaultSelect,
-    customModel: defaultSelect,
+    selectedModel: '',
+    customModel: '',
     error: '',
   };
 }
@@ -727,16 +734,18 @@ function cancelAddObjectChild(field: ConfigField, parentName: string) {
   if (addingObjectChildState.value[key]) {
     addingObjectChildState.value[key].open = false;
     addingObjectChildState.value[key].error = '';
+    addingObjectChildState.value[key].selectedModel = '';
+    addingObjectChildState.value[key].customModel = '';
   }
 }
 
+// 选中下拉模型：只更新 selectedModel，并清空 customModel 避免误提交残留值。
+// 若用户后续在"自定义输入"框中手填，则以 customModel 优先（用户显式意图）。
 function onSelectAvailableModel(field: ConfigField, parentName: string, modelName: string) {
   const key = getObjectChildStateKey(field, parentName);
   if (addingObjectChildState.value[key]) {
     addingObjectChildState.value[key].selectedModel = modelName;
-    if (modelName) {
-      addingObjectChildState.value[key].customModel = modelName;
-    }
+    addingObjectChildState.value[key].customModel = '';
     addingObjectChildState.value[key].error = '';
   }
 }

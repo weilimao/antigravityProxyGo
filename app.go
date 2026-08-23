@@ -15,6 +15,7 @@ import (
 	"antigravity-proxy/internal/autotrigger"
 	"antigravity-proxy/internal/corelog"
 	"antigravity-proxy/internal/dialogs"
+	"antigravity-proxy/internal/eventsgate"
 	"antigravity-proxy/internal/externalconfig"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/proxy"
@@ -82,11 +83,22 @@ type App struct {
 
 	// antigravityBgMgr 管理 Antigravity 桌面端壁纸与外观调谐。
 	antigravityBgMgr *antigravitybg.Manager
+
+	// appStartedAt 记录 App 创建时间，用于抑制冷启动前 30 秒内存面板显示的无意义尖峰。
+	appStartedAt time.Time
+
+	// eventsGate 节流前端事件派发,防止 stats/logs/state 等高频发往主线程
+	// 把主线程消息队列挤爆引发连锁卡死。startup 内构造。
+	eventsGate *eventsgate.Gate
+
+	// quitOnce 保证异步退出只发起一次,避免重复 Quit 触发二次 shutdown。
+	quitOnce sync.Once
 }
 
 func NewApp() *App {
 	return &App{
 		logBuffer: make([]string, 0),
+		appStartedAt: time.Now(),
 	}
 }
 
@@ -158,48 +170,54 @@ func (a *App) SetWindowVisible(v bool) {
 	a.isWindowVisibleMu.Lock()
 	a.isWindowVisible = v
 	a.isWindowVisibleMu.Unlock()
-	if v {
-		// 窗口恢复可见时，立刻补偿推送一次最新日志数据，防止后台静默状态期间漏刷
-		wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
+	if v && a.eventsGate != nil {
+		// 窗口恢复可见时,立刻补偿推送一次最新日志数据,防止后台静默状态期间漏刷
+		a.eventsGate.Emit("stats-updated", a.getStatsPayload(false))
 	}
+}
+
+// asyncQuit 异步发起 Wails 退出流程,保证只调一次。
+// 退出链路本身已有 Coordinator 控制总耗时;此函数仅负责一次性触发。
+func (a *App) asyncQuit() {
+	a.quitOnce.Do(func() {
+		go func() {
+			defer func() { _ = recover() }()
+			wailsRuntime.Quit(a.ctx)
+		}()
+	})
+}
+
+// emitEvent 经由 eventsGate 派发前端事件,统一节流与"不可见丢弃"。
+// 所有原本直接调 wailsRuntime.EventsEmit(a.ctx, ...) 的代码一律改走这里。
+func (a *App) emitEvent(name string, payload any) {
+	if a.eventsGate == nil {
+		// startup 早期尚未构造时退化为直发,保证不丢
+		if a.ctx != nil {
+			wailsRuntime.EventsEmit(a.ctx, name, payload)
+		}
+		return
+	}
+	a.eventsGate.Emit(name, payload)
 }
 
 // showMainWindow 统一"显示主窗口并唤到前台"的语义入口。
 //
-// 设计背景:
-//   Wails Windows 前端的所有窗口操作都走 Invoke → w32.PostMessage 落到
-//   单一主 UI 线程消息队列串行执行。当主线程被 WebView2 COM 回调占用
-//   时,正规 WindowShow 的 Invoke 闭包排队出不来,用户看到"点打开没反应"。
+// 恢复原实现:走 wailsRuntime.WindowShow 单一路径,异步 goroutine
+// 仅为了避免阻塞调用方(systray 线程)。SetWindowVisible(true) 同步置位,
+// 触发一次 stats 补偿。
 //
-// 双路并发,治本不依赖单一线程队列:
-//   - 正规路径: wailsRuntime.WindowShow (Invoke 投递) + SetWindowVisible(true),
-//     主线程空闲时先到,窗口正常显示并补偿一次 stats-updated。
-//   - 保底路径: foregroundFallback (Win32 跨线程 ShowWindowAsync + SetForegroundWindow),
-//     不依赖主线程消息队列,由内核异步投递 WM_SHOW/WM_RESTORE。
-//     主线程被占用正规路径排队时,保底路径直接唤出窗口。
-//
-// 调用点: app_tray.go 的托盘"显示控制面板"/双击图标 + app_lifecycle.go 的
-//   domReady 自动显示。两路 goroutine 各自 recover,绝不 panic 上抛;
-//   即使 a.ctx 尚未就绪 (startup 早于 domReady) 也由 recover 静默吞掉。
-//
-// 多层 goroutine 说明:调用方无需自行 go,本方法内两路均已 go;
-//   调用点直接 a.showMainWindow() 即可。
+// 调用点: app_tray.go 托盘"显示控制面板"/双击图标 + app_lifecycle.go domReady 自动显示。
 func (a *App) showMainWindow() {
-	// 正规路径:异步投递到主线程队列,不阻塞调用方
-	// (托盘 systray 线程的 onShow 回调 / domReady goroutine)。
 	go func() {
 		defer func() { _ = recover() }()
 		wailsRuntime.WindowShow(a.ctx)
-		a.SetWindowVisible(true)
 	}()
-
-	// Win32 跨线程保底:独立 goroutine,不依赖主线程消息队列。
-	// Windows 下做真实枚举+唤醒;非 Windows 下 foregroundFallback 是 no-op,
-	// 仅正规路径生效。
-	go a.foregroundFallback()
+	a.SetWindowVisible(true)
 }
 
-// IsWindowVisibleAndActive 检查窗口是否在前台且可见（非最小化且未隐藏）
+// IsWindowVisibleAndActive 检查窗口是否在前台且可见（非最小化且未隐藏）。
+// 恢复原实现:WindowIsMinimised 由 Wails 主线程查询(短暂排队可接受),
+// 与进程内自维护的 isWindowVisible 复合判定。
 func (a *App) IsWindowVisibleAndActive() bool {
 	if a.ctx == nil {
 		return false

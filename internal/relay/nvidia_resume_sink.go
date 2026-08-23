@@ -278,3 +278,12 @@ func (r *resumeSink) flush() {
 		r.live.flush()
 	}
 }
+
+// pingFrame 在 resumeSink 语义下:重试轮里客户端的 inactivity 看门狗依然在跑,
+// 必须让心跳真实到达 live(仅 live,不入 replay)。它与 content_block_* 的写入顺序无关,
+// 不重映射 index,也不进 pending,因为它是协议外的保活帧。
+func (r *resumeSink) pingFrame() {
+	if r.live != nil {
+		r.live.pingFrame()
+	}
+}

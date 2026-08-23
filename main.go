@@ -51,6 +51,8 @@ func main() {
 		// Acquire single instance lock
 		lock, err := singleinstance.TryLock("antigravity-proxy-desktop")
 		if err != nil {
+			// TryLock 失败 = 已有实例。激活已有实例窗口(A 方案),再退出本进程,
+			// 让用户的"双击"转化为主动唤出已运行实例,而不是阻塞 1s 后弹提示框。
 			singleinstance.ShowAlreadyRunningMessage()
 			os.Exit(0)
 		}
@@ -92,10 +94,9 @@ func main() {
 	}
 
 	// 进程级硬退出兜底：
-	// 即便存在后台 goroutine (account cooldown ticker、netutil 探测、
-	// sigcache cleaner 等未纳入统一退出信号的协程) 仍在运行并持有句柄，
-	// os.Exit 也会强制终止进程，彻底杜绝"退出窗口后进程在任务管理器
-	// 中残留不消失"的问题。OnShutdown 已在 wails.Run 返回前同步执行，
-	// 关键资源 (proxy、relay、session SaveToDisk 等) 已在此之前落盘完成。
+	//   OnShutdown 已被 lifecycle.Coordinator 包裹,自身具备 3s 整体预算与单任务超时;
+	//   即便 Coordinator 内仍有极端情况(如 Win32 内核级挂起)未在 3s 内返回,
+	//   wails.Run 返回前的最后一步仍会走到这里,os.Exit 强制终结进程,
+	//   彻底杜绝"退出窗口后进程在任务管理器中残留不消失"。
 	os.Exit(0)
 }

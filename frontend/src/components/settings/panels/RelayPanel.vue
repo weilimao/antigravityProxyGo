@@ -170,105 +170,9 @@
     </div>
 </div>
 
-<!-- 模型映射面板 (默认隐藏) -->
+<!-- 模型映射面板 (Vue SFC，复用 ModelSearchSelect 公共组件) -->
 <div id="relay-sub-panel-modelmapping" class="flex flex-col gap-6 w-full hidden">
-    <div class="bg-white dark:bg-[#1e2538] rounded-xl border border-outline-variant/20 p-5">
-        <!-- 顶部标题与新增 Tab 按钮 -->
-        <div class="flex items-center justify-between mb-4">
-            <h3 class="text-[14px] font-bold text-on-surface dark:text-white flex items-center gap-2">
-                <span class="material-symbols-outlined text-[18px] text-primary">alt_route</span>
-                <span data-i18n="relayModelMappingTitle">自定义中继模型映射与号池绑定</span>
-            </h3>
-            <div class="flex items-center gap-2">
-                <button class="flex items-center gap-1 px-3 py-1 text-[12px] font-medium bg-primary/10 text-primary hover:bg-primary/20 rounded-lg transition-colors cursor-pointer" onclick="window._relayAddTab()">
-                    <span class="material-symbols-outlined text-[16px]">add_box</span>
-                    <span>新增号池 Tab</span>
-                </button>
-            </div>
-        </div>
-
-        <!-- 动态号池 Tab 列表导航 -->
-        <div class="flex items-center gap-2 border-b border-outline-variant/20 pb-2 mb-4 overflow-x-auto" id="modelMappingTabsNav">
-            <!-- 动态渲染 Tab 按钮 -->
-        </div>
-
-        <!-- 当前 Tab 绑定账号池配置区 -->
-        <div class="bg-slate-50 dark:bg-white/5 p-3 rounded-lg border border-outline-variant/15 flex flex-wrap items-center justify-between gap-3 mb-4">
-            <div class="flex items-center gap-3 flex-wrap">
-                <!-- 搜索筛选输入框 (带清除图标) -->
-                <div class="relative w-56">
-                    <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-outline/70 text-[16px] pointer-events-none">search</span>
-                    <input type="text" id="inputRelayModelMappingSearch" class="w-full pl-8 pr-7 py-1 text-[12px] bg-white dark:bg-[#1e2538] border border-outline-variant/30 rounded-lg focus:border-primary focus:ring-2 focus:ring-primary/15 focus:outline-none transition-all placeholder:text-outline/50 text-on-surface dark:text-white" placeholder="搜索模型映射..." data-i18n-placeholder="relayModelMappingSearchPlaceholder" />
-                    <button id="btnClearRelayModelMappingSearch" class="hidden absolute right-2 top-1/2 -translate-y-1/2 text-outline hover:text-on-surface dark:hover:text-white p-0.5 rounded-full hover:bg-slate-200 dark:hover:bg-white/10 transition-colors cursor-pointer" title="清空搜索" data-i18n-title="relayModelMappingClearSearch">
-                        <span class="material-symbols-outlined text-[13px] block">close</span>
-                    </button>
-                </div>
-
-                <span class="text-[12px] font-bold text-on-surface dark:text-white flex items-center gap-1">
-                    <span class="material-symbols-outlined text-[16px] text-primary">hub</span>
-                    <span>路由目标账号池 (Target Provider):</span>
-                </span>
-                <select id="tabTargetProviderSelect" class="px-2 py-1 text-[12px] font-mono rounded border border-outline-variant/30 bg-white dark:bg-[#1e2538] text-on-surface dark:text-white focus:outline-none focus:border-primary">
-                    <!-- 动态渲染可用账号池列表 -->
-                </select>
-                <input type="text" id="tabTargetProviderCustom" class="px-2 py-1 text-[12px] font-mono rounded border border-outline-variant/30 bg-white dark:bg-[#1e2538] text-on-surface dark:text-white hidden w-32" placeholder="自定义号池ID" />
-                <button id="btnFetchChannelModels" class="flex items-center gap-1 px-2.5 py-1 text-[12px] font-medium bg-primary/10 text-primary hover:bg-primary/20 rounded-lg transition-colors cursor-pointer border border-primary/20" onclick="window._relayFetchChannelModels()">
-                    <span class="material-symbols-outlined text-[15px]">sync</span>
-                    <span>获取号池模型</span>
-                </button>
-                <span id="lblFetchedModelsCount" class="text-[11px] text-primary font-medium hidden"></span>
-                <!-- 清除失效模型:删除「真实目标模型已从远端下架」的映射行。默认禁用,需先成功获取号池模型核对远端全集后才可点。 -->
-                <button id="btnClearStaleModels" disabled
-                    class="flex items-center gap-1 px-2.5 py-1 text-[12px] font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 rounded-lg transition-colors cursor-pointer border border-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-red-500/10"
-                    onclick="window._relayClearStaleMappings()"
-                    data-i18n="relayClearStaleModels" data-i18n-title="relayClearStaleTip"
-                    title="删除「真实目标模型」已从远端下架的映射行(需先成功获取号池模型)">
-                    <span class="material-symbols-outlined text-[15px]">cleaning_services</span>
-                    <span>清除失效模型</span>
-                </button>
-                <!-- Other 号池多组获取按钮容器:切到 Other Tab 时由 relayController 动态渲染按组按钮,默认隐藏 -->
-                <div id="otherGroupFetchContainer" class="hidden flex flex-wrap items-center gap-2 ml-1"></div>
-            </div>
-            <div class="flex items-center gap-2">
-                <button id="btnDeleteCurrentTab" class="text-red-500 hover:text-red-700 text-[12px] font-medium flex items-center gap-1 transition-colors cursor-pointer hidden" onclick="window._relayDeleteCurrentTab()">
-                    <span class="material-symbols-outlined text-[15px]">delete</span>
-                    <span>删除当前 Tab</span>
-                </button>
-                <button class="flex items-center gap-1 text-[12px] font-medium text-primary hover:text-primary/80 transition-colors cursor-pointer px-2 py-1 rounded bg-primary/10" onclick="window._relayAddModelMapping()">
-                    <span class="material-symbols-outlined text-[16px]">add</span>
-                    <span data-i18n="relayAddMapping">添加映射模型</span>
-                </button>
-            </div>
-        </div>
-
-        <datalist id="channelModelsDatalist"></datalist>
-
-        <!-- 当前 Tab 下的模型映射表格 -->
-        <div class="overflow-x-auto max-h-[360px] overflow-y-auto pr-1">
-            <table class="w-full text-left text-[12px]">
-                <thead>
-                    <tr class="border-b border-outline-variant/25 text-outline/80">
-                        <th class="py-2.5 font-bold pl-2" data-i18n="relayMappingClientModel">客户端请求模型 (Client Model)</th>
-                        <th class="py-2.5 font-bold pl-2" data-i18n="relayMappingTargetModel">真实目标模型 (Target Model)</th>
-                        <th id="thInjectKwargs" class="py-2.5 font-bold text-center w-[160px] hidden" data-i18n="relayMappingInjectKwargs">注入 Template Kwargs</th>
-                        <th class="py-2.5 font-bold text-center w-[140px]" data-i18n="relayMappingMultimodal">多模态</th>
-                        <th class="py-2.5 font-bold text-center w-[120px]" data-i18n="relayMappingExpose">是否公开 (Expose)</th>
-                        <th class="py-2.5 font-bold text-center w-[80px]" data-i18n="autoTriggerColAction">操作</th>
-                    </tr>
-                </thead>
-                <tbody id="modelMappingTableBody">
-                    <!-- 动态渲染映射行 -->
-                </tbody>
-            </table>
-        </div>
-
-        <div class="flex justify-end gap-3 mt-5 border-t border-outline-variant/20 pt-4">
-            <button class="px-4 py-1.5 text-[12px] font-bold bg-primary text-white rounded-lg hover:bg-primary/90 transition-all duration-200 cursor-pointer shadow-md shadow-primary/20 flex items-center gap-1" onclick="window._relaySaveModelMapping()" id="btnSaveModelMapping">
-                <span class="material-symbols-outlined text-[16px]">save</span>
-                <span data-i18n="relaySaveMapping">保存全部映射与号池配置</span>
-            </button>
-        </div>
-    </div>
+    <ModelMappingPanel />
 </div>
 <!-- 教程子面板(中继服务器子 tab) -->
 <div id="relay-sub-panel-tutorial" class="flex flex-col gap-6 w-full hidden">
@@ -435,7 +339,5 @@ Authorization: Bearer sk-ant-...</pre>
 </template>
 
 <script setup lang="ts">
-// RelayPanel: 从 Settings.vue 提取的纯展示面板。
-// 保留所有 id / data-i18n / onclick / class 属性，
-// 使 settingsController / relayController 的 getElementById 与 classList 操作零改动。
+import ModelMappingPanel from '../relay-mapping/ModelMappingPanel.vue';
 </script>

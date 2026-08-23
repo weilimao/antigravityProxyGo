@@ -428,6 +428,8 @@
 </div>
 </div>
 </div>
+<!-- 按模型聚合的性能统计条 (近 N 条,跟随搜索/筛选联动) -->
+<div id="modelPerfBar"></div>
 <!-- 内容数据框 -->
 <div class="flex-grow overflow-y-auto">
 <!-- 模型统计面板 -->

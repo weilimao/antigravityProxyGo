@@ -176,3 +176,14 @@ func (t *teeSink) flush() {
 		t.live.flush()
 	}
 }
+
+// pingFrame: tee 首轮里 only-live 心跳。
+// 不写 replay(回放时不能带,否则未来重放会出现莫名 ping 帧,破坏"已有什么就回什么"语义);
+// 只 live,用于在上游已开块但长期未下发新字节时重置客户端 SDK 的 inactivity 看门狗。
+// 同步重置 tee 的"见新字节"时间戳,让离 this 心跳之后的下一段 content_block_delta 不被误认为"久停"。
+func (t *teeSink) pingFrame() {
+	if t.replayOnly || t.live == nil {
+		return
+	}
+	t.live.pingFrame()
+}

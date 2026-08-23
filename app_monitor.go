@@ -9,8 +9,6 @@ import (
 	"runtime/debug"
 	"sort"
 	"time"
-
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // app_monitor.go: 后台监控 — startMemoryMonitor 内存心跳 / emitMemoryStats 上报 / getStatsPayload 统计面板载荷。
@@ -37,12 +35,15 @@ func (a *App) startMemoryMonitor(ctx context.Context) {
 			if trendCounter >= 3 { // 3 * 10s = 30s
 				trendCounter = 0
 				if a.IsWindowVisibleAndActive() {
-					wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
+					a.emitEvent("stats-updated", a.getStatsPayload(false))
 				}
 				// Periodically force the Go runtime to release unused heap
 				// memory and trim WebView2 working set back to the OS.
 				debug.FreeOSMemory()
 				stats.TrimProcessWorkingSet()
+
+				// Trim 完了立刻向用户发送一次最新的内存读数（修剪的结果），避免等待 30s。
+				a.emitMemoryStats()
 			}
 		}
 	}
@@ -63,12 +64,20 @@ func (a *App) emitMemoryStats() {
 	corelog.Printf("[DEBUG MEMORY] Total RSS: %.2f MB | Go Heap: %.2f MB | Go Sys: %.2f MB | Proc Count: %d | CPU: %.1f%%\n",
 		float64(total)/(1024*1024), float64(ms.HeapAlloc)/(1024*1024), float64(ms.Sys)/(1024*1024), count, cpuPercent)
 
-	wailsRuntime.EventsEmit(a.ctx, "memory-stats-updated", map[string]interface{}{
+	payload := map[string]interface{}{
 		"total":        total,
 		"processCount": count,
 		"heapAlloc":    ms.HeapAlloc,
 		"cpuUsage":     cpuPercent,
-	})
+	}
+
+	// 冷启动抑制：前30秒不向前端推送内存事件,防止WebView2刚启动时的工作集尖峰误导用户
+	if time.Since(a.appStartedAt) > 30*time.Second {
+		a.emitEvent("memory-stats-updated", payload)
+	} else {
+		corelog.Printf("[DEBUG MEMORY] 冷启动抑制中 (前30秒), 暂不向前端推送内存事件。Go Heap: %.2f MB, Go Sys: %.2f MB\n",
+			float64(ms.HeapAlloc)/(1024*1024), float64(ms.Sys)/(1024*1024))
+	}
 }
 
 // getStatsPayload 获取隔离或原生的统计载荷快照

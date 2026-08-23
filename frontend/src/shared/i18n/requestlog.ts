@@ -70,6 +70,11 @@ export const requestlogZh: Record<string, string> = {
     reqHeaders: "请求头 (Request Headers)",
     reqBody: "请求参数 (Request Body)",
     btnCopyJson: "复制 JSON",
+    // 按模型聚合的性能统计条 (近 N 条)。模板 {n} 会被替换为样本条数。
+    modelPerfTitle: "按模型性能统计 (近 {n} 条)",
+    colModelPerfAvgTtfb: "平均首帧",
+    colModelPerfAvgDuration: "平均耗时",
+    modelPerfEmpty: "暂无数据",
 };
 
 export const requestlogEn: Record<string, string> = {
@@ -139,4 +144,9 @@ export const requestlogEn: Record<string, string> = {
     reqHeaders: "Request Headers",
     reqBody: "Request Body",
     btnCopyJson: "Copy JSON",
+    // Per-model performance stats bar. {n} is replaced with sample count.
+    modelPerfTitle: "Per-model Performance (last {n})",
+    colModelPerfAvgTtfb: "Avg First Byte",
+    colModelPerfAvgDuration: "Avg Duration",
+    modelPerfEmpty: "No data",
 };

@@ -83,10 +83,19 @@ func openAIChatSSEToAnthropicSSEIntoPinned(ctx context.Context, reader io.Reader
 	// message_start
 	sink.writeEvent("message_start", messageStartPayload(streamID, model, inputTokens))
 
+	// SSE ping 心跳看门狗:仅监控主循环是否已产出过一个 content_block(thinking/text/tool_use),
+	// 一旦激活就以 heartbeatIdle 为阈值向 sink 注入 ping 空帧,避免 Claude Code SDK 判定
+	// 「工具被中断」。stop 会在函数返回前调用,确保协程被销毁。
+	hb := newHeartbeatWatchdog(sink)
+	hb.start(ctx)
+	defer hb.stop()
+
 	blockStates := &sseBlockStates{
 		blocks:         map[int]*sseBlock{},
 		pinnedToolIDs:  pinnedToolIDs,
 		emittedToolIDs: map[int]string{},
+		// 心跳看门狗:让 sseBlockStates 能在每次真正写出业务 delta 后通知看门狗刷新时间戳。
+		heartbeat:      hb,
 	}
 	stopReason := ""
 
@@ -256,6 +265,11 @@ type sseBlockStates struct {
 	// emittedToolIDs 记录本轮已生成的 tool_index(上游 tc.Index)→ Anthropic tool_use ID 映射。
 	// 非 nil 时由调用方持有,首轮成功后快照进 pinnedToolIDs,供重试轮复用。
 	emittedToolIDs map[int]string
+	// heartbeat 是本翻译会话上的 SSE ping 看门狗。
+	// 一旦进入实质 content_block(thinking/text/tool_use)即被激活;它的 markBeat 方法会被
+	// emitTextDelta/emitThinkingDelta/emitToolCallDelta 在真实下发业务帧后调用,
+	// 用于把"最后活动时间"刷新,letting 上层(蓄流重试链路)在外层不感知心跳的存在。
+	heartbeat *heartbeatWatchdog
 }
 
 // nextFreeIndex 返回当前 blocks 中未占用的最小 index,供 text/tool 块分配使用。
@@ -306,6 +320,10 @@ func (s *sseBlockStates) emitTextDelta(text string, fw sseEventSink) {
 		fw.writeEvent("content_block_start", contentBlockStartPayload(b.index, "text", "", ""))
 	}
 	fw.writeEvent("content_block_delta", contentBlockTextDeltaPayload(b.index, text))
+	if s.heartbeat != nil {
+		s.heartbeat.markContentBlockEntry()
+		s.heartbeat.markBeat()
+	}
 }
 
 // closeThinkingIfOpen 在锁内调用:若 blocks[0] 是已开块(thinkingStarted)且尚未关闭的 thinking 块,
@@ -366,6 +384,10 @@ func (s *sseBlockStates) emitThinkingDelta(text string, fw sseEventSink) {
 		fw.writeEvent("content_block_start", contentBlockThinkingStartPayload(b.index))
 	}
 	fw.writeEvent("content_block_delta", contentBlockThinkingDeltaPayload(b.index, text))
+	if s.heartbeat != nil {
+		s.heartbeat.markContentBlockEntry()
+		s.heartbeat.markBeat()
+	}
 }
 
 // emitToolCallDelta 处理 OpenAI tool_calls 增量(index 指向上游分块的工具调用编号)，
@@ -435,6 +457,12 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 	// OpenAI 流式 tool_calls 的 arguments 是增量字符串，Anthropic 用 input_json_delta 直传
 	if tc.Function.Arguments != "" {
 		fw.writeEvent("content_block_delta", contentBlockInputJSONDeltaPayload(b.index, tc.Function.Arguments))
+	}
+	if s.heartbeat != nil {
+		s.heartbeat.markContentBlockEntry()
+		if tc.Function.Arguments != "" {
+			s.heartbeat.markBeat()
+		}
 	}
 }
 

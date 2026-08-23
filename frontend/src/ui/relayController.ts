@@ -16,7 +16,7 @@ import {
     handleAddUser
 } from './relayUsers';
 import './relayUserStats';
-import { initRelayModelMapping, loadModelMappings } from './relayModelMapping';
+// Model mapping panel now rendered as Vue SFC (ModelMappingPanel.vue), no DOM init needed.
 
 // Facade re-exports for external modules (e.g., dashboard.ts)
 export { refreshRelayPackages } from './relayPackages';
@@ -151,7 +151,7 @@ export function initRelayEvents() {
         if (btnRelaySubTabTutorial) btnRelaySubTabTutorial.className = active === 'tutorial' ? subTabActiveClass : subTabInactiveClass;
 
         if (active === 'modelmapping') {
-            loadModelMappings();
+            // Model mapping panel loads data via Vue onMounted in ModelMappingPanel.vue
         }
     }
 
@@ -217,7 +217,7 @@ export function initRelayEvents() {
         });
     }
 
-    initRelayModelMapping();
+    // Model mapping panel is now a Vue SFC, no DOM init needed.
 }
 
 // Listen for relay config updates globally (only once when module loads)

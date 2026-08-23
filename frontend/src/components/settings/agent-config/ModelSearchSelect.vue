@@ -132,6 +132,8 @@ const props = withDefaults(
     placeholder?: string;
     disabled?: boolean;
     allowCustom?: boolean;
+    /** 打开下拉时是否触发 refresh 事件（由父级注入刷新逻辑，如重新拉取中继映射） */
+    refreshOnOpen?: boolean;
   }>(),
   {
     modelValue: '',
@@ -139,12 +141,15 @@ const props = withDefaults(
     placeholder: '搜索或选择模型...',
     disabled: false,
     allowCustom: true,
+    refreshOnOpen: false,
   }
 );
 
 const emit = defineEmits<{
   'update:modelValue': [val: string];
   'change': [val: string];
+  /** 下拉打开时触发（仅当 refreshOnOpen=true），由父级用于重新拉取数据并更新 options */
+  'refresh': [];
 }>();
 
 const containerRef = ref<HTMLElement | null>(null);
@@ -220,6 +225,10 @@ function openDropdown() {
   isOpen.value = true;
   searchQuery.value = '';
   highlightedIndex.value = -1;
+  // 打开时按需通知父级刷新模型列表（如中继映射可能已在其他面板更新）
+  if (props.refreshOnOpen) {
+    emit('refresh');
+  }
   nextTick(() => {
     inputRef.value?.focus();
     inputRef.value?.select();

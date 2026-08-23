@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/netutil"
 	"antigravity-proxy/internal/settings"
 )
 
@@ -275,7 +276,11 @@ func fetchGeminiInternalModels(acc *account.Account) ([]string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "antigravity/ide/2.1.1 windows/amd64")
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	// 复用项目 netutil 系统代理链(IE 注册表 / 自定义 SOCKS5 / 本地 VPN 端口探测三级回退)。
+	// 原裸 http.Client{Timeout} 在 Transport=nil 时只读 HTTPS_PROXY 环境变量，不走 Windows
+	// IE 系统代理与本地 VPN 端口探测，导致防火墙环境 console “Google 获取模型必报 context deadline”。
+	// Timeout 由 15s 提到 30s：代理握手 + Google 内部接口延迟抖动，15s 偏紧。
+	client := &http.Client{Timeout: 30 * time.Second, Transport: netutil.NewTransport()}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("网络连接失败: %w", err)

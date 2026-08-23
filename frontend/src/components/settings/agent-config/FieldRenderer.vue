@@ -106,7 +106,9 @@
           :model-value="baseModelValue"
           :options="modelOptions"
           :placeholder="field.placeholder || '搜索或选择模型...'"
+          :refresh-on-open="true"
           @update:model-value="onModelSelect"
+          @refresh="emit('refresh-models')"
           class="flex-1 min-w-0"
         />
         <label
@@ -166,6 +168,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:value': [value: any];
+  /** 下拉打开时请求父级刷新模型列表（中继映射可能已更新） */
+  'refresh-models': [];
 }>();
 
 const enabledSet = ref<Set<string>>(new Set());

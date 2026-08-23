@@ -2,6 +2,7 @@ import { ipcRenderer } from '../shared/ipc';
 import { formatDuration } from './dashboardUtils';
 import { maybeDrawTrendChart, redrawTrendChartAnimated } from './dashboardTrends';
 import { LogsRowSlot, logsRowSlots, viewBtnLogMap, buildLogsRowSlot, updateLogsRowSlot, mergeRetryRows } from './dashboardLogs';
+import { renderModelPerfBar } from './dashboardModelPerf';
 import { initModalDom, showModal, hideModal } from './dashboardModal';
 import { initConsoleEvents } from './dashboardConsole';
 import state from './dashboardState';
@@ -254,6 +255,10 @@ export function renderLogsTable() {
     }
 
     addBtn(state.currentLanguage === 'zh' ? '下一页' : 'Next', state.currentPage + 1, false, state.currentPage === totalPages);
+
+    // 顶部「按模型聚合性能统计」条: 基于与表格一致的 filtered 列表(search/状态过滤已生效),
+    // 不使用 mergeRetryRows 折叠 —— 客户端多次独立 HTTP 请求在性能统计上仍是多次真实事件。
+    renderModelPerfBar(filtered);
 }
 
 // Multi-language Text Translation
@@ -408,6 +413,11 @@ export function switchTab(tab: string) {
     }
     if (tableFooter) {
         tableFooter.classList.toggle('hidden', tab !== 'logs');
+    }
+    // 「按模型性能统计」条与 logSearchRow/tableFooter 同生命周期: 仅 logs tab 可见。
+    const modelPerfBar = document.getElementById('modelPerfBar');
+    if (modelPerfBar) {
+        modelPerfBar.classList.toggle('hidden', tab !== 'logs');
     }
 
     if (tab === 'pricing') {

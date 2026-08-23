@@ -146,3 +146,44 @@ func (f *flushWriter) flush() {
 		f.flusher.Flush()
 	}
 }
+
+// pingFrame 实现 sseEventSink 接口:向客户端推一条 Anthropic 语义为空的 ping 事件,
+// 用于在「上游已开块(tool_use/text/thinking)但长时间未给出新字节」的窗口期重置
+// 客户端 SDK(Claude Code)的 inactivity 看门狗,避免它把当前 tool_use 判为 "interrupted"。
+//
+// 行为约定:
+//   - 不写入业务 delta;不会改变任何块状态;不参与 message_delta token 累计。
+//   - 若此前已经进入 deferredActive(尚未 flushDeferred),说明上游首个实质内容都没到,
+//     此时心跳应触发 flushDeferred(WriteHeader 200 + 刷已经暂存的 message_start/框架帧),
+//     否则客户端永远ENTER SSE 态,ping 帧再合法也无处可达。
+//   - 若已转直写则直推 + flusher.Flush。
+func (f *flushWriter) pingFrame() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.firstUpstreamByteHook != nil {
+		hook := f.firstUpstreamByteHook
+		f.firstUpstreamByteHook = nil
+		hook()
+	}
+	if f.deferredActive {
+		f.deferredActive = false
+		if f.firstByteHook != nil {
+			hook := f.firstByteHook
+			f.firstByteHook = nil
+			hook()
+		}
+		if f.deferred.Len() > 0 {
+			f.w.Write(f.deferred.Bytes())
+			f.w.Flush()
+			if f.flusher != nil {
+				f.flusher.Flush()
+			}
+			f.deferred.Reset()
+		}
+	}
+	writeSSEFrame(f.w, "ping", `{"type":"ping"}`)
+	f.w.Flush()
+	if f.flusher != nil {
+		f.flusher.Flush()
+	}
+}

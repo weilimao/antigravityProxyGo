@@ -46,6 +46,7 @@
             v-model:formData="formData"
             :availableModels="availableModels"
             @update:formData="onFormChange"
+            @refresh-models="onRefreshModels"
           />
         </div>
 
@@ -176,6 +177,7 @@ onMounted(() => {
   });
   initAgentConfig();
   fetchRelayModels().then((models) => {
+    relayModelCache = [...models];
     availableModels.value = models;
     refreshAvailableModels();
   });
@@ -199,8 +201,6 @@ function refreshAvailableModels() {
       }
     }
   } catch { /* JSON 解析失败时忽略，仅用中继模型列表 */ }
-  // 保存初始中继模型列表避免递归合并
-  if (!relayModelCache.length) relayModelCache = [...availableModels.value];
   // 合并去重：中继模型 + Agent catalog 模型 + JSON 已配置的 provider/model
   const merged = Array.from(new Set([...relayModelCache, ...catalogModelCache, ...jsonModelNames]));
   availableModels.value = merged.sort((a, b) => a.localeCompare(b));
@@ -238,6 +238,16 @@ function onFormChange(data: Record<string, any>) {
     }
   }
   refreshAvailableModels();
+}
+
+// onRefreshModels: 模型下拉打开时，重新拉取最新中继映射并合并至 availableModels。
+// 用户在中继面板新增映射后切回 Agent 配置面板，第一次点下拉即可搜到新模型。
+async function onRefreshModels() {
+  try {
+    const models = await fetchRelayModels();
+    relayModelCache = [...models];
+    refreshAvailableModels();
+  } catch { /* 静默失败，保留当前缓存 */ }
 }
 
 function syncFormFromJSON() {

@@ -56,6 +56,11 @@ func (r *replayWriter) writeRaw(s string) {
 // 这里保留方法以满足 sseEventSink 接口契约。
 func (r *replayWriter) flush() {}
 
+// pingFrame 在蓄流 sink 语义下为 no-op:replayWriter 仅作为"完整性判定与回放"载体,
+// 心跳帧(语义为空, 只重置客户端看门狗)如果落进 buffer 会在未来回放阶段被原样重播,
+// 反而会污染 live 上"第二轮工具段开始"的时序约定。本实现选择吞掉,仅留 frame 计数以便观测。
+func (r *replayWriter) pingFrame() {}
+
 // bytes 返回已蓄流的完整 SSE 字节切片(只读视图),供回放层逐帧 flush 给客户端。
 func (r *replayWriter) bytes() []byte {
 	r.mu.Lock()
