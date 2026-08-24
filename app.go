@@ -84,9 +84,6 @@ type App struct {
 	// antigravityBgMgr 管理 Antigravity 桌面端壁纸与外观调谐。
 	antigravityBgMgr *antigravitybg.Manager
 
-	// appStartedAt 记录 App 创建时间，用于抑制冷启动前 30 秒内存面板显示的无意义尖峰。
-	appStartedAt time.Time
-
 	// eventsGate 节流前端事件派发,防止 stats/logs/state 等高频发往主线程
 	// 把主线程消息队列挤爆引发连锁卡死。startup 内构造。
 	eventsGate *eventsgate.Gate
@@ -98,7 +95,6 @@ type App struct {
 func NewApp() *App {
 	return &App{
 		logBuffer: make([]string, 0),
-		appStartedAt: time.Now(),
 	}
 }
 

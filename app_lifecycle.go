@@ -29,7 +29,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -874,10 +873,6 @@ func (a *App) domReady(ctx context.Context) {
 		go a.showMainWindow()
 	}
 
-	// 启动 3 秒自愈修剪：首屏 DOM 与图表全部加载渲染完毕后，主动修剪前端与 Go 启动阶段产生的临时 JIT 与内存脏页
-	go func() {
-		time.Sleep(3 * time.Second)
-		debug.FreeOSMemory()
-		stats.TrimProcessWorkingSet()
-	}()
+	// DOM 就绪后立即异步推送一次实时内存数据
+	go a.emitMemoryStats()
 }

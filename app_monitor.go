@@ -36,14 +36,12 @@ func (a *App) startMemoryMonitor(ctx context.Context) {
 				trendCounter = 0
 				if a.IsWindowVisibleAndActive() {
 					a.emitEvent("stats-updated", a.getStatsPayload(false))
+				} else {
+					// 仅当窗口最小化或处于后台托盘静默时，智能修剪闲置工作集以实现极低挂机内存
+					stats.TrimProcessWorkingSet()
 				}
-				// Periodically force the Go runtime to release unused heap
-				// memory and trim WebView2 working set back to the OS.
+				// Periodically force the Go runtime to release unused heap memory
 				debug.FreeOSMemory()
-				stats.TrimProcessWorkingSet()
-
-				// Trim 完了立刻向用户发送一次最新的内存读数（修剪的结果），避免等待 30s。
-				a.emitMemoryStats()
 			}
 		}
 	}
@@ -71,13 +69,7 @@ func (a *App) emitMemoryStats() {
 		"cpuUsage":     cpuPercent,
 	}
 
-	// 冷启动抑制：前30秒不向前端推送内存事件,防止WebView2刚启动时的工作集尖峰误导用户
-	if time.Since(a.appStartedAt) > 30*time.Second {
-		a.emitEvent("memory-stats-updated", payload)
-	} else {
-		corelog.Printf("[DEBUG MEMORY] 冷启动抑制中 (前30秒), 暂不向前端推送内存事件。Go Heap: %.2f MB, Go Sys: %.2f MB\n",
-			float64(ms.HeapAlloc)/(1024*1024), float64(ms.Sys)/(1024*1024))
-	}
+	a.emitEvent("memory-stats-updated", payload)
 }
 
 // getStatsPayload 获取隔离或原生的统计载荷快照

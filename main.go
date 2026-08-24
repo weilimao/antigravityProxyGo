@@ -59,9 +59,8 @@ func main() {
 		defer lock.Unlock()
 	}
 
-	// Set WebView2 environment variable: 禁用无关功能模块与限制 V8 堆上限，同时保留 GPU 硬件加速以避免 CPU 软件解码/毛玻璃卷积导致内存与 CPU 暴涨。
-	// 后三项 (--disable-gpu-*-cache / --prune-gpu-command-buffer) 与 v1.4.0 一致, 阻止 GPU 进程常驻累积着色器/程序缓存导致 renderer 内存膨胀。
-	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--mute-audio --disable-audio --disable-features=AudioServiceSandbox,VideoCaptureService,Translate,MediaRouter --disable-breakpad --js-flags=\"--max-old-space-size=128\" --disable-gpu-program-caches --disable-gpu-shader-disk-cache --prune-gpu-command-buffer")
+	// Set WebView2 environment variable: 深度精简无关后台进程、合并网络栈并限制 V8 堆上限，消除多余空闲渲染器与冗余子进程开销。
+	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--mute-audio --disable-audio --disable-features=AudioServiceSandbox,VideoCaptureService,Translate,MediaRouter,SpareRendererForSitePerProcess,CalculateNativeWinOcclusion --enable-features=NetworkServiceInProcess --renderer-process-limit=1 --disable-site-isolation-trials --disable-background-networking --disable-component-update --disable-extensions --disable-sync --disable-breakpad --js-flags=\"--max-old-space-size=128\" --disable-gpu-program-caches --disable-gpu-shader-disk-cache --prune-gpu-command-buffer")
 
 	// Create an instance of the app structure
 	app := NewApp()
