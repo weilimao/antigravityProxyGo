@@ -30,7 +30,7 @@ const result = await build({
             // 互相覆盖(后者会吞掉 formatDuration 的导出)。
             const stubs = {
                 dashboardState: 'export default { currentLanguage: "zh" };',
-                dashboardUtils: 'export function formatDuration(m){return (m===undefined||m===null||typeof m!=="number"||isNaN(m)||m<0)?"-":(m<1000?m+"ms":(m/1000).toFixed(2)+"s")}; export function formatDisplayModel(m, r){return !m?"-":(r&&r!=="none"?`${m}(${r})`:m);};',
+                dashboardUtils: 'export function formatDuration(m){if(m===undefined||m===null||typeof m!=="number"||isNaN(m)||m<0)return"-";if(m<1000){const r=Number(m.toFixed(2));if(r>=1000)return (r/1000).toFixed(2)+"s";return r+"ms";}return (m/1000).toFixed(2)+"s";}; export function formatDisplayModel(m, r){return !m?"-":(r&&r!=="none"?`${m}(${r})`:m);};',
             };
             b.onResolve({ filter: /^\.\/dashboard(State|Utils)$/ }, args => ({
                 path: args.path, namespace: 'stub',
@@ -141,6 +141,11 @@ const { formatDuration } = await import(pathToFileURL(utilsOutPath).href);
 eq('0ms 正常格式化为 0ms(不吞成横杠)', formatDuration(0), '0ms');
 eq('1ms 格式化为 1ms', formatDuration(1), '1ms');
 eq('500ms 格式化为 500ms', formatDuration(500), '500ms');
+eq('999.888888888334ms 格式化为 999.89ms', formatDuration(999.888888888334), '999.89ms');
+eq('97.188888888883ms 格式化为 97.19ms', formatDuration(97.188888888883), '97.19ms');
+eq('12.3ms 格式化为 12.3ms (去末尾0)', formatDuration(12.3), '12.3ms');
+eq('12.345ms 格式化为 12.35ms (四舍五入)', formatDuration(12.345), '12.35ms');
+eq('999.996ms 进位格式化为 1.00s', formatDuration(999.996), '1.00s');
 eq('1500ms 格式化为 1.50s', formatDuration(1500), '1.50s');
 eq('undefined 兜底为 -', formatDuration(undefined), '-');
 eq('null 兜底为 -', formatDuration(null), '-');

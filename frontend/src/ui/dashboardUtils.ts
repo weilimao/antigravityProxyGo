@@ -9,7 +9,13 @@
  */
 export function formatDuration(ms: number | undefined | null): string {
     if (ms === undefined || ms === null || typeof ms !== 'number' || isNaN(ms) || ms < 0) return '-';
-    if (ms < 1000) return `${ms}ms`;
+    if (ms < 1000) {
+        const rounded = Number(ms.toFixed(2));
+        if (rounded >= 1000) {
+            return `${(rounded / 1000).toFixed(2)}s`;
+        }
+        return `${rounded}ms`;
+    }
     return `${(ms / 1000).toFixed(2)}s`;
 }
 
