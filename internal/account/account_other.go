@@ -179,6 +179,16 @@ func (m *Manager) AddOtherAccount(in OtherAccountInput) (string, error) {
 	}
 	m.RUnlock()
 	m.AddAccount(acc)
+	// 同步同组历史账号的 GroupName(若新增账号填了新组名,保持同组各账号一致)
+	if strings.TrimSpace(acc.GroupName) != "" {
+		m.Lock()
+		for _, a := range m.accounts {
+			if a != nil && a.Provider == otherProvider && a.GroupID == acc.GroupID {
+				a.GroupName = acc.GroupName
+			}
+		}
+		m.Unlock()
+	}
 	return acc.ID, nil
 }
 
@@ -235,6 +245,13 @@ func (m *Manager) UpdateOtherAccount(id string, in OtherAccountInput) (*Account,
 	// APIKey 留空表示保持不变;否则覆盖 AccessToken(复用 SetAccessToken 走 token 锁)。
 	if strings.TrimSpace(in.APIKey) != "" {
 		target.SetAccessToken(strings.TrimSpace(in.APIKey))
+	}
+
+	// 同步更新同组其它账号的 GroupName(保持组展示名在同组各账号间一致,避免 GetOtherGroups 聚合时取到旧组名)
+	for _, a := range m.accounts {
+		if a != nil && a.Provider == otherProvider && a.GroupID == groupID {
+			a.GroupName = groupName
+		}
 	}
 
 	// 先释放写锁再 SaveAccounts(内部会 RLock;写锁持有时不可再 RLock,否则自死锁)。

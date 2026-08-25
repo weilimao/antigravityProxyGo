@@ -86,12 +86,15 @@
           <span data-i18n="otherFetchModels">获取模型</span>
         </button>
       </div>
-      <div class="flex items-center gap-1.5">
-        <input type="text" id="inputOtherModelDefault" placeholder="deepseek-chat"
-          class="flex-1 min-w-0 px-3 py-1.5 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" />
-        <select id="selectOtherModelDefault" class="hidden w-36 shrink-0 px-2 py-1.5 bg-slate-100 dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[11px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all cursor-pointer">
-          <option value="">选择模型...</option>
-        </select>
+      <div>
+        <ModelSearchSelect
+          v-model="otherDefaultModel"
+          :options="otherModelOptions"
+          placeholder="例如: deepseek-chat (搜索或输入模型...)"
+          :allow-custom="true"
+          class="w-full"
+        />
+        <input type="hidden" id="inputOtherModelDefault" :value="otherDefaultModel" />
       </div>
     </div>
 
@@ -107,4 +110,6 @@
 <script setup lang="ts">
 import BaseModal from './BaseModal.vue';
 import PasswordInput from './PasswordInput.vue';
+import ModelSearchSelect from '../settings/agent-config/ModelSearchSelect.vue';
+import { otherDefaultModel, otherModelOptions } from '../../ui/otherAccountModal';
 </script>

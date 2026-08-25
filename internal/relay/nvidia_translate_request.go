@@ -149,7 +149,7 @@ func anthropicToOpenAIChat(req *AnthropicRequest, preserveImages bool, mappings 
 		out.ReasoningEffort = ""
 	} else {
 		// NIM 池 kwargs 开启 → 注入 chat_template_kwargs(原有逻辑)。
-		effort := resolveReasoningEffort(req)
+		effort := clampNvidiaReasoningEffortForKimiK3(resolveReasoningEffort(req), req.Model)
 		if mapped := mapReasoningEffort(effort, nvidiaThinkingEffortMode(req.Model)); mapped != "" {
 			out.ChatTemplateKwargs = map[string]interface{}{
 				"thinking":         true,
@@ -295,6 +295,25 @@ func mapReasoningEffort(effort, mode string) string {
 	}
 }
 
+// clampNvidiaReasoningEffortForKimiK3 对 NVIDIA NIM 上游 kimi-k3 单模型做思考强度钳位:
+// 探针实测(scripts/nvidia_tool_call_probe,2026-08-25 多次) kimi-k3 在 effort=max +
+// tool_choice=required 组合下陷入长时间深度思考无法收敛(600s 超时仍走不到 tool_calls
+// 帧),客户端 Claude Code 等不到 tool_use_block 完成事件,表现为「工具调用中断」。
+// 短期止血策略:在发往 NVIDIA 上游前把 reasoning_effort 从 max 钳到 high,保留
+// thinking=true 让上游继续走思考路径,但只走 8k–16k 思考预算,深度受限可控、能收敛。
+// 仅 kimi-k3 命中此钳位;deepseek/glm-5.2/llama 等其他 NVIDIA 池模型保持原映射不受
+// 影响(它们要么不支持 thinking,要么 max 档能正常收敛)。后续 NIM 端 kimi-k3 max 档修复
+// 收敛问题后,可移除此钳位。
+func clampNvidiaReasoningEffortForKimiK3(effort string, upstreamModel string) string {
+	if !strings.Contains(strings.ToLower(upstreamModel), "kimi-k3") {
+		return effort
+	}
+	if effort == "max" || effort == "xhigh" {
+		return "high"
+	}
+	return effort
+}
+
 // nvidiaThinkingEffortMode 按上游模型名判定不同上游取值模式。
 // 当前 NIM 池上游统一为 deepseek 取值(只有 high/max 两档最稳);新增上游若取值不同再按模型分支扩展。
 func nvidiaThinkingEffortMode(model string) string {
@@ -334,7 +353,7 @@ func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte
 		chatReq.ChatTemplateKwargs = nil
 		return
 	}
-	if mapped := mapReasoningEffort(effort, nvidiaThinkingEffortMode(upstreamModel)); mapped != "" {
+	if mapped := mapReasoningEffort(clampNvidiaReasoningEffortForKimiK3(effort, upstreamModel), nvidiaThinkingEffortMode(upstreamModel)); mapped != "" {
 		chatReq.ChatTemplateKwargs = map[string]interface{}{
 			"thinking":         true,
 			"reasoning_effort": mapped,

@@ -357,3 +357,61 @@ func TestManager_GetOtherGroupFormats(t *testing.T) {
 		t.Errorf("GetOtherGroupFormats unknown: want nil, got %v", got)
 	}
 }
+
+func TestUpdateOtherAccount_GroupNameSyncAcrossGroup(t *testing.T) {
+	m := NewManager()
+	id1, err1 := m.AddOtherAccount(OtherAccountInput{
+		GroupID:   "openrouter",
+		GroupName: "OpenRouter 旧名",
+		BaseURL:   "https://openrouter.ai/api/v1",
+		APIKey:    "key11111111",
+		Formats:   []string{"openai"},
+	})
+	if err1 != nil || id1 == "" {
+		t.Fatalf("AddOtherAccount 1 failed: %v", err1)
+	}
+	id2, err2 := m.AddOtherAccount(OtherAccountInput{
+		GroupID:   "openrouter",
+		GroupName: "OpenRouter 旧名",
+		BaseURL:   "https://openrouter.ai/api/v1",
+		APIKey:    "key22222222",
+		Formats:   []string{"openai"},
+	})
+	if err2 != nil || id2 == "" {
+		t.Fatalf("AddOtherAccount 2 failed: %v", err2)
+	}
+
+	// 验证初始状态聚合组名为旧名
+	groupsInit := m.GetOtherGroups()
+	if len(groupsInit) != 1 || groupsInit[0].GroupName != "OpenRouter 旧名" {
+		t.Fatalf("Initial GetOtherGroups: expected 1 group with 'OpenRouter 旧名', got: %+v", groupsInit)
+	}
+
+	// 编辑账号 2，修改组名为 "OpenRouter-VIP"
+	_, errUp := m.UpdateOtherAccount(id2, OtherAccountInput{
+		GroupID:   "openrouter",
+		GroupName: "OpenRouter-VIP",
+		BaseURL:   "https://openrouter.ai/api/v1",
+		APIKey:    "", // 保持 key 不变
+		Formats:   []string{"openai"},
+	})
+	if errUp != nil {
+		t.Fatalf("UpdateOtherAccount failed: %v", errUp)
+	}
+
+	// 验证账号 1 和账号 2 的 GroupName 均被同步为 "OpenRouter-VIP"
+	acc1 := m.GetAccountByID(id1)
+	acc2 := m.GetAccountByID(id2)
+	if acc1 == nil || acc1.GroupName != "OpenRouter-VIP" {
+		t.Errorf("acc1 GroupName: want 'OpenRouter-VIP', got %q", acc1.GroupName)
+	}
+	if acc2 == nil || acc2.GroupName != "OpenRouter-VIP" {
+		t.Errorf("acc2 GroupName: want 'OpenRouter-VIP', got %q", acc2.GroupName)
+	}
+
+	// 验证 GetOtherGroups() 聚合出的组名已为 "OpenRouter-VIP"
+	groupsAfter := m.GetOtherGroups()
+	if len(groupsAfter) != 1 || groupsAfter[0].GroupName != "OpenRouter-VIP" {
+		t.Errorf("GetOtherGroups after update: want 'OpenRouter-VIP', got: %+v", groupsAfter)
+	}
+}

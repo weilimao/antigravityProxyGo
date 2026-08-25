@@ -204,6 +204,19 @@ export function useModelMapping() {
     }
   }
 
+  // 监听 accounts-res 广播, 当 Other 账号添加/修改/删除/改名时, 即时同步 otherGroups 供模型映射面板展示
+  ipcRenderer.on('accounts-res', (_event: any, data: any) => {
+    if (data && Array.isArray(data.otherGroups)) {
+      otherGroups.value = data.otherGroups.map((g: any) => ({
+        groupId: String(g.groupId || g.groupID || g.id || ''),
+        groupName: String(g.groupName || g.groupId || ''),
+        formats: Array.isArray(g.formats) ? g.formats : [],
+        accountCount: Number(g.accountCount) || 0,
+        enabledCount: Number(g.enabledCount) || 0,
+      })).filter((g: OtherGroupInfo) => g.groupId);
+    }
+  });
+
   async function refreshOtherGroups() {
     otherGroups.value = await getOtherGroups();
   }
@@ -216,6 +229,8 @@ export function useModelMapping() {
           groupId: String(g.groupId || g.groupID || g.id || ''),
           groupName: String(g.groupName || g.groupId || ''),
           formats: Array.isArray(g.formats) ? g.formats : [],
+          accountCount: Number(g.accountCount) || 0,
+          enabledCount: Number(g.enabledCount) || 0,
         })).filter((g: OtherGroupInfo) => g.groupId);
       }
     } catch (e) { /* ignore */ }
@@ -226,6 +241,8 @@ export function useModelMapping() {
           groupId: String(g.groupId || g.groupID || g.id || ''),
           groupName: String(g.groupName || g.groupId || ''),
           formats: Array.isArray(g.formats) ? g.formats : [],
+          accountCount: Number(g.accountCount) || 0,
+          enabledCount: Number(g.enabledCount) || 0,
         })).filter((g: OtherGroupInfo) => g.groupId);
       }
     } catch (e) { /* ignore */ }

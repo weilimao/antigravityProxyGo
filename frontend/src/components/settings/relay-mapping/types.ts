@@ -22,4 +22,6 @@ export interface OtherGroupInfo {
   groupId: string;
   groupName: string;
   formats: string[];
+  accountCount?: number;
+  enabledCount?: number;
 }

@@ -7,10 +7,14 @@
  * 8 个函数,由 accountsController.initAccountsEvents 委托 initOtherAccountModalEvents() 完成句柄赋值与事件绑定。
  * 依赖：ipcRenderer、state(lastBackendData.otherGroups / currentAccountsList)、otherRevealAccountId(revealKeyState)。
  */
+import { ref } from 'vue';
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import { otherRevealAccountId } from '../shared/revealKeyState';
 import i18n from '../shared/i18n';
+
+export const otherDefaultModel = ref('');
+export const otherModelOptions = ref<string[]>([]);
 
 let groupSelectOther: HTMLSelectElement | null;
 let otherAccountModal: HTMLDivElement | null;
@@ -29,16 +33,8 @@ function otherGroupPlaceholderOptionHtml(): string {
     return `<option value="" data-i18n="otherGroupSelectPlaceholder">${ph}</option>`;
 }
 
-// otherSelectModelPlaceholderHtml:构建模型下拉「选择模型...」占位 option,同上理由从 dict 取值。
-function otherSelectModelPlaceholderHtml(): string {
-    const dict = i18n[state.currentLanguage] || i18n.zh || {};
-    const ph = dict.otherSelectModelPlaceholder || '选择模型...';
-    return `<option value="">${ph}</option>`;
-}
-
 // refreshOtherGroupSelectI18n:语言切换时由 dashboard.setLanguage 调用,
-// 即时重刷 Other 弹窗「选择已有组」与「默认模型」下拉的占位 option 文案( 若弹窗已打开 ),
-// 弥补 innerHTML 动态写入绕过 data-i18n 遍历的语言切换盲区。弹窗未打开时无副作用。
+// 即时重刷 Other 弹窗「选择已有组」下拉的占位 option 文案( 若弹窗已打开 )。
 export function refreshOtherGroupSelectI18n(): void {
     const dict = i18n[state.currentLanguage] || i18n.zh || {};
     if (!groupSelectOther) {
@@ -47,11 +43,6 @@ export function refreshOtherGroupSelectI18n(): void {
     if (groupSelectOther) {
         const phOpt = groupSelectOther.querySelector('option[value=""]') as HTMLOptionElement | null;
         if (phOpt) phOpt.textContent = dict.otherGroupSelectPlaceholder || '选择已有组...';
-    }
-    const selModel = document.getElementById('selectOtherModelDefault') as HTMLSelectElement | null;
-    if (selModel) {
-        const phOpt = selModel.querySelector('option[value=""]') as HTMLOptionElement | null;
-        if (phOpt) phOpt.textContent = dict.otherSelectModelPlaceholder || '选择模型...';
     }
 }
 
@@ -104,7 +95,6 @@ function onOtherGroupSelectChange() {
     const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
     const inputGroupName = document.getElementById('inputOtherGroupName') as HTMLInputElement | null;
     const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
-    const inputModelDefault = document.getElementById('inputOtherModelDefault') as HTMLInputElement | null;
     const chkFmtOpenai = document.getElementById('chkOtherFmtOpenai') as HTMLInputElement | null;
     const chkFmtAnthropic = document.getElementById('chkOtherFmtAnthropic') as HTMLInputElement | null;
 
@@ -125,7 +115,7 @@ function onOtherGroupSelectChange() {
         );
         if (hit) defModel = String(hit.defaultModel);
     }
-    if (inputModelDefault) inputModelDefault.value = defModel;
+    otherDefaultModel.value = defModel;
     // 不填 API Key / 展示名(用户自行填写);groupId 保持可编辑(不设 readonly)。
 }
 
@@ -177,8 +167,6 @@ export function openOtherAccountModal() {
     const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
     const inputApiKey = document.getElementById('inputOtherApiKey') as HTMLInputElement | null;
     const inputLabel = document.getElementById('inputOtherLabel') as HTMLInputElement | null;
-    const inputModelDefault = document.getElementById('inputOtherModelDefault') as HTMLInputElement | null;
-    const selectModelDefault = document.getElementById('selectOtherModelDefault') as HTMLSelectElement | null;
     const chkFmtOpenai = document.getElementById('chkOtherFmtOpenai') as HTMLInputElement | null;
     const chkFmtAnthropic = document.getElementById('chkOtherFmtAnthropic') as HTMLInputElement | null;
 
@@ -187,11 +175,8 @@ export function openOtherAccountModal() {
     if (inputBaseUrl) inputBaseUrl.value = '';
     if (inputApiKey) inputApiKey.value = '';
     if (inputLabel) inputLabel.value = '';
-    if (inputModelDefault) inputModelDefault.value = '';
-    if (selectModelDefault) {
-        selectModelDefault.classList.add('hidden');
-        selectModelDefault.innerHTML = otherSelectModelPlaceholderHtml();
-    }
+    otherDefaultModel.value = '';
+    otherModelOptions.value = [];
     // 默认勾选 OpenAI 格式,与新建态初始 checked 一致。
     if (chkFmtOpenai) chkFmtOpenai.checked = true;
     if (chkFmtAnthropic) chkFmtAnthropic.checked = false;
@@ -238,8 +223,6 @@ export function openEditOtherAccount(acc: any) {
     const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
     const inputApiKey = document.getElementById('inputOtherApiKey') as HTMLInputElement | null;
     const inputLabel = document.getElementById('inputOtherLabel') as HTMLInputElement | null;
-    const inputModelDefault = document.getElementById('inputOtherModelDefault') as HTMLInputElement | null;
-    const selectModelDefault = document.getElementById('selectOtherModelDefault') as HTMLSelectElement | null;
     const chkFmtOpenai = document.getElementById('chkOtherFmtOpenai') as HTMLInputElement | null;
     const chkFmtAnthropic = document.getElementById('chkOtherFmtAnthropic') as HTMLInputElement | null;
 
@@ -252,11 +235,8 @@ export function openEditOtherAccount(acc: any) {
         inputApiKey.placeholder = latestAcc.maskedKey || 'sk-... (留空保持不变)';
     }
     if (inputLabel) inputLabel.value = latestAcc.email || '';
-    if (inputModelDefault) inputModelDefault.value = latestAcc.defaultModel || '';
-    if (selectModelDefault) {
-        selectModelDefault.classList.add('hidden');
-        selectModelDefault.innerHTML = otherSelectModelPlaceholderHtml();
-    }
+    otherDefaultModel.value = latestAcc.defaultModel || '';
+    otherModelOptions.value = [];
 
     // 据账号 Formats 勾选协议 checkbox(openai 含则勾,否则取消;anthropic 同理)。
     const fmts: string[] = Array.isArray(latestAcc.formats) ? latestAcc.formats.map((f: any) => String(f).toLowerCase()) : [];
@@ -290,7 +270,6 @@ async function submitOtherAccount() {
     const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
     const inputApiKey = document.getElementById('inputOtherApiKey') as HTMLInputElement | null;
     const inputLabel = document.getElementById('inputOtherLabel') as HTMLInputElement | null;
-    const inputModelDefault = document.getElementById('inputOtherModelDefault') as HTMLInputElement | null;
     const chkFmtOpenai = document.getElementById('chkOtherFmtOpenai') as HTMLInputElement | null;
     const chkFmtAnthropic = document.getElementById('chkOtherFmtAnthropic') as HTMLInputElement | null;
 
@@ -340,7 +319,7 @@ async function submitOtherAccount() {
             apiKey,
             formats,
             label: inputLabel?.value.trim() || '',
-            defaultModel: inputModelDefault?.value.trim() || ''
+            defaultModel: otherDefaultModel.value.trim()
         };
         if (otherEditId) {
             // 编辑态:以 accountId 定位既有账号;apiKey 留空保持不变。
@@ -380,7 +359,6 @@ async function fetchOtherModels() {
     const inputGroupId = document.getElementById('inputOtherGroupId') as HTMLInputElement | null;
     const inputBaseUrl = document.getElementById('inputOtherBaseUrl') as HTMLInputElement | null;
     const inputApiKey = document.getElementById('inputOtherApiKey') as HTMLInputElement | null;
-    const selectModelDefault = document.getElementById('selectOtherModelDefault') as HTMLSelectElement | null;
     if (!btnOtherFetchModels) return;
 
     const groupId = inputGroupId ? inputGroupId.value.trim() : '';
@@ -408,22 +386,7 @@ async function fetchOtherModels() {
         // 透传 baseUrl/apiKey,便于未入库时按当前表单预拉;后端会优先用透传值,否则查号池该组首个账号。
         const res = await ipcRenderer.invoke('other:fetch-models', JSON.stringify({ groupId, baseUrl, apiKey }));
         if (res && res.success && Array.isArray(res.models)) {
-            if (selectModelDefault) {
-                selectModelDefault.innerHTML = otherSelectModelPlaceholderHtml();
-                res.models.forEach((m: string) => {
-                    const opt = document.createElement('option');
-                    opt.value = m;
-                    opt.textContent = m;
-                    selectModelDefault.appendChild(opt);
-                });
-                selectModelDefault.classList.remove('hidden');
-                selectModelDefault.onchange = () => {
-                    if (selectModelDefault.value) {
-                        const inputModelDefault = document.getElementById('inputOtherModelDefault') as HTMLInputElement | null;
-                        if (inputModelDefault) inputModelDefault.value = selectModelDefault.value;
-                    }
-                };
-            }
+            otherModelOptions.value = res.models;
         } else {
             // Anthropic-only 上游无 /v1/models 端点会返回 allowManualInput,提示用户手填。
             if (res && res.allowManualInput) {
@@ -431,7 +394,6 @@ async function fetchOtherModels() {
                     otherModalError.textContent = res?.error || '上游暂不支持模型列表,请手动填写模型名';
                     otherModalError.classList.remove('hidden');
                 }
-                if (selectModelDefault) selectModelDefault.classList.add('hidden');
             } else if (otherModalError) {
                 otherModalError.textContent = res?.error || '获取模型列表失败';
                 otherModalError.classList.remove('hidden');

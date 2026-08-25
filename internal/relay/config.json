@@ -42,7 +42,7 @@
   "nvidiaCompressEnabled": false,
   "nvidiaCompressThresholdTokens": 0,
   "nvidiaCompressKeepToolResults": 0,
-  "nvidiaWorkerProxyUrl": "http://127.0.0.1:53199",
+  "nvidiaWorkerProxyUrl": "http://127.0.0.1:49972",
   "nvidiaWorkerProxyEnabled": false,
   "nvidiaDedicatedProxyEnabled": false,
   "promptPrefix": "",
