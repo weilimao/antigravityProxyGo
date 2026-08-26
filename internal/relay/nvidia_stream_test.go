@@ -455,3 +455,105 @@ func TestOpenAIChatSSEToAnthropicSSE_ReasoningAsText(t *testing.T) {
 		t.Errorf("did not expect thinking_delta when ReasoningAsText is enabled, got:\n%s", got)
 	}
 }
+
+// TestTextBlockClosedBeforeToolUseStart 锁定关键修复：
+// 当上游先吐出文本（content），随后紧接着下发工具调用（tool_calls）时，
+// 必须在发送 tool_use 的 content_block_start 之前，先将 text 块的 content_block_stop 发出，
+// 杜绝 content_block 交错未闭合导致 Claude Code SDK 报错并显示「Tool use interrupted」。
+// 同时断言冒号非法字符被安全替换（如 Read:0 -> Read_0）。
+func TestTextBlockClosedBeforeToolUseStart(t *testing.T) {
+	events := runAnthropicSSE(t, writeUpstream(
+		textChunkLine("我把摸底跑完"),
+		toolChunkLine(0, "Read:0", "Read", "{\"file_path\":\"test.vue\"}"),
+		finishChunkLine("tool_calls"),
+	))
+
+	var textStopIdx, toolStartIdx int
+	textStopFound := false
+	toolStartFound := false
+	var toolID string
+
+	for i, ev := range events {
+		m := dataMap(t, ev)
+		if ev.event == "content_block_stop" {
+			if idx, ok := m["index"].(float64); ok && int(idx) == 0 {
+				textStopIdx = i
+				textStopFound = true
+			}
+		}
+		if ev.event == "content_block_start" {
+			if cb, ok := m["content_block"].(map[string]interface{}); ok && cb["type"] == "tool_use" {
+				toolStartIdx = i
+				toolStartFound = true
+				toolID, _ = cb["id"].(string)
+			}
+		}
+	}
+
+	if !textStopFound {
+		t.Fatalf("未找到 text 块 (index=0) 的 content_block_stop 事件")
+	}
+	if !toolStartFound {
+		t.Fatalf("未找到 tool_use 块 (index=1) 的 content_block_start 事件")
+	}
+
+	// 核心断言：text 的 stop 必须严格先于 tool_use 的 start 发出
+	if textStopIdx >= toolStartIdx {
+		t.Fatalf("时序错误：text 块的 content_block_stop(事件位置 %d) 未在 tool_use 的 content_block_start(事件位置 %d) 之前发出，导致 Block 嵌套交错", textStopIdx, toolStartIdx)
+	}
+
+	// 核心断言：toolID 中的冒号必须被清理为下划线，符合 Anthropic 规范
+	if strings.Contains(toolID, ":") {
+		t.Fatalf("toolID 包含非法冒号字符: %q", toolID)
+	}
+	if toolID != "Read_0" {
+		t.Fatalf("期望 toolID 为 Read_0，实得 %q", toolID)
+	}
+}
+
+// TestMultipleToolUseBlocksStrictlySequential 验证多工具调用场景下各工具块严格串行闭合
+func TestMultipleToolUseBlocksStrictlySequential(t *testing.T) {
+	events := runAnthropicSSE(t, writeUpstream(
+		textChunkLine("并行调用两个工具"),
+		toolChunkLine(0, "tool_1", "Read", "{\"file\":\"a.go\"}"),
+		toolChunkLine(1, "tool_2", "Read", "{\"file\":\"b.go\"}"),
+		finishChunkLine("tool_calls"),
+	))
+
+	// 记录每一个块的 start 和 stop 事件在完整流中的顺序
+	type blockLifecycle struct {
+		startPos int
+		stopPos  int
+	}
+	blocks := map[int]*blockLifecycle{}
+
+	for pos, ev := range events {
+		m := dataMap(t, ev)
+		if ev.event == "content_block_start" {
+			idx := int(m["index"].(float64))
+			blocks[idx] = &blockLifecycle{startPos: pos, stopPos: -1}
+		} else if ev.event == "content_block_stop" {
+			idx := int(m["index"].(float64))
+			if b, ok := blocks[idx]; ok {
+				b.stopPos = pos
+			}
+		}
+	}
+
+	if len(blocks) != 3 {
+		t.Fatalf("期望 3 个块（1 个文本 + 2 个工具），实得 %d 个", len(blocks))
+	}
+
+	// 验证每一个块必须先 stop，下一个块才能 start（严格串行）
+	for i := 0; i < len(blocks)-1; i++ {
+		cur := blocks[i]
+		next := blocks[i+1]
+		if cur == nil || next == nil {
+			t.Fatalf("块信息缺失")
+		}
+		if cur.stopPos == -1 || cur.stopPos >= next.startPos {
+			t.Fatalf("块 %d 的 stop (位置 %d) 必须在块 %d 的 start (位置 %d) 之前", i, cur.stopPos, i+1, next.startPos)
+		}
+	}
+}
+

@@ -38,7 +38,7 @@
       <label class="text-[12px] font-medium text-on-surface dark:text-white" data-i18n="nvidiaFieldBaseUrl">Base URL (上游端点)</label>
       <input type="text" id="inputOtherBaseUrl"
         placeholder="https://api.deepseek.com/v1"
-        data-i18n-placeholder="nvidiaFieldBaseUrlPlaceholder"
+        data-i18n-placeholder="otherFieldBaseUrlPlaceholder"
         class="px-3 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" />
     </div>
 
@@ -71,7 +71,7 @@
       <label class="text-[12px] font-medium text-on-surface dark:text-white" data-i18n="nvidiaFieldLabel">展示名 (可选)</label>
       <input type="text" id="inputOtherLabel"
         placeholder="DeepSeek 账号"
-        data-i18n-placeholder="nvidiaFieldLabelPlaceholder"
+        data-i18n-placeholder="otherFieldLabelPlaceholder"
         class="px-3 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" />
     </div>
 

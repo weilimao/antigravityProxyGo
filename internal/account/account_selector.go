@@ -666,20 +666,24 @@ func (m *Manager) SetProjectMaxConcurrency(v int) {
 	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
-// GetOtherMaxConcurrency 返回某组单账号并发上限,未知组回退默认 10。
-func (m *Manager) GetOtherMaxConcurrency(groupID string) int {
+// getOtherMaxConcurrencyUnsafe 是 GetOtherMaxConcurrency 的无锁内联版,供已持有 m.RLock 的内部聚合函数(如 GetOtherGroups)使用。
+func (m *Manager) getOtherMaxConcurrencyUnsafe(groupID string) int {
 	gid := strings.ToLower(strings.TrimSpace(groupID))
-	m.RLock()
 	if m.otherMaxConcurrency == nil {
-		m.RUnlock()
 		return defaultMaxConcurrency
 	}
 	v, ok := m.otherMaxConcurrency[gid]
-	m.RUnlock()
 	if !ok || v <= 0 {
 		return defaultMaxConcurrency
 	}
 	return v
+}
+
+// GetOtherMaxConcurrency 返回某组单账号并发上限,未知组回退默认 10。
+func (m *Manager) GetOtherMaxConcurrency(groupID string) int {
+	m.RLock()
+	defer m.RUnlock()
+	return m.getOtherMaxConcurrencyUnsafe(groupID)
 }
 
 // SetOtherMaxConcurrency 设置某组单账号并发上限并持久化到 accounts_pool.json(经 poolConfigOnDisk.OtherMaxConcurrency)。

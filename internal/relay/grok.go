@@ -368,10 +368,7 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 				workerProxyActive = true
 			}
 		}
-		targetURL := baseURL + "/v1/chat/completions"
-		if strings.HasSuffix(baseURL, "/v1") {
-			targetURL = baseURL + "/chat/completions"
-		}
+		targetURL := BuildOpenAIChatURL(baseURL)
 
 		upstreamBody, err := json.Marshal(upstreamReq)
 		if err != nil {
@@ -598,10 +595,7 @@ func (h *APICompatHandler) handleGrokModels(w http.ResponseWriter, r *http.Reque
 			workerProxyActive = true
 		}
 	}
-	targetURL := baseURL + "/v1/models"
-	if strings.HasSuffix(baseURL, "/v1") {
-		targetURL = baseURL + "/models"
-	}
+	targetURL := BuildOpenAIModelsURL(baseURL)
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
 	if err != nil {

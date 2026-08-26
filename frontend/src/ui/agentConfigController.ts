@@ -140,6 +140,58 @@ export async function saveAgentCatalogFull(agentId: string, jsonStr: string): Pr
   }
 }
 
+// ===== OpenCode Provider AI 一键生成 =====
+
+// DEFAULT_PROVIDER_GEN_PROMPT: AI 生成 provider 配置的默认系统提示词模板。
+// 用户可在弹窗里编辑此模板后再生成。要求 AI 只输出 JSON、走本地中继。
+export const DEFAULT_PROVIDER_GEN_PROMPT = `你是 OpenCode 配置生成专家。根据用户的需求描述,输出一个合法的 opencode.json 中单个 provider 的 JSON 配置片段。
+
+严格要求:
+1. 只输出一个 JSON 对象,绝对不要 markdown 代码块标记(\`\`\`),不要任何解释性前言或总结,回答的第一个字符必须是 '{'。
+2. JSON 顶层结构为 { "providerName": { ... } },providerName 用 kebab-case 简短命名(如 deepseek、openai-compatible)。
+3. provider 对象内必须包含以下字段:
+   - "npm": AI SDK 的 npm 包名。OpenAI 兼容接口用 "@ai-sdk/openai-compatible";Anthropic 原生用 "@ai-sdk/anthropic";Google 用 "@ai-sdk/google"。
+   - "api": 协议类型,取值 "openai" 或 "anthropic" 或 "google"。
+   - "options": { "baseURL": "<上游 baseURL>", "apiKey": "<留空字符串或环境变量引用>" }
+   - "models": { "<模型id>": { ...模型属性... } },至少包含一个模型条目。
+4. 每个模型条目可包含: name(显示名)、attachment(是否支持附件 bool)、reasoning(是否支持推理 bool)、tool_call(是否支持工具调用 bool)、temperature(是否支持温度 bool)、limit:{context, output}、cost:{input, output}、options:{reasoningEffort}。
+5. baseURL 若用户未指定上游,默认指向本地中继服务: http://127.0.0.1:18444/v1(经中继路由到各上游)。若用户指定了第三方上游(如 https://api.deepseek.com),baseURL 用该上游地址。
+6. apiKey 一律留空字符串 ""(由中继服务注入鉴权),不要编造密钥。
+7. 模型 id 以用户消息中给出的【强约束】模型列表为准(若提供):models 的 key 必须逐字使用列表中的模型 id,禁止增删改,禁止使用任何列表外的模型 id。若用户未提供列表,模型 id 必须与上游服务真实支持的模型 id 一致。
+
+示例输出形态(仅供参考结构,实际按用户需求填充):
+{ "deepseek": { "npm": "@ai-sdk/openai-compatible", "api": "openai", "options": { "baseURL": "http://127.0.0.1:18444/v1", "apiKey": "" }, "models": { "deepseek-chat": { "name": "DeepSeek Chat", "tool_call": true, "reasoning": false, "temperature": true, "limit": { "context": 64000, "output": 8192 } } } } }`;
+
+// generateOpenCodeProvider: 调后端让 AI 生成一份 provider.{name} JSON 片段。
+// model 为中继暴露的模型名, systemPrompt 为可编辑的提示词模板, userInput 为用户补充需求,
+// selectedModels 为用户多选的真实模型列表(非空时后端强约束 AI 只为这些模型生成条目)。
+// 返回 AI 输出的原始文本(预期是 JSON), 由调用方 JSON.parse 校验后回填。
+export async function generateOpenCodeProvider(
+  model: string,
+  systemPrompt: string,
+  userInput: string,
+  selectedModels: string[] = [],
+): Promise<{ success: boolean; content?: string; error?: string }> {
+  try {
+    return await ipcRenderer.invoke('externalconfig:ai-generate-provider', model, systemPrompt, userInput, selectedModels);
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
+// fetchTopRelayModels: 拉取中继调用量 Top 模型统计(跨用户聚合, 按请求次数降序)。
+// 供 AI 生成弹窗默认预选调用量前十的模型, 避免预选到已下架/无流量的模型。
+export async function fetchTopRelayModels(): Promise<{ model: string; requests: number; inputTokens: number; outputTokens: number }[]> {
+  try {
+    const res = await ipcRenderer.invoke('externalconfig:get-top-models');
+    if (!res || !res.success || !Array.isArray(res.models)) return [];
+    return res.models;
+  } catch (err) {
+    console.error('[AgentConfigController] Failed to fetch top relay models:', err);
+    return [];
+  }
+}
+
 // ===== 双向绑定工具 =====
 
 // getNestedValue: 按点分路径从 JSON 对象中取值。

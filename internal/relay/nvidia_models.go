@@ -216,10 +216,7 @@ func (h *APICompatHandler) handleNvidiaModels(w http.ResponseWriter, r *http.Req
 			workerProxyActive = true
 		}
 	}
-	targetURL := baseURL + "/v1/models"
-	if strings.HasSuffix(baseURL, "/v1") {
-		targetURL = baseURL + "/models"
-	}
+	targetURL := BuildOpenAIModelsURL(baseURL)
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
 	if err != nil {

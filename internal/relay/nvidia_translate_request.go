@@ -481,13 +481,20 @@ func normalizeEffort(e string) string {
 
 // anthropicAssistantToChat 把 Anthropic assistant 消息转成 OpenAI assistant 消息。
 // assistant 的 content 中可能混合 text 与 tool_use 块：text→content 字符串，tool_use→tool_calls。
+// 同时清洗客户端因历史中断残留的 "[Tool use interrupted]" 污染，防上游模型产生复读幻觉。
 func anthropicAssistantToChat(msg AnthropicMessage) ChatMessage {
 	var sb strings.Builder
 	var toolCalls []ChatToolCall
 	for _, b := range msg.Content {
 		switch b.Type {
 		case "text":
-			sb.WriteString(b.Text)
+			cleanText := SanitizeInterruptedHistoryText(SanitizeAllThoughtSignatures(b.Text))
+			if cleanText != "" {
+				if sb.Len() > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(cleanText)
+			}
 		case "tool_use":
 			args, _ := json.Marshal(b.Input)
 			toolCalls = append(toolCalls, ChatToolCall{
@@ -500,9 +507,14 @@ func anthropicAssistantToChat(msg AnthropicMessage) ChatMessage {
 			})
 		}
 	}
+	content := sb.String()
+	// 若纯文本消息被清洗后变为空且无 tool_calls，填入安全占位以防发送空 content 导致 OpenAI 校验报错
+	if content == "" && len(toolCalls) == 0 {
+		content = "好的，我继续执行任务。"
+	}
 	return ChatMessage{
 		Role:      "assistant",
-		Content:   sb.String(),
+		Content:   content,
 		ToolCalls: toolCalls,
 	}
 }
@@ -537,15 +549,18 @@ func anthropicUserToChat(msg AnthropicMessage, preserveImages bool) []ChatMessag
 				ToolName:   b.Name,
 			})
 		case "text":
-			if sb.Len() > 0 {
-				sb.WriteString("\n")
+			cleanText := SanitizeInterruptedHistoryText(SanitizeAllThoughtSignatures(b.Text))
+			if cleanText != "" {
+				if sb.Len() > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(cleanText)
+				if preserveImages {
+					// 交错收集:text 块按原始 content 顺序入栈 parts,与 image 块同批保序。
+					parts = append(parts, ChatMessageTextPart{Type: "text", Text: cleanText})
+				}
+				hasText = true
 			}
-			sb.WriteString(b.Text)
-			if preserveImages {
-				// 交错收集:text 块按原始 content 顺序入栈 parts,与 image 块同批保序。
-				parts = append(parts, ChatMessageTextPart{Type: "text", Text: b.Text})
-			}
-			hasText = true
 		case "image":
 			if preserveImages {
 				parts = append(parts, ChatMessageImageURLPart{

@@ -390,6 +390,18 @@ func (s *sseBlockStates) emitThinkingDelta(text string, fw sseEventSink) {
 	}
 }
 
+// closeTextIfOpen 在锁内调用:关闭所有已开块(textStarted)且尚未关闭(closed==false)的 text 块,
+// 按官方序列发出 content_block_stop 并标记 closed=true,保证在开 tool_use 之前文本块已完全闭合,
+// 避免 Anthropic SSE 出现 text 与 tool_use 块交错重叠导致 Claude Code SDK 判定「工具被中断」。
+func (s *sseBlockStates) closeTextIfOpen(fw sseEventSink) {
+	for _, b := range s.blocks {
+		if b != nil && b.kind == "text" && b.textStarted && !b.closed {
+			fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
+			b.closed = true
+		}
+	}
+}
+
 // emitToolCallDelta 处理 OpenAI tool_calls 增量(index 指向上游分块的工具调用编号)，
 // 映射成 Anthropic 的 content_block_start(tool_use) + content_block_delta(input_json_delta)。
 //
@@ -406,6 +418,9 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 	// 若 thinking 块当前已开:先按官方序列完整闭合它(signature_delta → stop)再开 tool_use,
 	// 保证"思考先于正文/工具"且 thinking 块在 tool_use 块之前完全闭合。
 	s.closeThinkingIfOpen(fw)
+	// 若 text 块当前已开:先闭合 text 块(content_block_stop)再开 tool_use,
+	// 保证 content_block 严格串行闭合，杜绝 text 与 tool_use 块交错重叠导致 SDK 报「工具被中断」。
+	s.closeTextIfOpen(fw)
 	// tool_use 块 index 分配:base = 已开(含已关)块数量 —— thinking 开过占 1 位 + text 开过占 1 位。
 	// 上游 tc.Index 是该工具调用在上游工具列表里的位次,key = base + tc.Index 保证多工具不抢 index,
 	// 且工具块严格排在 thinking/text 之后,符合官方"思考→正文→工具"或"思考→工具"顺序。
@@ -422,6 +437,15 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 	key := base + tc.Index
 	b, ok := s.blocks[key]
 	if !ok {
+		// 若此前有其他已开启但未闭合的 tool_use 块，在新 tool_use 开启前先闭合前一个工具块，
+		// 保证多个 tool_use 块之间亦严格串行（start->deltas->stop -> start->deltas->stop）。
+		for _, prev := range s.blocks {
+			if prev != nil && prev.kind == "tool_use" && prev.toolStarted && !prev.closed {
+				fw.writeEvent("content_block_stop", contentBlockStopPayload(prev.index))
+				prev.closed = true
+			}
+		}
+
 		// 生成 Anthropic tool_use id:优先 pin 复用首轮 ID,否则用上游 ID/兜底名生成。
 		toolID := ""
 		pinned := false
@@ -436,6 +460,9 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 		}
 		if toolID == "" {
 			toolID = fmt.Sprintf("toolu_nvidia_%d", tc.Index)
+		}
+		if strings.Contains(toolID, ":") {
+			toolID = strings.ReplaceAll(toolID, ":", "_")
 		}
 		b = &sseBlock{index: key, kind: "tool_use", toolID: toolID, toolName: tc.Function.Name}
 		s.blocks[key] = b

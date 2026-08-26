@@ -48,3 +48,42 @@ func TestEncodeThoughtSignatureDisabled(t *testing.T) {
 		t.Errorf("EncodeThoughtSignature should be disabled and return empty string, got %q", got)
 	}
 }
+
+func TestSanitizeInterruptedHistoryText(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "pure interrupted text",
+			input:    "[Tool use interrupted]",
+			expected: "",
+		},
+		{
+			name:     "bullet interrupted text",
+			input:    "● [Tool use interrupted]",
+			expected: "",
+		},
+		{
+			name:     "embedded interrupted text",
+			input:    "好的，我继续执行任务。[Tool use interrupted]",
+			expected: "好的，我继续执行任务。",
+		},
+		{
+			name:     "normal text untouched",
+			input:    "这是正常的助手回答内容。",
+			expected: "这是正常的助手回答内容。",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeInterruptedHistoryText(tc.input)
+			if got != tc.expected {
+				t.Errorf("SanitizeInterruptedHistoryText(%q) = %q, want %q", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+

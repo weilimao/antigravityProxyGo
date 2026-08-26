@@ -276,9 +276,16 @@
 		</p>
 		<div class="flex flex-col gap-1.5 border-t border-outline-variant/20 pt-4 mt-2">
 			<label class="text-[12px] font-bold text-outline" data-i18n="ocrModelLabel">OCR 图片分析模型</label>
-			<select class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-medium" id="selOcrModel">
-				<!-- 动态填充 -->
-			</select>
+			<ModelSearchSelect
+				:model-value="ocrModel"
+				:options="ocrModelOptions"
+				:allow-custom="true"
+				:refresh-on-open="true"
+				placeholder="搜索或输入用于 OCR 识别的模型..."
+				@update:model-value="setOcrModel"
+				@refresh="refreshOcrModelOptions"
+				class="w-full"
+			/>
 			<span class="text-[11px] text-outline leading-relaxed" data-i18n="ocrModelDesc">入站图片自动 OCR 降级时调用的本地模型,默认 gemini-2.5-flash,可从中继模型映射列表任选 Gemini 系模型。</span>
 		</div>
 	</div>
@@ -359,7 +366,19 @@
 </template>
 
 <script setup lang="ts">
-// GeneralPanel: 从 Settings.vue 提取的纯展示面板。
-// 保留所有 id / data-i18n / onclick / class 属性，
-// 使 settingsController / relayController 的 getElementById 与 classList 操作零改动。
+import { onMounted } from 'vue';
+import ModelSearchSelect from '../agent-config/ModelSearchSelect.vue';
+import {
+	ocrModel,
+	ocrModelOptions,
+	initOcrSettings,
+	refreshOcrModelOptions,
+	setOcrModel,
+} from '../../../ui/ocrSettings';
+
+// GeneralPanel: 继承系统参数配置面板，保留所有 DOM id 供 controller 兼容操作；
+// OCR 模型下拉已全面升级为公共组件 ModelSearchSelect，走响应式状态流。
+onMounted(() => {
+	initOcrSettings();
+});
 </script>

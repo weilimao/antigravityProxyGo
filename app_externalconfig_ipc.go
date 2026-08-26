@@ -83,6 +83,23 @@ func (a *App) handleExternalConfigInvokeIPC(channel string, args []interface{}) 
 		return ""
 	}
 
+	getStringSliceArg := func(idx int) []string {
+		if idx >= len(args) {
+			return nil
+		}
+		arr, ok := args[idx].([]interface{})
+		if !ok {
+			return nil
+		}
+		out := make([]string, 0, len(arr))
+		for _, v := range arr {
+			if s, ok := v.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+
 	switch channel {
 	case "externalconfig:save-config":
 		agentID := getStringArg(0)
@@ -148,6 +165,28 @@ func (a *App) handleExternalConfigInvokeIPC(channel string, args []interface{}) 
 		}
 		a.AddLog(fmt.Sprintf("✅ [Agent配置] %s 模型 catalog 已保存", agentID))
 		return marshalResponse(map[string]interface{}{"success": true})
+
+	case "externalconfig:ai-generate-provider":
+		// OpenCode provider AI 一键生成: 入参 (model, systemPrompt, userInput, models?),
+		// 调本地中继 /v1/chat/completions 让 AI 输出 provider.{name} JSON 片段。
+		// models(可选)为用户在前端多选的真实模型列表, 注入 user prompt 强约束 AI 只为
+		// 这些模型生成条目, 杜绝 AI 编造已下架/不存在的模型 id。
+		// 实现见 app_opencode_aigen.go, 此处只做参数提取与结果包装。
+		model := getStringArg(0)
+		systemPrompt := getStringArg(1)
+		userInput := getStringArg(2)
+		selectedModels := getStringSliceArg(3)
+		content, err := a.generateOpenCodeProvider(model, systemPrompt, userInput, selectedModels)
+		if err != nil {
+			a.AddLog(fmt.Sprintf("❌ [Agent配置] AI 生成 provider 失败: %v", err))
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		return marshalResponse(map[string]interface{}{"success": true, "content": content})
+
+	case "externalconfig:get-top-models":
+		// 中继调用量 Top 模型统计(跨用户聚合, 按请求次数降序),
+		// 供 AI 生成弹窗默认预选调用量前十的模型。
+		return marshalResponse(map[string]interface{}{"success": true, "models": a.getTopRelayModels()})
 	}
 
 	return "", false, nil

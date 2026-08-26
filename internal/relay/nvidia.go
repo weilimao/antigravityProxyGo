@@ -470,10 +470,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				workerProxyActive = true
 			}
 		}
-		targetURL := baseURL + "/v1/chat/completions"
-		if strings.HasSuffix(baseURL, "/v1") {
-			targetURL = baseURL + "/chat/completions"
-		}
+		targetURL := BuildOpenAIChatURL(baseURL)
 
 		upstreamBody, err := json.Marshal(upstreamReq)
 		if err != nil {

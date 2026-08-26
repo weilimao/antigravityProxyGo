@@ -1,15 +1,16 @@
 import { ipcRenderer, shell } from '../shared/ipc';
 import { bindProxySettings, loadProxyState } from './settingsProxy';
 import state from './dashboardState';
-
-let networkRefreshTimer: any = null;
+import {
+    deactivateNetworkLogs,
+    initSettingsNetworkListeners,
+    startNetworkLogsAutoRefresh,
+    stopNetworkLogsAutoRefresh,
+} from './settingsNetwork';
+import { refreshOcrModel } from './ocrSettings';
 
 export function deactivateSettings() {
-    if (networkRefreshTimer) {
-        clearInterval(networkRefreshTimer);
-        networkRefreshTimer = null;
-        console.log('[SettingsController] Outbound network logs auto refresh stopped.');
-    }
+    deactivateNetworkLogs();
 }
 
 export function onSettingsTabChanged(cb: (tab: string) => void): () => void {
@@ -55,24 +56,7 @@ export function initSettings() {
         const activeTabClass = 'px-4 py-1.5 text-[12px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-bold cursor-pointer transition-all duration-200';
         const inactiveTabClass = 'px-4 py-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md font-medium cursor-pointer transition-all duration-200';
 
-        function startNetworkLogsAutoRefresh() {
-            if (networkRefreshTimer) return;
-            networkRefreshTimer = setInterval(() => {
-                try {
-                    ipcRenderer.send('settings:get-network-status');
-                    ipcRenderer.send('settings:get-network-logs');
-                } catch (e) {
-                    console.error('[SettingsController] Failed to auto refresh network logs:', e);
-                }
-            }, 3000);
-        }
-
-        function stopNetworkLogsAutoRefresh() {
-            if (networkRefreshTimer) {
-                clearInterval(networkRefreshTimer);
-                networkRefreshTimer = null;
-            }
-        }
+        initSettingsNetworkListeners();
 
         function switchSettingsTab(activePanel: string) {
             const settingsPanelGeneral = document.getElementById('settings-panel-general');
@@ -752,155 +736,14 @@ export function refreshSettingsUI() {
 				});
 			}
 		}
-		// OCR 图片分析模型下拉:已从会话压缩块内解耦,始终填充并绑定,不依赖压缩开关。
-		const selOcrModel = document.getElementById('selOcrModel') as HTMLSelectElement | null;
-		if (selOcrModel) {
-			refreshOcrModelSelect(selOcrModel);
-		}
+		// OCR 图片分析模型: 已升级为 ModelSearchSelect 响应式公共组件，统一刷新候选与已保存值
+		void refreshOcrModel();
     } catch (err) {
         console.error('[SettingsController] Failed to refresh settings UI:', err);
     }
 }
 
-// OCR 图片分析模型下拉独立填充:读后端 settings:get-ocr-model(空串兜底 gemini-2.5-flash)
-// -> 单次 relay:get-model-mapping 拉取中继模型映射 -> 仅取 Expose=true 的带前缀模型作为候选
-// -> 若当前已存值不在候选(如历史 gemini 值),追加为自定义项 -> 填充 + 绑定 change 即时保存。
-// 独立于会话压缩开关,无论压缩是否启用都保证 OCR 下拉可见、可选、可保存。
-function refreshOcrModelSelect(selOcrModel: HTMLSelectElement): void {
-	let ocrModelVal = 'gemini-2.5-flash';
-	if ((window as any).wailsConfigCache && (window as any).wailsConfigCache['settings:get-ocr-model']) {
-		ocrModelVal = (window as any).wailsConfigCache['settings:get-ocr-model'];
-	} else {
-		try {
-			const m = ipcRenderer.sendSync('settings:get-ocr-model');
-			if (m) ocrModelVal = m;
-		} catch (_) { /* 兜底默认 gemini-2.5-flash */ }
-	}
-	const finalOcrModelVal = ocrModelVal;
-
-	// 候选仅取模型映射中显式开启 Expose 的带前缀 ClientModel(如 nvidia/gpt-4o、other/openai/gpt-4o)。
-	// 不再硬编码 gemini-* 兜底数组 —— 跨号池后由用户按需选择多模态模型,取 URL 前缀路由到对应号池。
-	ipcRenderer.invoke('relay:get-model-mapping').then((mappings: any) => {
-		const modelNames = (mappings || [])
-			.filter((m: any) => m && m.expose === true && m.clientModel)
-			.map((m: any) => m.clientModel);
-		// 当前已存值(如历史 gemini 值、或未勾选 Expose 的模型)不在候选时追加为自定义项,保证下拉不回空、旧值可继续选中/保存。
-		const ocrAll = Array.from(new Set([...modelNames, ...(finalOcrModelVal ? [finalOcrModelVal] : [])]));
-		selOcrModel.innerHTML = '';
-		ocrAll.forEach(m => {
-			const opt = document.createElement('option');
-			opt.value = m;
-			opt.textContent = m;
-			if (m === finalOcrModelVal) {
-				opt.selected = true;
-			}
-			selOcrModel.appendChild(opt);
-		});
-	}).catch(() => {
-		// 拉取映射失败:仅保留当前已存值(或默认),保证下拉可用。
-		selOcrModel.innerHTML = '';
-		const fallback = [finalOcrModelVal || 'gemini-2.5-flash'];
-		fallback.forEach(m => {
-			const opt = document.createElement('option');
-			opt.value = m;
-			opt.textContent = m;
-			if (m === finalOcrModelVal) {
-				opt.selected = true;
-			}
-			selOcrModel.appendChild(opt);
-		});
-	});
-
-	// OCR 模型下拉切换 -> 立即保存(独立于摘要模型,走单独 IPC channel)。
-	if (!(selOcrModel as any)._ocrBound) {
-		selOcrModel.addEventListener('change', () => {
-			try {
-				ipcRenderer.send('settings:set-ocr-model', selOcrModel.value);
-			} catch (err) {
-				console.error('[SettingsController] Failed to save ocr model:', err);
-			}
-		});
-		(selOcrModel as any)._ocrBound = true;
-	}
-}
-
 // Global hook
 (window as any).refreshSettingsUI = refreshSettingsUI;
 
-// Register network status and outband connection logs listeners
-ipcRenderer.on('settings:network-status-res', (event, data: any) => {
-    const lblNetStatusFallback = document.getElementById('lblNetStatusFallback');
-    const lblNetStatusCustomSocks = document.getElementById('lblNetStatusCustomSocks');
-
-    if (lblNetStatusFallback) {
-        lblNetStatusFallback.textContent = data.cachedLocalProxy ? data.cachedLocalProxy : (state.currentLanguage === 'zh' ? '直连 (无探测代理)' : 'DIRECT (No scan proxy)');
-        if (data.cachedLocalProxy) {
-            lblNetStatusFallback.className = "text-[13px] font-mono font-bold text-primary dark:text-primary-fixed-dim";
-        } else {
-            lblNetStatusFallback.className = "text-[13px] font-mono font-bold text-outline";
-        }
-    }
-
-    if (lblNetStatusCustomSocks) {
-        if (data.customSocks5Enabled) {
-            lblNetStatusCustomSocks.textContent = (state.currentLanguage === 'zh' ? '启用' : 'Enabled') + ` (${data.customSocks5Address})`;
-            lblNetStatusCustomSocks.className = "text-[13px] font-mono font-bold text-green-600 dark:text-green-400";
-        } else {
-            lblNetStatusCustomSocks.textContent = state.currentLanguage === 'zh' ? '未启用' : 'Disabled';
-            lblNetStatusCustomSocks.className = "text-[13px] font-mono font-bold text-outline";
-        }
-    }
-
-    const lblNetStatusFallbackProxy = document.getElementById('lblNetStatusFallbackProxy');
-    if (lblNetStatusFallbackProxy) {
-        if (data.fallbackProxyEnabled) {
-            lblNetStatusFallbackProxy.textContent = (state.currentLanguage === 'zh' ? '启用' : 'Enabled') + ` (${data.fallbackProxyAddress})`;
-            lblNetStatusFallbackProxy.className = "text-[13px] font-mono font-bold text-green-600 dark:text-green-400";
-        } else {
-            lblNetStatusFallbackProxy.textContent = state.currentLanguage === 'zh' ? '未启用' : 'Disabled';
-            lblNetStatusFallbackProxy.className = "text-[13px] font-mono font-bold text-outline";
-        }
-    }
-});
-
-ipcRenderer.on('settings:network-logs-res', (event, logs: any[]) => {
-    const tblNetworkLogsBody = document.getElementById('tblNetworkLogsBody');
-    if (!tblNetworkLogsBody) return;
-
-    if (!logs || logs.length === 0) {
-        const emptyMsg = state.currentLanguage === 'zh' ? '暂无连接记录，正在等待出站网络活动...' : 'No connection logs. Waiting for outbound network activity...';
-        tblNetworkLogsBody.innerHTML = `
-            <tr>
-                <td colspan="5" class="py-6 text-center text-outline/60">${emptyMsg}</td>
-            </tr>
-        `;
-        return;
-    }
-
-    // Newest log on top
-    const sortedLogs = [...logs].reverse();
-
-    let html = '';
-    sortedLogs.forEach((log: any) => {
-        const isSuccess = log.status === 'SUCCESS';
-        const statusClass = isSuccess 
-            ? 'text-green-600 dark:text-green-400 font-bold' 
-            : 'text-red-500 font-bold truncate max-w-[240px] inline-block';
-        const proxyClass = log.proxyUsed === 'DIRECT' 
-            ? 'text-outline font-bold' 
-            : 'text-primary dark:text-primary-fixed-dim font-bold';
-
-        html += `
-            <tr class="border-b border-outline-variant/10 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
-                <td class="py-2 px-3 text-slate-400 font-medium select-none">${log.timestamp}</td>
-                <td class="py-2 px-3 text-on-surface dark:text-slate-200 font-bold font-mono">${log.target}</td>
-                <td class="py-2 px-3 ${proxyClass} font-mono">${log.proxyUsed}</td>
-                <td class="py-2 px-3 text-center text-on-surface dark:text-slate-300 font-bold">${log.duration}</td>
-                <td class="py-2 px-3 ${statusClass}" title="${log.status}">${log.status}</td>
-            </tr>
-        `;
-    });
-
-    tblNetworkLogsBody.innerHTML = html;
-});
 

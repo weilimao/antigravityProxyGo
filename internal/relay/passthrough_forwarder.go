@@ -286,8 +286,8 @@ func (pf *passthroughForward) run(
 			}
 		}
 
-		// 上游 URL:OpenAI 格式 → {BaseURL}/v1/chat/completions;Anthropic 格式 → {BaseURL}/v1/messages。
-		// BaseURL 已含 /v1 则不重复拼(与 NVIDIA 链路口径一致)。
+		// 上游 URL:OpenAI 格式 → BuildOpenAIChatURL;Anthropic 格式 → BuildAnthropicMessagesURL。
+		// 自动识别 BaseURL 末尾自带的 /v1, /v2, /v3, /v4 等版本号，避免重复拼 /v1（如智谱 /api/paas/v4）。
 		// Other 号池组级 Cloudflare Worker 出口代理:组启用且 URL 非空时,用 Worker URL 覆盖 acc.BaseURL。
 		// 与 NVIDIA 链路(nvidia.go:460)同口径,通过 X-Egress-IP 头透传账号专属出口伪装 IP,
 		// 通过 X-Target-Upstream 头让通用 Worker 知道真正上游地址。
@@ -306,15 +306,9 @@ func (pf *passthroughForward) run(
 		originalBaseURL := strings.TrimRight(acc.BaseURL, "/")
 		var targetURL string
 		if upstreamFormat == "anthropic" {
-			targetURL = baseURL + "/v1/messages"
-			if strings.HasSuffix(baseURL, "/v1") {
-				targetURL = baseURL + "/messages"
-			}
+			targetURL = BuildAnthropicMessagesURL(baseURL)
 		} else {
-			targetURL = baseURL + "/v1/chat/completions"
-			if strings.HasSuffix(baseURL, "/v1") {
-				targetURL = baseURL + "/chat/completions"
-			}
+			targetURL = BuildOpenAIChatURL(baseURL)
 		}
 
 		workerProxyTag := ""

@@ -33,13 +33,24 @@
         <div class="flex flex-col gap-3 overflow-hidden" style="width: 50%; min-height: 0;">
           <div class="flex items-center justify-between flex-shrink-0">
             <span class="text-[13px] font-bold text-on-surface dark:text-white">可视化配置</span>
-            <button
-              class="text-[11px] text-primary hover:text-primary/80 font-medium flex items-center gap-1 cursor-pointer"
-              @click="syncFormFromJSON"
-            >
-              <span class="material-symbols-outlined text-[14px]">sync</span>
-              从 JSON 同步
-            </button>
+            <div class="flex items-center gap-3">
+              <button
+                v-if="selectedAgentId === 'opencode'"
+                class="text-[11px] text-primary hover:text-primary/80 font-medium flex items-center gap-1 cursor-pointer px-2 py-1 rounded-md hover:bg-primary/10 transition-colors"
+                @click="showAiGenModal = true"
+                title="用 AI 一键生成 provider 配置"
+              >
+                <span class="material-symbols-outlined text-[14px]">auto_awesome</span>
+                AI 生成 Provider
+              </button>
+              <button
+                class="text-[11px] text-primary hover:text-primary/80 font-medium flex items-center gap-1 cursor-pointer"
+                @click="syncFormFromJSON"
+              >
+                <span class="material-symbols-outlined text-[14px]">sync</span>
+                从 JSON 同步
+              </button>
+            </div>
           </div>
           <ConfigFormPanel
             :schema="currentSchema"
@@ -111,6 +122,16 @@
       <span class="material-symbols-outlined text-outline text-[48px]">tune</span>
       <span class="text-[13px] text-outline">请选择上方的 Agent Tab 开始编辑配置</span>
     </div>
+
+    <!-- OpenCode Provider AI 生成弹窗 (仅 opencode 选中时挂载) -->
+    <AiProviderGeneratorModal
+      v-if="selectedAgentId === 'opencode'"
+      :visible="showAiGenModal"
+      :available-models="availableModels"
+      @close="showAiGenModal = false"
+      @refresh-models="onRefreshModels"
+      @apply="onAiProviderGenerated"
+    />
   </div>
 </template>
 
@@ -136,6 +157,7 @@ import {
 } from '../../../ui/agentConfigController';
 import ConfigFormPanel from '../agent-config/ConfigFormPanel.vue';
 import JsonEditorPanel from '../agent-config/JsonEditorPanel.vue';
+import AiProviderGeneratorModal from '../../modals/AiProviderGeneratorModal.vue';
 
 const agentList = ref<AgentProfile[]>([]);
 const selectedAgentId = ref('');
@@ -150,6 +172,7 @@ const hasParseError = ref(false);
 const saveStatus = ref<'idle' | 'saving' | 'success' | 'error'>('idle');
 const saveError = ref('');
 const availableModels = ref<string[]>([]);
+const showAiGenModal = ref(false);
 let relayModelCache: string[] = [];
 let catalogModelCache: string[] = [];
 
@@ -253,6 +276,35 @@ async function onRefreshModels() {
 function syncFormFromJSON() {
   if (currentSchema.value) {
     formData.value = jsonToForm(jsonText.value, currentSchema.value);
+  }
+}
+
+// onAiProviderGenerated: AI 生成的 provider JSON 片段(形态 { providerName: {...} })
+// merge 进当前 jsonText 的 provider 对象下, 同名 provider 覆盖、新增的追加,
+// 然后刷新表单与可用模型列表。
+function onAiProviderGenerated(content: string) {
+  try {
+    const generated = JSON.parse(content); // { providerName: {...} }
+    const existing = JSON.parse(jsonText.value);
+    if (!existing.provider || typeof existing.provider !== 'object' || Array.isArray(existing.provider)) {
+      existing.provider = {};
+    }
+    // 逐个 merge: 同名覆盖,新增追加。同名校验避免静默覆盖已配置 provider。
+    const newNames = Object.keys(generated);
+    const overwritten: string[] = [];
+    for (const name of newNames) {
+      if (existing.provider[name] !== undefined) overwritten.push(name);
+      existing.provider[name] = generated[name];
+    }
+    jsonText.value = JSON.stringify(existing, null, 2);
+    syncFormFromJSON();
+    refreshAvailableModels();
+    const msg = overwritten.length
+      ? `已应用 ${newNames.length} 个 provider(${overwritten.join(', ')} 为覆盖)`
+      : `已新增 ${newNames.length} 个 provider`;
+    showToast(msg, 'success');
+  } catch (err: any) {
+    showToast('应用 AI 生成结果失败: ' + (err?.message || String(err)), 'error');
   }
 }
 

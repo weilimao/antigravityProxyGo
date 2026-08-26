@@ -57,3 +57,21 @@ func DecodeThoughtSignature(text string) (string, []string) {
 
 	return cleanText, sigs
 }
+
+// SanitizeInterruptedHistoryText 清洗客户端历史消息中残留的 "[Tool use interrupted]"、
+// "[Tool interrupted]" 等中断标记文本，避免上游模型被历史中的中断标记带偏产生复读幻觉。
+func SanitizeInterruptedHistoryText(text string) string {
+	if text == "" {
+		return ""
+	}
+	t := strings.TrimSpace(text)
+	if t == "[Tool use interrupted]" || t == "● [Tool use interrupted]" || t == "[Tool interrupted]" || t == "● [Tool interrupted]" {
+		return ""
+	}
+	cleaned := strings.ReplaceAll(text, "● [Tool use interrupted]", "")
+	cleaned = strings.ReplaceAll(cleaned, "[Tool use interrupted]", "")
+	cleaned = strings.ReplaceAll(cleaned, "● [Tool interrupted]", "")
+	cleaned = strings.ReplaceAll(cleaned, "[Tool interrupted]", "")
+	return strings.TrimSpace(cleaned)
+}
+

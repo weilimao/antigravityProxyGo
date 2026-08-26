@@ -291,10 +291,10 @@ func (m *Manager) GetOtherGroups() []OtherGroupInfo {
 				Formats:   append([]string{}, a.Formats...),
 				LbMode:    m.otherLBModes[strings.ToLower(strings.TrimSpace(gid))],
 				// MaxConcurrency 回显该组单账号在途并发上限,与选号热路径同口径:
-				// 经 GetOtherMaxConcurrency 内建 v<=0 → defaultMaxConcurrency(10) 回退,
+				// 经 getOtherMaxConcurrencyUnsafe 内建 v<=0 → defaultMaxConcurrency(10) 回退,
 				// 故未配置组回显 10 而非 0,与 NVIDIA/Antigravity/Project 三池 emitter 回退范式对齐,
 				// 前端组 tab input 显示与实际限流行为一致(均按 10)。
-				MaxConcurrency: m.GetOtherMaxConcurrency(gid),
+				MaxConcurrency:     m.getOtherMaxConcurrencyUnsafe(gid),
 				WorkerProxyURL:     m.getOtherWorkerProxyURLUnsafe(gid),
 				WorkerProxyEnabled: m.isOtherWorkerProxyEnabledUnsafe(gid),
 			}
