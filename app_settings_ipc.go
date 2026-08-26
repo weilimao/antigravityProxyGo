@@ -200,6 +200,56 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		a.AddLog(fmt.Sprintf("⚙️ NVIDIA Cloudflare Worker 代理出口启用状态: %v", a.settingsMgr.IsNvidiaWorkerProxyEnabled()))
 		return true
 
+	case "settings:set-grok-worker-proxy-url":
+		url := ""
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				url = s
+			}
+		}
+		_ = a.settingsMgr.SetGrokWorkerProxyURL(url)
+		a.AddLog(fmt.Sprintf("⚙️ Grok Cloudflare Worker 出口代理 URL: %s", a.settingsMgr.GetGrokWorkerProxyURL()))
+		// 依赖此配置的前端 Accounts.vue Grok 工具栏读 lastBackendData.grokWorkerProxyUrl 回填,
+		// 立即重发广播避免下次启动才同步(对齐 other:set-group-lb-mode 的即时同步范式)。
+		a.emitAccountsRes()
+		return true
+
+	case "settings:set-grok-worker-proxy-enabled":
+		enabled := false
+		if len(args) > 0 {
+			if b, ok := args[0].(bool); ok {
+				enabled = b
+			}
+		}
+		_ = a.settingsMgr.SetGrokWorkerProxyEnabled(enabled)
+		a.AddLog(fmt.Sprintf("⚙️ Grok Cloudflare Worker 代理出口启用状态: %v", a.settingsMgr.IsGrokWorkerProxyEnabled()))
+		a.emitAccountsRes()
+		return true
+
+	case "settings:set-antigravity-worker-proxy-url":
+		url := ""
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				url = s
+			}
+		}
+		_ = a.settingsMgr.SetAntigravityWorkerProxyURL(url)
+		a.AddLog(fmt.Sprintf("⚙️ Antigravity Cloudflare Worker 出口代理 URL: %s", a.settingsMgr.GetAntigravityWorkerProxyURL()))
+		a.emitAccountsRes()
+		return true
+
+	case "settings:set-antigravity-worker-proxy-enabled":
+		enabled := false
+		if len(args) > 0 {
+			if b, ok := args[0].(bool); ok {
+				enabled = b
+			}
+		}
+		_ = a.settingsMgr.SetAntigravityWorkerProxyEnabled(enabled)
+		a.AddLog(fmt.Sprintf("⚙️ Antigravity Cloudflare Worker 代理出口启用状态: %v", a.settingsMgr.IsAntigravityWorkerProxyEnabled()))
+		a.emitAccountsRes()
+		return true
+
 	case "settings:get-nvidia-dedicated-proxy":
 		wailsRuntime.EventsEmit(a.ctx, "settings:nvidia-dedicated-proxy-res", map[string]interface{}{
 			"address":  a.settingsMgr.GetNvidiaDedicatedProxyAddress(),

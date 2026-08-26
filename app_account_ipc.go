@@ -599,6 +599,46 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		data, _ := marshalResponse(map[string]interface{}{"success": true})
 		return data, true, nil
 
+	case "other:set-worker-proxy-url":
+		// args: [groupID, url]。与 other:set-lb-mode 同走 invoke 双通道。
+		groupID := ""
+		url := ""
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				groupID = s
+			}
+		}
+		if len(args) > 1 {
+			if s, ok := args[1].(string); ok {
+				url = s
+			}
+		}
+		_ = a.accountMgr.SetOtherWorkerProxyURL(groupID, url)
+		a.AddLog(fmt.Sprintf("⚙️ [Other] group %s Cloudflare Worker 代理 URL: %s", groupID, a.accountMgr.GetOtherWorkerProxyURL(groupID)))
+		a.emitAccountsRes()
+		data, _ := marshalResponse(map[string]interface{}{"success": true})
+		return data, true, nil
+
+	case "other:set-worker-proxy-enabled":
+		// args: [groupID, enabled]。启用 Worker 代理出口时,以 Worker URL 覆盖组内各账号的 BaseURL。
+		groupID := ""
+		var enabled bool
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				groupID = s
+			}
+		}
+		if len(args) > 1 {
+			if b, ok := args[1].(bool); ok {
+				enabled = b
+			}
+		}
+		_ = a.accountMgr.SetOtherWorkerProxyEnabled(groupID, enabled)
+		a.AddLog(fmt.Sprintf("⚙️ [Other] group %s Cloudflare Worker 代理出口启用: %v", groupID, a.accountMgr.IsOtherWorkerProxyEnabled(groupID)))
+		a.emitAccountsRes()
+		data, _ := marshalResponse(map[string]interface{}{"success": true})
+		return data, true, nil
+
 	case "other:list-groups":
 		groups := a.accountMgr.GetOtherGroups()
 		data, _ := marshalResponse(map[string]interface{}{"success": true, "groups": groups})

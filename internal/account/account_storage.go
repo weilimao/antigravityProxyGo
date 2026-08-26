@@ -104,6 +104,8 @@ type poolConfigOnDisk struct {
 	AntigravityCliVersion     string          `json:"antigravityCliVersion,omitempty"`
 	ProjectMaxConcurrency     int             `json:"projectMaxConcurrency,omitempty"`
 	OtherMaxConcurrency       map[string]int  `json:"otherMaxConcurrency,omitempty"`
+	OtherWorkerProxyURLs    map[string]string `json:"otherWorkerProxyUrls,omitempty"`
+	OtherWorkerProxyEnabled map[string]bool   `json:"otherWorkerProxyEnabled,omitempty"`
 	GrokMaxConcurrency        int             `json:"grokMaxConcurrency,omitempty"`
 	GrokCliVersion            string          `json:"grokCliVersion,omitempty"`
 	GrokQuotaCooldownHours   int             `json:"grokQuotaCooldownHours,omitempty"`
@@ -228,6 +230,8 @@ func (m *Manager) marshalPoolConfig() ([]byte, error) {
 		AntigravityCliVersion:     m.antigravityCliVersion,
 		ProjectMaxConcurrency:     m.projectMaxConcurrency,
 		OtherMaxConcurrency:       m.otherMaxConcurrency,
+		OtherWorkerProxyURLs:    m.otherWorkerProxyURLs,
+		OtherWorkerProxyEnabled: m.otherWorkerProxyEnabled,
 		GrokMaxConcurrency:        m.grokMaxConcurrency,
 		GrokCliVersion:            m.grokCliVersion,
 		GrokQuotaCooldownHours:   m.grokQuotaCooldownHours,
@@ -336,6 +340,26 @@ func (m *Manager) loadPoolConfigIntoMemory() {
 				v = 0
 			}
 			m.otherMaxConcurrency[lgid] = v
+		}
+	}
+	if cfg.OtherWorkerProxyURLs != nil {
+		m.otherWorkerProxyURLs = make(map[string]string, len(cfg.OtherWorkerProxyURLs))
+		for gid, u := range cfg.OtherWorkerProxyURLs {
+			lgid := strings.ToLower(strings.TrimSpace(gid))
+			if lgid == "" {
+				continue
+			}
+			m.otherWorkerProxyURLs[lgid] = strings.TrimSpace(u)
+		}
+	}
+	if cfg.OtherWorkerProxyEnabled != nil {
+		m.otherWorkerProxyEnabled = make(map[string]bool, len(cfg.OtherWorkerProxyEnabled))
+		for gid, en := range cfg.OtherWorkerProxyEnabled {
+			lgid := strings.ToLower(strings.TrimSpace(gid))
+			if lgid == "" {
+				continue
+			}
+			m.otherWorkerProxyEnabled[lgid] = en
 		}
 	}
 	if m.activeChannel == "gemini-cli" {

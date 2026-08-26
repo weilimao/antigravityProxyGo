@@ -40,8 +40,8 @@ func InitDB(dataDir string) error {
 	}
 
 	// Configure connection pool to save memory
-	db.SetMaxOpenConns(15) // Limit concurrent readers in WAL mode to control memory
-	db.SetMaxIdleConns(5)
+	db.SetMaxOpenConns(6) // Limit concurrent readers in WAL mode to control memory
+	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(time.Hour)
 
 	if err := db.Ping(); err != nil {
@@ -63,8 +63,8 @@ func CloseDB() {
 }
 
 func runMigrations(db *sql.DB, dataDir string) error {
-	// Enable WAL mode, busy timeout, and limit memory cache size per connection to 4MB (-4000 pages)
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA cache_size=-4000;`); err != nil {
+	// Enable WAL mode, busy timeout, and limit memory cache size per connection to 2MB (-2000 pages)
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA cache_size=-2000;`); err != nil {
 		log.Printf("Warning: Failed to enable WAL mode/busy timeout/cache limit: %v\n", err)
 	}
 

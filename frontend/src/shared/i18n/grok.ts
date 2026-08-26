@@ -74,6 +74,10 @@ export const grokZh: Record<string, string> = {
     grokCheckAuthDone: "检查完成：共 {total} 个 · 刷新 {refreshed} · 跳过 {skipped} · 停用 {disabled} · 失败 {failed}",
     grokCheckAuthNoAccounts: "当前没有可检查的 Grok OAuth 账号",
     grokCheckAuthFailed: "检查授权失败: {detail}",
+    // Cloudflare Worker 出口代理(号池单值,工具栏内嵌)。
+    grokWorkerProxyLabel: "Worker出口",
+    grokWorkerProxyUrlPlaceholder: "https://your-worker.workers.dev",
+    grokWorkerProxyTip: "启用后,Grok 号池上游 cli-chat-proxy.grok.com 将经由此 Cloudflare Worker 出口转发;Worker 需按 X-Target-Upstream 头回源。",
 };
 
 export const grokEn: Record<string, string> = {
@@ -142,4 +146,8 @@ export const grokEn: Record<string, string> = {
     grokCheckAuthDone: "Done: {total} total · refreshed {refreshed} · skipped {skipped} · disabled {disabled} · failed {failed}",
     grokCheckAuthNoAccounts: "No Grok OAuth accounts to check",
     grokCheckAuthFailed: "Check auth failed: {detail}",
+    // Cloudflare Worker egress proxy (per-pool value, embedded in toolbar).
+    grokWorkerProxyLabel: "Worker",
+    grokWorkerProxyUrlPlaceholder: "https://your-worker.workers.dev",
+    grokWorkerProxyTip: "When enabled, Grok pool traffic to cli-chat-proxy.grok.com is forwarded via this Cloudflare Worker; the Worker must relay using the X-Target-Upstream header.",
 };

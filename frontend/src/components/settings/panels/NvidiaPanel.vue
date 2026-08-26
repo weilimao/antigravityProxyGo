@@ -136,10 +136,10 @@
 <div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
 <span class="material-symbols-outlined text-amber-500 text-[20px]">cloud</span>
-<span data-i18n="nvidiaWorkerProxyTitle">NVIDIA Cloudflare 代理出口 Worker</span>
+<span data-i18n="nvidiaWorkerProxyTitle">Cloudflare 通用代理出口 Worker</span>
 </h2>
 <p class="text-xs text-outline leading-relaxed" data-i18n="nvidiaWorkerProxyEnableDesc">
-将 NVIDIA 请求转发至 Cloudflare Worker，通过 Anycast 边缘 IP 轮换打散出口，避免单 IP 突发流量触发 429 拦截。
+将请求转发至 Cloudflare Worker，通过 Anycast 边缘 IP 轮换打散出口，避免单 IP 突发流量触发 429 拦截。通用 Worker 脚本适用于所有号池（NVIDIA / Other 组），无需为不同上游分别部署。
 </p>
 <div class="flex flex-col gap-3 border-t border-outline-variant/20 pt-4 mt-2">
 <div class="flex items-center justify-between">
@@ -168,19 +168,19 @@
 </div>
 
 <p class="text-[12px] text-outline leading-relaxed">
-当您使用多个 NVIDIA 账号高频请求时，官方网关可能会因<b>单 IP 短期内吞吐过大</b>触发 429 拦截。通过部署 Cloudflare Worker 作为代理出口，可利用 Cloudflare 全球 Anycast 边缘出站 IP 自动打散流量，并支持账号级独立伪装住宅 IP。
+当您使用多个账号高频请求上游时，官方网关可能会因<b>单 IP 短期内吞吐过大</b>触发 429 拦截。通过部署 Cloudflare Worker 作为代理出口，可利用 Cloudflare 全球 Anycast 边缘出站 IP 自动打散流量，并支持账号级独立伪装住宅 IP。<b>此通用 Worker 脚本适用于所有号池</b>——NVIDIA 号池在上方开启即可，Other 号池在组 Tab 内开启即可，无需为不同上游分别部署。
 </p>
 
 <!-- Worker 脚本代码编辑器 (带语法着色、行号、原位编辑与一键复制) -->
 <div class="flex flex-col gap-1.5">
 <div class="text-[11px] font-bold text-on-surface dark:text-white flex items-center gap-1.5">
   <span class="material-symbols-outlined text-[16px] text-amber-500">code</span>
-  <span>Worker 脚本代码（支持流式 SSE、双工零缓冲边收边发与 X-Egress-IP 伪装，可直接编辑与一键复制）：</span>
+  <span>Worker 脚本代码（通用版，支持任意号池上游、流式 SSE、双工零缓冲边收边发与 X-Egress-IP 伪装，可直接编辑与一键复制）：</span>
 </div>
 <CodeEditor
   v-model="workerScript"
   :default-code="defaultWorkerScriptCode"
-  file-name="nvidia-worker-egress.js"
+  file-name="universal-worker-egress.js"
   language="JavaScript"
 />
 </div>
@@ -190,7 +190,8 @@
 <div>1. 登录 <a href="https://dash.cloudflare.com" target="_blank" class="text-primary hover:underline">Cloudflare Dashboard</a> &rarr; <b>Workers &amp; Pages</b> &rarr; 点击 <b>Create application</b> &rarr; 创建 Worker。</div>
 <div>2. 点击 <b>Quick edit</b>，粘贴上方一键复制的代码并点击 <b>Save and deploy</b>。</div>
 <div>3. 复制生成的 Worker 地址（如 <code>https://your-worker.workers.dev</code>），粘贴到上方「Cloudflare Worker 地址」输入框并开启。</div>
-<div>4. （可选）在「账号池 &rarr; NVIDIA」点击账号编辑，即可查看到已为各账号分配的专属住宅伪装 IP。</div>
+<div>4. NVIDIA 号池：在此面板开启即可。Other 号池：进入「账号池 &rarr; Other」选中具体组 Tab，在工具栏开启「Worker 出口」并填写同一 Worker 地址。</div>
+<div>5. （可选）在「账号池 &rarr; NVIDIA」点击账号编辑，即可查看到已为各账号分配的专属住宅伪装 IP。</div>
 </div>
 </div>
 
@@ -225,12 +226,25 @@ const defaultWorkerScriptCode = `export default {
       });
     }
 
-    // 2. 构造目标 URL (NVIDIA 官方 API)
-    const targetUrl = \`https://integrate.api.nvidia.com\${url.pathname}\${url.search}\`;
+    // 2. 从 X-Target-Upstream 头获取真正的上游地址（通用化核心）
+    //    号池中继层在启用 Worker 代理出口时注入此头，Worker 据此转发到真正上游。
+    //    未携带此头的请求回退到 path 推断（兼容旧客户端直连 Worker 的场景）。
+    const targetUpstream = request.headers.get("x-target-upstream");
+    let targetOrigin;
+    if (targetUpstream && targetUpstream.trim() !== "") {
+      // 显式上游：拼接 X-Target-Upstream + 原始 path + query
+      const upstream = new URL(targetUpstream.trim());
+      targetOrigin = upstream.origin;
+    } else {
+      // 无显式上游头时回退：直接用请求 path 作为上游（兼容直连场景）
+      targetOrigin = url.origin;
+    }
+    const targetUrl = targetOrigin + url.pathname + url.search;
 
     // 3. 构造出站 Headers（修正 Host 并注入专属伪装 IP，剔除逐跳头）
     const newHeaders = new Headers(request.headers);
-    newHeaders.set("host", "integrate.api.nvidia.com");
+    const targetHost = new URL(targetOrigin).host;
+    newHeaders.set("host", targetHost);
 
     const egressIP = request.headers.get("x-egress-ip");
     if (egressIP && egressIP.trim() !== "") {
@@ -243,7 +257,9 @@ const defaultWorkerScriptCode = `export default {
       newHeaders.delete("x-real-ip");
       newHeaders.delete("x-forwarded-for");
     }
+    // 剔除自定义控制头，不透传给上游
     newHeaders.delete("x-egress-ip");
+    newHeaders.delete("x-target-upstream");
 
     // 4. 双工流零拷贝转发 (Zero-Buffer Duplex Pipeline) 与异步惰性重试
     let primaryBody = null;
@@ -252,7 +268,7 @@ const defaultWorkerScriptCode = `export default {
     if (request.body && request.method !== "GET" && request.method !== "HEAD") {
       const [stream1, stream2] = request.body.tee();
       primaryBody = stream1;
-      // 备用流异步克隆至内存备用，完全不阻塞主流向 NVIDIA 边推边发
+      // 备用流异步克隆至内存备用，完全不阻塞主流向上游边推边发
       retryBufferPromise = new Response(stream2).arrayBuffer();
     }
 

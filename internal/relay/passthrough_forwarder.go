@@ -288,7 +288,22 @@ func (pf *passthroughForward) run(
 
 		// 上游 URL:OpenAI 格式 → {BaseURL}/v1/chat/completions;Anthropic 格式 → {BaseURL}/v1/messages。
 		// BaseURL 已含 /v1 则不重复拼(与 NVIDIA 链路口径一致)。
+		// Other 号池组级 Cloudflare Worker 出口代理:组启用且 URL 非空时,用 Worker URL 覆盖 acc.BaseURL。
+		// 与 NVIDIA 链路(nvidia.go:460)同口径,通过 X-Egress-IP 头透传账号专属出口伪装 IP,
+		// 通过 X-Target-Upstream 头让通用 Worker 知道真正上游地址。
 		baseURL := strings.TrimRight(acc.BaseURL, "/")
+		workerProxyActive := false
+		if poolChannel == "other" && targetGroupID != "" && pf.accountMgr != nil {
+			if pf.accountMgr.IsOtherWorkerProxyEnabled(targetGroupID) {
+				workerURL := strings.TrimRight(pf.accountMgr.GetOtherWorkerProxyURL(targetGroupID), "/")
+				if workerURL != "" {
+					baseURL = workerURL
+					workerProxyActive = true
+				}
+			}
+		}
+		// 原始上游 BaseURL,供 Worker 代理时注入 X-Target-Upstream 头。
+		originalBaseURL := strings.TrimRight(acc.BaseURL, "/")
 		var targetURL string
 		if upstreamFormat == "anthropic" {
 			targetURL = baseURL + "/v1/messages"
@@ -302,7 +317,11 @@ func (pf *passthroughForward) run(
 			}
 		}
 
-		pf.h.log("🟢 [路由转发 %d/%d] %s 号池(group %s) → 账号 %s | model %s -> %s | fmt %s | %s", attempt+1, maxAttempts, poolChannel, targetGroupID, acc.Email, inModel, upstreamModel, upstreamFormat, targetURL)
+		workerProxyTag := ""
+		if workerProxyActive {
+			workerProxyTag = " [Worker 代理出口]"
+		}
+		pf.h.log("🟢 [路由转发 %d/%d]%s %s 号池(group %s) → 账号 %s | model %s -> %s | fmt %s | %s", attempt+1, maxAttempts, workerProxyTag, poolChannel, targetGroupID, acc.Email, inModel, upstreamModel, upstreamFormat, targetURL)
 
 		// 单账号 429 原地退避 + 多状态码换号。
 		var activeResp *http.Response
@@ -317,6 +336,14 @@ func (pf *passthroughForward) run(
 			}
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+acc.GetAccessToken())
+			// 账号专属出口伪装 IP:经 Worker 代理出口时通过 X-Egress-IP 头透传(与 NVIDIA 链路口径一致)。
+			if strings.TrimSpace(acc.EgressIP) != "" {
+				req.Header.Set("X-Egress-IP", strings.TrimSpace(acc.EgressIP))
+			}
+			// Worker 通用代理出口：注入 X-Target-Upstream 头让 Worker 知道真正上游地址。
+			if workerProxyActive {
+				req.Header.Set("X-Target-Upstream", originalBaseURL)
+			}
 			if upstreamFormat == "anthropic" {
 				req.Header.Set("Accept", "application/json")
 				// Anthropic 端点通常识别 anthropic-version 头,缺省会导致部分中继网关 400;注入兜底版本。

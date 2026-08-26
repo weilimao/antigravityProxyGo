@@ -32,6 +32,8 @@ export const otherZh: Record<string, string> = {
     otherFetchModelsEmpty: "该组暂无可用账号或未配置 BaseURL,无法获取模型",
     otherManualInputAllowed: "上游暂不支持模型列表,请手动填写模型名",
     otherModels: "其他模型",
+    otherWorkerProxyLabel: "Worker出口",
+    otherWorkerProxyUrlPlaceholder: "https://your-worker.workers.dev",
 };
 
 export const otherEn: Record<string, string> = {
@@ -64,4 +66,6 @@ export const otherEn: Record<string, string> = {
     otherFetchModelsEmpty: "No enabled account or BaseURL for this group, cannot fetch models",
     otherManualInputAllowed: "Upstream has no model list endpoint, please enter model name manually",
     otherModels: "Other Models",
+    otherWorkerProxyLabel: "Worker Proxy",
+    otherWorkerProxyUrlPlaceholder: "https://your-worker.workers.dev",
 };

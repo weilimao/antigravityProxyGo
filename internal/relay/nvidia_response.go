@@ -147,12 +147,20 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 
 	if !isStreaming {
 		// 非流式：全量读 body 解析 usage，原样透传。
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusBadGateway)
-			_, _ = w.Write([]byte(`{"error":"read upstream passthrough body failed"}`))
-			return 0, 0, 0
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"read upstream passthrough body failed"}`))
+		if dbg := GetGlobalDebugger(); dbg.IsEnabled() {
+			dbg.LogUpstreamResponseBody(ExtractDebuggerReqID(ctx), []byte(`(read upstream body failed: `+err.Error()+`)`))
 		}
+		return 0, 0, 0
+	}
+	// NVIDIA 调试模式:把读到的完整上游响应 body 落盘到与 LogClientRequest 同一份日志文件,
+	// 便于调试 NIM 非流式响应里 content/reasoning_content/usage 的真实形态。
+	if dbg := GetGlobalDebugger(); dbg.IsEnabled() {
+		dbg.LogUpstreamResponseBody(ExtractDebuggerReqID(ctx), bodyBytes)
+	}
 		// 仅在解析成功时记 usage，避免坏响应污染统计；body 始终原样透传。
 		var chatResp OpenAIChatResponse
 		inUsage, outUsage, cachedUsage := 0, 0, 0
@@ -295,9 +303,21 @@ func (h *APICompatHandler) writeAnthropicErrorFromUpstream(w http.ResponseWriter
 
 func (h *APICompatHandler) writeNvidiaAnthropicNormal(w http.ResponseWriter, resp *http.Response, model string, userSession *RelaySession, poolAccount *account.Account, logCtx nvidiaLogCtx) {
 	bodyBytes, err := io.ReadAll(resp.Body)
+	reqID := ExtractDebuggerReqID(resp.Request.Context())
+	if reqID == "" {
+		reqID = logCtx.SessionID
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "read upstream body failed: " + err.Error()})
+		if dbg := GetGlobalDebugger(); dbg.IsEnabled() {
+			dbg.LogUpstreamResponseBody(reqID, []byte(`(read upstream body failed: `+err.Error()+`)`))
+		}
 		return
+	}
+	// NVIDIA 调试模式:Anthropic 非流式回译前的原始上游 OpenAI 响应体落盘,便于排查
+	// Claude Code 工具中断时上游 reasoning_content/content/usage 的真实形态。
+	if dbg := GetGlobalDebugger(); dbg.IsEnabled() {
+		dbg.LogUpstreamResponseBody(reqID, bodyBytes)
 	}
 	if resp.StatusCode != http.StatusOK {
 		// 上游非 200:翻译成 Anthropic 标准错误结构回写(原裸透 OpenAI JSON 会让 CLI 无法识别)

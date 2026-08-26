@@ -249,8 +249,32 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 		cycleWait = 10 * time.Second
 	}
 	streamID := fmt.Sprintf("msg_nvidia_%d", time.Now().UnixNano())
+	// 若上游 handler 在请求 context 里注入了 debugger reqID,优先复用同一个 reqID,
+	// 使 LogUpstreamResponseBody 落盘到与客户端入站请求同一文件中(单文件闭环,
+	// 前端 UI 抓包更清晰);否则 fallback 到 streamID 保持兼容。
+	if extracted := ExtractDebuggerReqID(r.Context()); extracted != "" {
+		streamID = extracted
+	}
 	httpClient := h.streamClient
 	ctx := r.Context()
+
+	// NVIDIA 调试模式:把上游每次 attempt 的原始 SSE 字节流镜像一份到 debugUpstreamBuf,
+	// 结束时通过 GetGlobalDebugger().LogUpstreamResponseBody(streamID, ...) 落盘到
+	// 当前请求的同一日志文件。
+	//   - 与 LogClientRequest (handleNvidia 入口) + LogUpstreamRequest (出站请求体)
+	//     构成完整"入站 → 出站 → 上游响应"日志闭环,排查 Claude Code 工具调用中断场景
+	//     所需的「上游实际 raw SSE 形态」就在这个 buffer 里;
+	//   - 缓冲跨重试共享(本函数内单变量):同一 streamID 同一文件,简单避免重试间多文件拆分;
+	//   - 仅 debugger 开启时有真实写盘行为,关闭时 tee 写入 bytes.Buffer 内存零开销。
+	debugUpstreamBuf := &bytes.Buffer{}
+	// 函数任意出口统一落盘:让所有 5 个返回点(成功/失败/中断)都把当前收集到的
+	// 上游 raw SSE 内容写到 debugger 日志。debugger 关闭时 IsEnabled() 短路,
+	// writeLine 内部不会生成磁盘 IO。
+	defer func() {
+		if dbg := GetGlobalDebugger(); dbg.IsEnabled() {
+			dbg.LogUpstreamResponseBody(streamID, debugUpstreamBuf.Bytes())
+		}
+	}()
 
 	// pinnedToolIDs 实现 tool_use ID 跨重试轮一致性:首轮(attempt==0)翻译时生成并快照进该 map,
 	// 后续所有重试轮/兜底轮在翻译时强制复用首轮 ID(经 openAIChatSSEToAnthropicSSEIntoPinned 注入),
@@ -338,7 +362,11 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 				sink = resume
 			}
 			var attemptEmitted map[int]string
-			attemptIn, attemptOut, attemptCached, finishEmitted, streamTerminated, attemptEmitted, sseErr := openAIChatSSEToAnthropicSSEIntoPinned(ctx, activeBody, activeBody, sink, streamID, model, inboundInputTokens, pinnedToolIDs)
+			// 镜像上游原始 SSE 字节流(debugUpstreamBuf)到 debugger,不阻塞翻译主流程;失败无 reverse 影响。
+			// 注意第一个参数是 reader(读到什么进翻译层),第二个参数是 body(ctx 取消时 Close 用),
+			// 必须传 tee 之前的原 activeBody,否则 Close 作用不到 tee 包装后的 reader 上。
+			teeReader := io.TeeReader(activeBody, debugUpstreamBuf)
+			attemptIn, attemptOut, attemptCached, finishEmitted, streamTerminated, attemptEmitted, sseErr := openAIChatSSEToAnthropicSSEIntoPinned(ctx, teeReader, activeBody, sink, streamID, model, inboundInputTokens, pinnedToolIDs)
 			activeBody.Close() // 本轮上游响应体读完即关,下一轮(若有)重拉会拿到全新 body
 			// ID 一致性锚定:首轮(无 pin)之后,持续持有 emitted 作为后续轮的 pin。
 			// 注:无论 emitted 是否为空 map,都用同一份引用——后续轮翻译层会把新 index 追加进来,

@@ -55,6 +55,17 @@
                     <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="antigravityCliVersionLabel">Hub版本</span>
                     <input type="text" id="antigravityCliVersion" placeholder="2.3.1" class="w-20 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="antigravityCliVersionTip" title="Antigravity Hub 版本号(发往 Google 上游的 User-Agent 伪装版本);默认 2.3.1,留空回退默认" />
                 </div>
+                <!-- Antigravity 池 Cloudflare Worker 出口代理(对仗 grokWorkerProxyEnabled):
+                     启用后 finalRequester 把 https://{google host}/v1beta/... 的 scheme/host 改写为 Worker 地址,
+                     path/query 保留,真实上游经 X-Target-Upstream 头透传给 Worker。 -->
+                <div class="flex items-center gap-1.5 ml-1 pl-2 border-l border-outline-variant/20" id="antigravityWorkerProxyWrap">
+                    <label class="flex items-center gap-1 cursor-pointer">
+                        <input type="checkbox" id="antigravityWorkerProxyEnabled" class="sr-only peer" />
+                        <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap peer-checked:text-primary dark:peer-checked:text-primary-fixed-dim" data-i18n="antigravityWorkerProxyLabel">Worker出口</span>
+                        <span class="relative inline-block w-7 h-3.5 bg-slate-300 dark:bg-white/10 rounded-full peer-checked:bg-primary transition-colors peer-checked:after:translate-x-3 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-3 after:h-3 after:bg-white dark:after:bg-slate-200 after:rounded-full after:shadow-sm after:transition-transform"></span>
+                    </label>
+                    <input type="text" id="antigravityWorkerProxyUrl" class="w-40 px-2 py-0.5 bg-transparent border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary font-mono" placeholder="https://your-worker.workers.dev" data-i18n-placeholder="antigravityWorkerProxyUrlPlaceholder" data-i18n-title="antigravityWorkerProxyTip" title="启用后,Antigravity 号池 Google 上游请求将经由此 Cloudflare Worker 出口转发;Worker 需按 X-Target-Upstream 头回源。" />
+                </div>
             </div>
 
             <div class="flex items-center gap-2 bg-slate-50/50 dark:bg-white/5 px-3 py-1.5 rounded-lg border border-outline-variant/30 flex-shrink-0 hidden" id="nvidiaLBModeContainer">
@@ -95,6 +106,16 @@
                     <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="grokQuotaCooldownLabel">超限冷却</span>
                     <input type="number" min="0" max="720" id="grokQuotaCooldownHours" placeholder="24" class="w-14 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="grokQuotaCooldownTip" title="429/403 重试仍失败后冷却时长(小时);默认 24(=1天),0/留空回退默认" />
                     <span class="text-[12px] text-on-surface-variant dark:text-slate-400">h</span>
+                </div>
+                <!-- Grok 池 Cloudflare Worker 出口代理(对仗 otherLBModeContainer 同位置同款):
+                     启用后 Grok 链路把上游 baseURL 改写为 Worker URL,真正上游经 X-Target-Upstream 头透传。 -->
+                <div class="flex items-center gap-1.5 ml-1 pl-2 border-l border-outline-variant/20">
+                    <label class="flex items-center gap-1 cursor-pointer">
+                        <input type="checkbox" id="grokWorkerProxyEnabled" class="sr-only peer" />
+                        <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap peer-checked:text-primary dark:peer-checked:text-primary-fixed-dim" data-i18n="grokWorkerProxyLabel">Worker出口</span>
+                        <span class="relative inline-block w-7 h-3.5 bg-slate-300 dark:bg-white/10 rounded-full peer-checked:bg-primary transition-colors peer-checked:after:translate-x-3 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-3 after:h-3 after:bg-white dark:after:bg-slate-200 after:rounded-full after:shadow-sm after:transition-transform"></span>
+                    </label>
+                    <input type="text" id="grokWorkerProxyUrl" class="w-40 px-2 py-0.5 bg-transparent border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary font-mono" placeholder="https://your-worker.workers.dev" data-i18n-placeholder="grokWorkerProxyUrlPlaceholder" data-i18n-title="grokWorkerProxyTip" title="启用后,Grok 号池上游 cli-chat-proxy.grok.com 将经由此 Cloudflare Worker 出口转发;Worker 需按 X-Target-Upstream 头回源。" />
                 </div>
             </div>
             <button type="button" id="btnNvidiaPreferredModels" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg text-[13px] font-medium text-amber-600 dark:text-amber-400 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer" data-i18n-title="nvidiaPreferredModelsBtn">
@@ -185,6 +206,15 @@
                     <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20">
                         <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="maxConcurrencyLabel">并发上限</span>
                         <input type="number" min="0" max="1000" id="otherMaxConcurrency" class="w-14 px-1.5 py-0.5 bg-transparent border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="maxConcurrencyTip" title="0=未配置(默认10);超过自动换号" />
+                    </div>
+                    <!-- Other 池组级 Cloudflare Worker 出口代理(与 LB 下拉同显隐) -->
+                    <div class="flex items-center gap-1.5 ml-1 pl-2 border-l border-outline-variant/20">
+                    <label class="flex items-center gap-1 cursor-pointer">
+                            <input type="checkbox" id="otherWorkerProxyEnabled" class="sr-only peer" />
+                            <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap peer-checked:text-primary dark:peer-checked:text-primary-fixed-dim" data-i18n="otherWorkerProxyLabel">Worker出口</span>
+                            <span class="relative inline-block w-7 h-3.5 bg-slate-300 dark:bg-white/10 rounded-full peer-checked:bg-primary transition-colors peer-checked:after:translate-x-3 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-3 after:h-3 after:bg-white dark:after:bg-slate-200 after:rounded-full after:shadow-sm after:transition-transform"></span>
+                        </label>
+                        <input type="text" id="otherWorkerProxyUrl" class="w-40 px-2 py-0.5 bg-transparent border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary font-mono" placeholder="https://your-worker.workers.dev" data-i18n-placeholder="otherWorkerProxyUrlPlaceholder" />
                     </div>
                 </div>
                 <!-- 布局切换按钮组 -->

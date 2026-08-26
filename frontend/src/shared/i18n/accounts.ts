@@ -22,6 +22,10 @@ export const accountsZh: Record<string, string> = {
     poolLoadBalance: "账号负载均衡",
     antigravityCliVersionLabel: "Hub版本",
     antigravityCliVersionTip: "Antigravity Hub 版本号(发往 Google 上游的 User-Agent 伪装版本);默认 2.3.1,留空回退默认",
+    // Antigravity 池 Cloudflare Worker 出口代理(号池单值,工具栏内嵌,与 grokWorkerProxyLabel 同义,跨命名空间不冲突)。
+    antigravityWorkerProxyLabel: "Worker出口",
+    antigravityWorkerProxyUrlPlaceholder: "https://your-worker.workers.dev",
+    antigravityWorkerProxyTip: "启用后,Antigravity 号池发往 Google 上游的请求将经由此 Cloudflare Worker 出口转发;Worker 需按 X-Target-Upstream 头回源。",
     btnAddAccount: "添加账号",
     antigravityRecommended: "Antigravity (推荐)",
     authOfficialPlugin: "使用官方插件凭证授权",
@@ -145,6 +149,10 @@ export const accountsEn: Record<string, string> = {
     poolLoadBalance: "Account Load Balancing",
     antigravityCliVersionLabel: "Hub Ver",
     antigravityCliVersionTip: "Antigravity Hub version (User-Agent header sent to Google upstream); default 2.3.1, blank falls back to default",
+    // Antigravity pool Cloudflare Worker egress proxy (per-pool value, embedded in toolbar).
+    antigravityWorkerProxyLabel: "Worker",
+    antigravityWorkerProxyUrlPlaceholder: "https://your-worker.workers.dev",
+    antigravityWorkerProxyTip: "When enabled, Antigravity pool traffic to Google upstream is forwarded via this Cloudflare Worker; the Worker must relay using the X-Target-Upstream header.",
     btnAddAccount: "Add Account",
     antigravityRecommended: "Antigravity (Recommended)",
     authOfficialPlugin: "Authorize via Official Plugin",

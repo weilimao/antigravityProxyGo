@@ -25,6 +25,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -136,7 +137,27 @@ func NewAPICompatHandler(
 	// finalRequester 默认实现: 按目标 URL 判流式属性选 client/streamClient, 复刻既有
 	// handleV1Internal 直连出站的 Header 装配(Content-Type / Bearer / UA)。测试可替换为
 	// 返回伪造 200 响应的假上游闭包, 避免单测真实出网到写死的 daily-cloudcode-pa.googleapis.com。
+	//
+	// Cloudflare Worker 代理出口(Antigravity 号池):
+	// 当 settingsMgr.IsAntigravityWorkerProxyEnabled() 为 true 时,把 targetURL 的 scheme/host
+	// 改写为 Worker 地址,path/query 保留;原始完整 URL 经 X-Target-Upstream 头透传给 Worker,
+	// Worker 据此回源到真正的 Google 上游(与 NVIDIA/Grok 两池的链路口径一致)。
+	// EgressIP 仅在账号绑定了专属伪装 IP 时透传(acc.EgressIP),供 Worker 在 cf 携带 x-forwarded-for。
 	h.finalRequester = func(acc *account.Account, method, targetURL string, reqBody []byte) (*http.Response, error) {
+		originalURL := targetURL
+		workerProxyActive := false
+		if h.settingsMgr != nil && h.settingsMgr.IsAntigravityWorkerProxyEnabled() {
+			if w := strings.TrimRight(h.settingsMgr.GetAntigravityWorkerProxyURL(), "/"); w != "" {
+				if u, err := url.Parse(targetURL); err == nil {
+					if wu, err := url.Parse(w); err == nil {
+						u.Scheme = wu.Scheme
+						u.Host = wu.Host
+						targetURL = u.String()
+						workerProxyActive = true
+					}
+				}
+			}
+		}
 		req, err := http.NewRequest(method, targetURL, bytes.NewReader(reqBody))
 		if err != nil {
 			return nil, err
@@ -147,6 +168,14 @@ func NewAPICompatHandler(
 			req.Header.Set("User-Agent", h.accountMgr.GetAntigravityUserAgent())
 		} else {
 			req.Header.Set("User-Agent", account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion))
+		}
+		// 账号专属出口伪装 IP:经 Worker 代理出口时通过 X-Egress-IP 头透传(与 NVIDIA/Grok 同口径)。
+		if acc.EgressIP != "" {
+			req.Header.Set("X-Egress-IP", strings.TrimSpace(acc.EgressIP))
+		}
+		// Worker 通用代理出口:注入 X-Target-Upstream 头让 Worker 回源到真正的 Google 上游。
+		if workerProxyActive {
+			req.Header.Set("X-Target-Upstream", originalURL)
 		}
 		httpClient := h.client
 		if strings.Contains(targetURL, "alt=sse") || strings.Contains(targetURL, "streamGenerateContent") {

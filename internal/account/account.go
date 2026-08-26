@@ -177,6 +177,12 @@ type AccountsData struct {
 	AntigravityMaxConcurrency int            `json:"antigravityMaxConcurrency,omitempty"`
 	ProjectMaxConcurrency     int            `json:"projectMaxConcurrency,omitempty"`
 	OtherMaxConcurrency       map[string]int `json:"otherMaxConcurrency,omitempty"`
+	// OtherWorkerProxyURLs 持久化 Other 号池各组 Cloudflare Worker 出口代理 URL(按 GroupID map)。
+	// key 为小写规范化的 GroupID,value 为 Worker URL(如 https://my-worker.workers.dev)。
+	OtherWorkerProxyURLs    map[string]string `json:"otherWorkerProxyUrls,omitempty"`
+	// OtherWorkerProxyEnabled 持久化 Other 号池各组是否启用 Worker 代理出口(按 GroupID map)。
+	// key 为小写规范化的 GroupID,value 为 true/false。
+	OtherWorkerProxyEnabled map[string]bool   `json:"otherWorkerProxyEnabled,omitempty"`
 	// AntigravityCliVersion 持久化 Antigravity 号池全局 Hub/客户端版本号(号池单值,对仗 AntigravityMaxConcurrency)。
 	// 用于发往 Google 上游的 User-Agent 身份头(如 antigravity/hub/<ver> (aidev_client; os_type=windows; arch=amd64))。
 	// 空串=未配置, GetAntigravityCliVersion 回退默认 DefaultAntigravityCliVersion("2.3.1")。
@@ -221,6 +227,10 @@ type Manager struct {
 	antigravityMaxConcurrency int
 	projectMaxConcurrency     int
 	otherMaxConcurrency       map[string]int
+	// otherWorkerProxyURLs 按 GroupID 维度保存各组 Cloudflare Worker 出口代理 URL,与 otherLBModes 同范式。
+	otherWorkerProxyURLs map[string]string
+	// otherWorkerProxyEnabled 按 GroupID 维度保存各组是否启用 Worker 代理出口,与 otherWorkerProxyURLs 同范式。
+	otherWorkerProxyEnabled map[string]bool
 	// antigravityCliVersion 持久化 Antigravity 号池全局 Hub/客户端版本号(单池单值,对仗 antigravityMaxConcurrency);
 	// 空串=未配置, GetAntigravityCliVersion 回退默认 DefaultAntigravityCliVersion("2.3.1")。
 	antigravityCliVersion string

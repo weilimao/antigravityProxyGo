@@ -221,6 +221,24 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		a.emitAccountsRes()
 		return true
 
+	case "other:set-worker-proxy-url":
+		// args: [groupID, url]。与 other:set-lb-mode 同走 IPCSend。
+		groupID := getStringArg(0)
+		url := getStringArg(1)
+		_ = a.accountMgr.SetOtherWorkerProxyURL(groupID, url)
+		a.AddLog(fmt.Sprintf("⚙️ [Other] group %s Cloudflare Worker 代理 URL: %s", groupID, a.accountMgr.GetOtherWorkerProxyURL(groupID)))
+		a.emitAccountsRes()
+		return true
+
+	case "other:set-worker-proxy-enabled":
+		// args: [groupID, enabled]。与 other:set-lb-mode 同走 IPCSend。
+		groupID := getStringArg(0)
+		enabled := getBoolArg(1)
+		_ = a.accountMgr.SetOtherWorkerProxyEnabled(groupID, enabled)
+		a.AddLog(fmt.Sprintf("⚙️ [Other] group %s Cloudflare Worker 代理出口启用: %v", groupID, a.accountMgr.IsOtherWorkerProxyEnabled(groupID)))
+		a.emitAccountsRes()
+		return true
+
 	case "grok:set-lb-mode":
 		// args: [mode]。Grok 单池单值 LB 算法(与 nvidia:set-lb-mode 同构, 无组维度)。
 		// 广播 accounts-res 让前端 grok tab 的 LB 下拉用最新值回填, 避免切 tab 还原陈旧值。

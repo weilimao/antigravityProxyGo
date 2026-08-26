@@ -90,6 +90,16 @@ let grokCliVersion: HTMLInputElement | null;
 // Grok 池「额度超限后冷却时长」(号池单值, 单位小时, 对仗 grokCliVersion):单账号 429/403 等待 5s 重试 1 次仍失败
 // 即挂此冷却(默认 24h=1 天)。0/留空回退默认 24; 网络错误走 60s 短冷却不受此值影响。
 let grokQuotaCooldownHours: HTMLInputElement | null;
+// Grok 池 Cloudflare Worker 出口代理(号池单值,对仗 NVIDIA 设置面板同款):
+// 启用后 relay.grok.go 把上游 baseURL 改写为 Worker URL,真实上游经 X-Target-Upstream 头透传。
+let grokWorkerProxyEnabled: HTMLInputElement | null;
+let grokWorkerProxyUrl: HTMLInputElement | null;
+// Antigravity 池 Cloudflare Worker 出口代理(号池单值,对仗 grokWorkerProxyEnabled):
+// 启用后 relay.compat.finalRequester 把目标 URL 的 scheme/host 改写为 Worker 地址(保留 path/query),
+// 真实上游经 X-Target-Upstream 头透传。
+let antigravityWorkerProxyWrap: HTMLDivElement | null;
+let antigravityWorkerProxyEnabled: HTMLInputElement | null;
+let antigravityWorkerProxyUrl: HTMLInputElement | null;
 let btnExportAccounts: HTMLButtonElement | null;
 let btnImportAccounts: HTMLButtonElement | null;
 let btnLayoutGrid: HTMLButtonElement | null;
@@ -223,6 +233,14 @@ export function updateViewTabUI() {
             if (antigravityCliVersion && state.lastBackendData) {
                 antigravityCliVersion.value = state.lastBackendData.antigravityCliVersion || '2.3.1';
             }
+            // Antigravity Tab:Worker 代理出口 toggle+URL input 随容器一起显隐,回填自 settings 层。
+            if (antigravityWorkerProxyWrap) antigravityWorkerProxyWrap.classList.remove('hidden');
+            if (antigravityWorkerProxyEnabled && state.lastBackendData) {
+                antigravityWorkerProxyEnabled.checked = !!state.lastBackendData.antigravityWorkerProxyEnabled;
+            }
+            if (antigravityWorkerProxyUrl && state.lastBackendData) {
+                antigravityWorkerProxyUrl.value = state.lastBackendData.antigravityWorkerProxyUrl || '';
+            }
         /* } else if (state.currentViewTab === 'gemini-cli') {
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = activeClass;
             btnChannelAntigravity.className = inactiveClass;
@@ -288,6 +306,14 @@ export function updateViewTabUI() {
             if (grokQuotaCooldownHours && state.lastBackendData) {
                 grokQuotaCooldownHours.value = String((state.lastBackendData.grokQuotaCooldownHours as number) ?? 24);
             }
+            // Grok Tab:Worker 代理出口 toggle+URL input 回填(settings 层承接持久化与启用断言)。
+            // grokWorkerProxyEnabled 容器恒显(在 grokLBModeContainer 内部,跟随父容器显隐)。
+            if (grokWorkerProxyEnabled && state.lastBackendData) {
+                grokWorkerProxyEnabled.checked = !!state.lastBackendData.grokWorkerProxyEnabled;
+            }
+            if (grokWorkerProxyUrl && state.lastBackendData) {
+                grokWorkerProxyUrl.value = state.lastBackendData.grokWorkerProxyUrl || '';
+            }
         } else if (state.currentViewTab === 'other') {
             if (btnChannelOther) btnChannelOther.className = activeClass;
             btnChannelAntigravity.className = inactiveClass;
@@ -324,6 +350,7 @@ export function updateViewTabUI() {
                 poolModeToggle.checked = state.lastBackendData.projectPoolMode;
             }
             if (antigravityCliVersionWrap) antigravityCliVersionWrap.classList.add('hidden');
+            if (antigravityWorkerProxyWrap) antigravityWorkerProxyWrap.classList.add('hidden');
             // project Tab:并发上限 input 用 projectMaxConcurrency 回填(?? 10 兜底)。
             if (poolMaxConcurrency && state.lastBackendData) {
                 poolMaxConcurrency.value = String(state.lastBackendData.projectMaxConcurrency ?? 10);
@@ -490,6 +517,13 @@ export function initAccountsEvents() {
     grokMaxConcurrency = document.getElementById('grokMaxConcurrency') as HTMLInputElement | null;
     grokCliVersion = document.getElementById('grokCliVersion') as HTMLInputElement | null;
     grokQuotaCooldownHours = document.getElementById('grokQuotaCooldownHours') as HTMLInputElement | null;
+    // Grok 池 Worker 代理出口(号池单值,DOM 在 Accounts.vue grokLBModeContainer 尾部)。
+    grokWorkerProxyEnabled = document.getElementById('grokWorkerProxyEnabled') as HTMLInputElement | null;
+    grokWorkerProxyUrl = document.getElementById('grokWorkerProxyUrl') as HTMLInputElement | null;
+    // Antigravity 池 Worker 代理出口(号池单值,DOM 在 Accounts.vue poolModeContainer 尾部)。
+    antigravityWorkerProxyWrap = document.getElementById('antigravityWorkerProxyWrap') as HTMLDivElement | null;
+    antigravityWorkerProxyEnabled = document.getElementById('antigravityWorkerProxyEnabled') as HTMLInputElement | null;
+    antigravityWorkerProxyUrl = document.getElementById('antigravityWorkerProxyUrl') as HTMLInputElement | null;
     // Other 号池组名子 Tab + LB 模式：句柄赋值 + 事件绑定（已抽离 otherGroupTabs.ts）
     initOtherGroupTabsEvents();
 
@@ -804,6 +838,41 @@ export function initAccountsEvents() {
             if (acvDebounce) clearTimeout(acvDebounce);
             acvDebounce = setTimeout(() => {
                 ipcRenderer.send('antigravity:set-cli-version', v);
+            }, 300);
+        });
+    }
+
+    // Antigravity 池 Cloudflare Worker 代理出口(enable toggle + URL input 组合,与 grokWorkerProxyEnabled 同构)。
+    // 未传 URL,开启后立即触发「Worker 改写但空 URL 视为未启用」的后端兜底,与 settings.IsXxxWorkerProxyEnabled 口径一致。
+    if (antigravityWorkerProxyEnabled) {
+        antigravityWorkerProxyEnabled.addEventListener('change', (e: any) => {
+            ipcRenderer.send('settings:set-antigravity-worker-proxy-enabled', !!e.target.checked);
+        });
+    }
+    if (antigravityWorkerProxyUrl) {
+        let awpDebounce: ReturnType<typeof setTimeout> | null = null;
+        antigravityWorkerProxyUrl.addEventListener('change', (e: any) => {
+            const v = (e.target.value || '').trim();
+            if (awpDebounce) clearTimeout(awpDebounce);
+            awpDebounce = setTimeout(() => {
+                ipcRenderer.send('settings:set-antigravity-worker-proxy-url', v);
+            }, 300);
+        });
+    }
+
+    // Grok 池 Cloudflare Worker 代理出口(号池单值,与 antigravityWorkerProxyEnabled 同构)。
+    if (grokWorkerProxyEnabled) {
+        grokWorkerProxyEnabled.addEventListener('change', (e: any) => {
+            ipcRenderer.send('settings:set-grok-worker-proxy-enabled', !!e.target.checked);
+        });
+    }
+    if (grokWorkerProxyUrl) {
+        let gwpDebounce: ReturnType<typeof setTimeout> | null = null;
+        grokWorkerProxyUrl.addEventListener('change', (e: any) => {
+            const v = (e.target.value || '').trim();
+            if (gwpDebounce) clearTimeout(gwpDebounce);
+            gwpDebounce = setTimeout(() => {
+                ipcRenderer.send('settings:set-grok-worker-proxy-url', v);
             }, 300);
         });
     }

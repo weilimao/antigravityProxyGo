@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/wailsapp/wails/v2"
@@ -42,6 +43,10 @@ func localMediaHandler() http.Handler {
 }
 
 func main() {
+	// 内存轻量化配置：设置 Go 堆内存软上限为 96MB，GOGC 调整为 60，主动抑制大流量突发时的堆膨胀
+	debug.SetMemoryLimit(96 * 1024 * 1024)
+	debug.SetGCPercent(60)
+
 	// 将工作目录切换为可执行文件实际目录，确保自启动时工作目录正确，防止托盘初始化失败
 	if exePath, err := os.Executable(); err == nil {
 		_ = os.Chdir(filepath.Dir(exePath))
@@ -60,7 +65,7 @@ func main() {
 	}
 
 	// Set WebView2 environment variable: 深度精简无关后台进程、合并网络栈并限制 V8 堆上限，消除多余空闲渲染器与冗余子进程开销。
-	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--mute-audio --disable-audio --disable-features=AudioServiceSandbox,VideoCaptureService,Translate,MediaRouter,SpareRendererForSitePerProcess,CalculateNativeWinOcclusion --enable-features=NetworkServiceInProcess --renderer-process-limit=1 --disable-site-isolation-trials --disable-background-networking --disable-component-update --disable-extensions --disable-sync --disable-breakpad --js-flags=\"--max-old-space-size=128\" --disable-gpu-program-caches --disable-gpu-shader-disk-cache --prune-gpu-command-buffer")
+	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--mute-audio --disable-audio --disable-features=AudioServiceSandbox,VideoCaptureService,Translate,MediaRouter,SpareRendererForSitePerProcess,CalculateNativeWinOcclusion,InterestFeedContentSuggestions,OptimizationHints --enable-features=NetworkServiceInProcess --renderer-process-limit=1 --disable-site-isolation-trials --disable-background-networking --disable-component-update --disable-extensions --disable-sync --disable-breakpad --js-flags=\"--max-old-space-size=64 --expose-gc\" --disable-gpu-program-caches --disable-gpu-shader-disk-cache --prune-gpu-command-buffer --enable-aggressive-domstorage-flushing")
 
 	// Create an instance of the app structure
 	app := NewApp()

@@ -141,6 +141,11 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		GetGlobalDebugger().Configure(enabled, logPath)
 	}
 	GetGlobalDebugger().LogClientRequest(reqID, r.Method, r.URL.Path, r.Header, bodyBytes)
+	// 将 reqID 注入 r.Context, 供下游 writeNvidiaAnthropicStream/pullAnthropicStreamWithRetry
+	// 经 ExtractDebuggerReqID 提取,把上游响应 body 写到与客户端入站请求同一个日志文件,
+	// 呈现「📥入站 → 🟢出站 → 📥上游响应」三段闭环。下游若无注入,fallback 到自身生成
+	// 的 msg_nvidia_<ts>,保证向后兼容。
+	r = r.WithContext(WithDebuggerReqID(r.Context(), reqID))
 
 	// 会话级隔离键注入:供 OCR 缓存等按会话隔离的特性共享同一会话 ID(同用户不同会话不共享
 	// 缓存槽),并贯穿下方日志让"哪个会话在打"可观测。
@@ -457,10 +462,12 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		// 运行时互斥与防套娃：专属 SOCKS5 代理优先级最高。若启用专属 SOCKS5，则直连官方 BaseURL，
 		// 绝不套用 Worker URL；仅在未开启专属 SOCKS5 且启用了 Worker 代理时才使用 Worker URL。
 		baseURL := strings.TrimRight(poolAccount.BaseURL, "/")
+		workerProxyActive := false
 		if !h.isNvidiaDedicatedProxyEnabledSafe() && h.isNvidiaWorkerProxyEnabledSafe() {
 			workerURL := strings.TrimRight(h.getNvidiaWorkerProxyURLSafe(), "/")
 			if workerURL != "" {
 				baseURL = workerURL
+				workerProxyActive = true
 			}
 		}
 		targetURL := baseURL + "/v1/chat/completions"
@@ -488,6 +495,10 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		req.Header.Set("Accept", "application/json")
 		if strings.TrimSpace(poolAccount.EgressIP) != "" {
 			req.Header.Set("X-Egress-IP", strings.TrimSpace(poolAccount.EgressIP))
+		}
+		// Worker 通用代理出口：注入 X-Target-Upstream 头让 Worker 知道真正上游地址。
+		if workerProxyActive {
+			req.Header.Set("X-Target-Upstream", strings.TrimRight(poolAccount.BaseURL, "/"))
 		}
 		// NVIDIA 上游不识别 anthropic 头，不注入
 
@@ -537,6 +548,9 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			req.Header.Set("Accept", "application/json")
 			if strings.TrimSpace(poolAccount.EgressIP) != "" {
 				req.Header.Set("X-Egress-IP", strings.TrimSpace(poolAccount.EgressIP))
+			}
+			if workerProxyActive {
+				req.Header.Set("X-Target-Upstream", strings.TrimRight(poolAccount.BaseURL, "/"))
 			}
 
 			if singleAttempt > 1 {

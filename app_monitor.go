@@ -36,11 +36,9 @@ func (a *App) startMemoryMonitor(ctx context.Context) {
 				trendCounter = 0
 				if a.IsWindowVisibleAndActive() {
 					a.emitEvent("stats-updated", a.getStatsPayload(false))
-				} else {
-					// 仅当窗口最小化或处于后台托盘静默时，智能修剪闲置工作集以实现极低挂机内存
-					stats.TrimProcessWorkingSet()
 				}
-				// Periodically force the Go runtime to release unused heap memory
+				// 周期性平滑修剪工作集与主动释放未使用堆内存，使前台常驻与后台挂机均维持在两三百兆以内的极低内存水位
+				stats.TrimProcessWorkingSet()
 				debug.FreeOSMemory()
 			}
 		}

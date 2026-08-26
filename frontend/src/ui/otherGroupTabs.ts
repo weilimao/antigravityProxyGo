@@ -20,6 +20,8 @@ let otherGroupTabs: HTMLDivElement | null;
 let otherLBModeContainer: HTMLDivElement | null;
 let otherLBModeSelect: HTMLSelectElement | null;
 let otherMaxConcurrency: HTMLInputElement | null;
+let otherWorkerProxyEnabled: HTMLInputElement | null;
+let otherWorkerProxyUrl: HTMLInputElement | null;
 
 // 句柄赋值 + 事件绑定（由 accountsController.initAccountsEvents 委托调用）
 export function initOtherGroupTabsEvents(): void {
@@ -27,6 +29,8 @@ export function initOtherGroupTabsEvents(): void {
     otherLBModeContainer = document.getElementById('otherLBModeContainer') as HTMLDivElement | null;
     otherLBModeSelect = document.getElementById('otherLBModeSelect') as HTMLSelectElement | null;
     otherMaxConcurrency = document.getElementById('otherMaxConcurrency') as HTMLInputElement | null;
+    otherWorkerProxyEnabled = document.getElementById('otherWorkerProxyEnabled') as HTMLInputElement | null;
+    otherWorkerProxyUrl = document.getElementById('otherWorkerProxyUrl') as HTMLInputElement | null;
 
     // 单账号在途并发上限:Other 池按组配置(仅选中具体组时发送,「全部组」下拉不可见,不发送)。
     if (otherMaxConcurrency) {
@@ -41,6 +45,30 @@ export function initOtherGroupTabsEvents(): void {
             }, 300);
         });
         otherMaxConcurrency.addEventListener('click', (e) => e.stopPropagation());
+    }
+
+    // Other 号池组级 Cloudflare Worker 出口代理开关
+    if (otherWorkerProxyEnabled) {
+        otherWorkerProxyEnabled.addEventListener('change', (e: any) => {
+            if (!otherLBModeSelectorVisible()) return;
+            const enabled = !!e.target.checked;
+            ipcRenderer.send('other:set-worker-proxy-enabled', state.otherGroupFilter, enabled);
+        });
+        otherWorkerProxyEnabled.addEventListener('click', (e) => e.stopPropagation());
+    }
+
+    // Other 号池组级 Cloudflare Worker 出口代理 URL
+    if (otherWorkerProxyUrl) {
+        let urlDebounce: ReturnType<typeof setTimeout> | null = null;
+        otherWorkerProxyUrl.addEventListener('change', (e: any) => {
+            if (!otherLBModeSelectorVisible()) return;
+            const url = String(e.target.value || '').trim();
+            if (urlDebounce) clearTimeout(urlDebounce);
+            urlDebounce = setTimeout(() => {
+                ipcRenderer.send('other:set-worker-proxy-url', state.otherGroupFilter, url);
+            }, 300);
+        });
+        otherWorkerProxyUrl.addEventListener('click', (e) => e.stopPropagation());
     }
 
     // Other 号池组内负载均衡方式选择框:作用于当前选中组(「全部组」下拉不可见,不发送)。
@@ -75,6 +103,10 @@ export function renderOtherGroupTabs() {
         otherGroupTabs.innerHTML = '';
         // 切走 other 通道时回到「全部组」默认过滤,避免残留上一个组过滤。
         state.otherGroupFilter = 'ALL';
+        // 污染修复:此分支此前不调用 renderOtherLBMode,导致工具栏 otherLBModeContainer
+        // 残留的 flex 状态泄漏到 Grok/NVIDIA 等其他 Tab(Worker 出口/并发上限条偶发出现)。
+        // 此时 currentViewTab!=='other',renderOtherLBMode 走 hidden 分支收尾。
+        renderOtherLBMode();
         return;
     }
 
@@ -233,6 +265,20 @@ export function renderOtherLBMode() {
     }
     if (otherMaxConcurrency && g) {
         otherMaxConcurrency.value = String((g as any).maxConcurrency ?? 10);
+    }
+
+    // 同步回填该组 Cloudflare Worker 出口代理开关与 URL。
+    if (!otherWorkerProxyEnabled) {
+        otherWorkerProxyEnabled = document.getElementById('otherWorkerProxyEnabled') as HTMLInputElement | null;
+    }
+    if (!otherWorkerProxyUrl) {
+        otherWorkerProxyUrl = document.getElementById('otherWorkerProxyUrl') as HTMLInputElement | null;
+    }
+    if (otherWorkerProxyEnabled && g) {
+        otherWorkerProxyEnabled.checked = !!(g as any).workerProxyEnabled;
+    }
+    if (otherWorkerProxyUrl && g) {
+        otherWorkerProxyUrl.value = String((g as any).workerProxyUrl || '');
     }
 }
 

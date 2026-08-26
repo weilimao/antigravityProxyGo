@@ -358,7 +358,16 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 		}
 
 		// 构造上游 URL: {BaseURL}/v1/chat/completions(若 base_url 已含 /v1 后缀, 不再重复拼接, 与 handleNvidia 同口径)。
+		// 启用 Cloudflare Worker 代理出口时,把 baseURL 改写为 Worker URL,
+		// 真正上游经 X-Target-Upstream 头透传给 Worker(与 NVIDIA 链路同口径)。
 		baseURL := strings.TrimRight(poolAccount.BaseURL, "/")
+		workerProxyActive := false
+		if h.settingsMgr != nil && h.settingsMgr.IsGrokWorkerProxyEnabled() {
+			if w := strings.TrimRight(h.settingsMgr.GetGrokWorkerProxyURL(), "/"); w != "" {
+				baseURL = w
+				workerProxyActive = true
+			}
+		}
 		targetURL := baseURL + "/v1/chat/completions"
 		if strings.HasSuffix(baseURL, "/v1") {
 			targetURL = baseURL + "/chat/completions"
@@ -371,7 +380,11 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 			break
 		}
 
-		h.log("🟢 [Grok 中继 %d/%d] 用户 %s 分配账号 %s | 模型 %s -> %s | 思考 reasoning_effort=%q | 会话 %s | %s", attempt+1, maxAttempts, userSession.UserID, poolAccount.Email, inModel, upstreamModel, upstreamReq.ReasoningEffort, ocrSessionDisplay(userSession), targetURL)
+		proxyTag := ""
+		if workerProxyActive {
+			proxyTag = " [Worker 代理出口]"
+		}
+		h.log("🟢 [Grok 中继 %d/%d]%s 用户 %s 分配账号 %s | 模型 %s -> %s | 思考 reasoning_effort=%q | 会话 %s | %s", attempt+1, maxAttempts, proxyTag, userSession.UserID, poolAccount.Email, inModel, upstreamModel, upstreamReq.ReasoningEffort, ocrSessionDisplay(userSession), targetURL)
 
 		httpClient := h.client
 		if isStreaming {
@@ -393,6 +406,14 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 			// Grok 上游鉴权: Authorization: Bearer <APIKey>(APIKey 复用 AccessToken 字段, 与 NVIDIA/Other 同源)。
 			req.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
 			req.Header.Set("Accept", "application/json")
+			// 账号专属出口伪装 IP:经 Worker 代理出口时通过 X-Egress-IP 头透传(与 NVIDIA 链路口径一致)。
+			if strings.TrimSpace(poolAccount.EgressIP) != "" {
+				req.Header.Set("X-Egress-IP", strings.TrimSpace(poolAccount.EgressIP))
+			}
+			// Worker 通用代理出口:注入 X-Target-Upstream 头让 Worker 知道真正上游地址。
+			if workerProxyActive {
+				req.Header.Set("X-Target-Upstream", strings.TrimRight(poolAccount.BaseURL, "/"))
+			}
 			// Grok CLI 身份头注入(仅对 cli-chat-proxy.grok.com 上游生效):对齐 CLIProxyAPI2
 			// xai_executor.go:1141-1145, 规避上游 426 版本闸门("Grok CLI version (none) outdated.
 			// Please update to version 0.1.202 or later")。版本号取号池全局配置 GetGrokCliVersion(默认 1.0.0);
@@ -568,7 +589,15 @@ func (h *APICompatHandler) handleGrokModels(w http.ResponseWriter, r *http.Reque
 	}
 
 	// 构造发往上游的 URL: 剥离 /grok|/xai 本地路由前缀, 强匹配上游 /v1/models。
+	// 启用 Cloudflare Worker 代理出口时改写 baseURL,真正上游经 X-Target-Upstream 透传(同对话链路)。
 	baseURL := strings.TrimRight(poolAccount.BaseURL, "/")
+	workerProxyActive := false
+	if h.settingsMgr != nil && h.settingsMgr.IsGrokWorkerProxyEnabled() {
+		if w := strings.TrimRight(h.settingsMgr.GetGrokWorkerProxyURL(), "/"); w != "" {
+			baseURL = w
+			workerProxyActive = true
+		}
+	}
 	targetURL := baseURL + "/v1/models"
 	if strings.HasSuffix(baseURL, "/v1") {
 		targetURL = baseURL + "/models"
@@ -582,6 +611,14 @@ func (h *APICompatHandler) handleGrokModels(w http.ResponseWriter, r *http.Reque
 	}
 	req.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
 	req.Header.Set("Accept", "application/json")
+	// 账号专属出口伪装 IP:经 Worker 代理出口时通过 X-Egress-IP 头透传(与对话链路同口径)。
+	if strings.TrimSpace(poolAccount.EgressIP) != "" {
+		req.Header.Set("X-Egress-IP", strings.TrimSpace(poolAccount.EgressIP))
+	}
+	// Worker 通用代理出口:注入 X-Target-Upstream 头让 Worker 知道真正上游地址。
+	if workerProxyActive {
+		req.Header.Set("X-Target-Upstream", strings.TrimRight(poolAccount.BaseURL, "/"))
+	}
 	// Grok CLI 身份头注入(对齐对话请求 grok.go 上游注入, 见 applyGrokCLIHeaders):模型列表端点
 	// 同样受 chat-proxy 版本闸门约束, 不注入会 426 走 buildFallbackGrokModels 兜底, 拿不到上游真模型清单。
 	applyGrokCLIHeaders(req, poolAccount.BaseURL, h.accountMgr.GetGrokCliVersion())

@@ -49,6 +49,10 @@ type OtherGroupInfo struct {
 	// 已经 GetOtherMaxConcurrency 规整:v<=0(0/负数)= 未配置,回退默认 10,与选号热路径
 	// 同口径,故回显永远 >=10 或用户配置的正数,前端无需再做 0 兜底。
 	MaxConcurrency int `json:"maxConcurrency"`
+	// WorkerProxyURL 是该组 Cloudflare Worker 出口代理 URL(回显供前端组 tab input 回填)。
+	WorkerProxyURL string `json:"workerProxyUrl,omitempty"`
+	// WorkerProxyEnabled 是该组是否启用 Worker 代理出口(回显供前端组 tab checkbox 回填)。
+	WorkerProxyEnabled bool `json:"workerProxyEnabled"`
 }
 
 // reserveOtherProviderGroupIDs 是禁止用作 GroupID 的保留值,避免与现有号池 Provider 冲突导致路由歧义。
@@ -291,6 +295,8 @@ func (m *Manager) GetOtherGroups() []OtherGroupInfo {
 				// 故未配置组回显 10 而非 0,与 NVIDIA/Antigravity/Project 三池 emitter 回退范式对齐,
 				// 前端组 tab input 显示与实际限流行为一致(均按 10)。
 				MaxConcurrency: m.GetOtherMaxConcurrency(gid),
+				WorkerProxyURL:     m.getOtherWorkerProxyURLUnsafe(gid),
+				WorkerProxyEnabled: m.isOtherWorkerProxyEnabledUnsafe(gid),
 			}
 			if gi.LbMode == "" {
 				gi.LbMode = "round-robin"
@@ -377,4 +383,65 @@ func (m *Manager) GetOtherGroupFormats(groupID string) []string {
 		}
 	}
 	return nil
+}
+
+// ============ 组级 Cloudflare Worker 出口代理配置 ============
+
+// GetOtherWorkerProxyURL 返回某组 Cloudflare Worker 出口代理 URL。未配置返回空串。
+func (m *Manager) GetOtherWorkerProxyURL(groupID string) string {
+	gid := strings.ToLower(strings.TrimSpace(groupID))
+	m.RLock()
+	defer m.RUnlock()
+	return m.getOtherWorkerProxyURLUnsafe(gid)
+}
+
+// getOtherWorkerProxyURLUnsafe 是 GetOtherWorkerProxyURL 的无锁内联版,供 GetOtherGroups
+// 在已持 RLock 的临界区内直接调用,避免递归加锁死锁。
+func (m *Manager) getOtherWorkerProxyURLUnsafe(gid string) string {
+	if m.otherWorkerProxyURLs == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.otherWorkerProxyURLs[gid])
+}
+
+// SetOtherWorkerProxyURL 设置某组 Cloudflare Worker 出口代理 URL 并持久化到 accounts_pool.json。
+func (m *Manager) SetOtherWorkerProxyURL(groupID, url string) error {
+	gid := strings.ToLower(strings.TrimSpace(groupID))
+	m.Lock()
+	if m.otherWorkerProxyURLs == nil {
+		m.otherWorkerProxyURLs = make(map[string]string)
+	}
+	m.otherWorkerProxyURLs[gid] = strings.TrimSpace(url)
+	m.Unlock()
+	return m.SaveAccountsFor(true, poolPartKind)
+}
+
+// IsOtherWorkerProxyEnabled 返回某组是否启用了 Cloudflare Worker 出口代理。
+// 启用 = true 且 URL 非空(与 NVIDIA IsNvidiaWorkerProxyEnabled 同口径)。
+func (m *Manager) IsOtherWorkerProxyEnabled(groupID string) bool {
+	gid := strings.ToLower(strings.TrimSpace(groupID))
+	m.RLock()
+	defer m.RUnlock()
+	return m.isOtherWorkerProxyEnabledUnsafe(gid)
+}
+
+// isOtherWorkerProxyEnabledUnsafe 是 IsOtherWorkerProxyEnabled 的无锁内联版,供 GetOtherGroups
+// 在已持 RLock 的临界区内直接调用。
+func (m *Manager) isOtherWorkerProxyEnabledUnsafe(gid string) bool {
+	if m.otherWorkerProxyEnabled == nil {
+		return false
+	}
+	return m.otherWorkerProxyEnabled[gid] && m.getOtherWorkerProxyURLUnsafe(gid) != ""
+}
+
+// SetOtherWorkerProxyEnabled 设置某组是否启用 Cloudflare Worker 出口代理并持久化到 accounts_pool.json。
+func (m *Manager) SetOtherWorkerProxyEnabled(groupID string, enabled bool) error {
+	gid := strings.ToLower(strings.TrimSpace(groupID))
+	m.Lock()
+	if m.otherWorkerProxyEnabled == nil {
+		m.otherWorkerProxyEnabled = make(map[string]bool)
+	}
+	m.otherWorkerProxyEnabled[gid] = enabled
+	m.Unlock()
+	return m.SaveAccountsFor(true, poolPartKind)
 }

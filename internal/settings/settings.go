@@ -167,6 +167,15 @@ type Config struct {
 	// NvidiaWorkerProxyURL 是 NVIDIA 号池专用的 Cloudflare Worker 出口代理 URL (如 https://my-nvidia.workers.dev)
 	NvidiaWorkerProxyURL          string `json:"nvidiaWorkerProxyUrl,omitempty"`
 	NvidiaWorkerProxyEnabled      bool   `json:"nvidiaWorkerProxyEnabled"`
+	// GrokWorkerProxyURL 是 Grok 号池专用的 Cloudflare Worker 出口代理 URL(号池单值,对仗 NvidiaWorkerProxyURL)。
+	// 启用后 relay 把上游 baseURL 改写为该 Worker 原始上游经 X-Target-Upstream 头透传(与 NVIDIA 同口径)。
+	GrokWorkerProxyURL     string `json:"grokWorkerProxyUrl,omitempty"`
+	GrokWorkerProxyEnabled bool   `json:"grokWorkerProxyEnabled,omitempty"`
+	// AntigravityWorkerProxyURL 是 Antigravity 官方号池专用的 Cloudflare Worker 出口代理 URL。
+	// 启用后 finalRequester 把 https://{host}/v1beta/... 的 host 改写为 Worker host,
+	// 原始完整 URL 经 X-Target-Upstream 头透传(与 NVIDIA 链路口径一致)。
+	AntigravityWorkerProxyURL     string `json:"antigravityWorkerProxyUrl,omitempty"`
+	AntigravityWorkerProxyEnabled bool   `json:"antigravityWorkerProxyEnabled,omitempty"`
 	// NvidiaDedicatedProxy* 是 NVIDIA 号池专用的出站代理 (支持 SOCKS5/HTTP)
 	NvidiaDedicatedProxyAddress  string `json:"nvidiaDedicatedProxyAddress,omitempty"`
 	NvidiaDedicatedProxyEnabled  bool   `json:"nvidiaDedicatedProxyEnabled"`
@@ -411,6 +420,16 @@ type ManagerInterface interface {
 	SetNvidiaWorkerProxyURL(val string) error
 	IsNvidiaWorkerProxyEnabled() bool
 	SetNvidiaWorkerProxyEnabled(val bool) error
+	// Grok Worker 出口代理(号池单值,对仗 NVIDIA):URL + Enabled 成对,Enabled 需 URL 非空才视为激活。
+	GetGrokWorkerProxyURL() string
+	SetGrokWorkerProxyURL(val string) error
+	IsGrokWorkerProxyEnabled() bool
+	SetGrokWorkerProxyEnabled(val bool) error
+	// Antigravity Worker 出口代理(号池单值,对仗 NVIDIA):URL + Enabled 成对,Enabled 需 URL 非空才视为激活。
+	GetAntigravityWorkerProxyURL() string
+	SetAntigravityWorkerProxyURL(val string) error
+	IsAntigravityWorkerProxyEnabled() bool
+	SetAntigravityWorkerProxyEnabled(val bool) error
 	GetNvidiaDedicatedProxyAddress() string
 	SetNvidiaDedicatedProxyAddress(val string) error
 	GetNvidiaDedicatedProxyEnabled() bool

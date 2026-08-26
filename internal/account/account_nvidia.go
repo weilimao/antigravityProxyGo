@@ -219,6 +219,13 @@ func ResolveNvidiaModel(inModel string, acc *Account) string {
 			return acc.ModelFable
 		}
 	}
+	// 剥离路由前缀：nvidia/moonshotai/kimi-k3 → moonshotai/kimi-k3
+	// 路由层默认规则 nvidia/* 匹配后 TargetModel 透传原值（含 nvidia/ 前缀），
+	// 但 NIM 上游实际期望的模型 ID 不含 nvidia/ 命名空间前缀，原样透传会导致 400。
+	if strings.HasPrefix(lower, "nvidia/") {
+		name = name[len("nvidia/"):]
+		lower = strings.ToLower(name)
+	}
 	if strings.Contains(name, "/") {
 		// 客户端显式指定了具名上游模型（如 meta/llama-3.3-70b-instruct），优先直接透传
 		return name
