@@ -48,7 +48,7 @@ func (pf *passthroughForward) buildUpstreamBody(bodyBytes []byte, upstreamModel 
 			// 多模态上游保图:与上方降级闸同一判据,上游原生支持视觉时让翻译层把 image 块转译为
 			// OpenAI Chat Vision 数组形态 content 原样透传(否则旧字符串路径静默丢图)。
 			preserveImages := allowOCR && pf.h.ocr != nil && pf.h.ocr.modelSupportsImage(upstreamModel)
-			u, err := AnthropicToOpenAIChatPreservingImages(&anthReq, preserveImages, mappings)
+			u, err := AnthropicToOpenAIChatPreservingImagesForProvider(&anthReq, preserveImages, "other", mappings)
 			if err != nil {
 				return nil, "", fmt.Errorf("anthropic->openai transform failed: %w", err)
 			}

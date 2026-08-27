@@ -330,3 +330,86 @@ func TestAnthropicSSEToOpenAIChatSSE_ThinkingStream(t *testing.T) {
 		t.Errorf("reasoning_content 累积: want 'partial', got %q", reasoningAcc)
 	}
 }
+
+// TestAnthropicToOpenAIChat_CrossPoolSameTargetModel 锁定跨号池同名 TargetModel 场景:
+// 当 mappings 中同时存在 nvidia 与 other 的同名 targetModel(如 moonshotai/kimi-k3) 时,
+// 打往 nvidia 号池的请求绝不能被误判为 other 号池, 必须正确注入 chat_template_kwargs,
+// 且 extractNvidiaResolvedEffort 能够正确提取出思考等级。
+func TestAnthropicToOpenAIChat_CrossPoolSameTargetModel(t *testing.T) {
+	SetGlobalEnableThinkingMode(true)
+	defer SetGlobalEnableThinkingMode(true)
+
+	yesPtr := true
+	mappings := []settings.ModelMappingEntry{
+		{
+			ClientModel:              "nvidia/moonshotai/kimi-k3",
+			TargetModel:              "moonshotai/kimi-k3",
+			TargetProvider:           "nvidia",
+			InjectChatTemplateKwargs: &yesPtr,
+		},
+		{
+			ClientModel:              "other/openrouter/moonshotai/kimi-k3",
+			TargetModel:              "moonshotai/kimi-k3",
+			TargetProvider:           "other",
+			TargetGroupID:            "openrouter",
+			InjectChatTemplateKwargs: &yesPtr,
+		},
+	}
+
+	// 1. 模拟 NVIDIA 链路请求
+	reqNvidia := &AnthropicRequest{
+		Model: "moonshotai/kimi-k3",
+		Thinking: &AnthropicThinking{
+			Type: "adaptive",
+		},
+		OutputConfig: []byte(`{"effort":"max"}`),
+	}
+	outNvidia, err := AnthropicToOpenAIChatPreservingImagesForProvider(reqNvidia, false, "nvidia", mappings)
+	if err != nil {
+		t.Fatalf("AnthropicToOpenAIChatPreservingImagesForProvider(nvidia) 失败: %v", err)
+	}
+	if outNvidia.ReasoningEffort != "" {
+		t.Errorf("NVIDIA 链路顶层 ReasoningEffort 应为空, 实际=%q", outNvidia.ReasoningEffort)
+	}
+	if outNvidia.ChatTemplateKwargs == nil {
+		t.Fatalf("NVIDIA 链路应包含 ChatTemplateKwargs, 实际为 nil")
+	}
+	if eff, ok := outNvidia.ChatTemplateKwargs["reasoning_effort"].(string); !ok || eff != "max" {
+		t.Errorf("NVIDIA ChatTemplateKwargs reasoning_effort 期望 'max', 实际=%v", outNvidia.ChatTemplateKwargs["reasoning_effort"])
+	}
+	if resolved := extractNvidiaResolvedEffort(outNvidia); resolved != "max" {
+		t.Errorf("extractNvidiaResolvedEffort 期望 'max', 实际=%q", resolved)
+	}
+
+	// 2. 模拟 Other 链路请求
+	reqOther := &AnthropicRequest{
+		Model: "moonshotai/kimi-k3",
+		Thinking: &AnthropicThinking{
+			Type: "adaptive",
+		},
+		OutputConfig: []byte(`{"effort":"max"}`),
+	}
+	outOther, err := AnthropicToOpenAIChatPreservingImagesForProvider(reqOther, false, "other", mappings)
+	if err != nil {
+		t.Fatalf("AnthropicToOpenAIChatPreservingImagesForProvider(other) 失败: %v", err)
+	}
+	if outOther.ChatTemplateKwargs != nil {
+		t.Errorf("Other 链路不应包含 ChatTemplateKwargs, 实际=%v", outOther.ChatTemplateKwargs)
+	}
+	if outOther.ReasoningEffort != "max" {
+		t.Errorf("Other 链路顶层 ReasoningEffort 期望 'max', 实际=%q", outOther.ReasoningEffort)
+	}
+
+	// 3. 模拟未显式传 provider 时的直接兼容调用
+	outFallback, err := AnthropicToOpenAIChat(reqNvidia, mappings)
+	if err != nil {
+		t.Fatalf("AnthropicToOpenAIChat 失败: %v", err)
+	}
+	if outFallback.ChatTemplateKwargs == nil {
+		t.Fatalf("兜底识别 NVIDIA 链路应包含 ChatTemplateKwargs, 实际为 nil")
+	}
+	if resolved := extractNvidiaResolvedEffort(outFallback); resolved != "max" {
+		t.Errorf("兜底调用 extractNvidiaResolvedEffort 期望 'max', 实际=%q", resolved)
+	}
+}
+

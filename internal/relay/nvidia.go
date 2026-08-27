@@ -384,7 +384,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			// AnthropicToOpenAIChat 旧默认分支会静默丢弃图块(字符串 content 装不下 image_url)。
 			// 非多模态 & ocrSelf 自递归 → 走旧字符串路径(零回归)。
 			preserveImages := !ocrSelf && h.ocr.modelSupportsImage(upstreamModel)
-			u, err := AnthropicToOpenAIChatPreservingImages(&anthReq, preserveImages, mappings)
+			u, err := AnthropicToOpenAIChatPreservingImagesForProvider(&anthReq, preserveImages, "nvidia", mappings)
 			if err != nil {
 				h.log("🚫 [NVIDIA 中继] Anthropic→OpenAI 转换失败(账号 %s): %v,回写 400", poolAccount.Email, err)
 				h.accountMgr.ReleaseAccount(poolAccount.ID)

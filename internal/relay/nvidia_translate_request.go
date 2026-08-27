@@ -29,7 +29,12 @@ import (
 //   与思考 on/off 无关;官方未文档化该头,关思考的正路是 body thinking.type=disabled 或省略 thinking 字段)。
 func AnthropicToOpenAIChat(req *AnthropicRequest, mappings ...[]settings.ModelMappingEntry) (*OpenAIChatRequest, error) {
 	// 默认不保留 image 块(字符串 content)。多模态上游由调用方显式走 AnthropicToOpenAIChatPreservingImages。
-	return anthropicToOpenAIChat(req, false, mappings...)
+	return anthropicToOpenAIChat(req, false, "", mappings...)
+}
+
+// AnthropicToOpenAIChatForProvider 把 Anthropic Messages 请求翻译成 OpenAI Chat Completions 请求,并显式指定目标号池(nvidia / other / grok)。
+func AnthropicToOpenAIChatForProvider(req *AnthropicRequest, targetProvider string, mappings ...[]settings.ModelMappingEntry) (*OpenAIChatRequest, error) {
+	return anthropicToOpenAIChat(req, false, targetProvider, mappings...)
 }
 
 // AnthropicToOpenAIChatPreservingImages 构造 Anthropic→OpenAI 转换,并在 preserveImages=true 时
@@ -37,10 +42,15 @@ func AnthropicToOpenAIChat(req *AnthropicRequest, mappings ...[]settings.ModelMa
 // 由降级闸判定上游多模态的调用方(nvidia.go / passthrough_forwarder.go)显式传入 true;
 // false 时与 AnthropicToOpenAIChat 完全等价(旧行为,字符串 content,image 块走 text 兜底)。
 func AnthropicToOpenAIChatPreservingImages(req *AnthropicRequest, preserveImages bool, mappings ...[]settings.ModelMappingEntry) (*OpenAIChatRequest, error) {
-	return anthropicToOpenAIChat(req, preserveImages, mappings...)
+	return anthropicToOpenAIChat(req, preserveImages, "", mappings...)
 }
 
-func anthropicToOpenAIChat(req *AnthropicRequest, preserveImages bool, mappings ...[]settings.ModelMappingEntry) (*OpenAIChatRequest, error) {
+// AnthropicToOpenAIChatPreservingImagesForProvider 构造 Anthropic→OpenAI 转换并显式指定目标号池(nvidia / other / grok)。
+func AnthropicToOpenAIChatPreservingImagesForProvider(req *AnthropicRequest, preserveImages bool, targetProvider string, mappings ...[]settings.ModelMappingEntry) (*OpenAIChatRequest, error) {
+	return anthropicToOpenAIChat(req, preserveImages, targetProvider, mappings...)
+}
+
+func anthropicToOpenAIChat(req *AnthropicRequest, preserveImages bool, targetProvider string, mappings ...[]settings.ModelMappingEntry) (*OpenAIChatRequest, error) {
 	if req == nil {
 		return nil, fmt.Errorf("nvidia: nil anthropic request")
 	}
@@ -132,11 +142,21 @@ func anthropicToOpenAIChat(req *AnthropicRequest, preserveImages bool, mappings 
 	// 推理模型(glm-5.2)在客户端未显式请求时不 fallback 强开,尊重 opt-in 语义。
 	// Anthropic-Beta 头里的 redact-thinking-* 不再参与本决策(该头在 claude-cli 2.1.220 开/关两态均常驻,
 	// 与思考 on/off 无关;官方未文档化该头,关思考的正路是 body thinking.type=disabled 或省略 thinking 字段)。
+	// 解析目标号池归属: 优先使用显式声明的 targetProvider; 若未声明则通过 model 前缀及 mapping 启发式识别
+	isOther := false
+	if strings.EqualFold(strings.TrimSpace(targetProvider), "other") {
+		isOther = true
+	} else if strings.EqualFold(strings.TrimSpace(targetProvider), "nvidia") || strings.EqualFold(strings.TrimSpace(targetProvider), "grok") {
+		isOther = false
+	} else {
+		isOther = isOtherProviderTarget(req.Model, mappings...)
+	}
+
 	if !IsEnableThinkingMode() || !thinkingRequested(req) {
 		// 无思考信号(opt-in OFF 或全局关)→ 两种参数都不注入,上游行为不变。
 		out.ChatTemplateKwargs = nil
 		out.ReasoningEffort = ""
-	} else if isOtherProviderTarget(req.Model, mappings...) {
+	} else if isOther {
 		// Other 号池 → 官方 OpenAI reasoning_effort 顶层字段。
 		effort := resolveReasoningEffort(req)
 		out.ChatTemplateKwargs = nil // Other 池绝不注入 NIM 专属 kwargs
@@ -328,7 +348,7 @@ func injectNvidiaChatTemplateKwargs(chatReq *OpenAIChatRequest, bodyBytes []byte
 	// 故 NIM 链路必须把客户端原发在顶层的 reasoning_effort 清空,绝不透传给 NIM 上游。
 	// (顶层 reasoning_effort 是 Other 号池 OpenAI 格式组的官方注入字段,NIM 链路禁用。)
 	chatReq.ReasoningEffort = ""
-	if !IsEnableThinkingMode() || isNvidiaModelNoKwargs(upstreamModel, mappings...) {
+	if !IsEnableThinkingMode() || isNvidiaModelNoKwargs(chatReq.Model, mappings...) || isNvidiaModelNoKwargs(upstreamModel, mappings...) {
 		chatReq.ChatTemplateKwargs = nil
 		return
 	}
@@ -367,19 +387,28 @@ func extractNvidiaResolvedEffort(req *OpenAIChatRequest) string {
 
 // isNvidiaModelNoKwargs 判定模型映射配置是否显式禁用 chat_template_kwargs 思考参数。
 // 匹配规则:
-//   - 在 mappings 中匹配 ClientModel 或 TargetModel,命中后:
-//     · TargetProvider=="other" 一律禁注入(chat_template_kwargs 是 NVIDIA NIM 专属约定,
-//       各第三方上游思考参数格式各异——阿里云 DeepSeek v4 要 bool、NIM 要字符串、有的根本不认;
-//       默认强塞会触发上游 400 "Input should be a valid boolean" 等类型不匹配报错)。
-//     · InjectChatTemplateKwargs 显式配置为 false 时禁注入(其余号池沿用既有口径)。
+//   - 优先匹配 ClientModel, 命中后:
+//     · TargetProvider=="other" 一律禁注入(chat_template_kwargs 是 NVIDIA NIM 专属约定);
+//     · InjectChatTemplateKwargs 显式配置为 false 时禁注入。
+//   - 若无 ClientModel 精准匹配，仅在 entry 归属于 nvidia 号池且 TargetModel 匹配时判定。
 func isNvidiaModelNoKwargs(model string, mappings ...[]settings.ModelMappingEntry) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if len(mappings) > 0 {
+		// 1. 优先精准匹配 ClientModel
 		for _, entry := range mappings[0] {
-			if strings.EqualFold(entry.ClientModel, m) || strings.EqualFold(entry.TargetModel, m) {
+			if strings.EqualFold(entry.ClientModel, m) {
 				if strings.EqualFold(strings.TrimSpace(entry.TargetProvider), "other") {
 					return true
 				}
+				if !entry.ShouldInjectChatTemplateKwargs() {
+					return true
+				}
+				return false
+			}
+		}
+		// 2. 无 ClientModel 精确匹配时，仅在 entry 归属于 nvidia (非 other) 且 TargetModel 匹配时判定
+		for _, entry := range mappings[0] {
+			if strings.EqualFold(entry.TargetModel, m) && (entry.TargetProvider == "" || strings.EqualFold(strings.TrimSpace(entry.TargetProvider), "nvidia")) {
 				if !entry.ShouldInjectChatTemplateKwargs() {
 					return true
 				}
@@ -389,11 +418,12 @@ func isNvidiaModelNoKwargs(model string, mappings ...[]settings.ModelMappingEntr
 	return false
 }
 
-// isOtherProviderTarget 判定模型映射目标是否为 Other 号池(TargetProvider=="other")。
-// 与 isNvidiaModelNoKwargs 同源的 mapping 查找(匹配 ClientModel 或 TargetModel),
-// 但语义独立:仅返回「目标是否为 Other 号池」,不关心 InjectChatTemplateKwargs 配置。
-// 供 AnthropicToOpenAIChat 的思考注入三分支决策使用——Other 号池走官方 OpenAI reasoning_effort,
-// 与 NVIDIA NIM 专属 chat_template_kwargs 区分。无 mapping 命中时返回 false(非 Other,走原 NIM 链路)。
+// isOtherProviderTarget 判定模型是否归属于 Other 号池(TargetProvider=="other")。
+// 判定规则:
+// 1. 若 model 前缀为 "other/"，直接返回 true;
+// 2. 若在 mappings 中命中 ClientModel 匹配项，且其 TargetProvider=="other"，返回 true;
+// 3. 其余情况返回 false (非 Other 号池，走 NVIDIA NIM 链路)。
+// 严禁对 TargetModel 进行模糊反查，以避免当 NVIDIA 与 Other 号池共享相同的上游模型名称时产生冲突。
 func isOtherProviderTarget(model string, mappings ...[]settings.ModelMappingEntry) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if strings.HasPrefix(m, "other/") {
@@ -403,10 +433,8 @@ func isOtherProviderTarget(model string, mappings ...[]settings.ModelMappingEntr
 		return false
 	}
 	for _, entry := range mappings[0] {
-		if strings.EqualFold(entry.ClientModel, m) || strings.EqualFold(entry.TargetModel, m) {
-			if strings.EqualFold(strings.TrimSpace(entry.TargetProvider), "other") {
-				return true
-			}
+		if strings.EqualFold(entry.ClientModel, m) {
+			return strings.EqualFold(strings.TrimSpace(entry.TargetProvider), "other")
 		}
 	}
 	return false

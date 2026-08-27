@@ -297,7 +297,7 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 			// 多模态上游保图: 上游模型原生支持视觉时, 让翻译层把 image 块转译为 OpenAI Chat Vision
 			// 数组形态 content 原样透传, 否则翻译层旧默认分支会静默丢弃图块(与 handleNvidia 同口径)。
 			preserveImages := !ocrSelf && h.ocr.modelSupportsImage(upstreamModel)
-			u, err := AnthropicToOpenAIChatPreservingImages(&anthReq, preserveImages, mappings)
+			u, err := AnthropicToOpenAIChatPreservingImagesForProvider(&anthReq, preserveImages, "grok", mappings)
 			if err != nil {
 				h.log("🚫 [Grok 中继] Anthropic→OpenAI 转换失败(账号 %s): %v, 回写 400", poolAccount.Email, err)
 				h.accountMgr.ReleaseAccount(poolAccount.ID)
