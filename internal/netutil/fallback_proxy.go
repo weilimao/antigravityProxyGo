@@ -101,6 +101,7 @@ func buildFallbackTransport(u *url.URL, user, pass string) (*http.Transport, err
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     true, // 关键：SOCKS5/HTTP 代理自定义 DialContext 会默认禁用 HTTP/2，需显式开启
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
 		},

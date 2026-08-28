@@ -29,6 +29,7 @@ func NewTransport() *http.Transport {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     true, // 关键：自定义 DialContext 会默认禁用 HTTP/2 自动协商，需显式开启
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
 		},
