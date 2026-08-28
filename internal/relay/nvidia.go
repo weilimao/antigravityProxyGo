@@ -554,30 +554,33 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				h.log("🔄 [NVIDIA 中继 429 重试 %d/%d] 账号 %s 遇到 429 限流，等待 2 秒后原地重试...", singleAttempt, maxSingleAcc429Retries, poolAccount.Email)
 			}
 
-			resp, errDo := httpClient.Do(req)
-			if errDo != nil {
-				// 客户端主动取消特判:r.Context() 被撤销时,上游 Do() 瞬间返回 context.Canceled
-				// (请求未真正发往上游)。此时该号本身健康,绝不能拉黑 60s 冷却,也不能继续换号
-				// (换下一个号仍会被同一已取消的 context 砍掉,把整个号池挨个"砍头"刷屏)。
-				// 直接整体退出,不写响应(客户端已断开,写了也是对空管道写)。
-				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
-					h.log("⏹️ [NVIDIA 中继] 账号 %s 上游请求被客户端取消(ctx err=%v),终止换号重试(不冷冻该号)。", poolAccount.Email, errDo)
-					lastErr = errDo
-					// 客户端断开:本次请求结束,释放并发槽。
-					h.accountMgr.ReleaseAccount(poolAccount.ID)
-					return
-				}
-				h.log("⚠️ [NVIDIA 中继] 账号 %s 访问上游失败: %v", poolAccount.Email, errDo)
-				skippedAccounts[poolAccount.ID] = true
+		resp, errDo := httpClient.Do(req)
+		if errDo != nil {
+			// 客户端主动取消特判:r.Context() 被撤销时,上游 Do() 瞬间返回 context.Canceled
+			// (请求未真正发往上游)。此时该号本身健康,绝不能拉黑 60s 冷却,也不能继续换号
+			// (换下一个号仍会被同一已取消的 context 砍掉,把整个号池挨个"砍头"刷屏)。
+			// 直接整体退出,不写响应(客户端已断开,写了也是对空管道写)。
+			if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
+				h.log("⏹️ [NVIDIA 中继] 账号 %s 上游请求被客户端取消(ctx err=%v),终止换号重试(不冷冻该号)。", poolAccount.Email, errDo)
 				lastErr = errDo
-				lastResp = nil
-				// 网络错误：短期冷静该号 60s，换号重试
-				h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, time.Now().UnixNano()/1e6+60*1000, nvidiaChannel, inModel)
-				h.sessionRouter.UnbindSession(sessionKey)
-				// 网络错误换号:本次请求在该号上结束,释放并发槽。
+				// 客户端断开:本次请求结束,释放并发槽。
 				h.accountMgr.ReleaseAccount(poolAccount.ID)
-				break
+				return
 			}
+			h.log("⚠️ [NVIDIA 中继] 账号 %s 访问上游失败: %v", poolAccount.Email, errDo)
+			skippedAccounts[poolAccount.ID] = true
+			lastErr = errDo
+			lastResp = nil
+			// 网络错误：短期冷静该号 60s，换号重试
+			h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, time.Now().UnixNano()/1e6+60*1000, nvidiaChannel, inModel)
+			h.sessionRouter.UnbindSession(sessionKey)
+			// 网络错误换号:本次请求在该号上结束,释放并发槽。
+			h.accountMgr.ReleaseAccount(poolAccount.ID)
+			break
+		}
+
+		// 显式记录与上游协商的 HTTP 协议版本（HTTP/1.1 或 HTTP/2.0），用于验证传输层优化是否生效。
+		h.log("🔍 [NVIDIA 中继] 账号 %s 上游协商协议: %s (Status: %d)", poolAccount.Email, resp.Proto, resp.StatusCode)
 
 			// 处理 429 限流：5 次以内原地退避 2 秒重试，重试 5 次均 429 失败才冷冻切号
 			if resp.StatusCode == http.StatusTooManyRequests {
