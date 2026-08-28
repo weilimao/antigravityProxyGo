@@ -345,9 +345,10 @@ func TestPinnedToolIDs_RetryRoundReusesFirstRoundID(t *testing.T) {
 	if !finishEmitted {
 		t.Fatalf("首轮应 finishEmitted=true")
 	}
-	// 首轮 emitted 应记录 tc.Index=0 → tc.ID="call_0"
-	if got, ok := emitted1[0]; !ok || got != "call_0" {
-		t.Fatalf("首轮 emitted[0] 应为 'call_0',实际=%v (map=%v)", got, emitted1)
+	// 首轮 emitted 应记录 tc.Index=0 → 重写后的 toolu_nv_* 全局唯一 id(上游 "call_0" 类自增短 id 不透传,见 rewriteUpstreamToolCallID)
+	firstEmitted, ok := emitted1[0]
+	if !ok || !strings.HasPrefix(firstEmitted, "toolu_nv_") {
+		t.Fatalf("首轮 emitted[0] 应为 toolu_nv_* 重写 id,实际=%v (map=%v)", emitted1[0], emitted1)
 	}
 
 	// 解析首轮 replay 拿到的 tool ID
@@ -361,8 +362,8 @@ func TestPinnedToolIDs_RetryRoundReusesFirstRoundID(t *testing.T) {
 			}
 		}
 	}
-	if firstID != "call_0" {
-		t.Fatalf("首轮 content_block_start.tool_use.id 应为 'call_0',实际=%q", firstID)
+	if firstID != firstEmitted {
+		t.Fatalf("首轮 content_block_start.tool_use.id 应为 emitted 记录的重写 id %q,实际=%q", firstEmitted, firstID)
 	}
 
 	// ===== 重试轮(上游返回完全不同的 tool_call id)=====
@@ -389,9 +390,9 @@ func TestPinnedToolIDs_RetryRoundReusesFirstRoundID(t *testing.T) {
 			}
 		}
 	}
-	// 关键断言:尽管上游第二轮返回 "call_NEW_DIFFERENT",翻译输出仍用首轮 ID "call_0"。
-	if secondID != "call_0" {
-		t.Fatalf("重试轮 tool_use.id 应复用首轮 ID 'call_0'(防半截 id 错乱),实际=%q", secondID)
+	// 关键断言:尽管上游第二轮返回 "call_NEW_DIFFERENT",翻译输出仍用首轮重写 id(pin 一致性)。
+	if secondID != firstEmitted {
+		t.Fatalf("重试轮 tool_use.id 应复用首轮 id %q(防半截 id 错乱),实际=%q", firstEmitted, secondID)
 	}
 }
 
@@ -409,9 +410,10 @@ func TestPinnedToolIDs_RetryRoundAppendsNewIndex(t *testing.T) {
 	)
 	_, _, _, _, _, emitted1, _ := openAIChatSSEToAnthropicSSEIntoPinned(
 		context.Background(), strings.NewReader(upstream1), nil, rw1, "msg_test", "kimi-k3", 0, nil)
-	// 首轮应记录 tool[0] → "call_0"
-	if got := emitted1[0]; got != "call_0" {
-		t.Fatalf("首轮 emitted[0] 期望 'call_0',实际=%q", got)
+	// 首轮应记录 tool[0] → 重写后的 toolu_nv_* 唯一 id
+	firstEmitted := emitted1[0]
+	if !strings.HasPrefix(firstEmitted, "toolu_nv_") {
+		t.Fatalf("首轮 emitted[0] 应为 toolu_nv_* 重写 id,实际=%q", firstEmitted)
 	}
 	pinnedSoFar := emitted1 // 主循环语义:pinnedToolIDs = 首轮 emitted
 
@@ -445,17 +447,17 @@ func TestPinnedToolIDs_RetryRoundAppendsNewIndex(t *testing.T) {
 	if len(ids) != 2 {
 		t.Fatalf("重试轮应有 2 个 tool_use start,实际=%d ids=%v", len(ids), ids)
 	}
-	// tool[0] 必须用首轮 ID "call_0",即便上游换了 "call_0_NEW"
-	if ids[0] != "call_0" {
-		t.Fatalf("tool[0] 应复用首轮 ID 'call_0',实际=%q", ids[0])
+	// tool[0] 必须用首轮重写 id,即便上游换了 "call_0_NEW"
+	if ids[0] != firstEmitted {
+		t.Fatalf("tool[0] 应复用首轮 id %q,实际=%q", firstEmitted, ids[0])
 	}
-	// tool[1] 是新 index,用上游 "call_1_NEW"
-	if ids[1] != "call_1_NEW" {
-		t.Fatalf("tool[1] 应用上游 'call_1_NEW',实际=%q", ids[1])
+	// tool[1] 是新 index:上游 id("call_1_NEW")同样被重写为 toolu_nv_* 唯一 id
+	if !strings.HasPrefix(ids[1], "toolu_nv_") {
+		t.Fatalf("tool[1] 应为 toolu_nv_* 重写 id,实际=%q", ids[1])
 	}
-	// 关键:pin map 应已追加 tool[1],供下一轮继续使用
-	if pinnedSoFar[1] != "call_1_NEW" {
-		t.Fatalf("重试轮翻译层应将新 index=1 追加到 pinnedToolIDs,期望 'call_1_NEW',实际 map=%v", pinnedSoFar)
+	// 关键:pin map 应已追加 tool[1] 的重写 id,供下一轮继续使用
+	if pinnedSoFar[1] != ids[1] {
+		t.Fatalf("重试轮翻译层应将新 index=1 的重写 id 追加到 pinnedToolIDs,期望 %q,实际 map=%v", ids[1], pinnedSoFar)
 	}
 	_ = emitted2
 }
@@ -486,7 +488,7 @@ func TestResumeSink_SkipsAlreadyLiveToolBlock(t *testing.T) {
 		_ = err
 	}
 
-	// 断言首轮 live 已含 call_0 的 tool_use start(idempotency 前提)
+	// 断言首轮 live 已含 tool_use start(idempotency 前提;id 已被重写为 toolu_nv_* 唯一格式)
 	firstLive := parseSSEEvents(h.flushLive())
 	toolStartCount := 0
 	var firstClientIdx = -1
@@ -495,10 +497,8 @@ func TestResumeSink_SkipsAlreadyLiveToolBlock(t *testing.T) {
 			cb, _ := dataMap(t, ev)["content_block"].(map[string]interface{})
 			if cb != nil && cb["type"] == "tool_use" {
 				toolStartCount++
-				if id, _ := cb["id"].(string); id == "call_0" {
-					if v, ok := dataMap(t, ev)["index"].(float64); ok {
-						firstClientIdx = int(v)
-					}
+				if v, ok := dataMap(t, ev)["index"].(float64); ok {
+					firstClientIdx = int(v)
 				}
 			}
 		}
@@ -507,7 +507,7 @@ func TestResumeSink_SkipsAlreadyLiveToolBlock(t *testing.T) {
 		t.Fatalf("首轮应有 1 个 tool_use start,实际=%d,live=%v", toolStartCount, eventNames(firstLive))
 	}
 	if firstClientIdx < 0 {
-		t.Fatalf("首轮应能定位到 call_0 tool_use 块的客户端 index,实际=%d", firstClientIdx)
+		t.Fatalf("首轮应能定位到 tool_use 块的客户端 index,实际=%d", firstClientIdx)
 	}
 	// 首轮 tee.liveToolUpIdxs 应记录该 tool 上游 index → 客户端 index
 	if len(h.tee.liveToolUpIdxs) != 1 {
@@ -599,7 +599,7 @@ func TestResumeSink_SkipsAlreadyLiveToolBlock_FullClose(t *testing.T) {
 	}
 	resume.commitPending()
 
-	// 累计 live 中 call_abc 的 content_block_start 应仍只 1 个
+	// 累计 live 中 tool_use start 应仍只 1 个(重试轮整块跳过;id 已被重写为 toolu_nv_*)
 	finalLive := parseSSEEvents(h.flushLive())
 	toolStartCount := 0
 	toolIdxSet := map[int]bool{}
@@ -607,20 +607,18 @@ func TestResumeSink_SkipsAlreadyLiveToolBlock_FullClose(t *testing.T) {
 		if ev.event == "content_block_start" {
 			cb, _ := dataMap(t, ev)["content_block"].(map[string]interface{})
 			if cb != nil && cb["type"] == "tool_use" {
-				if id, _ := cb["id"].(string); id == "call_abc" {
-					toolStartCount++
-					if v, ok := dataMap(t, ev)["index"].(float64); ok {
-						toolIdxSet[int(v)] = true
-					}
+				toolStartCount++
+				if v, ok := dataMap(t, ev)["index"].(float64); ok {
+					toolIdxSet[int(v)] = true
 				}
 			}
 		}
 	}
 	if toolStartCount != 1 {
-		t.Fatalf("重试轮后累计 live 中 call_abc 的 tool_use start 应仍为 1(重试轮已跳过),实际=%d", toolStartCount)
+		t.Fatalf("重试轮后累计 live 中的 tool_use start 应仍为 1(重试轮已跳过),实际=%d", toolStartCount)
 	}
 	if len(toolIdxSet) != 1 {
-		t.Fatalf("call_abc 应只对应 1 个客户端 index,实际=%v", toolIdxSet)
+		t.Fatalf("tool_use 应只对应 1 个客户端 index,实际=%v", toolIdxSet)
 	}
 }
 

@@ -460,7 +460,8 @@ func TestOpenAIChatSSEToAnthropicSSE_ReasoningAsText(t *testing.T) {
 // 当上游先吐出文本（content），随后紧接着下发工具调用（tool_calls）时，
 // 必须在发送 tool_use 的 content_block_start 之前，先将 text 块的 content_block_stop 发出，
 // 杜绝 content_block 交错未闭合导致 Claude Code SDK 报错并显示「Tool use interrupted」。
-// 同时断言冒号非法字符被安全替换（如 Read:0 -> Read_0）。
+// 同时断言工具 id 被重写为全局唯一 toolu_nv_* 格式(20260828:上游 "Read:0" 类自增短 id
+// 每轮重复,客户端按 id 判重丢弃新调用导致死循环,见 rewriteUpstreamToolCallID)。
 func TestTextBlockClosedBeforeToolUseStart(t *testing.T) {
 	events := runAnthropicSSE(t, writeUpstream(
 		textChunkLine("我把摸底跑完"),
@@ -502,12 +503,13 @@ func TestTextBlockClosedBeforeToolUseStart(t *testing.T) {
 		t.Fatalf("时序错误：text 块的 content_block_stop(事件位置 %d) 未在 tool_use 的 content_block_start(事件位置 %d) 之前发出，导致 Block 嵌套交错", textStopIdx, toolStartIdx)
 	}
 
-	// 核心断言：toolID 中的冒号必须被清理为下划线，符合 Anthropic 规范
+	// 核心断言：tool_use id 被重写为全局唯一 toolu_nv_* 格式(不含冒号等非法字符;
+	// 上游 "Read:0" 类短 id 被重写,永不再透传给客户端)。
 	if strings.Contains(toolID, ":") {
 		t.Fatalf("toolID 包含非法冒号字符: %q", toolID)
 	}
-	if toolID != "Read_0" {
-		t.Fatalf("期望 toolID 为 Read_0，实得 %q", toolID)
+	if !strings.HasPrefix(toolID, "toolu_nv_") {
+		t.Fatalf("toolID 应为 toolu_nv_* 重写格式，实得 %q", toolID)
 	}
 }
 

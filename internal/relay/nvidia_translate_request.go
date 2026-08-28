@@ -510,8 +510,18 @@ func normalizeEffort(e string) string {
 // anthropicAssistantToChat 把 Anthropic assistant 消息转成 OpenAI assistant 消息。
 // assistant 的 content 中可能混合 text 与 tool_use 块：text→content 字符串，tool_use→tool_calls。
 // 同时清洗客户端因历史中断残留的 "[Tool use interrupted]" 污染，防上游模型产生复读幻觉。
+//
+// thinking 块处理(关键链路易错点,20260828 修复):
+//   Claude Code 客户端开启 interleaved-thinking 后,每条 assistant 历史消息都携带
+//   {type:"thinking", thinking:"...", signature:""} 块。若转换时静默丢弃,上游模型
+//   看到的将是"思考被阉割"的历史(只有零散的 text 片段),无法延续深层推理脉络,导致
+//   下一轮响应"失去上下文连贯感",表现为客户端反复触发 thinking → 夭折 → 自动追问。
+//   故此处把 thinking 块按原始顺序合并到 ChatMessage.ReasoningContent(OpenAI 协议原生
+//   字段,Kimi/DeepSeek 等推理模型识别),让上游清晰看到每一轮的历史推理轨迹。
+//   对不识别 reasoning_content 的上游该字段会被忽略,零回归。
 func anthropicAssistantToChat(msg AnthropicMessage) ChatMessage {
 	var sb strings.Builder
+	var thinkingSB strings.Builder
 	var toolCalls []ChatToolCall
 	for _, b := range msg.Content {
 		switch b.Type {
@@ -522,6 +532,17 @@ func anthropicAssistantToChat(msg AnthropicMessage) ChatMessage {
 					sb.WriteString("\n")
 				}
 				sb.WriteString(cleanText)
+			}
+		case "thinking":
+			// 历史 thinking 块按原始顺序合并透传给上游(ReasoningContent 字段),
+			// 保证上游模型能看到前轮推理轨迹,维持多轮对话的思考连续性。
+			// 空 thinking 不写入,避免空串占位。
+			tt := strings.TrimSpace(b.Thinking)
+			if tt != "" {
+				if thinkingSB.Len() > 0 {
+					thinkingSB.WriteString("\n")
+				}
+				thinkingSB.WriteString(tt)
 			}
 		case "tool_use":
 			args, _ := json.Marshal(b.Input)
@@ -536,14 +557,18 @@ func anthropicAssistantToChat(msg AnthropicMessage) ChatMessage {
 		}
 	}
 	content := sb.String()
-	// 若纯文本消息被清洗后变为空且无 tool_calls，填入安全占位以防发送空 content 导致 OpenAI 校验报错
-	if content == "" && len(toolCalls) == 0 {
+	// 若纯文本消息被清洗后变为空且无 tool_calls,但带 thinking,仍允许 content 为空字符串:
+	//   ChatMessage.Content 无 omitempty,空串会序列化为 "content":"",上游可接受(NVIDIA serde
+	//   要求 content 必填)。这样真正"thinking-only"的 assistant碎想消息也能完整回送上游。
+	// 若 content 空且无 tool_calls 且无 thinking,才补占位符防极端空消息(chain of custody 完整)。
+	if content == "" && len(toolCalls) == 0 && thinkingSB.Len() == 0 {
 		content = "好的，我继续执行任务。"
 	}
 	return ChatMessage{
-		Role:      "assistant",
-		Content:   content,
-		ToolCalls: toolCalls,
+		Role:             "assistant",
+		Content:          content,
+		ToolCalls:        toolCalls,
+		ReasoningContent: thinkingSB.String(),
 	}
 }
 

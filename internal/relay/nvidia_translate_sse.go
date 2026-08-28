@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -402,6 +403,39 @@ func (s *sseBlockStates) closeTextIfOpen(fw sseEventSink) {
 	}
 }
 
+// nvidiaToolIDSeq 是 rewriteUpstreamToolCallID 的全局原子序列号,与纳秒时间戳组合保证
+// 单进程内 tool_use id 全局唯一(即使同一纳秒并发生成也唯一)。
+var nvidiaToolIDSeq uint64
+
+// rewriteUpstreamToolCallID 把上游(NVIDIA NIM:Kimi/GLM/DeepSeek)产出的 tool_call id 重写为
+// Anthropic 官方格式的全局唯一 tool_use id。
+//
+// 根因(20260828 实测定案):NIM 上游的 tool_call id 形如 "Bash:0"/"Read:0"(工具名:序号),
+// 且每轮请求独立从 0 重新编号。Claude Code 历史中一旦存过某 id(首轮执行成功),后续每轮
+// 新调用的 id 与历史完全相同,客户端 SDK 以 tool_use.id 作为"新调用 vs 已执行调用"的区分键,
+// 重复 id 被直接判定为已执行而忽略 —— 表现为工具永不执行 + stop_reason=tool_use 无可执行调用
+// + Claude Code 自动补 "(no content)" user 消息追问的死循环(20260828 19:10-19:14 日志实证:
+// 19 轮连续请求 tool_results 恒 6 个不增长,上游每轮 id 恒为 "Bash:0")。
+//
+// Anthropic 官方 tool_use.id 形如 "toolu_01XFDUDYJg..."(toolu_ 前缀全局唯一),Claude Code
+// 依赖该唯一性区分新旧调用。故此处对非 toolu_ 前缀的上游 id 一律重写为 纳秒时间戳+原子序号
+// 的唯一 id;已是 toolu_ 前缀(防御:理论上 NIM 不产出,但若未来上游对齐官方)则原样透传。
+//
+// 断流重试 ID 一致性:首轮重写后的 id 经 emittedToolIDs 快照进 pinnedToolIDs
+// (pullAnthropicStreamWithRetry),重试轮 pin 复用同一 id,客户端不会见同一块两个 id;
+// 该路径在本函数上游(emitToolCallDelta 的 pinned 分支)处理,与重写正交。
+//
+// 上游兼容性:Kimi/GLM 等不校验 tool_call_id 的取值(历史回合回传什么它都按序消费),
+// 重写 id 对上一游完全无感;Claude Code 下轮回传历史时 tool_use.id 与 tool_result.tool_use_id
+// 同为新 id,一致性闭环。
+func rewriteUpstreamToolCallID(upstreamID string, index int) string {
+	id := strings.TrimSpace(upstreamID)
+	if strings.HasPrefix(id, "toolu_") {
+		return id
+	}
+	return fmt.Sprintf("toolu_nv_%x_%d_%d", time.Now().UnixNano(), atomic.AddUint64(&nvidiaToolIDSeq, 1), index)
+}
+
 // emitToolCallDelta 处理 OpenAI tool_calls 增量(index 指向上游分块的工具调用编号)，
 // 映射成 Anthropic 的 content_block_start(tool_use) + content_block_delta(input_json_delta)。
 //
@@ -446,7 +480,7 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 			}
 		}
 
-		// 生成 Anthropic tool_use id:优先 pin 复用首轮 ID,否则用上游 ID/兜底名生成。
+		// 生成 Anthropic tool_use id:优先 pin 复用首轮 ID(断流重试 ID 一致性),否则重写上游 id 为全局唯一 toolu_ 格式。
 		toolID := ""
 		pinned := false
 		if s.pinnedToolIDs != nil {
@@ -456,13 +490,7 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 			}
 		}
 		if toolID == "" {
-			toolID = tc.ID
-		}
-		if toolID == "" {
-			toolID = fmt.Sprintf("toolu_nvidia_%d", tc.Index)
-		}
-		if strings.Contains(toolID, ":") {
-			toolID = strings.ReplaceAll(toolID, ":", "_")
+			toolID = rewriteUpstreamToolCallID(tc.ID, tc.Index)
 		}
 		b = &sseBlock{index: key, kind: "tool_use", toolID: toolID, toolName: tc.Function.Name}
 		s.blocks[key] = b
