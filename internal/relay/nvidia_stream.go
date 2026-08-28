@@ -365,9 +365,33 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 			// 镜像上游原始 SSE 字节流(debugUpstreamBuf)到 debugger,不阻塞翻译主流程;失败无 reverse 影响。
 			// 注意第一个参数是 reader(读到什么进翻译层),第二个参数是 body(ctx 取消时 Close 用),
 			// 必须传 tee 之前的原 activeBody,否则 Close 作用不到 tee 包装后的 reader 上。
-			teeReader := io.TeeReader(activeBody, debugUpstreamBuf)
+			// P0 观测:timing 包在 tee 之下(最贴近 socket 的一层),统计本 attempt 上游字节
+			// 到达节奏(首字节等待/读批 gap),只观测不拦截,翻译与 debugger 镜像语义不变。
+			timing := newUpstreamTimingReader(activeBody)
+			teeReader := io.TeeReader(timing, debugUpstreamBuf)
 			attemptIn, attemptOut, attemptCached, finishEmitted, streamTerminated, attemptEmitted, sseErr := openAIChatSSEToAnthropicSSEIntoPinned(ctx, teeReader, activeBody, sink, streamID, model, inboundInputTokens, pinnedToolIDs)
 			activeBody.Close() // 本轮上游响应体读完即关,下一轮(若有)重拉会拿到全新 body
+			// P0 观测落行:每 attempt 单行统计——首字节等待(≈本轮流式首帧延迟)、读批节奏
+			// (gapMax/gapP95)、字节量与结果标签,用于区分「首轮排队慢 / 中途吐字抖动 / 断流」。
+			upStat := timing.snapshot()
+			attemptResult := "断流/不完整"
+			switch {
+			case sseErr == nil && (finishEmitted || streamTerminated):
+				attemptResult = "完整"
+			case ctx != nil && ctx.Err() != nil:
+				attemptResult = "客户端取消"
+			}
+			// poolAccount 可能为 nil(测试路径如 TestWriteNvidiaAnthropicStream_FlusherInvoked
+			// 仅需验证 Flusher 被调用,不关心账号),故取 Email速空前先防御。
+			accountLabel := "(nil)"
+			if poolAccount != nil {
+				accountLabel = poolAccount.Email
+			}
+			h.log("📊 [NVIDIA 流式统计] 周期 %d/%d 第 %d/%d 次 账号 %s | 首字节等待 %v | 读批 %d gapMax %v gapP95 %v | 字节 %d | 本批耗时 %v | 结果 %s",
+				cycle+1, maxCycles, attempt+1, maxRetries, accountLabel,
+				upStat.FirstByteWait.Round(time.Millisecond), upStat.Reads,
+				upStat.GapMax.Round(time.Millisecond), upStat.GapP95.Round(time.Millisecond),
+				upStat.Bytes, upStat.Elapsed.Round(time.Millisecond), attemptResult)
 			// ID 一致性锚定:首轮(无 pin)之后,持续持有 emitted 作为后续轮的 pin。
 			// 注:无论 emitted 是否为空 map,都用同一份引用——后续轮翻译层会把新 index 追加进来,
 			// 形成跨轮单调递增的稳定 ID 锚。即便 attempt 失败,pinnedToolIDs 也是"截至本轮已生成 ID"

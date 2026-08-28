@@ -74,9 +74,9 @@ func openAIChoiceMessageToAnthropic(m ChatMessage) ([]AnthropicContent, []Anthro
 		if input == nil {
 			input = make(map[string]interface{})
 		}
-		// tool_use id:重写为全局唯一 toolu_ 格式(根因见 rewriteUpstreamToolCallID 注释:
-		// NIM 上游每轮重发 "Bash:0" 类自增短 id,与客户端历史冲突导致 Claude Code 丢调用死循环)。
-		id := rewriteUpstreamToolCallID(tc.ID, i)
+		// tool_use id:重写为全局唯一 toolu_ 格式(根因见 rewriteToolCallID 注释:
+		// 上游每轮重发自增短 id,与客户端历史冲突导致 Claude Code 丢调用死循环)。
+		id := rewriteToolCallID(tc.ID, i)
 		tools = append(tools, AnthropicContent{
 			Type:  "tool_use",
 			ID:    id,
