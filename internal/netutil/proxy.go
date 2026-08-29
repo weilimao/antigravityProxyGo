@@ -32,6 +32,8 @@ func NewTransport() *http.Transport {
 		ForceAttemptHTTP2:     true, // 关键：自定义 DialContext 会默认禁用 HTTP/2 自动协商，需显式开启
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
+			// 共享 TLS session 缓存:换号/换出口重建连接时走简短握手,省 1 个 RTT。
+			ClientSessionCache: sharedTLSSessionCache,
 		},
 	}
 }
@@ -246,8 +248,8 @@ func DialContext(ctx context.Context, network, address string) (net.Conn, error)
 	}
 
 	dialDirect := func() (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, network, address)
+		// 显式超时 Dialer(15s 建连上限),替代零值 net.Dialer 的 OS 默认分钟级悬挂。
+		return newTimeoutDialer().DialContext(ctx, network, address)
 	}
 
 	dummyReq, err := http.NewRequestWithContext(ctx, "CONNECT", "https://"+address, nil)
@@ -278,7 +280,9 @@ func DialContext(ctx context.Context, network, address string) (net.Conn, error)
 			password, _ := proxyURL.User.Password()
 			proxyAuth = &proxy.Auth{User: username, Password: password}
 		}
-		dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, proxyAuth, proxy.Direct)
+		// forward 拨号器换为带超时的实现:连 SOCKS5 服务器本身悬挂也受 15s 上限约束
+		// (原 proxy.Direct 内部为零值 Dialer,无超时)。
+		dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, proxyAuth, &socks5ForwardDialer{d: newTimeoutDialer()})
 		if err != nil {
 			connDirect, errDial := dialDirect()
 			return logAndReturn(connDirect, "DIRECT (Proxy Fallback)", errDial)
@@ -299,7 +303,8 @@ func DialContext(ctx context.Context, network, address string) (net.Conn, error)
 		return logAndReturn(conn, pStr, nil)
 
 	case "http", "https":
-		var d net.Dialer
+		// 显式超时 Dialer(原零值 net.Dialer):拨向 HTTP 代理服务器的 TCP 建连受 15s 上限约束。
+		d := newTimeoutDialer()
 		conn, err := d.DialContext(ctx, "tcp", proxyURL.Host)
 		if err != nil {
 			connDirect, errDial := dialDirect()

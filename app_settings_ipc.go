@@ -200,6 +200,47 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		a.AddLog(fmt.Sprintf("⚙️ NVIDIA Cloudflare Worker 代理出口启用状态: %v", a.settingsMgr.IsNvidiaWorkerProxyEnabled()))
 		return true
 
+	case "settings:set-nvidia-hedge-enabled":
+		enabled := false
+		if len(args) > 0 {
+			if b, ok := args[0].(bool); ok {
+				enabled = b
+			}
+		}
+		_ = a.settingsMgr.SetNvidiaHedgeEnabled(enabled)
+		a.AddLog(fmt.Sprintf("⚙️ NVIDIA 对冲请求启用状态: %v", a.settingsMgr.IsNvidiaHedgeEnabled()))
+		return true
+
+	case "settings:set-nvidia-hedge-delay-ms":
+		delayMs := 0
+		if len(args) > 0 {
+			switch v := args[0].(type) {
+			case float64:
+				delayMs = int(v)
+			case int:
+				delayMs = v
+			}
+		}
+		// 0/负/越界由 settings 层归一化(默认 10000ms,钳位 [2000,60000]),落盘值即生效值。
+		_ = a.settingsMgr.SetNvidiaHedgeDelayMs(delayMs)
+		a.AddLog(fmt.Sprintf("⚙️ NVIDIA 对冲触发延迟: %dms", a.settingsMgr.GetNvidiaHedgeDelayMs()))
+		return true
+
+	case "settings:set-nvidia-hedge-max-parallel":
+		n := 0
+		if len(args) > 0 {
+			switch v := args[0].(type) {
+			case float64:
+				n = int(v)
+			case int:
+				n = v
+			}
+		}
+		// 归一化钳位 [2,5] 在 settings 层完成(最坏上游计费 = 并发数 倍)。
+		_ = a.settingsMgr.SetNvidiaHedgeMaxParallel(n)
+		a.AddLog(fmt.Sprintf("⚙️ NVIDIA 对冲并发数(含主请求): %d", a.settingsMgr.GetNvidiaHedgeMaxParallel()))
+		return true
+
 	case "settings:set-grok-worker-proxy-url":
 		url := ""
 		if len(args) > 0 {

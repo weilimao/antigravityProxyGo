@@ -44,6 +44,7 @@
   "nvidiaCompressKeepToolResults": 0,
   "nvidiaWorkerProxyEnabled": false,
   "nvidiaDedicatedProxyEnabled": false,
+  "nvidiaHedgeEnabled": false,
   "promptPrefix": "",
   "customModelOverrideEnabled": false,
   "customModelOverrideID": "",

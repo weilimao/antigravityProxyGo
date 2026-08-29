@@ -28,7 +28,7 @@ func InitDB(dataDir string) error {
 	}
 
 	dbPath := filepath.Join(dataDir, "antigravity.db")
-	
+
 	// Create directory if not exists
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return fmt.Errorf("failed to create db directory: %w", err)
@@ -92,12 +92,20 @@ func runMigrations(db *sql.DB, dataDir string) error {
 			path TEXT NOT NULL DEFAULT '',
 			session_id TEXT NOT NULL DEFAULT '',
 			family TEXT NOT NULL DEFAULT '',
-			-- reasoning_effort: 命中上游的思考等级(low/medium/high/max/none 等, 映射折叠后真正发给
-			-- 上游的值, 非客户端原始意图档)。供前端请求日志「模型」列追加 (档) 后缀展示。
-			-- 空串=客户端未开思考 / 全局关 / 上游无 reasoning_effort 概念(gemini/claude 直连)。
-			reasoning_effort TEXT NOT NULL DEFAULT '',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		);`,
+		-- reasoning_effort: 命中上游的思考等级(low/medium/high/max/none 等, 映射折叠后真正发给
+		-- 上游的值, 非客户端原始意图档)。供前端请求日志「模型」列追加 (档) 后缀展示。
+		-- 空串=客户端未开思考 / 全局关 / 上游无 reasoning_effort 概念(gemini/claude 直连)。
+		reasoning_effort TEXT NOT NULL DEFAULT '',
+		-- request_body/request_headers: 本地模式请求报文(Truncate 截断后的 JSON 文本, 空串=未存)。
+		-- 仅最新 N 条保留(由 PruneLocalRequestBodies 依 stats.MaxRequestLogs 口径周期性置空老行),
+		-- 供「查看详情」弹窗跨重启可读; 标量历史行永久保留(hourly trends 重建依赖)。
+		request_body TEXT NOT NULL DEFAULT '',
+		request_headers TEXT NOT NULL DEFAULT '',
+		-- cache_status: 缓存命中标记(HIT/MISS/NONE), 与 stats.RequestLog.CacheStatus 同义,
+		-- 供 DB 回填内存环后前端「缓存」列与命中筛选还原展示。空串=旧数据未采集。
+		cache_status TEXT NOT NULL DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);`,
 		`CREATE INDEX IF NOT EXISTS idx_req_logs_user_mode ON request_logs(user_id, mode);`,
 		`CREATE INDEX IF NOT EXISTS idx_req_logs_user_timestamp ON request_logs(user_id, timestamp);`,
 		`CREATE INDEX IF NOT EXISTS idx_req_logs_timestamp ON request_logs(timestamp);`,
@@ -183,6 +191,12 @@ func runMigrations(db *sql.DB, dataDir string) error {
 	// 置于 first_byte_ms 之后, 与 repo_stats / repo_query 的 SELECT/INSERT 列序一致; 幂等 ALTER 兼容
 	// 既有库(列已存在时 SQLite 返回 "duplicate column" 错误, 忽略即可)。旧数据默认空串 = 不渲染后缀。
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT '';`)
+	// request_body/request_headers: 本地模式请求报文落库(替代 stats.json 全量持久化的 12MB JSON 膨胀)。
+	// 幂等 ALTER 兼容既有库(列已存在时 "duplicate column" 错误, 忽略即可)。旧数据默认空串。
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN request_body TEXT NOT NULL DEFAULT '';`)
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN request_headers TEXT NOT NULL DEFAULT '';`)
+	// cache_status: 缓存命中标记(HIT/MISS/NONE), 幂等 ALTER, 旧数据默认空串(前端不渲染即视为未知)。
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN cache_status TEXT NOT NULL DEFAULT '';`)
 
 	// --- Versioned Migrations ---
 	migrationVersion := getMigrationVersion(db)

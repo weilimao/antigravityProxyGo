@@ -37,6 +37,12 @@ type RequestLog struct {
 	// 供前端请求日志「模型」列追加 (档) 后缀展示。空串 = 未开思考 / 全局关 / 无该概念。
 	// 与 stats.RequestLog.ReasoningEffort / RequestLogLite.ReasoningEffort 同义。
 	ReasoningEffort string `json:"reasoning_effort"`
+	// RequestBody/RequestHeaders: 本地模式请求报文(Truncate 后的 JSON 文本, 空串=未存)。
+	// 仅最新 N 条保留(PruneLocalRequestBodies 周期置空老行), 供「查看详情」跨重启可读。
+	RequestBody    string `json:"request_body"`
+	RequestHeaders string `json:"request_headers"`
+	// CacheStatus 缓存命中标记(HIT/MISS/NONE), 与 stats.RequestLog.CacheStatus 同义。
+	CacheStatus string `json:"cache_status"`
 }
 
 // InsertRequestLog inserts a new request log into the database
@@ -49,14 +55,16 @@ func InsertRequestLog(log *RequestLog) error {
 		INSERT INTO request_logs (
 			server_log_id, req_id, timestamp, mode, user_id, model_name,
 			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, first_byte_ms, status_code,
-			method, host, path, session_id, family, reasoning_effort
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			method, host, path, session_id, family, reasoning_effort,
+			request_body, request_headers, cache_status
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	res, err := GlobalDB.Exec(query,
 		log.ServerLogID, log.ReqID, log.Timestamp, log.Mode, log.UserID, log.ModelName,
 		log.InTokens, log.OutTokens, log.CachedTokens, log.Cost, log.InputCost, log.OutputCost, log.CachedCost, log.DurationMs, log.FirstByteMs, log.StatusCode,
 		log.Method, log.Host, log.Path, log.SessionID, log.Family, log.ReasoningEffort,
+		log.RequestBody, log.RequestHeaders, log.CacheStatus,
 	)
 	if err != nil {
 		LastInsertError = err.Error()
@@ -135,12 +143,12 @@ func GetTokensForUserModelFamilySince(userID string, modelKeyword string, sinceI
 	`
 	likePattern := "%" + modelKeyword + "%"
 	row := GlobalDB.QueryRow(query, userID, likePattern, sinceIso)
-	
+
 	var total sql.NullInt64
 	if err := row.Scan(&total); err != nil {
 		return 0, err
 	}
-	
+
 	if !total.Valid {
 		return 0, nil
 	}
@@ -200,8 +208,93 @@ func HasServerLogID(userID string, serverLogID int64, mode string) bool {
 	return false
 }
 
+// QueryRecentLocalRequests 读取最新 limit 条 mode='local' 请求日志(含 request_body/request_headers/cache_status),
+// 按 id DESC 返回(最新在前)。供 stats.Tracker 启动时从 DB 回填内存环:请求列表与详情弹窗跨重启可用,
+// 替代旧实现中 stats.json 携带 150 条完整报文的 12MB 级持久化。DB 未初始化或查询失败返回 nil。
+func QueryRecentLocalRequests(limit int) []*RequestLog {
+	if GlobalDB == nil || limit <= 0 {
+		return nil
+	}
+	query := `
+		SELECT
+			id, server_log_id, req_id, timestamp, mode, user_id, model_name,
+			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost, duration_ms, first_byte_ms, status_code,
+			method, host, path, session_id, family, reasoning_effort,
+			request_body, request_headers, cache_status
+		FROM request_logs
+		WHERE mode = 'local'
+		ORDER BY id DESC
+		LIMIT ?
+	`
+	rows, err := GlobalDB.Query(query, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
 
+	var logs []*RequestLog
+	for rows.Next() {
+		var l RequestLog
+		if err := rows.Scan(
+			&l.ID, &l.ServerLogID, &l.ReqID, &l.Timestamp, &l.Mode, &l.UserID, &l.ModelName,
+			&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost, &l.DurationMs, &l.FirstByteMs, &l.StatusCode,
+			&l.Method, &l.Host, &l.Path, &l.SessionID, &l.Family, &l.ReasoningEffort,
+			&l.RequestBody, &l.RequestHeaders, &l.CacheStatus,
+		); err != nil {
+			return nil
+		}
+		logs = append(logs, &l)
+	}
+	return logs
+}
 
+// PruneLocalRequestBodies 将 mode='local' 老行的 request_body/request_headers 置空,
+// 仅保留最新 keep 条的报文(与内存环 MaxRequestLogs 口径一致), 防 request_logs 随报文累积无限膨胀。
+// 标量字段一律保留(user_hourly_trends 重建与远端聚合依赖全量标量历史)。幂等、可随时重跑。
+func PruneLocalRequestBodies(keep int) error {
+	if GlobalDB == nil || keep < 0 {
+		return nil
+	}
+	_, err := GlobalDB.Exec(`
+		UPDATE request_logs
+		SET request_body = '', request_headers = ''
+		WHERE mode = 'local'
+		  AND (request_body <> '' OR request_headers <> '')
+		  AND id <= (SELECT IFNULL(MAX(id), 0) FROM request_logs WHERE mode = 'local') - ?
+	`, keep)
+	return err
+}
+
+// UpsertLocalRequestLog 按 req_id 幂等落一条本地模式日志:已存在则仅回填报文与缓存标记
+// (旧双写时代 DB 里可能已有同 req_id 的标量行,如 stats.json 存量迁移),不存在则整行插入。
+// 传入 log.Mode 为空时兜底 "local"。返回 affected 语义: true=整行插入, false=仅更新报文。
+func UpsertLocalRequestLog(log *RequestLog) (bool, error) {
+	if GlobalDB == nil {
+		return false, fmt.Errorf("database not initialized")
+	}
+	if log.Mode == "" {
+		log.Mode = "local"
+	}
+	res, err := GlobalDB.Exec(`
+		UPDATE request_logs
+		SET request_body = ?, request_headers = ?, cache_status = ?
+		WHERE req_id = ? AND mode = 'local'
+	`, log.RequestBody, log.RequestHeaders, log.CacheStatus, log.ReqID)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected > 0 {
+		return false, nil
+	}
+	if err := InsertRequestLog(log); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
 // GetQuotaWindowStart retrieves the window_start time for a quota type.
 func GetQuotaWindowStart(userID string, quotaType string) (string, error) {

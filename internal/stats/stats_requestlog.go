@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"encoding/json"
 	"math"
 	"strings"
 	"time"
@@ -11,6 +12,32 @@ import (
 
 // 请求日志入库簇：AddRequestLog / AddRequestLogForFamily / AddRequestLogInMemoryOnly / ClearRetriesOrErrors。
 
+// requestBodyToDBString 将(已截断的)报文序列化为 JSON 文本写入 DB TEXT 列; nil → ""。
+func requestBodyToDBString(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	if b, err := json.Marshal(v); err == nil {
+		return string(b)
+	}
+	return ""
+}
+
+// requestBodyFromDBString 将 DB TEXT 列反序列化回 interface{}(详情弹窗按对象美化展示);
+// 空串 → nil, 解析失败(历史脏数据) → 原样按字符串兜底, 不丢失内容。
+func requestBodyFromDBString(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	var v interface{}
+	if err := json.Unmarshal([]byte(s), &v); err == nil {
+		return v
+	}
+	return s
+}
 
 func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 	// 只保留真正的模型对话/发送请求（即包含 generatecontent 或 predict 的 API 调用）
@@ -59,12 +86,18 @@ func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 			OutputCost:   outputCost,
 			CachedCost:   cachedCost,
 			DurationMs:   rl.DurationMs,
-			StatusCode:   rl.StatusCode,
-			Method:       rl.Method,
-			Host:         rl.Host,
-			Path:         rl.Path,
-			SessionID:    rl.SessionID,
-			Family:       rl.Family,
+			// 修复历史遗漏: FirstByteMs 此前未写入 DB 列(request_logs.first_byte_ms 恒 0),
+			// 现与内存环/IPC 热路径同口径写入, 供跨重启回填后首帧列有值。
+			FirstByteMs:    rl.FirstByteMs,
+			StatusCode:     rl.StatusCode,
+			Method:         rl.Method,
+			Host:           rl.Host,
+			Path:           rl.Path,
+			SessionID:      rl.SessionID,
+			Family:         rl.Family,
+			RequestBody:    requestBodyToDBString(rl.RequestBody),
+			RequestHeaders: requestBodyToDBString(rl.RequestHeaders),
+			CacheStatus:    rl.CacheStatus,
 		}
 		_ = db.InsertRequestLog(dbItem)
 	}(reqLog, t.pricingMgr)
@@ -107,19 +140,20 @@ func (t *Tracker) AddRequestLogForFamily(reqLog *RequestLog) {
 		cachedCost := math.Round((float64(rl.CachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
 
 		dbItem := &db.RequestLog{
-			ReqID:        rl.ID,
-			Timestamp:    timestamp,
-			Mode:         "local",
-			UserID:       rl.Account,
-			ModelName:    rl.Model,
-			InTokens:     rl.InTokens,
-			OutTokens:    rl.OutTokens,
-			CachedTokens: rl.CachedTokens,
-			Cost:         rl.Cost,
-			InputCost:    inputCost,
-			OutputCost:   outputCost,
-			CachedCost:   cachedCost,
+			ReqID:           rl.ID,
+			Timestamp:       timestamp,
+			Mode:            "local",
+			UserID:          rl.Account,
+			ModelName:       rl.Model,
+			InTokens:        rl.InTokens,
+			OutTokens:       rl.OutTokens,
+			CachedTokens:    rl.CachedTokens,
+			Cost:            rl.Cost,
+			InputCost:       inputCost,
+			OutputCost:      outputCost,
+			CachedCost:      cachedCost,
 			DurationMs:      rl.DurationMs,
+			FirstByteMs:     rl.FirstByteMs,
 			StatusCode:      rl.StatusCode,
 			Method:          rl.Method,
 			Host:            rl.Host,
@@ -127,6 +161,9 @@ func (t *Tracker) AddRequestLogForFamily(reqLog *RequestLog) {
 			SessionID:       rl.SessionID,
 			Family:          rl.Family,
 			ReasoningEffort: rl.ReasoningEffort,
+			RequestBody:     requestBodyToDBString(rl.RequestBody),
+			RequestHeaders:  requestBodyToDBString(rl.RequestHeaders),
+			CacheStatus:     rl.CacheStatus,
 		}
 		_ = db.InsertRequestLog(dbItem)
 	}(reqLog, t.pricingMgr)

@@ -181,6 +181,17 @@ type Config struct {
 	NvidiaDedicatedProxyEnabled  bool   `json:"nvidiaDedicatedProxyEnabled"`
 	NvidiaDedicatedProxyUsername string `json:"nvidiaDedicatedProxyUsername,omitempty"`
 	NvidiaDedicatedProxyPassword string `json:"nvidiaDedicatedProxyPassword,omitempty"`
+	// NvidiaHedgeEnabled/NvidiaHedgeDelayMs 是 NVIDIA 号池「对冲请求」(hedged request) 开关与触发阈值。
+	// 语义:每账号轮换的首次上游 Do 发起后,若在 DelayMs 内未收到响应头,立即用号池内另一账号
+	// (并发槽成对占/释)并发补发一份完全相同的请求,谁先回响应头用谁;败方取消,不记故障、不冷却。
+	// 默认关闭(零回归);代价是败方的上游预填算力浪费(0% 缓存场景上游计费可能翻倍),前端文案已明示。
+	NvidiaHedgeEnabled bool `json:"nvidiaHedgeEnabled"`
+	NvidiaHedgeDelayMs int  `json:"nvidiaHedgeDelayMs,omitempty"`
+	// NvidiaHedgeMaxParallel 是对冲「总参赛请求数(含主请求)」,同时轰出形态:
+	// 主请求 DelayMs 内未回响应头时,一次性并发补发 MaxParallel-1 份(各用不同账号)。
+	// 范围 [2,5],0/越界经归一化钳位,默认 2(一主一备,向后兼容旧配置零变化)。
+	// 最坏情况上游计费 = MaxParallel 倍(全部败方预填算力浪费),前端文案同步警示。
+	NvidiaHedgeMaxParallel int `json:"nvidiaHedgeMaxParallel,omitempty"`
 	PromptPrefix                  string `json:"promptPrefix"`
 	CustomModelOverrideEnabled    bool   `json:"customModelOverrideEnabled"`
 	CustomModelOverrideID         string `json:"customModelOverrideID"`
@@ -438,6 +449,17 @@ type ManagerInterface interface {
 	SetNvidiaDedicatedProxyUsername(val string) error
 	GetNvidiaDedicatedProxyPassword() string
 	SetNvidiaDedicatedProxyPassword(val string) error
+	// IsNvidiaHedgeEnabled/SetNvidiaHedgeEnabled: NVIDIA 对冲请求开关(默认关,零回归)。
+	IsNvidiaHedgeEnabled() bool
+	SetNvidiaHedgeEnabled(val bool) error
+	// GetNvidiaHedgeDelayMs/SetNvidiaHedgeDelayMs: 对冲触发延迟(毫秒)。读写两侧共用同一
+	// 归一化(0/负 → 默认 10000,越界钳位 [2000,60000]),落盘值与生效值恒一致。
+	GetNvidiaHedgeDelayMs() int
+	SetNvidiaHedgeDelayMs(val int) error
+	// GetNvidiaHedgeMaxParallel/SetNvidiaHedgeMaxParallel: 对冲总参赛请求数(含主请求),
+	// 归一化钳位 [2,5],0/缺省 → 2(一主一备,向后兼容)。
+	GetNvidiaHedgeMaxParallel() int
+	SetNvidiaHedgeMaxParallel(val int) error
 	// GetAccountLayout/SetAccountLayout: 号池视图布局("grid"|"list"),纯 UI pref,落 config.json。
 	GetAccountLayout() string
 	SetAccountLayout(layout string) error

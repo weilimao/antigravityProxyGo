@@ -104,6 +104,8 @@ func buildFallbackTransport(u *url.URL, user, pass string) (*http.Transport, err
 		ForceAttemptHTTP2:     true, // 关键：SOCKS5/HTTP 代理自定义 DialContext 会默认禁用 HTTP/2，需显式开启
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
+			// 与 NewTransport 共享同一 session 缓存,兜底出口重建连接同样省握手 RTT。
+			ClientSessionCache: sharedTLSSessionCache,
 		},
 	}
 
@@ -113,8 +115,9 @@ func buildFallbackTransport(u *url.URL, user, pass string) (*http.Transport, err
 		if user != "" || pass != "" {
 			auth = &proxy.Auth{User: user, Password: pass}
 		}
+		// forward 换带超时 Dialer:连兜底 SOCKS5 服务器本身的建连悬挂受 15s 上限约束。
 		// proxy.SOCKS5 返回的 dialer 通常实现 proxy.ContextDialer,DialContext 可精确传导 ctx 取消。
-		dialer, err := proxy.SOCKS5("tcp", u.Host, auth, proxy.Direct)
+		dialer, err := proxy.SOCKS5("tcp", u.Host, auth, &socks5ForwardDialer{d: newTimeoutDialer()})
 		if err != nil {
 			return nil, fmt.Errorf("build socks5 dialer for %s: %v", u.Host, err)
 		}

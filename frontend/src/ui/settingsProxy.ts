@@ -227,6 +227,56 @@ export function bindProxySettings(): void {
             }
         });
     }
+
+    // ===== NVIDIA 对冲请求 (可选,默认关):开关 + 触发延迟(毫秒) + 并发数 =====
+    const chkNvidiaHedgeEnabled = document.getElementById('chkNvidiaHedgeEnabled') as HTMLInputElement | null;
+    const txtNvidiaHedgeDelayMs = document.getElementById('txtNvidiaHedgeDelayMs') as HTMLInputElement | null;
+    const txtNvidiaHedgeMaxParallel = document.getElementById('txtNvidiaHedgeMaxParallel') as HTMLInputElement | null;
+    const divNvidiaHedgeDelay = document.getElementById('divNvidiaHedgeDelay');
+
+    if (chkNvidiaHedgeEnabled) {
+        chkNvidiaHedgeEnabled.addEventListener('change', (e: any) => {
+            const enabled = e.target.checked;
+            try {
+                ipcRenderer.send('settings:set-nvidia-hedge-enabled', enabled);
+                if (divNvidiaHedgeDelay) {
+                    divNvidiaHedgeDelay.style.display = enabled ? 'flex' : 'none';
+                }
+            } catch (err) {
+                console.error('[SettingsController] Failed to save nvidia hedge enabled:', err);
+            }
+        });
+    }
+
+    if (txtNvidiaHedgeDelayMs) {
+        txtNvidiaHedgeDelayMs.addEventListener('change', (e: any) => {
+            const parsed = parseInt(String(e.target.value).trim(), 10);
+            // 回显必须与后端归一化逐位一致(settings.normalizeNvidiaHedgeDelayMs):
+            // NaN/<=0 → 10000 默认;其余钳位 [2000,60000]。落盘值即生效值,不做二次换算。
+            const normalized = isNaN(parsed) || parsed <= 0 ? 10000 : Math.min(60000, Math.max(2000, parsed));
+            e.target.value = String(normalized);
+            try {
+                ipcRenderer.send('settings:set-nvidia-hedge-delay-ms', normalized);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save nvidia hedge delay:', err);
+            }
+        });
+    }
+
+    if (txtNvidiaHedgeMaxParallel) {
+        txtNvidiaHedgeMaxParallel.addEventListener('change', (e: any) => {
+            const parsed = parseInt(String(e.target.value).trim(), 10);
+            // 回显与后端归一化逐位一致(settings.normalizeNvidiaHedgeMaxParallel):
+            // NaN/<=0 → 2 默认;其余钳位 [2,5]。最坏上游计费 = 并发数 倍。
+            const normalized = isNaN(parsed) || parsed <= 0 ? 2 : Math.min(5, Math.max(2, parsed));
+            e.target.value = String(normalized);
+            try {
+                ipcRenderer.send('settings:set-nvidia-hedge-max-parallel', normalized);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save nvidia hedge max parallel:', err);
+            }
+        });
+    }
 }
 
 // 自定义 SOCKS5 + NVIDIA 兜底代理:逐字段 ipcRenderer.sendSync('settings:get-*') 回填。
@@ -355,6 +405,28 @@ export function loadProxyState(): void {
         }
         if (txtNvidiaDedicatedProxyPassword && dedicatedProxyState.password !== undefined) {
             txtNvidiaDedicatedProxyPassword.value = String(dedicatedProxyState.password);
+        }
+    }
+
+    // ===== NVIDIA 对冲请求回填(wailsConfigCache 通道,见 app_lifecycle.go settings:get-nvidia-hedge) =====
+    const chkNvidiaHedgeEnabled = document.getElementById('chkNvidiaHedgeEnabled') as HTMLInputElement | null;
+    const txtNvidiaHedgeDelayMs = document.getElementById('txtNvidiaHedgeDelayMs') as HTMLInputElement | null;
+    const txtNvidiaHedgeMaxParallel = document.getElementById('txtNvidiaHedgeMaxParallel') as HTMLInputElement | null;
+    const divNvidiaHedgeDelay = document.getElementById('divNvidiaHedgeDelay');
+
+    const hedgeState = ipcRenderer.sendSync('settings:get-nvidia-hedge');
+    if (hedgeState) {
+        if (chkNvidiaHedgeEnabled) {
+            chkNvidiaHedgeEnabled.checked = !!hedgeState.enabled;
+            if (divNvidiaHedgeDelay) {
+                divNvidiaHedgeDelay.style.display = hedgeState.enabled ? 'flex' : 'none';
+            }
+        }
+        if (txtNvidiaHedgeDelayMs && hedgeState.delayMs !== undefined && hedgeState.delayMs !== null) {
+            txtNvidiaHedgeDelayMs.value = String(hedgeState.delayMs);
+        }
+        if (txtNvidiaHedgeMaxParallel && hedgeState.maxParallel !== undefined && hedgeState.maxParallel !== null) {
+            txtNvidiaHedgeMaxParallel.value = String(hedgeState.maxParallel);
         }
     }
 }

@@ -93,6 +93,37 @@
 </div>
 </div>
 
+<!-- NVIDIA 对冲请求卡片 (可选,默认关闭;首帧排队尾部延迟的对冲杠杆,败方取消不记故障) -->
+<div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+<h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">bolt</span>
+<span data-i18n="nvidiaHedgeTitle">NVIDIA 对冲请求 (首帧加速)</span>
+</h2>
+<p class="text-xs text-outline leading-relaxed" data-i18n="nvidiaHedgeTip">
+仅作用于 NVIDIA 上游链路：首个上游请求发出后，若在设定毫秒数内未收到响应头，立即用号池中另一账号并发补发一份相同请求，谁先回响应头用谁，败方自动取消（不记故障、不冷却账号）。可显著压缩偶发的几十秒级首帧排队，但败方的上游预填充算力会浪费——缓存未命中场景上游计费可能翻倍，请按需开启。
+</p>
+<div class="flex flex-col gap-3 border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex items-center justify-between">
+<div class="flex flex-col gap-0.5">
+<label class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="nvidiaHedgeEnableLabel">启用 NVIDIA 对冲请求</label>
+<span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="nvidiaHedgeEnableDesc">默认关闭。开启后主请求超过下方毫秒数未回响应头时，以另一账号并发补发对冲请求（仅每账号首个请求生效，重试轮不放大）。</span>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="chkNvidiaHedgeEnabled" type="checkbox"/>
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
+<div class="flex flex-col gap-1.5 mt-1" id="divNvidiaHedgeDelay" style="display: none;">
+<label class="text-[12px] font-bold text-outline" data-i18n="nvidiaHedgeDelayLabel">对冲触发延迟 (毫秒，范围 2000-60000，默认 10000)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-mono" id="txtNvidiaHedgeDelayMs" type="number" min="2000" max="60000" step="500" placeholder="10000"/>
+<span class="text-[11px] text-outline" data-i18n="nvidiaHedgeDelayTip">越小对冲越激进（更费上游算力），越大越保守（尾部延迟省得少）。建议 8000-15000。</span>
+<label class="text-[12px] font-bold text-outline mt-1" data-i18n="nvidiaHedgeMaxParallelLabel">对冲并发请求总数 (含主请求，范围 2-5，默认 2)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-mono" id="txtNvidiaHedgeMaxParallel" type="number" min="2" max="5" step="1" placeholder="2"/>
+<span class="text-[11px] text-outline" data-i18n="nvidiaHedgeMaxParallelTip">到达阈值后同时用不同账号补发「并发数-1」份相同请求。最坏情况上游计费 ≈ 并发数 × 单请求预填成本；号池可用账号不足时自动按实际数降级。</span>
+</div>
+</div>
+</div>
+
 <!-- NVIDIA 专属出站代理 (支持 SOCKS5/HTTP，可指定本地 Clash 独立端口实现单号池极速分流) -->
 <div class="glass-card rounded-xl p-6 flex flex-col gap-4">
 <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">

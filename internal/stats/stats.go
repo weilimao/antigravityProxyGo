@@ -28,24 +28,24 @@ type GlobalStats struct {
 	// TotalCacheEligibleInputTokens 是“缓存命中率”分母专用累加器: 仅在 TrackRequest
 	// (gemini/claude 直连链路, 上游响应携带真实 cachedTokens) 时累加 inputTokens,
 	// 刻意不含 TrackRequestForModel 走的 NVIDIA 号池链路，且刻意不含 TAB 代码补全模型 (IsTabModel)。
-	TotalCacheEligibleInputTokens int                    `json:"totalCacheEligibleInputTokens"`
-	TabExcludedFromEligible       bool                   `json:"tabExcludedFromEligible,omitempty"`
+	TotalCacheEligibleInputTokens int  `json:"totalCacheEligibleInputTokens"`
+	TabExcludedFromEligible       bool `json:"tabExcludedFromEligible,omitempty"`
 	// BackfillForcedDone 是「Pools["antigravity"] 强制全量回填」一次性迁移标志。
 	// 修正 8/8 上线后老 stats.json 已带零散 Pools["antigravity"](reqs=121 而非 Models 全量
 	// 几千 M cached)的历史脏态: 首次 LoadFromDisk 检测到该标志缺失时, 调
 	// BackfillPoolFromModelsForce 用 Models 表 Google 族全量覆盖式重算桶标量, 置 true 落盘,
 	// 再次启动即跳过该段重算(避免每次启动都从 Models 重算覆盖正在增长的真实增量)。
-	BackfillForcedDone            bool                   `json:"backfillForcedDone,omitempty"`
+	BackfillForcedDone bool `json:"backfillForcedDone,omitempty"`
 	// NvidiaUsageBackfillDone 是「NVIDIA 号池历史差量自愈合并」一次性迁移标志。
 	// recordNvidiaUsage 的第 4 落点(TrackRequestForModel)上线晚于 usage.json 记账,
 	// 历史 NVIDIA 请求量只躺在 usage.json 未进 stats.Models 模型表。首次 LoadFromDisk
 	// 检测到该标志缺失时, 从 usage.json 聚合 nvidia 账号差量合并进 Models + 全局标量 +
 	// Pools["nvidia"], 置 true 落盘, 再次启动即跳过。详见 stats_migrate_nvidia.go。
-	NvidiaUsageBackfillDone       bool                   `json:"nvidiaUsageBackfillDone,omitempty"`
-	TotalCost                     float64                `json:"totalCost"`
-	TotalRetries                  int                    `json:"totalRetries"`
-	TotalErrors                   int                    `json:"totalErrors"`
-	Models                        map[string]*ModelStats `json:"models"`
+	NvidiaUsageBackfillDone bool                   `json:"nvidiaUsageBackfillDone,omitempty"`
+	TotalCost               float64                `json:"totalCost"`
+	TotalRetries            int                    `json:"totalRetries"`
+	TotalErrors             int                    `json:"totalErrors"`
+	Models                  map[string]*ModelStats `json:"models"`
 	// Pools 是「按号池/按组」维度的命中率子聚合(前端缓存命中率卡片号池筛选数据源)。
 	// key: "antigravity" / "nvidia" / "other:<groupId>"(缺失兜底 "other:__unknown__")。
 	// 由 TrackRequestForPool 累加, 与全局标量(TotalCachedTokens 等)两套独立口径并行:
@@ -137,21 +137,21 @@ type RequestLogLite struct {
 
 func toRequestLogLite(r *RequestLog) RequestLogLite {
 	return RequestLogLite{
-		ID:           r.ID,
-		Timestamp:    r.Timestamp,
-		Method:       r.Method,
-		Host:         r.Host,
-		Path:         r.Path,
-		Model:        r.Model,
-		InTokens:     r.InTokens,
-		OutTokens:    r.OutTokens,
-		CachedTokens: r.CachedTokens,
-		CacheStatus:  r.CacheStatus,
-		StatusCode:   r.StatusCode,
-		Cost:         r.Cost,
-		Account:      r.Account,
-		SessionID:    r.SessionID,
-		DurationMs:     r.DurationMs,
+		ID:              r.ID,
+		Timestamp:       r.Timestamp,
+		Method:          r.Method,
+		Host:            r.Host,
+		Path:            r.Path,
+		Model:           r.Model,
+		InTokens:        r.InTokens,
+		OutTokens:       r.OutTokens,
+		CachedTokens:    r.CachedTokens,
+		CacheStatus:     r.CacheStatus,
+		StatusCode:      r.StatusCode,
+		Cost:            r.Cost,
+		Account:         r.Account,
+		SessionID:       r.SessionID,
+		DurationMs:      r.DurationMs,
 		FirstByteMs:     r.FirstByteMs,
 		Family:          r.Family,
 		ReasoningEffort: r.ReasoningEffort,
@@ -162,7 +162,10 @@ type StatsData struct {
 	Stats        GlobalStats    `json:"stats"`
 	Trends       []*HourlyTrend `json:"trends"`
 	NvidiaTrends []*HourlyTrend `json:"nvidiaTrends,omitempty"`
-	Requests     []*RequestLog  `json:"requests"`
+	// Requests 仅为向后兼容保留: 旧版 stats.json 曾在本字段持久化 150 条完整请求日志
+	// (含报文, 致文件膨胀到 12MB+)。现持久化职责已迁移至 SQLite request_logs
+	// (SaveToDisk 停写; LoadFromDisk 读到本字段时一次性迁入 DB), 写出恒为空。
+	Requests []*RequestLog `json:"requests,omitempty"`
 }
 
 type Tracker struct {

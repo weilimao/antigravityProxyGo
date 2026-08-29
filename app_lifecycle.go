@@ -464,6 +464,12 @@ func (a *App) domReady(ctx context.Context) {
 			"username": a.settingsMgr.GetNvidiaDedicatedProxyUsername(),
 			"password": a.settingsMgr.GetNvidiaDedicatedProxyPassword(),
 		},
+		// NVIDIA 对冲请求(默认关):前端 sendSync 读 wailsConfigCache(见 ipc.ts)。
+		"settings:get-nvidia-hedge": map[string]interface{}{
+			"enabled":     a.settingsMgr.IsNvidiaHedgeEnabled(),
+			"delayMs":     a.settingsMgr.GetNvidiaHedgeDelayMs(),
+			"maxParallel": a.settingsMgr.GetNvidiaHedgeMaxParallel(),
+		},
 	}
 
 	bytesCache, _ := json.Marshal(cache)

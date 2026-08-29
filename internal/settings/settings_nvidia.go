@@ -214,6 +214,83 @@ func containsStr(ss []string, s string) bool {
 	return false
 }
 
+// ============ NVIDIA 对冲请求 (hedged request) ============
+
+// 对冲触发延迟的默认/上下界(毫秒)。上风语义:NIM 首帧尾部延迟常态 10-40s,
+// 默认 10s 使对冲只打尾部;2s 下限防误配置成 0/负导致每请求无差别双发(上游计费直接翻倍)。
+const (
+	defaultNvidiaHedgeDelayMs = 10000
+	minNvidiaHedgeDelayMs     = 2000
+	maxNvidiaHedgeDelayMs     = 60000
+)
+
+// normalizeNvidiaHedgeDelayMs 读写两侧共用归一化:0/负(未配置/旧配置)→ 默认,越界钳位。
+// 保证 GetXxx 返回值恒可直接用于 time.Duration 换算,SetXxx 落盘值与生效值一致。
+func normalizeNvidiaHedgeDelayMs(v int) int {
+	if v <= 0 {
+		return defaultNvidiaHedgeDelayMs
+	}
+	if v < minNvidiaHedgeDelayMs {
+		return minNvidiaHedgeDelayMs
+	}
+	if v > maxNvidiaHedgeDelayMs {
+		return maxNvidiaHedgeDelayMs
+	}
+	return v
+}
+
+// IsNvidiaHedgeEnabled 返回是否启用 NVIDIA 对冲请求(默认 false,显式 opt-in)。
+func (m *Manager) IsNvidiaHedgeEnabled() bool {
+	return getSetting(m, func(c *Config) bool { return c.NvidiaHedgeEnabled })
+}
+
+// SetNvidiaHedgeEnabled 持久化 NVIDIA 对冲请求开关。
+func (m *Manager) SetNvidiaHedgeEnabled(val bool) error {
+	return setSetting(m, func(c *Config, v bool) { c.NvidiaHedgeEnabled = v }, val)
+}
+
+// GetNvidiaHedgeDelayMs 返回对冲触发延迟(毫秒),经归一化兜底。
+func (m *Manager) GetNvidiaHedgeDelayMs() int {
+	return getSetting(m, func(c *Config) int { return normalizeNvidiaHedgeDelayMs(c.NvidiaHedgeDelayMs) })
+}
+
+// SetNvidiaHedgeDelayMs 持久化对冲触发延迟(毫秒),写前归一化钳位。
+func (m *Manager) SetNvidiaHedgeDelayMs(val int) error {
+	return setSetting(m, func(c *Config, v int) { c.NvidiaHedgeDelayMs = normalizeNvidiaHedgeDelayMs(v) }, val)
+}
+
+// 对冲总并发(含主请求)的默认与钳位区间。上限 5 是计费熔断:同时轰出形态下
+// 最坏上游计费 = 并发数 × 单请求预填成本,再大属于拿算力硬赌队列抽签。
+const (
+	defaultNvidiaHedgeMaxParallel = 2
+	minNvidiaHedgeMaxParallel     = 2
+	maxNvidiaHedgeMaxParallel     = 5
+)
+
+// normalizeNvidiaHedgeMaxParallel 读写共用归一化:<=0(未配置/旧配置)→ 默认 2,越界钳位。
+func normalizeNvidiaHedgeMaxParallel(v int) int {
+	if v <= 0 {
+		return defaultNvidiaHedgeMaxParallel
+	}
+	if v < minNvidiaHedgeMaxParallel {
+		return minNvidiaHedgeMaxParallel
+	}
+	if v > maxNvidiaHedgeMaxParallel {
+		return maxNvidiaHedgeMaxParallel
+	}
+	return v
+}
+
+// GetNvidiaHedgeMaxParallel 返回对冲总参赛请求数(含主请求),经归一化兜底。
+func (m *Manager) GetNvidiaHedgeMaxParallel() int {
+	return getSetting(m, func(c *Config) int { return normalizeNvidiaHedgeMaxParallel(c.NvidiaHedgeMaxParallel) })
+}
+
+// SetNvidiaHedgeMaxParallel 持久化对冲总并发,写前归一化钳位。
+func (m *Manager) SetNvidiaHedgeMaxParallel(val int) error {
+	return setSetting(m, func(c *Config, v int) { c.NvidiaHedgeMaxParallel = normalizeNvidiaHedgeMaxParallel(v) }, val)
+}
+
 // 接口断言:保证 *Manager 实现 ManagerInterface(定义于 settings.go)。
 // 放在文件末尾保持与原 settings.go 一致。
 var _ ManagerInterface = (*Manager)(nil)
