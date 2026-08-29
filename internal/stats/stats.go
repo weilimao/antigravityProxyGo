@@ -207,6 +207,10 @@ func (t *Tracker) Init(userDataPath string) {
 	t.Unlock()
 
 	t.LoadFromDisk()
+
+	// 请求日志报文列的低频剪枝:原挂在每次 SaveToDisk(3s 防抖)热路径,现已解耦为
+	// 独立 goroutine(5min),让热路径不留每 3s 一次的全表 UPDATE 抖动。
+	startRequestBodyPruner()
 }
 
 func (t *Tracker) UpdatePath(newPath string) {
@@ -234,7 +238,12 @@ func (t *Tracker) SetOnPayloadUpdate(fn func()) {
 
 func (t *Tracker) TrackRequest(modelName string, inTokens, outTokens, cachedTokens int) {
 	t.Lock()
-	defer t.Unlock()
+	// defer 包裹保 panic 安全:critical section 任何 panic 都保证锁释放;
+	// Unlock 在前、notify 在后,顺序保证 notify 时锁已释放(notifyPayloadUpdate 拿 RLock)。
+	defer func() {
+		t.Unlock()
+		t.notifyPayloadUpdate()
+	}()
 
 	cost := t.pricingMgr.CalculateCost(modelName, inTokens, outTokens, cachedTokens)
 	rate := t.pricingMgr.GetPricingForModel(modelName)
@@ -289,8 +298,20 @@ func (t *Tracker) TrackRequest(modelName string, inTokens, outTokens, cachedToke
 	t.scheduleSave()
 }
 
-// TrackRequestForModel 将一次请求计入全局综合统计(顶部指标卡 + stats.Models 模型表 + trends
-// 全局桶, 与 nvidiaTrends(NVIDIA 专用桶)物理隔离, 不会与 TrackNvidiaRequest 产生重复累加。
+// notifyPayloadUpdate 请求级 UI 通知:与 scheduleSave(磁盘落盘节拍)解耦。
+// 各 Track* 方法在写锁释放后直接触发,由 triggerStatsUpdate(1s 节流)安插
+// stats-updated。这样指标卡/日志刷新跟手(秒级),而落盘仍是独立低频节拍,
+// 拉长落盘间隔(10s)不会让仪表盘变慢。callback 判空后调用,实际发射频率 ≤ 1/s。
+func (t *Tracker) notifyPayloadUpdate() {
+	t.RLock()
+	cb := t.onPayloadUpdate
+	t.RUnlock()
+	if cb != nil {
+		cb()
+	}
+}
+
+// TrackRequestForModel 将一次请求计入全局综合统计
 //
 // 设计目的: 纳入 NVIDIA 号池链路的用量到「模型统计」Tab / 顶部指标卡 / 「综合趋势」曲线, 使其与
 // gemini/claude 直连链路口径一致。本方法刻意不含 family 参数——family 仅是 RequestLog 的展示标记
@@ -299,7 +320,10 @@ func (t *Tracker) TrackRequest(modelName string, inTokens, outTokens, cachedToke
 // cachedTokens 对 NVIDIA 上游(OpenAI Chat 协议)固定为 0。
 func (t *Tracker) TrackRequestForModel(modelName string, inTokens, outTokens, cachedTokens int) {
 	t.Lock()
-	defer t.Unlock()
+	defer func() {
+		t.Unlock()
+		t.notifyPayloadUpdate()
+	}()
 
 	cost := t.pricingMgr.CalculateCost(modelName, inTokens, outTokens, cachedTokens)
 	rate := t.pricingMgr.GetPricingForModel(modelName)
@@ -365,7 +389,10 @@ func (t *Tracker) TrackRequestForModel(modelName string, inTokens, outTokens, ca
 // 调用方应先判 (input==0 && output==0) 跳过, 避免制造空桶。
 func (t *Tracker) TrackNvidiaRequest(modelName string, inTokens, outTokens, cachedTokens int) {
 	t.Lock()
-	defer t.Unlock()
+	defer func() {
+		t.Unlock()
+		t.notifyPayloadUpdate()
+	}()
 
 	cost := t.pricingMgr.CalculateCost(modelName, inTokens, outTokens, cachedTokens)
 	rate := t.pricingMgr.GetPricingForModel(modelName)
@@ -395,6 +422,7 @@ func (t *Tracker) TrackRetry(count int) {
 	t.Unlock()
 
 	t.scheduleSave()
+	t.notifyPayloadUpdate()
 }
 
 func (t *Tracker) TrackError(count int) {
@@ -403,4 +431,5 @@ func (t *Tracker) TrackError(count int) {
 	t.Unlock()
 
 	t.scheduleSave()
+	t.notifyPayloadUpdate()
 }

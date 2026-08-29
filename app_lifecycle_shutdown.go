@@ -161,6 +161,26 @@ func (a *App) shutdown() {
 	// 阶段2:并发落盘/收尾(任一慢 ≠ 拖累其他)
 	stage2 := []lifecycle.Task{
 		{
+			Name:    "stats.FinalSaveToDisk",
+			Timeout: 1200 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				if a.statsTracker != nil {
+					a.statsTracker.SaveToDisk()
+				}
+				return nil
+			},
+		},
+		{
+			Name:    "usage.FinalSaveToDisk",
+			Timeout: 1200 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				if a.usageTracker != nil {
+					a.usageTracker.SaveToDisk()
+				}
+				return nil
+			},
+		},
+		{
 			Name:    "session.SaveToDisk",
 			Timeout: 800 * time.Millisecond,
 			Run: func(ctx context.Context) error {

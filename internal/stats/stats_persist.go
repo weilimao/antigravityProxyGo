@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"antigravity-proxy/internal/db"
@@ -12,6 +13,34 @@ import (
 )
 
 // 持久化簇：scheduleSave / SaveToDisk / LoadFromDisk / seedEmptyTrends。
+
+// saveInterval 与 requestBodyPruneInterval 分别承载两种「节拍」语义,刻意拆开:
+//   - saveInterval = 10s:stats.json 聚合镜像的落盘防抖。落盘展开是「全量深拷贝 + json.Marshal +
+//     WriteFileAtomic(fsync)」的重活,3s 一档在高流量下每 3s 一次 fsync+写盘,长期是卡顿主源之一;
+//     拉到 10s 是把崩溃丢窗从 3s 放宽到 10s(聚合镜像可丢;请求明细仍由 request_logs 即时落库,
+//     不丢),换取 3 倍降频。空闲期(无 Track*)timer 根本不启动,不产生"空转写盘"。
+//   - requestBodyPruneInterval = 5min:PruneLocalRequestBodies 的全表 UPDATE(仅清报文列,行保留)。
+//     原挂在 SaveToDisk 尾,每 3s 一次;改为独立 goroutine 低频执行,职责松耦合,请求日志
+//     "超过窗口的报文置空"语义不变(仅延后至多 5min)。
+const saveInterval = 10 * time.Second
+const requestBodyPruneInterval = 5 * time.Minute
+
+var pruneOnce sync.Once
+
+// startRequestBodyPruner 启动独立低频剪枝:把 db.PruneLocalRequestBodies 从 SaveToDisk
+// 热路径解耦,周期由 3s 降为 5min,消除请求高峰下每 3s 的 WAL churn 与表扫描抖动。
+// sync.Once 幂等,程序生命周期内只启动一次。
+func startRequestBodyPruner() {
+	pruneOnce.Do(func() {
+		go func() {
+			t := time.NewTicker(requestBodyPruneInterval)
+			defer t.Stop()
+			for range t.C {
+				_ = db.PruneLocalRequestBodies(MaxRequestLogs)
+			}
+		}()
+	})
+}
 
 func (t *Tracker) scheduleSave() {
 	t.saveTimeoutLock.Lock()
@@ -21,18 +50,11 @@ func (t *Tracker) scheduleSave() {
 		return
 	}
 
-	t.saveTimeout = time.AfterFunc(3*time.Second, func() {
+	t.saveTimeout = time.AfterFunc(saveInterval, func() {
 		t.SaveToDisk()
 		t.saveTimeoutLock.Lock()
 		t.saveTimeout = nil
 		t.saveTimeoutLock.Unlock()
-
-		t.RLock()
-		callback := t.onPayloadUpdate
-		t.RUnlock()
-		if callback != nil {
-			callback()
-		}
 	})
 }
 
@@ -103,10 +125,6 @@ func (t *Tracker) SaveToDisk() {
 		fmt.Printf("[StatsTracker] Failed to write stats: %v\n", err)
 		return
 	}
-
-	// 落盘成功节拍上顺带修剪 DB 超窗报文(仅最新 MaxRequestLogs 条保留报文, 防 request_logs
-	// 随报文无限膨胀); 挂载现有防抖节拍不新增定时器, DB 未初始化时函数内直接返回。
-	_ = db.PruneLocalRequestBodies(MaxRequestLogs)
 }
 
 func (t *Tracker) LoadFromDisk() {

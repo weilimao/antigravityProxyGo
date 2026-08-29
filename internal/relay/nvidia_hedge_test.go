@@ -9,10 +9,12 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +22,10 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/pricing"
+	"antigravity-proxy/internal/session"
+	"antigravity-proxy/internal/settings"
+	"antigravity-proxy/internal/stats"
 )
 
 type hedgeRTFunc func(*http.Request) (*http.Response, error)
@@ -579,5 +585,130 @@ func TestFormatNvidiaHedgeRace(t *testing.T) {
 				t.Fatalf("名单渲染不符:\n got=%s\nwant=%s", got, tt.want)
 			}
 		})
+	}
+}
+
+// ============ Handler 层对冲可观测性回归(扳机日志 / 分支出发 / 无候选降级) ============
+
+// hedgeTestSettings 是 settings.ManagerInterface 的最小对冲开关 mock:其余方法走
+// 内嵌接口的零值(不会触发真实磁盘读写),只覆盖对冲 4 个 getter。
+type hedgeTestSettings struct {
+	settings.ManagerInterface
+	enabled   bool
+	delayMs   int
+	maxPar    int
+	immediate bool
+}
+
+func (m *hedgeTestSettings) IsNvidiaHedgeEnabled() bool     { return m.enabled }
+func (m *hedgeTestSettings) GetNvidiaHedgeDelayMs() int     { return m.delayMs }
+func (m *hedgeTestSettings) GetNvidiaHedgeMaxParallel() int { return m.maxPar }
+func (m *hedgeTestSettings) IsNvidiaHedgeImmediate() bool   { return m.immediate }
+
+// 顺带覆盖 handleNvidia 常见探测:其余接口方法嵌入零值返回零值(等价"关闭/默认"),与
+// settings.ManagerInterface 的语义一致(这些正是 Hedge 测试关心的默认口径)。
+func (m *hedgeTestSettings) GetEnableDebuggerMode() bool        { return false }
+func (m *hedgeTestSettings) GetResolvedDebuggerLogPath() string { return "" }
+
+// newHedgeLogHandler 构造带日志捕获(写 logs 指针)与对冲配置的 handler。
+// 复用 newNvidiaTestHandler 的账号池装配语义,只接管 settings/logFn 两路注入。
+func newHedgeLogHandler(t *testing.T, accounts []*account.Account, cfg hedgeTestSettings, logs *[]string) *APICompatHandler {
+	t.Helper()
+	accMgr := account.NewManager()
+	for _, a := range accounts {
+		accMgr.AddAccount(a)
+	}
+	accMgr.SetNvidiaPoolMode(true)
+	accMgr.SetActiveChannel("nvidia")
+	router := session.NewRouter()
+	ut := stats.NewUsageTracker(pricing.NewManager())
+	return NewAPICompatHandler(nil, accMgr, router, nil, ut, &cfg, func(msg string) {
+		*logs = append(*logs, msg)
+	})
+}
+
+// TestHandleNvidia_HedgeTriggerLog 锁定:对冲开启 + 慢上游(超过阈值)时,扳机日志与分支出发
+// 日志必须在胜负裁决之前先落一条,用户无需等到响应结束才知道对冲已开火。
+func TestHandleNvidia_HedgeTriggerLog(t *testing.T) {
+	// 慢上游:200ms 后才回响应头,强制对冲计时器(50ms)先到点 → 必触发对冲再完成竞速。
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(&OpenAIChatResponse{
+			ID: "chatcmpl-hedge", Model: "moonshotai/kimi-k2.5",
+			Choices: []OpenAIChatChoice{{Index: 0, Message: ChatMessage{Role: "assistant", Content: "hi"}, FinishReason: "stop"}},
+			Usage:   OpenAIChatUsage{PromptTokens: 10, CompletionTokens: 3, TotalTokens: 13},
+		})
+	}))
+	defer upstream.Close()
+
+	accA := mkNvidiaAccount("nv-a", "nv-a@x.dev", "key-a", upstream.URL, "moonshotai/kimi-k2.5")
+	accB := mkNvidiaAccount("nv-b", "nv-b@x.dev", "key-b", upstream.URL, "moonshotai/kimi-k2.5")
+	var logs []string
+	handler := newHedgeLogHandler(t, []*account.Account{accA, accB}, hedgeTestSettings{
+		enabled:   true,
+		delayMs:   50,
+		maxPar:    2,
+		immediate: false,
+	}, &logs)
+
+	anthReq := &AnthropicRequest{
+		Model:    "claude-sonnet-4-5",
+		Messages: []AnthropicMessage{{Role: "user", Content: []AnthropicContent{{Type: "text", Text: "hi"}}}},
+	}
+	body, _ := json.Marshal(anthReq)
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages", bytesReader(body))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-hedge", UserKey: "k-hedge"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 (对冲竞速结束后照常返回), got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	full := strings.Join(logs, "\n")
+	// 扳机日志:记录主号与对冲阈值,任何竞速起点都可见。
+	if !strings.Contains(full, "[NVIDIA 对冲]") || !strings.Contains(full, "主号[") || !strings.Contains(full, "触发对冲") {
+		t.Fatalf("缺少对冲扳机日志: logs=\n%s", full)
+	}
+	// 分支出发日志:至少发出 1 个对冲分支(maxParallel=2)。
+	if !strings.Contains(full, "分支1 出发") {
+		t.Fatalf("缺少对冲分支出发日志: logs=\n%s", full)
+	}
+}
+
+// TestHandleNvidia_HedgeEnabledButSingleAccount 锁定:对冲开关开着但号池可用账号仅 1 个时,
+// 必须打一条显式退化日志(替代原静默裸 Do),让用户能分辨「没开」与「开了但没号」。
+func TestHandleNvidia_HedgeEnabledButSingleAccount(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(&OpenAIChatResponse{
+			ID: "chatcmpl-solo", Model: "moonshotai/kimi-k2.5",
+			Choices: []OpenAIChatChoice{{Index: 0, Message: ChatMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+			Usage:   OpenAIChatUsage{PromptTokens: 5, CompletionTokens: 2, TotalTokens: 7},
+		})
+	}))
+	defer upstream.Close()
+
+	acc := mkNvidiaAccount("nv-solo", "nv-solo@x.dev", "key-solo", upstream.URL, "moonshotai/kimi-k2.5")
+	var logs []string
+	handler := newHedgeLogHandler(t, []*account.Account{acc}, hedgeTestSettings{
+		enabled:   true,
+		delayMs:   50,
+		maxPar:    2,
+		immediate: false,
+	}, &logs)
+
+	req := httptest.NewRequest(http.MethodPost, "/nvidia/v1/messages",
+		strings.NewReader(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`))
+	rr := httptest.NewRecorder()
+	handler.handleNvidia(rr, req, &RelaySession{UserID: "u-solo", UserKey: "k-solo"})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	full := strings.Join(logs, "\n")
+	// 退化告警:仅有 1 个账号可用时,对冲开关开着也必须给出可辨识的退化原因
+	if !strings.Contains(full, "仅 1 个") || !strings.Contains(full, "对冲") {
+		t.Fatalf("单账号池缺少对冲退化警告日志: logs=\n%s", full)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"antigravity-proxy/internal/fileutil"
 	"antigravity-proxy/internal/pricing"
 )
 
@@ -159,7 +160,12 @@ func (u *UsageTracker) RecordUsage(sample UsageSample) {
 	}
 
 	u.Lock()
-	defer u.Unlock()
+	// defer 包裹保 panic 安全:同 stats.Tracker 同构,critical section 任意 panic 均保证
+	// 释放锁再 notify(notify 拿 RLock 依赖 Unlock 先行,顺序敏感)。
+	defer func() {
+		u.Unlock()
+		u.notifyPayloadUpdate()
+	}()
 
 	inTokens := sample.InTokens
 	outTokens := sample.OutTokens
@@ -253,6 +259,17 @@ func (u *UsageTracker) RecordUsage(sample UsageSample) {
 	u.state.UpdatedAt = timestamp
 
 	u.scheduleSave()
+}
+
+// notifyPayloadUpdate 请求级 UI 通知:与 scheduleSave(磁盘落盘节拍)解耦。
+// 与 stats.Tracker.notifyPayloadUpdate 同构,Unlock 后调用,死锁风险为零。
+func (u *UsageTracker) notifyPayloadUpdate() {
+	u.RLock()
+	cb := u.onPayloadUpdate
+	u.RUnlock()
+	if cb != nil {
+		cb()
+	}
 }
 
 // RenameAccountByID 就地更新某账号在用量聚合里缓存的展示名(Email),
@@ -482,18 +499,14 @@ func (u *UsageTracker) scheduleSave() {
 		return
 	}
 
-	u.saveTimeout = time.AfterFunc(3*time.Second, func() {
+	u.saveTimeout = time.AfterFunc(10*time.Second, func() {
 		u.SaveToDisk()
 		u.saveTimeoutLock.Lock()
 		u.saveTimeout = nil
 		u.saveTimeoutLock.Unlock()
 
-		u.RLock()
-		callback := u.onPayloadUpdate
-		u.RUnlock()
-		if callback != nil {
-			callback()
-		}
+		// 落盘节拍已降频至 10s,UI 通知改由 RecordUsage 显式 Unlock 后立即触发,
+		// 此处不再放行 callback ——保留它就是"落盘驱动 UI",即"拉长落盘节拍=让界面变卡"的回归。
 	})
 }
 
@@ -505,19 +518,44 @@ func (u *UsageTracker) SaveToDisk() {
 		return
 	}
 
+	// 深拷贝:Accounts map 及其 Models 子 map 按值复制后释放读锁。
+	// 只持锁到数据不再指向 u.state,避免锁内做磁盘 IO(同时彻底抹掉 recordUsage
+	// 并发写期间 RLock→MarshalIndent 之间的深浅拷贝分界竞态)。
+	accountsDeep := make(map[string]*AccountUsage, len(u.state.Accounts))
+	for k, v := range u.state.Accounts {
+		if v == nil {
+			continue
+		}
+		modelsCopy := make(map[string]*ModelUsage, len(v.Models))
+		for mk, mu := range v.Models {
+			if mu == nil {
+				continue
+			}
+			cp := *mu
+			modelsCopy[mk] = &cp
+		}
+		accCp := *v
+		accCp.Models = modelsCopy
+		accountsDeep[k] = &accCp
+	}
 	data := UsageData{
-		Usage: u.state,
+		Usage: UsageState{
+			UpdatedAt: u.state.UpdatedAt,
+			Totals:    u.state.Totals,
+			Accounts:  accountsDeep,
+		},
 	}
 	u.RUnlock()
 
-	bytesData, err := json.MarshalIndent(data, "", "  ")
+	// Marshal 而非 MarshalIndent:体积小、CPU 更省;配 fileutil.WriteFileAtomic
+	// (tmp+fsync+rename),磁盘写满/掉电不再截断 usage.json。
+	bytesData, err := json.Marshal(data)
 	if err != nil {
 		fmt.Printf("[UsageTracker] Failed to marshal usage: %v\n", err)
 		return
 	}
 
-	err = os.WriteFile(path, bytesData, 0644)
-	if err != nil {
+	if err := fileutil.WriteFileAtomic(path, bytesData, 0644); err != nil {
 		fmt.Printf("[UsageTracker] Failed to write usage: %v\n", err)
 	}
 }

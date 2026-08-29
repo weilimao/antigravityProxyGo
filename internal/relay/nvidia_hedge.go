@@ -109,7 +109,11 @@ func hedgedUpstreamDo(parent context.Context, client *http.Client, primary *http
 
 	// 以下变量仅被本 goroutine(select 循环)读写,buildHedge 亦在本 goroutine 同步执行,
 	// 分支协程只往 outcomes 发送,不与本区共享变量。
-	var hedgeCancels []context.CancelFunc
+	// hedgeCancels 改为 map[分支序号]cancel:胜方裁决时只能取消「败方」,绝不能顺手取消掉
+	// 胜者自己的派生 ctx —— 胜方响应体读取还在运行,自己 cancel 自己 = 自断流。
+	// (旧 []slice 版本在"对冲胜"路径会连带取消胜方,触发下游 ReadAll：context canceled → 502。
+	//  新测试 TestHandleNvidia_HedgeTriggerLog 首次把这条回归显化,工程上必须戒掉。)
+	hedgeCancels := make(map[int]context.CancelFunc)
 	firedHedges := 0
 
 	// fireAll 触发时同时轰出全部对冲;候选耗尽的分支被 buildHedge 静默跳过。
@@ -121,7 +125,7 @@ func hedgedUpstreamDo(parent context.Context, client *http.Client, primary *http
 				cancel()
 				continue
 			}
-			hedgeCancels = append(hedgeCancels, cancel)
+			hedgeCancels[i] = cancel
 			firedHedges++
 			launch(i, req)
 		}
@@ -158,10 +162,12 @@ func hedgedUpstreamDo(parent context.Context, client *http.Client, primary *http
 		select {
 		case out := <-outcomes:
 			if out.err == nil && out.resp != nil {
-				// 首个响应头到达者胜:取消全部对冲派生 ctx;对冲胜时一并掐断败方主请求,
+				// 首个响应头到达者胜:只取消「败方」对冲派生 ctx(跳过胜方),
 				// 收割其余已发分支(自然终结或已被 cancel 的分支,结局都会被收割读取)。
-				for _, c := range hedgeCancels {
-					c()
+				for idx, c := range hedgeCancels {
+					if idx != out.idx {
+						c()
+					}
 				}
 				if out.idx != 0 {
 					primaryCancel() // [F1] 僵尸主请求立即断流,不烧剩余算力

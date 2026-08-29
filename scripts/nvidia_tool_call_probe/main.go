@@ -8,6 +8,7 @@
 //
 //	go run ./scripts/nvidia_tool_call_probe                                    # 默认跑 kimi-k3 (max 思考等级)
 //	go run ./scripts/nvidia_tool_call_probe -models "moonshotai/kimi-k3,meta/llama-3.3-70b-instruct"
+//	go run ./scripts/nvidia_tool_call_probe -models "deepseek-ai/deepseek-v4-pro-0813"
 //	go run ./scripts/nvidia_tool_call_probe -effort high                      # 指定思考等级
 //	go run ./scripts/nvidia_tool_call_probe -token nvapi-XXXX                  # 覆盖 token
 //	go run ./scripts/nvidia_tool_call_probe -prompt "自定义强制工具调用 prompt"
@@ -772,5 +773,3 @@ func main() {
 		fmt.Printf("\n[汇总日志] %s\n", summaryFile)
 	}
 }
-
-

@@ -23,3 +23,6 @@ constants.js
 languageServer.js
 main.js
 preload.js
+
+# 临时备份文件
+*.bak

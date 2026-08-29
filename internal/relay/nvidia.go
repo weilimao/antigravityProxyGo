@@ -554,150 +554,177 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				h.log("🔄 [NVIDIA 中继 429 重试 %d/%d] 账号 %s 遇到 429 限流，等待 2 秒后原地重试...", singleAttempt, maxSingleAcc429Retries, poolAccount.Email)
 			}
 
-		// ── 对冲请求(可选,默认关):本号轮换的首个 Do 在阈值内未回响应头时,用池内其他账号
-		// 同时轰出 maxParallel-1 份相同请求竞速,谁先回响应头用谁。仅 singleAttempt==1 启用:
-		// 429 原地重试、蓄流回放、兜底代理轮一律裸 Do,避免对冲放大重试导致上游计费失控。
-		// 契约见 nvidia_hedge.go(差错不构成胜负;败方收割;主 ctx 绝不被本路径 cancel)。
-		var resp *http.Response
-		var errDo error
-		if h.isNvidiaHedgeEnabledSafe() && singleAttempt == 1 && len(activeAvailable) > 1 {
-			hedgeDelayMs := h.getNvidiaHedgeDelayMsSafe()
-			hedgeImmediate := h.isNvidiaHedgeImmediateSafe()
-			maxParallel := h.getNvidiaHedgeMaxParallelSafe()
-			if maxParallel < 2 {
-				maxParallel = 2
-			}
-			// hedgeAccs: 对冲分支序号 → 已占账号;claimed: 主号+已发对冲号,保证各对冲号互不相同
-			// (同账号补发大概率落同一副本队列,毫无对冲价值)。两个表均只被 buildHedge 在本
-			// goroutine 同步写入、胜者判定后在本 goroutine 读取,无跨协程共享。
-			hedgeAccs := make(map[int]*account.Account, maxParallel-1)
-			claimed := map[string]bool{poolAccount.ID: true}
-			buildHedge := func(hctx context.Context, hedgeIdx int) (*http.Request, error) {
-				// 择对冲号:排除主号与已发对冲号;并发过滤优先,择号口径与主号一致。必须绕开
-				// sticky 通道(GetOrAssignAccount 见旧绑定不在候选即重绑,会把会话粘性漂到对冲号
-				// —— 主若最终胜出,粘性就错了),固定走 round-robin 计数最小分支,粘性重绑留待胜者出炉。
-				// 本闭包由 hedgedUpstreamDo 在计时器到点时同步调用(同 goroutine),写 hedgeAccs 无竞争。
-				// [F2] 候选集现场刷新:timer 最长 60s 才触发,attempt 循环开头的 activeAvailable 快照
-				// 期间可能已有账号被并行请求打挂进冷却/禁用;直接重拉可用集再减 skipped/claimed,
-				// 避免对冲选中一个其实已经坏掉的号白空转一次。
-				cands := make([]*account.Account, 0, len(activeAvailable)-1)
-				for _, cand := range h.accountMgr.GetAvailableAccountsForChannel(nvidiaChannel, inModel) {
-					if !claimed[cand.ID] && !skippedAccounts[cand.ID] {
-						cands = append(cands, cand)
+			// ── 对冲请求(可选,默认关):本号轮换的首个 Do 在阈值内未回响应头时,用池内其他账号
+			// 同时轰出 maxParallel-1 份相同请求竞速,谁先回响应头用谁。仅 singleAttempt==1 启用:
+			// 429 原地重试、蓄流回放、兜底代理轮一律裸 Do,避免对冲放大重试导致上游计费失控。
+			// 契约见 nvidia_hedge.go(差错不构成胜负;败方收割;主 ctx 绝不被本路径 cancel)。
+			var resp *http.Response
+			var errDo error
+			if h.isNvidiaHedgeEnabledSafe() && singleAttempt == 1 && len(activeAvailable) > 1 {
+				hedgeDelayMs := h.getNvidiaHedgeDelayMsSafe()
+				hedgeImmediate := h.isNvidiaHedgeImmediateSafe()
+				maxParallel := h.getNvidiaHedgeMaxParallelSafe()
+				if maxParallel < 2 {
+					maxParallel = 2
+				}
+				// hedgeAccs: 对冲分支序号 → 已占账号;claimed: 主号+已发对冲号,保证各对冲号互不相同
+				// (同账号补发大概率落同一副本队列,毫无对冲价值)。两个表均只被 buildHedge 在本
+				// goroutine 同步写入、胜者判定后在本 goroutine 读取,无跨协程共享。
+				hedgeAccs := make(map[int]*account.Account, maxParallel-1)
+				claimed := map[string]bool{poolAccount.ID: true}
+				buildHedge := func(hctx context.Context, hedgeIdx int) (*http.Request, error) {
+					// 扳机日志(可观测性):buildHedge 首次被调 = 对冲计时器到点/即刻同刻轰出。
+					// 不打在 hedgedUpstreamDo 内部,是为了保持原语无日志依赖;打在 nvidia.go 的
+					// 封装层(此处)即可用 poolAccount/hedgeDelayMs/maxParallel 这些调用方上下文。
+					if hedgeIdx == 1 {
+						if hedgeImmediate {
+							h.log("⚡ [NVIDIA 对冲] 即刻竞赛:主号[%s] 与对冲分支同刻出发(共 %d 条参赛分支)...", poolAccount.Email, maxParallel)
+						} else {
+							h.log("⏱️ [NVIDIA 对冲] 主号[%s] 首帧超阈值 %dms 未回,触发对冲:轰出 %d 份竞速分支(共 %d 条参赛分支)...", poolAccount.Email, hedgeDelayMs, maxParallel-1, maxParallel)
+						}
 					}
+					// 择对冲号:排除主号与已发对冲号;并发过滤优先,择号口径与主号一致。必须绕开
+					// sticky 通道(GetOrAssignAccount 见旧绑定不在候选即重绑,会把会话粘性漂到对冲号
+					// —— 主若最终胜出,粘性就错了),固定走 round-robin 计数最小分支,粘性重绑留待胜者出炉。
+					// 本闭包由 hedgedUpstreamDo 在计时器到点时同步调用(同 goroutine),写 hedgeAccs 无竞争。
+					// [F2] 候选集现场刷新:timer 最长 60s 才触发,attempt 循环开头的 activeAvailable 快照
+					// 期间可能已有账号被并行请求打挂进冷却/禁用;直接重拉可用集再减 skipped/claimed,
+					// 避免对冲选中一个其实已经坏掉的号白空转一次。
+					cands := make([]*account.Account, 0, len(activeAvailable)-1)
+					for _, cand := range h.accountMgr.GetAvailableAccountsForChannel(nvidiaChannel, inModel) {
+						if !claimed[cand.ID] && !skippedAccounts[cand.ID] {
+							cands = append(cands, cand)
+						}
+					}
+					if len(cands) == 0 {
+						// 无候选告警(原静默退化):把「其他号冷却/禁用/模型不匹配」显性化,用户能分辨"对冲没开"还是"开了但没号"。
+						if hedgeIdx == 1 {
+							h.log("⚠️ [NVIDIA 对冲] 无可选候选账号(其他号冷却/禁用/不支持该模型),退化为裸 Do 等主号[%s] 响应", poolAccount.Email)
+						}
+						return nil, errNoHedgeCandidate
+					}
+					var picked *account.Account
+					if hf := h.accountMgr.FilterByConcurrency(cands, limit); len(hf) > 0 {
+						picked = h.pickNvidiaAccount("round-robin", "", hf)
+					} else {
+						picked = h.accountMgr.LeastLoadedAccount(cands)
+					}
+					if picked == nil {
+						return nil, errNoHedgeCandidate
+					}
+					h.accountMgr.AcquireAccount(picked.ID)
+					claimed[picked.ID] = true
+					hedgeAccs[hedgeIdx] = picked
+					// 对冲号 URL 解析与主号同口径:Worker 激活时目标为 Worker 地址,
+					// 经 X-Target-Upstream 透传对冲号真实上游;否则直连对冲号 BaseURL。
+					hedgeBase := strings.TrimRight(picked.BaseURL, "/")
+					if workerProxyActive {
+						hedgeBase = strings.TrimRight(h.getNvidiaWorkerProxyURLSafe(), "/")
+					}
+					hreq, errH := http.NewRequestWithContext(hctx, http.MethodPost, BuildOpenAIChatURL(hedgeBase), bytes.NewReader(upstreamBody))
+					if errH != nil {
+						delete(hedgeAccs, hedgeIdx)
+						delete(claimed, picked.ID)
+						h.accountMgr.ReleaseAccount(picked.ID)
+						return nil, errH
+					}
+					hreq.Header.Set("Content-Type", "application/json")
+					hreq.Header.Set("Authorization", "Bearer "+picked.AccessToken)
+					hreq.Header.Set("Accept", "application/json")
+					if strings.TrimSpace(picked.EgressIP) != "" {
+						hreq.Header.Set("X-Egress-IP", strings.TrimSpace(picked.EgressIP))
+					}
+					if workerProxyActive {
+						hreq.Header.Set("X-Target-Upstream", strings.TrimRight(picked.BaseURL, "/"))
+					}
+					// 分支出发日志:对冲号已占并发槽且请求构造完成才宣告,避免假出发。
+					// egress 后缀与主号日志同口径:仅对冲号配置了 EgressIP 时才追加 IP(隐私可观测一致)。
+					hedgeEgressTag := ""
+					if strings.TrimSpace(picked.EgressIP) != "" {
+						hedgeEgressTag = " (IP: " + strings.TrimSpace(picked.EgressIP) + ")"
+					}
+					h.log("⚡ [NVIDIA 对冲] 分支%d 出发: 账号 %s%s", hedgeIdx, picked.Email, hedgeEgressTag)
+					return hreq, nil
 				}
-				if len(cands) == 0 {
-					return nil, errNoHedgeCandidate
+				hres := hedgedUpstreamDo(r.Context(), httpClient, req, time.Duration(hedgeDelayMs)*time.Millisecond, hedgeImmediate, maxParallel, buildHedge)
+				resp, errDo = hres.resp, hres.err
+				// 裁决日志的扳机描述:即刻模式不再以毫秒阈值表述。
+				hedgeTriggerDesc := fmt.Sprintf("(%dms阈值)", hedgeDelayMs)
+				if hedgeImmediate {
+					hedgeTriggerDesc = "(即刻轰出,不等延迟)"
 				}
-				var picked *account.Account
-				if hf := h.accountMgr.FilterByConcurrency(cands, limit); len(hf) > 0 {
-					picked = h.pickNvidiaAccount("round-robin", "", hf)
-				} else {
-					picked = h.accountMgr.LeastLoadedAccount(cands)
-				}
-				if picked == nil {
-					return nil, errNoHedgeCandidate
-				}
-				h.accountMgr.AcquireAccount(picked.ID)
-				claimed[picked.ID] = true
-				hedgeAccs[hedgeIdx] = picked
-				// 对冲号 URL 解析与主号同口径:Worker 激活时目标为 Worker 地址,
-				// 经 X-Target-Upstream 透传对冲号真实上游;否则直连对冲号 BaseURL。
-				hedgeBase := strings.TrimRight(picked.BaseURL, "/")
-				if workerProxyActive {
-					hedgeBase = strings.TrimRight(h.getNvidiaWorkerProxyURLSafe(), "/")
-				}
-				hreq, errH := http.NewRequestWithContext(hctx, http.MethodPost, BuildOpenAIChatURL(hedgeBase), bytes.NewReader(upstreamBody))
-				if errH != nil {
-					delete(hedgeAccs, hedgeIdx)
-					delete(claimed, picked.ID)
-					h.accountMgr.ReleaseAccount(picked.ID)
-					return nil, errH
-				}
-				hreq.Header.Set("Content-Type", "application/json")
-				hreq.Header.Set("Authorization", "Bearer "+picked.AccessToken)
-				hreq.Header.Set("Accept", "application/json")
-				if strings.TrimSpace(picked.EgressIP) != "" {
-					hreq.Header.Set("X-Egress-IP", strings.TrimSpace(picked.EgressIP))
-				}
-				if workerProxyActive {
-					hreq.Header.Set("X-Target-Upstream", strings.TrimRight(picked.BaseURL, "/"))
-				}
-				return hreq, nil
-			}
-			hres := hedgedUpstreamDo(r.Context(), httpClient, req, time.Duration(hedgeDelayMs)*time.Millisecond, hedgeImmediate, maxParallel, buildHedge)
-			resp, errDo = hres.resp, hres.err
-			// 裁决日志的扳机描述:即刻模式不再以毫秒阈值表述。
-			hedgeTriggerDesc := fmt.Sprintf("(%dms阈值)", hedgeDelayMs)
-			if hedgeImmediate {
-				hedgeTriggerDesc = "(即刻轰出,不等延迟)"
-			}
-			// 并发槽配对:对冲号槽随胜负即时了结 —— 主胜释全部对冲槽;对冲胜则换绑 poolAccount
-			// 为胜号、释主槽与其余对冲槽,下方所有冷却/释放/成功路径以胜号为准(链零改动)。
-			// 败方一律不记故障、不冷却、不进 skippedAccounts:对冲失败不代表账号坏。
-			if hres.hedgeFired {
-				if hres.hedgeWon {
-					winner := hedgeAccs[hres.winnerHedgeIdx]
-					if winner == nil {
-						// 按构造不可能(buildHedge 成功即落表)。防御:账目异常时宁可多占一槽
-						// 也不误释导致计数倒挂,日志告警后按主胜处理。
-						h.log("⚠️ [NVIDIA 对冲] 胜者分支 %d 缺少账号映射(账目异常),按主胜处理", hres.winnerHedgeIdx)
+				// 并发槽配对:对冲号槽随胜负即时了结 —— 主胜释全部对冲槽;对冲胜则换绑 poolAccount
+				// 为胜号、释主槽与其余对冲槽,下方所有冷却/释放/成功路径以胜号为准(链零改动)。
+				// 败方一律不记故障、不冷却、不进 skippedAccounts:对冲失败不代表账号坏。
+				if hres.hedgeFired {
+					if hres.hedgeWon {
+						winner := hedgeAccs[hres.winnerHedgeIdx]
+						if winner == nil {
+							// 按构造不可能(buildHedge 成功即落表)。防御:账目异常时宁可多占一槽
+							// 也不误释导致计数倒挂,日志告警后按主胜处理。
+							h.log("⚠️ [NVIDIA 对冲] 胜者分支 %d 缺少账号映射(账目异常),按主胜处理", hres.winnerHedgeIdx)
+							for _, acc := range hedgeAccs {
+								h.accountMgr.ReleaseAccount(acc.ID)
+							}
+						} else {
+							h.accountMgr.ReleaseAccount(poolAccount.ID)
+							for idx, acc := range hedgeAccs {
+								if idx != hres.winnerHedgeIdx {
+									h.accountMgr.ReleaseAccount(acc.ID)
+								}
+							}
+							h.log("⚡ [NVIDIA 对冲] 参赛=%s %s → 胜:对冲%d[%s] 率先响应,切换为胜号继续(主号[%s]及其余败方对冲已断流释放并发槽,不记故障、不冷却)。", formatNvidiaHedgeRace(poolAccount.Email, hedgeAccs), hedgeTriggerDesc, hres.winnerHedgeIdx, winner.Email, poolAccount.Email)
+							poolAccount = winner
+							// sticky 模式把会话粘性重绑到胜号:对冲胜通常意味着原号所落副本队列恶化,
+							// 同会话后续请求应沿用胜号。GetOrAssignAccount 见旧绑定不在候选即重绑。
+							if lbMode == "sticky" && h.sessionRouter != nil {
+								h.sessionRouter.GetOrAssignAccount(sessionKey, []*account.Account{winner}, nil)
+							}
+						}
+					} else {
 						for _, acc := range hedgeAccs {
 							h.accountMgr.ReleaseAccount(acc.ID)
 						}
-					} else {
-						h.accountMgr.ReleaseAccount(poolAccount.ID)
-						for idx, acc := range hedgeAccs {
-							if idx != hres.winnerHedgeIdx {
-								h.accountMgr.ReleaseAccount(acc.ID)
-							}
+						if errDo == nil && len(hedgeAccs) > 0 {
+							h.log("⚡ [NVIDIA 对冲] 参赛=%s %s → 胜:主[%s] 率先回响应头,全部 %d 路败方对冲已取消(不记故障、不冷却,并发槽即时释放)。", formatNvidiaHedgeRace(poolAccount.Email, hedgeAccs), hedgeTriggerDesc, poolAccount.Email, len(hedgeAccs))
 						}
-						h.log("⚡ [NVIDIA 对冲] 参赛=%s %s → 胜:对冲%d[%s] 率先响应,切换为胜号继续(主号[%s]及其余败方对冲已断流释放并发槽,不记故障、不冷却)。", formatNvidiaHedgeRace(poolAccount.Email, hedgeAccs), hedgeTriggerDesc, hres.winnerHedgeIdx, winner.Email, poolAccount.Email)
-						poolAccount = winner
-						// sticky 模式把会话粘性重绑到胜号:对冲胜通常意味着原号所落副本队列恶化,
-						// 同会话后续请求应沿用胜号。GetOrAssignAccount 见旧绑定不在候选即重绑。
-						if lbMode == "sticky" && h.sessionRouter != nil {
-							h.sessionRouter.GetOrAssignAccount(sessionKey, []*account.Account{winner}, nil)
-						}
-					}
-				} else {
-					for _, acc := range hedgeAccs {
-						h.accountMgr.ReleaseAccount(acc.ID)
-					}
-					if errDo == nil && len(hedgeAccs) > 0 {
-						h.log("⚡ [NVIDIA 对冲] 参赛=%s %s → 胜:主[%s] 率先回响应头,全部 %d 路败方对冲已取消(不记故障、不冷却,并发槽即时释放)。", formatNvidiaHedgeRace(poolAccount.Email, hedgeAccs), hedgeTriggerDesc, poolAccount.Email, len(hedgeAccs))
 					}
 				}
+			} else {
+				// 裸 Do 路径的「对冲未生效」显因日志:对冲开关开着但此刻号池可用账号 ≤1 时,
+				// 原设计完全静默,用户无法区分「没开对冲」与「开了但没号可对冲」。仅在首次尝试打一行,
+				// 429 原地重试轮(singleAttempt>1)不重复刷。
+				if h.isNvidiaHedgeEnabledSafe() && singleAttempt == 1 && len(activeAvailable) <= 1 {
+					h.log("⚠️ [NVIDIA 对冲] 开关已启用但当前可用账号仅 %d 个 (需 ≥2),无可对冲候选,本请求按裸 Do 执行", len(activeAvailable))
+				}
+				resp, errDo = httpClient.Do(req)
 			}
-		} else {
-			resp, errDo = httpClient.Do(req)
-		}
-		if errDo != nil {
-			// 客户端主动取消特判:r.Context() 被撤销时,上游 Do() 瞬间返回 context.Canceled
-			// (请求未真正发往上游)。此时该号本身健康,绝不能拉黑 60s 冷却,也不能继续换号
-			// (换下一个号仍会被同一已取消的 context 砍掉,把整个号池挨个"砍头"刷屏)。
-			// 直接整体退出,不写响应(客户端已断开,写了也是对空管道写)。
-			if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
-				h.log("⏹️ [NVIDIA 中继] 账号 %s 上游请求被客户端取消(ctx err=%v),终止换号重试(不冷冻该号)。", poolAccount.Email, errDo)
+			if errDo != nil {
+				// 客户端主动取消特判:r.Context() 被撤销时,上游 Do() 瞬间返回 context.Canceled
+				// (请求未真正发往上游)。此时该号本身健康,绝不能拉黑 60s 冷却,也不能继续换号
+				// (换下一个号仍会被同一已取消的 context 砍掉,把整个号池挨个"砍头"刷屏)。
+				// 直接整体退出,不写响应(客户端已断开,写了也是对空管道写)。
+				if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
+					h.log("⏹️ [NVIDIA 中继] 账号 %s 上游请求被客户端取消(ctx err=%v),终止换号重试(不冷冻该号)。", poolAccount.Email, errDo)
+					lastErr = errDo
+					// 客户端断开:本次请求结束,释放并发槽。
+					h.accountMgr.ReleaseAccount(poolAccount.ID)
+					return
+				}
+				h.log("⚠️ [NVIDIA 中继] 账号 %s 访问上游失败: %v", poolAccount.Email, errDo)
+				skippedAccounts[poolAccount.ID] = true
 				lastErr = errDo
-				// 客户端断开:本次请求结束,释放并发槽。
+				lastResp = nil
+				// 网络错误：短期冷静该号 60s，换号重试
+				h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, time.Now().UnixNano()/1e6+60*1000, nvidiaChannel, inModel)
+				h.sessionRouter.UnbindSession(sessionKey)
+				// 网络错误换号:本次请求在该号上结束,释放并发槽。
 				h.accountMgr.ReleaseAccount(poolAccount.ID)
-				return
+				break
 			}
-			h.log("⚠️ [NVIDIA 中继] 账号 %s 访问上游失败: %v", poolAccount.Email, errDo)
-			skippedAccounts[poolAccount.ID] = true
-			lastErr = errDo
-			lastResp = nil
-			// 网络错误：短期冷静该号 60s，换号重试
-			h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, time.Now().UnixNano()/1e6+60*1000, nvidiaChannel, inModel)
-			h.sessionRouter.UnbindSession(sessionKey)
-			// 网络错误换号:本次请求在该号上结束,释放并发槽。
-			h.accountMgr.ReleaseAccount(poolAccount.ID)
-			break
-		}
 
-		// 显式记录与上游协商的 HTTP 协议版本（HTTP/1.1 或 HTTP/2.0），用于验证传输层优化是否生效。
-		h.log("🔍 [NVIDIA 中继] 账号 %s 上游协商协议: %s (Status: %d)", poolAccount.Email, resp.Proto, resp.StatusCode)
+			// 显式记录与上游协商的 HTTP 协议版本（HTTP/1.1 或 HTTP/2.0），用于验证传输层优化是否生效。
+			h.log("🔍 [NVIDIA 中继] 账号 %s 上游协商协议: %s (Status: %d)", poolAccount.Email, resp.Proto, resp.StatusCode)
 
 			// 处理 429 限流：5 次以内原地退避 2 秒重试，重试 5 次均 429 失败才冷冻切号
 			if resp.StatusCode == http.StatusTooManyRequests {

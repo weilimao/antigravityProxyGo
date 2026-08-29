@@ -29,8 +29,8 @@ import (
 )
 
 const (
-	sampleInterval  = 5 * time.Second // 采样周期:5 秒
-	keepSnapshots   = 6               // 滚动保留最近 6 份快照 = 最近 30 秒现场
+	sampleInterval  = 30 * time.Second // 采样周期:30s(原 5s:每次必做一次 runtime.GC()/全栈快照+双次原子写,常态周期性扰动主进程,故降频)
+	keepSnapshots   = 6                // 滚动保留最近 6 份快照 = 最近约 3 分钟现场
 	snapshotNameFmt = "goroutines_%02d.txt"
 )
 
@@ -84,7 +84,7 @@ func writeSnapshot(dir string, idx *int) {
 	}
 
 	// 先收集到内存 buffer,再一次性写盘,避免半写入文件被取证时显示截断
-	runtime.GC() // 触发一次 GC,使 goroutine 状态更稳定可读 (可选)
+	// (注:不再强制 runtime.GC();GC 主收益只在采样意义,30s 已可满足取证,且能移除每 5s 的 Full GC 停顿)
 
 	// header 提供时间戳与 goroutine 计数,便于翻阅
 	buf := make([]byte, 0, 64*1024)

@@ -430,24 +430,30 @@ func (r *Router) LoadFromDisk() {
 }
 
 func (r *Router) SaveToDisk() {
-	r.Lock()
-	if r.persistPath == "" {
-		r.Unlock()
+	// 深拷贝:读锁内先取会话 map,Marshal 时不还依赖写锁/读锁,写盘阶段与并发会话请求
+	// 不再共享同一底层数据,消除"marshal/原子写期间阻塞路由" 的旧卡顿。
+	r.RLock()
+	path := r.persistPath
+	if path == "" {
+		r.RUnlock()
 		return
 	}
-	data, err := json.MarshalIndent(r.sessionMap, "", "  ")
-	r.Unlock()
+	data := make(map[string]SessionEntry, len(r.sessionMap))
+	for k, v := range r.sessionMap {
+		data[k] = v
+	}
+	r.RUnlock()
 
+	// Marshal 而非 MarshalIndent:会话绑定数量小,机器化序列化在写盘上 CPU/体积更优。
+	bytesData, err := json.Marshal(data)
 	if err != nil {
 		return
 	}
 
-	r.Lock()
 	// 原子写:磁盘写满不再把会话绑定文件截成半截(老 os.WriteFile 的截断事故源)。
-	if err := fileutil.WriteFileAtomic(r.persistPath, data, 0644); err != nil {
+	if err := fileutil.WriteFileAtomic(path, bytesData, 0644); err != nil {
 		fmt.Printf("[SessionRouter] 落盘失败: %v\n", err)
 	}
-	r.Unlock()
 }
 
 func (r *Router) scheduleSave() {

@@ -85,10 +85,19 @@ func (pc *PacketCapturer) SaveToDisk() {
 		pc.RUnlock()
 		return
 	}
-	data := pc.packets
+	// 深拷贝:逐元素值拷贝 *CapturedPacket,与 RecordUsage 竞态同理,
+	// 释放锁后 Marshal 期间同 packet 的并发 SavePacket 不再与读操作共享底层数组。
+	data := make([]CapturedPacket, 0, len(pc.packets))
+	for _, p := range pc.packets {
+		if p == nil {
+			continue
+		}
+		cp := *p
+		data = append(data, cp)
+	}
 	pc.RUnlock()
 
-	bytesData, err := json.MarshalIndent(data, "", "  ")
+	bytesData, err := json.Marshal(data)
 	if err != nil {
 		fmt.Printf("[PacketCapturer] Failed to marshal packets: %v\n", err)
 		return
@@ -134,7 +143,7 @@ func (pc *PacketCapturer) scheduleSave() {
 		return
 	}
 
-	pc.saveTimeout = time.AfterFunc(3*time.Second, func() {
+	pc.saveTimeout = time.AfterFunc(10*time.Second, func() {
 		pc.SaveToDisk()
 		pc.saveTimeoutLock.Lock()
 		pc.saveTimeout = nil
