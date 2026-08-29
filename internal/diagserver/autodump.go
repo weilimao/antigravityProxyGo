@@ -23,6 +23,8 @@ import (
 	"runtime/pprof"
 	"strconv"
 	"sync"
+
+	"antigravity-proxy/internal/fileutil"
 	"time"
 )
 
@@ -95,19 +97,15 @@ func writeSnapshot(dir string, idx *int) {
 	_ = p.WriteTo(&byteWriter{buf: &buf}, 1)
 
 	fname := filepath.Join(dir, fmt.Sprintf(snapshotNameFmt, *idx%keepSnapshots))
-	// 先写临时文件再 rename,降低写过程中被取证读到截断内容的几率
-	tmp := fname + ".tmp"
-	if err := os.WriteFile(tmp, buf, 0644); err != nil {
+	// 共享原子写(tmp+fsync+rename):写满磁盘时静默失败,绝不留下半截快照误导取证。
+	if err := fileutil.WriteFileAtomic(fname, buf, 0644); err != nil {
 		return
 	}
-	_ = os.Rename(tmp, fname)
 	*idx++
 
 	// 同时写一份 "latest" 别名,方便优先查看最末态
 	latest := filepath.Join(dir, "goroutines_LATEST.txt")
-	tmpLatest := latest + ".tmp"
-	_ = os.WriteFile(tmpLatest, buf, 0644)
-	_ = os.Rename(tmpLatest, latest)
+	_ = fileutil.WriteFileAtomic(latest, buf, 0644)
 }
 
 // byteWriter 仅实现 io.Writer,持有 *[]byte 以最小开销追加。

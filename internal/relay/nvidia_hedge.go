@@ -13,7 +13,7 @@ package relay
 //     断流蓄流回放、兜底代理轮一律不对冲 —— 避免对冲放大重试,计费失控。
 //  2. 差错不构成胜负:单分支 transport 错误只淘汰自己,其余分支继续等;全部皆错才败。
 //     因此「主请求提前失败」不会提前触发对冲(保持既有冷却/换号链语义逐字不变),
-//     对冲仅由 delay 计时器触发 —— 「超过 N 毫秒无响应头才补一枪」是配置的唯一语义。
+//     对冲仅由配置扳机触发:delay 计时器(默认)或即刻模式(开局即全员竞速)。
 //  3. 败方不计故障、不冷却、不解粘性绑定 —— 对冲未成功不代表账号坏。
 //  4. 竞速形态(maxParallel≥2)下所有分支(含主请求)都挂在派生可取消 ctx 上:对冲胜时
 //     立即掐断败方主请求(否则它会在上游继续跑完整 prefill/decode 白烧全程算力);主胜时
@@ -58,26 +58,28 @@ type hedgeResult struct {
 	winnerHedgeIdx int            // 胜方对冲分支序号(1..maxParallel-1;仅 hedgeWon 时有意义)
 }
 
-// hedgedUpstreamDo 竞速执行主请求与(延迟触发的)0..N 个对冲请求,返回胜方。
+// hedgedUpstreamDo 竞速执行主请求与 0..N 个对冲请求,返回胜方。
 //
 // 参数:
 //   - parent:      客户端请求 ctx(通常 r.Context()),对冲请求由此派生;parent 一旦取消
 //     (客户端断开),全部分支都会因 ctx 传播而错,Err 将是 context.Canceled 家族 —
 //     与裸 Do 在客户端断开时的返回口径完全一致,调用方既有特判不受影响。
 //   - primary:     调用方已构造好的主请求(其 ctx 绑定由调用方负责,本函数不改动)。
-//   - delay:       触发对冲的等待阈值;主请求在此之前返回(无论成败)→ 永不对冲。
+//   - delay:       触发对冲的等待阈值(仅延迟模式生效);主请求在此之前返回(无论成败)→ 永不对冲。
+//   - immediate:   即刻竞赛模式开关。true 时放弃定时器,主请求与全部对冲同刻出发
+//     (每次请求上游计费恒为 maxParallel 倍,用于极致首帧场景)。
 //   - maxParallel: 总参赛请求数(含主请求),<=1 时直接退化为单边等待主请求。
-//     计时器到点时最多补发 maxParallel-1 个对冲;buildHedge 返回错误即少发一个
+//     触发时最多补发 maxParallel-1 个对冲;buildHedge 返回错误即少发一个
 //     (候选耗尽自动降级),绝不为凑数而复用同一账号。
 //   - buildHedge:  惰性构造第 hedgeIdx 个对冲请求(择号/占并发槽/建请求体副本),
-//     hedgeIdx 从 1 开始递增;在计时器到点时于本 goroutine 同步调用 —— 因此其闭包
+//     hedgeIdx 从 1 开始递增;于触发时刻在本 goroutine 同步调用 —— 因此其闭包
 //     捕获的调用方变量无数据竞争。返回错误(含 errNoHedgeCandidate)即跳过该分支。
 //
 // 资源纪律:败方若已拿到响应(纳秒级同帧完成),收割协程负责关闭其 Body;
 // 败方仍在排队则 cancel 其派生 ctx(主侧同样持有派生 cancel,对冲胜即掐断——
 // 这是刻意的:主败方若不掐,会在上游继续跑完整 prefill/decode,白烧全程算力)。
 // 收割协程按「已发分支数-1」精确沥干共享通道后退出,不残留常驻协程。
-func hedgedUpstreamDo(parent context.Context, client *http.Client, primary *http.Request, delay time.Duration, maxParallel int, buildHedge func(ctx context.Context, hedgeIdx int) (*http.Request, error)) hedgeResult {
+func hedgedUpstreamDo(parent context.Context, client *http.Client, primary *http.Request, delay time.Duration, immediate bool, maxParallel int, buildHedge func(ctx context.Context, hedgeIdx int) (*http.Request, error)) hedgeResult {
 	if maxParallel < 1 {
 		maxParallel = 1
 	}
@@ -105,15 +107,12 @@ func hedgedUpstreamDo(parent context.Context, client *http.Client, primary *http
 	primary = primary.WithContext(primaryCtx)
 	launch(0, primary)
 
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-
 	// 以下变量仅被本 goroutine(select 循环)读写,buildHedge 亦在本 goroutine 同步执行,
 	// 分支协程只往 outcomes 发送,不与本区共享变量。
 	var hedgeCancels []context.CancelFunc
 	firedHedges := 0
 
-	// fireAll 计时器到点同时轰出全部对冲;候选耗尽的分支被 buildHedge 静默跳过。
+	// fireAll 触发时同时轰出全部对冲;候选耗尽的分支被 buildHedge 静默跳过。
 	fireAll := func() {
 		for i := 1; i <= hedgeTotal; i++ {
 			hctx, cancel := context.WithCancel(parent)
@@ -139,6 +138,17 @@ func hedgedUpstreamDo(parent context.Context, client *http.Client, primary *http
 				}
 			}
 		}()
+	}
+
+	// 点火:延迟模式挂定时器;即刻模式此刻于本 goroutine 同步轰出全部对冲,
+	// 定时器通道置 nil 使 select 的 timer 分支永久休眠(副作用纪律与定时器路径一致)。
+	var timerC <-chan time.Time
+	if immediate {
+		fireAll()
+	} else {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		timerC = timer.C
 	}
 
 	dead := 0            // 已终结分支数(含主)
@@ -187,7 +197,7 @@ func hedgedUpstreamDo(parent context.Context, client *http.Client, primary *http
 				}
 				return hedgeResult{err: out.err, hedgeFired: firedHedges > 0}
 			}
-		case <-timer.C:
+		case <-timerC:
 			fireAll()
 		}
 	}
@@ -232,6 +242,19 @@ func (h *APICompatHandler) getNvidiaHedgeMaxParallelSafe() (n int) {
 		}
 	}()
 	return h.settingsMgr.GetNvidiaHedgeMaxParallel()
+}
+
+// isNvidiaHedgeImmediateSafe 读取即刻竞赛开关;settingsMgr 未注入/panic 时回退 false(延迟模式)。
+func (h *APICompatHandler) isNvidiaHedgeImmediateSafe() (enabled bool) {
+	if h == nil || h.settingsMgr == nil {
+		return false
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			enabled = false
+		}
+	}()
+	return h.settingsMgr.IsNvidiaHedgeImmediate()
 }
 
 // ============ 裁决日志渲染(纯函数,可单测) ============

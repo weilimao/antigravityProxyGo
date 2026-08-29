@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/db"
+	"antigravity-proxy/internal/fileutil"
 )
 
 // 持久化簇：scheduleSave / SaveToDisk / LoadFromDisk / seedEmptyTrends。
@@ -97,7 +98,7 @@ func (t *Tracker) SaveToDisk() {
 		return
 	}
 
-	err = os.WriteFile(path, bytesData, 0644)
+	err = fileutil.WriteFileAtomic(path, bytesData, 0644)
 	if err != nil {
 		fmt.Printf("[StatsTracker] Failed to write stats: %v\n", err)
 		return

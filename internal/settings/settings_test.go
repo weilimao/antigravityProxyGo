@@ -454,3 +454,58 @@ func TestSettings_NvidiaWorkerProxy(t *testing.T) {
 	}
 }
 
+
+// TestLoadConfig_BakRecovery 业务回归(磁盘写满场景):settings 主配置被截断写坏时,
+// 启动自动从 .bak 快照恢复,字段值以快照为准,且主文件不被旁移。
+func TestLoadConfig_BakRecovery(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, configFileName)
+	if err := os.WriteFile(configPath, []byte(`{"relayPort":"19999","language":"en","unfin`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath+".bak", []byte(`{"relayPort":"19988","language":"en"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewManager()
+	mgr.Init(tempDir)
+
+	if got := mgr.GetRelayPort(); got != "19988" {
+		t.Fatalf("应从 .bak 恢复 relayPort=19988,实际 %q", got)
+	}
+	if got := mgr.GetLanguage(); got != "en" {
+		t.Fatalf("应从 .bak 恢复 language=en,实际 %q", got)
+	}
+	if _, err := os.Stat(configPath + ".corrupt"); !os.IsNotExist(err) {
+		t.Fatal("恢复成功不应旁移主文件")
+	}
+}
+
+// TestLoadConfig_BothCorrupt_Quarantine 业务回归:主与 .bak 双毁时,不加载脏数据、
+// 主文件旁移为 .corrupt(字节保留),后续 SaveConfig 从干净起点正常重建。
+func TestLoadConfig_BothCorrupt_Quarantine(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, configFileName)
+	if err := os.WriteFile(configPath, []byte(`{"relayPort":"1`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath+".bak", []byte(`oops`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewManager()
+	mgr.Init(tempDir)
+
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatal("双毁后主文件应被旁移")
+	}
+	if _, err := os.Stat(configPath + ".corrupt"); err != nil {
+		t.Fatal(".corrupt 罪证应存在")
+	}
+	if err := mgr.SaveConfig(); err != nil {
+		t.Fatalf("双毁旁移后保存失败: %v", err)
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatal("保存后主文件应重建")
+	}
+}

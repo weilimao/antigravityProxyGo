@@ -608,3 +608,64 @@ func TestNvidiaAccount_EgressIP(t *testing.T) {
 	}
 }
 
+
+// TestPartitionCorruptBakRecovery 业务回归(磁盘写满场景):分区主文件被 ENOSPC 截断式损坏时,
+// 启动加载自动从 .bak 快照恢复账号,不旁移主文件;恢复后下一次保存自愈主文件。
+func TestPartitionCorruptBakRecovery(t *testing.T) {
+	tmp := t.TempDir()
+	nvidiaPart := filepath.Join(tmp, "accounts_nvidia.json")
+	if err := os.WriteFile(nvidiaPart, []byte(`{"accounts":[{"email":"cut@x.dev","prov`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nvidiaPart+".bak",
+		[]byte(`{"accounts":[{"email":"recovered@x.dev","provider":"nvidia"}]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewManager()
+	m.Init(tmp)
+
+	accs := m.GetAccounts()
+	if len(accs) != 1 || accs[0].Email != "recovered@x.dev" {
+		t.Fatalf("应从 .bak 恢复 1 个账号,实际 %+v", accs)
+	}
+	// 恢复成功不旁移主文件
+	assertFileNotExists(t, nvidiaPart+".corrupt")
+	// 恢复后正常落盘 → 主文件被健康内容自愈覆盖
+	if err := m.SaveAccounts(false); err != nil {
+		t.Fatalf("恢复后保存失败: %v", err)
+	}
+	healed := readFileAccounts(t, nvidiaPart)
+	if len(healed) != 1 || healed[0].Email != "recovered@x.dev" {
+		t.Fatalf("自愈后主文件内容不符: %+v", healed)
+	}
+}
+
+// TestPartitionBothCorrupt_Quarantine 业务回归:主与 .bak 双毁时,不加载脏数据、
+// 主文件旁移为 .corrupt(字节保留可人工抢救),后续保存从空状态正常重建全新主文件。
+func TestPartitionBothCorrupt_Quarantine(t *testing.T) {
+	tmp := t.TempDir()
+	nvidiaPart := filepath.Join(tmp, "accounts_nvidia.json")
+	if err := os.WriteFile(nvidiaPart, []byte(`{"accounts":[{"email":"cut`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nvidiaPart+".bak", []byte(`also-broken`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewManager()
+	m.Init(tmp)
+
+	if got := len(m.GetAccounts()); got != 0 {
+		t.Fatalf("双毁应加载 0 账号,实际 %d", got)
+	}
+	assertFileNotExists(t, nvidiaPart)
+	raw, err := os.ReadFile(nvidiaPart + ".corrupt")
+	if err != nil || !strings.HasPrefix(string(raw), `{"accounts":[{"email":"cut`) {
+		t.Fatalf(".corrupt 罪证字节不符: %q err=%v", raw, err)
+	}
+	if err := m.SaveAccounts(false); err != nil {
+		t.Fatalf("双毁旁移后保存失败: %v", err)
+	}
+	assertFileExists(t, nvidiaPart)
+}

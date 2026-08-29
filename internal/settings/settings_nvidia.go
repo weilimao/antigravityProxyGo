@@ -259,12 +259,14 @@ func (m *Manager) SetNvidiaHedgeDelayMs(val int) error {
 	return setSetting(m, func(c *Config, v int) { c.NvidiaHedgeDelayMs = normalizeNvidiaHedgeDelayMs(v) }, val)
 }
 
-// 对冲总并发(含主请求)的默认与钳位区间。上限 5 是计费熔断:同时轰出形态下
-// 最坏上游计费 = 并发数 × 单请求预填成本,再大属于拿算力硬赌队列抽签。
+// 对冲总并发(含主请求)的默认与钳位区间。默认值 2 保守起步;上限 512 只是防脏值的
+// 硬保险丝,产品级上限在 IPC 写入处动态钳为「当前启用中的 NVIDIA 账号数」——
+// 运行时另有候选耗尽自动降级兜底,任何超限配置都不会造成超发。
+// 计费提醒:同时轰出形态下最坏上游计费 = 并发数 × 单请求预填成本。
 const (
 	defaultNvidiaHedgeMaxParallel = 2
 	minNvidiaHedgeMaxParallel     = 2
-	maxNvidiaHedgeMaxParallel     = 5
+	maxNvidiaHedgeMaxParallel     = 512
 )
 
 // normalizeNvidiaHedgeMaxParallel 读写共用归一化:<=0(未配置/旧配置)→ 默认 2,越界钳位。
@@ -289,6 +291,17 @@ func (m *Manager) GetNvidiaHedgeMaxParallel() int {
 // SetNvidiaHedgeMaxParallel 持久化对冲总并发,写前归一化钳位。
 func (m *Manager) SetNvidiaHedgeMaxParallel(val int) error {
 	return setSetting(m, func(c *Config, v int) { c.NvidiaHedgeMaxParallel = normalizeNvidiaHedgeMaxParallel(v) }, val)
+}
+
+// IsNvidiaHedgeImmediate 返回即刻竞赛开关(默认 false = 延迟对冲模式)。
+// 开启后主请求与全部对冲在 t=0 同刻发出,跳过触发延迟。
+func (m *Manager) IsNvidiaHedgeImmediate() bool {
+	return getSetting(m, func(c *Config) bool { return c.NvidiaHedgeImmediate })
+}
+
+// SetNvidiaHedgeImmediate 持久化即刻竞赛开关。
+func (m *Manager) SetNvidiaHedgeImmediate(val bool) error {
+	return setSetting(m, func(c *Config, v bool) { c.NvidiaHedgeImmediate = v }, val)
 }
 
 // 接口断言:保证 *Manager 实现 ManagerInterface(定义于 settings.go)。

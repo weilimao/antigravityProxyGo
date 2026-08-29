@@ -266,14 +266,27 @@ export function bindProxySettings(): void {
     if (txtNvidiaHedgeMaxParallel) {
         txtNvidiaHedgeMaxParallel.addEventListener('change', (e: any) => {
             const parsed = parseInt(String(e.target.value).trim(), 10);
-            // 回显与后端归一化逐位一致(settings.normalizeNvidiaHedgeMaxParallel):
-            // NaN/<=0 → 2 默认;其余钳位 [2,5]。最坏上游计费 = 并发数 倍。
-            const normalized = isNaN(parsed) || parsed <= 0 ? 2 : Math.min(5, Math.max(2, parsed));
+            // 回显与后端归一化逐位一致:NaN/<=0 → 2 默认;上限动态跟随号池
+            // (max 属性由 loadProxyState 以启用账号数写入,兜底 2)。最坏上游计费 = 并发数 倍。
+            const dynMax = Math.max(2, parseInt(txtNvidiaHedgeMaxParallel.max, 10) || 2);
+            const normalized = isNaN(parsed) || parsed <= 0 ? 2 : Math.min(dynMax, Math.max(2, parsed));
             e.target.value = String(normalized);
             try {
                 ipcRenderer.send('settings:set-nvidia-hedge-max-parallel', normalized);
             } catch (err) {
                 console.error('[SettingsController] Failed to save nvidia hedge max parallel:', err);
+            }
+        });
+    }
+
+    // 即刻竞赛开关:主与全部对冲 t=0 同刻出发(不再等触发延迟)。
+    const chkNvidiaHedgeImmediate = document.getElementById('chkNvidiaHedgeImmediate') as HTMLInputElement | null;
+    if (chkNvidiaHedgeImmediate) {
+        chkNvidiaHedgeImmediate.addEventListener('change', (e: any) => {
+            try {
+                ipcRenderer.send('settings:set-nvidia-hedge-immediate', !!e.target.checked);
+            } catch (err) {
+                console.error('[SettingsController] Failed to save nvidia hedge immediate:', err);
             }
         });
     }
@@ -427,6 +440,21 @@ export function loadProxyState(): void {
         }
         if (txtNvidiaHedgeMaxParallel && hedgeState.maxParallel !== undefined && hedgeState.maxParallel !== null) {
             txtNvidiaHedgeMaxParallel.value = String(hedgeState.maxParallel);
+        }
+        const chkNvidiaHedgeImmediate = document.getElementById('chkNvidiaHedgeImmediate') as HTMLInputElement | null;
+        if (chkNvidiaHedgeImmediate) {
+            chkNvidiaHedgeImmediate.checked = !!hedgeState.immediate;
+        }
+        // 动态上限:上限跟随当前启用中的 NVIDIA 账号数(poolSize)——
+        // 输入框 max 与 badge 同步;号池未知/为空时按 2 兜底。
+        const poolSize = Number(hedgeState.poolSize);
+        const dynMax = Math.max(2, isNaN(poolSize) ? 2 : poolSize);
+        if (txtNvidiaHedgeMaxParallel) {
+            txtNvidiaHedgeMaxParallel.max = String(dynMax);
+        }
+        const lblNvidiaHedgeMaxPool = document.getElementById('lblNvidiaHedgeMaxPool');
+        if (lblNvidiaHedgeMaxPool) {
+            lblNvidiaHedgeMaxPool.textContent = String(dynMax);
         }
     }
 }

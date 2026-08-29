@@ -562,6 +562,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		var errDo error
 		if h.isNvidiaHedgeEnabledSafe() && singleAttempt == 1 && len(activeAvailable) > 1 {
 			hedgeDelayMs := h.getNvidiaHedgeDelayMsSafe()
+			hedgeImmediate := h.isNvidiaHedgeImmediateSafe()
 			maxParallel := h.getNvidiaHedgeMaxParallelSafe()
 			if maxParallel < 2 {
 				maxParallel = 2
@@ -624,8 +625,13 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 				}
 				return hreq, nil
 			}
-			hres := hedgedUpstreamDo(r.Context(), httpClient, req, time.Duration(hedgeDelayMs)*time.Millisecond, maxParallel, buildHedge)
+			hres := hedgedUpstreamDo(r.Context(), httpClient, req, time.Duration(hedgeDelayMs)*time.Millisecond, hedgeImmediate, maxParallel, buildHedge)
 			resp, errDo = hres.resp, hres.err
+			// 裁决日志的扳机描述:即刻模式不再以毫秒阈值表述。
+			hedgeTriggerDesc := fmt.Sprintf("(%dms阈值)", hedgeDelayMs)
+			if hedgeImmediate {
+				hedgeTriggerDesc = "(即刻轰出,不等延迟)"
+			}
 			// 并发槽配对:对冲号槽随胜负即时了结 —— 主胜释全部对冲槽;对冲胜则换绑 poolAccount
 			// 为胜号、释主槽与其余对冲槽,下方所有冷却/释放/成功路径以胜号为准(链零改动)。
 			// 败方一律不记故障、不冷却、不进 skippedAccounts:对冲失败不代表账号坏。
@@ -646,7 +652,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 								h.accountMgr.ReleaseAccount(acc.ID)
 							}
 						}
-						h.log("⚡ [NVIDIA 对冲] 参赛=%s (%dms阈值) → 胜:对冲%d[%s] 率先响应,切换为胜号继续(主号[%s]及其余败方对冲已断流释放并发槽,不记故障、不冷却)。", formatNvidiaHedgeRace(poolAccount.Email, hedgeAccs), hedgeDelayMs, hres.winnerHedgeIdx, winner.Email, poolAccount.Email)
+						h.log("⚡ [NVIDIA 对冲] 参赛=%s %s → 胜:对冲%d[%s] 率先响应,切换为胜号继续(主号[%s]及其余败方对冲已断流释放并发槽,不记故障、不冷却)。", formatNvidiaHedgeRace(poolAccount.Email, hedgeAccs), hedgeTriggerDesc, hres.winnerHedgeIdx, winner.Email, poolAccount.Email)
 						poolAccount = winner
 						// sticky 模式把会话粘性重绑到胜号:对冲胜通常意味着原号所落副本队列恶化,
 						// 同会话后续请求应沿用胜号。GetOrAssignAccount 见旧绑定不在候选即重绑。
@@ -659,7 +665,7 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 						h.accountMgr.ReleaseAccount(acc.ID)
 					}
 					if errDo == nil && len(hedgeAccs) > 0 {
-						h.log("⚡ [NVIDIA 对冲] 参赛=%s (%dms阈值) → 胜:主[%s] 率先回响应头,全部 %d 路败方对冲已取消(不记故障、不冷却,并发槽即时释放)。", formatNvidiaHedgeRace(poolAccount.Email, hedgeAccs), hedgeDelayMs, poolAccount.Email, len(hedgeAccs))
+						h.log("⚡ [NVIDIA 对冲] 参赛=%s %s → 胜:主[%s] 率先回响应头,全部 %d 路败方对冲已取消(不记故障、不冷却,并发槽即时释放)。", formatNvidiaHedgeRace(poolAccount.Email, hedgeAccs), hedgeTriggerDesc, poolAccount.Email, len(hedgeAccs))
 					}
 				}
 			}

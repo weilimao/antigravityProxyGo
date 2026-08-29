@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"antigravity-proxy/internal/fileutil"
 	"antigravity-proxy/internal/netutil"
 )
 
@@ -105,40 +106,77 @@ func (m *Manager) loadConfig() {
 	}
 
 	data, err := os.ReadFile(configPath)
+	restoredFromBak := false
 	if err != nil {
-		return
+		// 主文件读取失败 → 先尝试 .bak 快照
+		if bData, bErr := os.ReadFile(fileutil.BakPath(configPath)); bErr == nil {
+			data, restoredFromBak = bData, true
+		} else {
+			return
+		}
 	}
 
-	// 自动剥离 Windows 文本编辑器及 PowerShell 写入时可能携带的 UTF-8 BOM 头 (0xEF 0xBB 0xBF)
-	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
-		data = data[3:]
+	// 解析与字段补齐封装为闭包:主文件损坏时以完全同口径重试 .bak 快照。
+	tryParse := func(raw []byte) (parsed Config, rawMap map[string]json.RawMessage, ok bool) {
+		// 自动剥离 Windows 文本编辑器及 PowerShell 写入时可能携带的 UTF-8 BOM 头 (0xEF 0xBB 0xBF)
+		if len(raw) >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF {
+			raw = raw[3:]
+		}
+
+		parsed = Config{
+			EnablePacketCapture:           true,
+			EnableCustomCompression:       true,
+			MaxTokensThreshold:            100000,
+			CompressionStrategy:           "summarize",
+			SummaryModel:                  "gemini-2.5-flash-lite",
+			KeepRecentTurns:               5,
+			OcrModel:                      DefaultOcrModel,
+			NvidiaCompressEnabled:         true,
+			NvidiaCompressThresholdTokens: 80000,
+			NvidiaCompressKeepToolResults: 4,
+			EnableThinkingMode:            true,
+			EnableDebuggerMode:            false,
+			DebuggerLogPath:               "logs/debugger",
+		}
+		if uErr := json.Unmarshal(raw, &parsed); uErr != nil {
+			return Config{}, nil, false
+		}
+		// rawMap 解析失败不是致命错误(字段探测按缺失处理),保持与旧行为一致:置 nil 跳过探测。
+		rawMap = nil
+		var probe map[string]json.RawMessage
+		if uErr := json.Unmarshal(raw, &probe); uErr == nil {
+			rawMap = probe
+		}
+		return parsed, rawMap, true
 	}
 
-	parsed := Config{
-		EnablePacketCapture:           true,
-		EnableCustomCompression:       true,
-		MaxTokensThreshold:            100000,
-		CompressionStrategy:           "summarize",
-		SummaryModel:                  "gemini-2.5-flash-lite",
-		KeepRecentTurns:               5,
-		OcrModel:                      DefaultOcrModel,
-		NvidiaCompressEnabled:         true,
-		NvidiaCompressThresholdTokens: 80000,
-		NvidiaCompressKeepToolResults: 4,
-		EnableThinkingMode:            true,
-		EnableDebuggerMode:            false,
-		DebuggerLogPath:               "logs/debugger",
+	parsed, rawMap, ok := tryParse(data)
+	if !ok && !restoredFromBak {
+		if bData, bErr := os.ReadFile(fileutil.BakPath(configPath)); bErr == nil {
+			if p2, rm2, ok2 := tryParse(bData); ok2 {
+				parsed, rawMap, ok = p2, rm2, true
+				restoredFromBak = true
+			}
+		}
 	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
+	if !ok {
+		// 主与 .bak 双双损坏:旁移罪证,绝不让空配置回写湮灭字节。
+		if q := fileutil.QuarantineCorrupt(configPath); q != "" {
+			fmt.Printf("[Settings] ⚠️ 配置文件损坏且无可恢复快照,已旁移为 %s(原字节保留,可人工恢复)\n", q)
+		} else {
+			fmt.Printf("[Settings] ⚠️ 配置文件损坏且旁移失败: %s\n", configPath)
+		}
 		return
+	}
+	if restoredFromBak {
+		fmt.Printf("[Settings] ⚠️ 配置文件主文件损坏,已从 .bak 快照恢复\n")
 	}
 
 	// Detect which security fields are explicitly set in the config file.
 	// If a security field is missing from an older config, apply secure defaults
 	// rather than the Go zero value (false).
 	needSave := false
-	var rawMap map[string]json.RawMessage
-	if err := json.Unmarshal(data, &rawMap); err == nil {
+	if rawMap != nil {
 		if _, exists := rawMap["relaySSRFBlock"]; !exists {
 			parsed.RelaySSRFBlock = true
 		}
@@ -239,7 +277,8 @@ func (m *Manager) SaveConfig() error {
 		return err
 	}
 
-	err = os.WriteFile(configPath, data, 0644)
+	// 原子写 + .bak 快照:磁盘写满/写中断只会留下半截 tmp,原配置分毫未动。
+	err = fileutil.WriteFileAtomicWithBak(configPath, data, 0644)
 	if err != nil {
 		return err
 	}
@@ -530,7 +569,7 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		err = os.WriteFile(configPath, data, 0644)
+		err = fileutil.WriteFileAtomic(configPath, data, 0644)
 		if err != nil {
 			return "", err
 		}

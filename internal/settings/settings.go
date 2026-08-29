@@ -189,9 +189,14 @@ type Config struct {
 	NvidiaHedgeDelayMs int  `json:"nvidiaHedgeDelayMs,omitempty"`
 	// NvidiaHedgeMaxParallel 是对冲「总参赛请求数(含主请求)」,同时轰出形态:
 	// 主请求 DelayMs 内未回响应头时,一次性并发补发 MaxParallel-1 份(各用不同账号)。
-	// 范围 [2,5],0/越界经归一化钳位,默认 2(一主一备,向后兼容旧配置零变化)。
+	// settings 层钳位 [2,512](防脏值保险丝);产品级上限由 IPC 写入处按当前启用
+	// NVIDIA 账号数动态钳位,默认 2(一主一备,向后兼容旧配置零变化)。
 	// 最坏情况上游计费 = MaxParallel 倍(全部败方预填算力浪费),前端文案同步警示。
 	NvidiaHedgeMaxParallel int `json:"nvidiaHedgeMaxParallel,omitempty"`
+	// NvidiaHedgeImmediate 是「即刻竞赛」开关:开启后不再等待 DelayMs,主请求与全部
+	// 对冲在 t=0 同刻发出竞赛(每次请求上游计费恒为 MaxParallel 倍)。默认关闭。
+	// 胜负/取消/差错纪律与延迟模式完全一致,仅触发时机不同。
+	NvidiaHedgeImmediate bool `json:"nvidiaHedgeImmediate,omitempty"`
 	PromptPrefix                  string `json:"promptPrefix"`
 	CustomModelOverrideEnabled    bool   `json:"customModelOverrideEnabled"`
 	CustomModelOverrideID         string `json:"customModelOverrideID"`
@@ -460,6 +465,9 @@ type ManagerInterface interface {
 	// 归一化钳位 [2,5],0/缺省 → 2(一主一备,向后兼容)。
 	GetNvidiaHedgeMaxParallel() int
 	SetNvidiaHedgeMaxParallel(val int) error
+	// IsNvidiaHedgeImmediate/SetNvidiaHedgeImmediate: 即刻竞赛开关(默认关=延迟对冲模式)。
+	IsNvidiaHedgeImmediate() bool
+	SetNvidiaHedgeImmediate(val bool) error
 	// GetAccountLayout/SetAccountLayout: 号池视图布局("grid"|"list"),纯 UI pref,落 config.json。
 	GetAccountLayout() string
 	SetAccountLayout(layout string) error

@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"antigravity-proxy/internal/fileutil"
+
 	"antigravity-proxy/internal/account"
 )
 
@@ -441,7 +443,10 @@ func (r *Router) SaveToDisk() {
 	}
 
 	r.Lock()
-	_ = os.WriteFile(r.persistPath, data, 0644)
+	// 原子写:磁盘写满不再把会话绑定文件截成半截(老 os.WriteFile 的截断事故源)。
+	if err := fileutil.WriteFileAtomic(r.persistPath, data, 0644); err != nil {
+		fmt.Printf("[SessionRouter] 落盘失败: %v\n", err)
+	}
 	r.Unlock()
 }
 

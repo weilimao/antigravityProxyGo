@@ -57,6 +57,24 @@ let pricingContent: HTMLElement | null;
 let logSearchRow: HTMLElement | null;
 let tableFooter: HTMLElement | null;
 
+// 首帧趋势自愈: 打开后首个全量帧(get-state 响应, 携带 trends/nvidiaTrends)若因
+// 事件竞态未落地, 趋势区会干等到下一个 30s 全量节拍才出图(用户体感"等好久")。
+// 此处仅在 initDashboardEvents 里挂一次: 1.5s 后若两个桶仍都为空, 补发唯一一次
+// get-state(幂等; 正常路径下首帧已先到, 两桶非空, 此检查静默跳过)。
+// 30s 周期刷新语义保持不变。
+let initialTrendsRecoveryDone = false;
+function scheduleInitialTrendsRecovery(): void {
+    if (initialTrendsRecoveryDone) return;
+    initialTrendsRecoveryDone = true;
+    setTimeout(() => {
+        const globalEmpty = !state.trendsData || state.trendsData.length === 0;
+        const nvidiaEmpty = !state.nvidiaTrendsData || state.nvidiaTrendsData.length === 0;
+        if (globalEmpty && nvidiaEmpty) {
+            ipcRenderer.send('get-state');
+        }
+    }, 1500);
+}
+
 // Tables
 let modelsTableBody: HTMLElement | null;
 let logsTableBody: HTMLElement | null;
@@ -518,6 +536,7 @@ export function switchView(viewName: string) {
 
 export function initDashboardEvents() {
     initModalDom();
+    scheduleInitialTrendsRecovery();
 
     proxyToggle = document.getElementById('proxyToggle') as HTMLInputElement | null;
     btnInstallCert = document.getElementById('btnInstallCert') as HTMLButtonElement | null;

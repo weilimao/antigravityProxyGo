@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"antigravity-proxy/internal/fileutil"
 )
 
 // MemoryKeyFile 是目录记忆持久化文件名（置于应用数据根目录，而非数据目录，
@@ -83,7 +85,8 @@ func (m *FileDirMemory) Set(key DirMemoryKey, dir string) {
 	m.persist(raw)
 }
 
-// persist 原子写入（临时文件 + rename）。
+// persist 原子落盘(共享 fileutil.WriteFileAtomic:tmp+fsync+rename;磁盘满时静默失败,
+// 原文件不被截断)。
 func (m *FileDirMemory) persist(raw SerializableEventMemory) {
 	data, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
@@ -92,9 +95,5 @@ func (m *FileDirMemory) persist(raw SerializableEventMemory) {
 	if m.rootDir != "" {
 		_ = os.MkdirAll(m.rootDir, 0755)
 	}
-	tmp := m.path() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return
-	}
-	_ = os.Rename(tmp, m.path())
+	_ = fileutil.WriteFileAtomic(m.path(), data, 0644)
 }

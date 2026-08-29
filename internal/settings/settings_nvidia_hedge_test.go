@@ -55,7 +55,8 @@ func TestSettings_NvidiaHedge(t *testing.T) {
 		}
 	}
 
-	// 并发数:默认 2(零值归一化,向后兼容);钳位 [2,5]。
+	// 并发数:默认 2(零值归一化,向后兼容);settings 层钳位 [2,512](产品级上限
+	// 由 IPC 写入处按启用号数动态钳,此处仅锁存储层防脏值保险丝)。
 	if got := mgr.GetNvidiaHedgeMaxParallel(); got != defaultNvidiaHedgeMaxParallel {
 		t.Errorf("Expected default maxParallel %d, got %d", defaultNvidiaHedgeMaxParallel, got)
 	}
@@ -65,10 +66,12 @@ func TestSettings_NvidiaHedge(t *testing.T) {
 	}{
 		{3, 3},
 		{5, 5},
+		{117, 117},
 		{0, defaultNvidiaHedgeMaxParallel},
 		{-1, defaultNvidiaHedgeMaxParallel},
 		{1, minNvidiaHedgeMaxParallel},
-		{99, maxNvidiaHedgeMaxParallel},
+		{512, maxNvidiaHedgeMaxParallel},
+		{999, maxNvidiaHedgeMaxParallel},
 	}
 	for _, c := range parallelCases {
 		if err := mgr.SetNvidiaHedgeMaxParallel(c.in); err != nil {
@@ -79,9 +82,19 @@ func TestSettings_NvidiaHedge(t *testing.T) {
 		}
 	}
 
-	// 落盘往返:开关、延迟(60000)与并发(5)重启后保持一致。
-	if err := mgr.SetNvidiaHedgeMaxParallel(5); err != nil {
-		t.Fatalf("SetNvidiaHedgeMaxParallel(5) failed: %v", err)
+	// 落盘往返:开关、延迟(60000)与并发(117,池级上限内的池规模值)重启后保持一致。
+	if err := mgr.SetNvidiaHedgeMaxParallel(117); err != nil {
+		t.Fatalf("SetNvidiaHedgeMaxParallel(117) failed: %v", err)
+	}
+	// 即刻竞赛开关:默认 false(延迟对冲模式) → set true → 重启后仍 true。
+	if mgr.IsNvidiaHedgeImmediate() {
+		t.Errorf("Expected IsNvidiaHedgeImmediate == false initially")
+	}
+	if err := mgr.SetNvidiaHedgeImmediate(true); err != nil {
+		t.Fatalf("SetNvidiaHedgeImmediate failed: %v", err)
+	}
+	if !mgr.IsNvidiaHedgeImmediate() {
+		t.Errorf("Expected IsNvidiaHedgeImmediate == true after set")
 	}
 	mgr2 := NewManager()
 	mgr2.Init(tempDir)
@@ -91,7 +104,10 @@ func TestSettings_NvidiaHedge(t *testing.T) {
 	if got := mgr2.GetNvidiaHedgeDelayMs(); got != maxNvidiaHedgeDelayMs {
 		t.Errorf("Expected reloaded delay %d, got %d", maxNvidiaHedgeDelayMs, got)
 	}
-	if got := mgr2.GetNvidiaHedgeMaxParallel(); got != maxNvidiaHedgeMaxParallel {
-		t.Errorf("Expected reloaded maxParallel %d, got %d", maxNvidiaHedgeMaxParallel, got)
+	if got := mgr2.GetNvidiaHedgeMaxParallel(); got != 117 {
+		t.Errorf("Expected reloaded maxParallel 117, got %d", got)
+	}
+	if !mgr2.IsNvidiaHedgeImmediate() {
+		t.Errorf("Expected reloaded IsNvidiaHedgeImmediate == true")
 	}
 }

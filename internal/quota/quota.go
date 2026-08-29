@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/fileutil"
 	"antigravity-proxy/internal/modelfetch"
 	"antigravity-proxy/internal/netutil"
 )
@@ -104,7 +105,9 @@ func (q *QuotaService) saveProjectMap() {
 		return
 	}
 
-	_ = os.WriteFile(filepath.Join(dataDir, "captured_projects.json"), bytesData, 0644)
+	if err := fileutil.WriteFileAtomic(filepath.Join(dataDir, "captured_projects.json"), bytesData, 0644); err != nil {
+		fmt.Printf("[Quota] captured_projects.json 落盘失败: %v\n", err)
+	}
 }
 
 func (q *QuotaService) SetCapturedProject(email, projectId string) {

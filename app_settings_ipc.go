@@ -236,9 +236,25 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 				n = v
 			}
 		}
-		// 归一化钳位 [2,5] 在 settings 层完成(最坏上游计费 = 并发数 倍)。
+		// 上限动态跟随号池:钳到当前启用中的 NVIDIA 账号数(下限 2 由 settings 层归一化);
+		// settings 层另有 [2,512] 防脏值保险丝。运行时点火侧候选耗尽自动降级,绝无超发。
+		if poolN := a.enabledNvidiaAccountCount(); poolN >= 2 && n > poolN {
+			n = poolN
+		}
 		_ = a.settingsMgr.SetNvidiaHedgeMaxParallel(n)
-		a.AddLog(fmt.Sprintf("⚙️ NVIDIA 对冲并发数(含主请求): %d", a.settingsMgr.GetNvidiaHedgeMaxParallel()))
+		a.AddLog(fmt.Sprintf("⚙️ NVIDIA 对冲并发数(含主请求): %d(当前启用号池 %d)", a.settingsMgr.GetNvidiaHedgeMaxParallel(), a.enabledNvidiaAccountCount()))
+		return true
+
+	case "settings:set-nvidia-hedge-immediate":
+		enabled := false
+		if len(args) > 0 {
+			if b, ok := args[0].(bool); ok {
+				enabled = b
+			}
+		}
+		// 即刻竞赛:不再等待触发延迟,主与全部对冲 t=0 同刻发出(每次请求计费恒为并发数倍)。
+		_ = a.settingsMgr.SetNvidiaHedgeImmediate(enabled)
+		a.AddLog(fmt.Sprintf("⚙️ NVIDIA 对冲即刻竞赛: %v", a.settingsMgr.IsNvidiaHedgeImmediate()))
 		return true
 
 	case "settings:set-grok-worker-proxy-url":

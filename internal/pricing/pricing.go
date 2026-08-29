@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"antigravity-proxy/internal/fileutil"
 )
 
 type ModelRate struct {
@@ -121,7 +123,7 @@ func (m *Manager) savePricing() error {
 		return err
 	}
 
-	err = os.WriteFile(m.pricingFilePath, data, 0644)
+	err = fileutil.WriteFileAtomic(m.pricingFilePath, data, 0644)
 	if err != nil {
 		return err
 	}

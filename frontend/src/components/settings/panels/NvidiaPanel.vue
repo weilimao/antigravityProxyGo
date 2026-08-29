@@ -117,9 +117,19 @@
 <label class="text-[12px] font-bold text-outline" data-i18n="nvidiaHedgeDelayLabel">对冲触发延迟 (毫秒，范围 2000-60000，默认 10000)</label>
 <input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-mono" id="txtNvidiaHedgeDelayMs" type="number" min="2000" max="60000" step="500" placeholder="10000"/>
 <span class="text-[11px] text-outline" data-i18n="nvidiaHedgeDelayTip">越小对冲越激进（更费上游算力），越大越保守（尾部延迟省得少）。建议 8000-15000。</span>
-<label class="text-[12px] font-bold text-outline mt-1" data-i18n="nvidiaHedgeMaxParallelLabel">对冲并发请求总数 (含主请求，范围 2-5，默认 2)</label>
-<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-mono" id="txtNvidiaHedgeMaxParallel" type="number" min="2" max="5" step="1" placeholder="2"/>
-<span class="text-[11px] text-outline" data-i18n="nvidiaHedgeMaxParallelTip">到达阈值后同时用不同账号补发「并发数-1」份相同请求。最坏情况上游计费 ≈ 并发数 × 单请求预填成本；号池可用账号不足时自动按实际数降级。</span>
+<label class="text-[12px] font-bold text-outline mt-1" data-i18n="nvidiaHedgeMaxParallelLabel">对冲并发请求总数 (含主请求，默认 2，上限跟随号池规模)</label>
+<input class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-mono" id="txtNvidiaHedgeMaxParallel" type="number" min="2" max="2" step="1" placeholder="2"/>
+<span class="text-[11px] text-outline"><span data-i18n="nvidiaHedgeMaxParallelTip">到达阈值后同时用不同账号补发「并发数-1」份相同请求。最坏情况上游计费 ≈ 并发数 × 单请求预填成本；号池可用账号不足时自动按实际数降级。当前号池可并发上限：</span><b id="lblNvidiaHedgeMaxPool" class="text-primary">-</b></span>
+<div class="flex items-center justify-between mt-2">
+<div class="flex flex-col gap-0.5 max-w-[80%]">
+<label class="text-[12px] font-bold text-outline" data-i18n="nvidiaHedgeImmediateLabel">同时轰出竞赛 (不等延迟，全部请求同刻出发)</label>
+<span class="text-[11px] text-outline" data-i18n="nvidiaHedgeImmediateDesc">勾选后不再等待上方触发延迟：主请求与全部对冲同刻发出竞赛，先回响应头者胜，败方立即取消。注意：每次请求上游计费恒 ≈ 并发数 × 单请求预填成本（如并发 5 即单请求的 5 倍），仅在追求极致首帧时开启。</span>
+</div>
+<label class="relative inline-flex items-center cursor-pointer shrink-0">
+<input class="sr-only peer" id="chkNvidiaHedgeImmediate" type="checkbox"/>
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
 </div>
 </div>
 </div>

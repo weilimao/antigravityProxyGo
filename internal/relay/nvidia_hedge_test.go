@@ -79,7 +79,7 @@ func TestHedgedUpstreamDo_PrimaryFastNoHedge(t *testing.T) {
 		return hedgeOKResp(body), nil
 	})}
 	var built int32
-	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 50*time.Millisecond, 3, hedgeBuilder(t, &built))
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 50*time.Millisecond, false, 3, hedgeBuilder(t, &built))
 	if res.err != nil || res.resp == nil {
 		t.Fatalf("主请求应立即成功,实际 err=%v resp=%v", res.err, res.resp)
 	}
@@ -112,7 +112,7 @@ func TestHedgedUpstreamDo_HedgeWins(t *testing.T) {
 		<-primaryGate
 		return hedgeOKResp(primaryBody), nil
 	})}
-	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, 2, hedgeBuilder(t, nil))
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, false, 2, hedgeBuilder(t, nil))
 	if res.err != nil || res.resp == nil {
 		t.Fatalf("对冲应胜出,实际 err=%v", res.err)
 	}
@@ -161,7 +161,7 @@ func TestHedgedUpstreamDo_PrimaryWinsHedgeCanceled(t *testing.T) {
 			return nil, r.Context().Err()
 		}
 	})}
-	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, 3, hedgeBuilder(t, nil))
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, false, 3, hedgeBuilder(t, nil))
 	if !res.hedgeFired || res.hedgeWon {
 		t.Fatalf("应对冲已发但主胜: fired=%v won=%v", res.hedgeFired, res.hedgeWon)
 	}
@@ -190,7 +190,7 @@ func TestHedgedUpstreamDo_PrimaryErrorBeforeTimer(t *testing.T) {
 		return nil, sentinel
 	})}
 	var built int32
-	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 5*time.Second, 3, hedgeBuilder(t, &built))
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 5*time.Second, false, 3, hedgeBuilder(t, &built))
 	if res.resp != nil {
 		t.Fatal("主错不应有响应")
 	}
@@ -220,7 +220,7 @@ func TestHedgedUpstreamDo_BothErrorPreferPrimary(t *testing.T) {
 			return nil, r.Context().Err()
 		}
 	})}
-	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, 2, hedgeBuilder(t, nil))
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, false, 2, hedgeBuilder(t, nil))
 	if res.resp != nil {
 		t.Fatal("双方皆错不应有响应")
 	}
@@ -246,7 +246,7 @@ func TestHedgedUpstreamDo_NoCandidateDegrades(t *testing.T) {
 			return nil, r.Context().Err()
 		}
 	})}
-	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, 4,
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, false, 4,
 		func(context.Context, int) (*http.Request, error) { return nil, errNoHedgeCandidate })
 	if res.err != nil || res.resp == nil {
 		t.Fatalf("无候选应退化为裸 Do 并照常返回,实际 err=%v", res.err)
@@ -269,7 +269,7 @@ func TestHedgedUpstreamDo_ClientCancelPropagates(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
-	res := hedgedUpstreamDo(parent, client, hedgeTestReq(t, parent), 20*time.Millisecond, 3, hedgeBuilder(t, nil))
+	res := hedgedUpstreamDo(parent, client, hedgeTestReq(t, parent), 20*time.Millisecond, false, 3, hedgeBuilder(t, nil))
 	if res.resp != nil {
 		t.Fatal("客户端取消不应有响应")
 	}
@@ -308,7 +308,7 @@ func TestHedgedUpstreamDo_MultiHedgeSecondWins(t *testing.T) {
 			return hedgeOKResp(primaryBody), nil
 		}
 	})}
-	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, 3, hedgeBuilder(t, nil))
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, false, 3, hedgeBuilder(t, nil))
 	if !res.hedgeFired || !res.hedgeWon || res.winnerHedgeIdx != 2 {
 		t.Fatalf("应对冲2胜: fired=%v won=%v idx=%d err=%v", res.hedgeFired, res.hedgeWon, res.winnerHedgeIdx, res.err)
 	}
@@ -368,7 +368,7 @@ func TestHedgedUpstreamDo_PartialCandidates(t *testing.T) {
 		req.Header.Set("X-Test-Role", fmt.Sprintf("hedge-%d", hedgeIdx))
 		return req, nil
 	}
-	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, 5, build)
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, false, 5, build)
 	if atomic.LoadInt32(&buildCalls) != 4 {
 		t.Fatalf("maxParallel=5 应尝试构造 4 个对冲,实际 %d", buildCalls)
 	}
@@ -412,7 +412,7 @@ func TestHedgedUpstreamDo_MaxParallelOneDegrades(t *testing.T) {
 		}
 	})}
 	var built int32
-	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 5*time.Millisecond, 1, hedgeBuilder(t, &built))
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 5*time.Millisecond, false, 1, hedgeBuilder(t, &built))
 	if res.err != nil || res.resp == nil {
 		t.Fatalf("单边形态应照常返回,实际 err=%v", res.err)
 	}
@@ -435,7 +435,7 @@ func TestHedgedUpstreamDo_HedgeWinCancelsPrimaryCtx(t *testing.T) {
 		close(primaryCanceled)
 		return nil, r.Context().Err()
 	})}
-	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, 2, hedgeBuilder(t, nil))
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, false, 2, hedgeBuilder(t, nil))
 	if !res.hedgeWon {
 		t.Fatalf("应对冲胜: won=%v err=%v", res.hedgeWon, res.err)
 	}
@@ -467,7 +467,7 @@ func TestHedgedUpstreamDo_PrimaryWinKeepsPrimaryCtxAlive(t *testing.T) {
 			return nil, r.Context().Err()
 		}
 	})}
-	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, 2, hedgeBuilder(t, nil))
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 20*time.Millisecond, false, 2, hedgeBuilder(t, nil))
 	if res.hedgeWon || res.err != nil || res.resp == nil {
 		t.Fatalf("应主胜: won=%v err=%v", res.hedgeWon, res.err)
 	}
@@ -475,6 +475,83 @@ func TestHedgedUpstreamDo_PrimaryWinKeepsPrimaryCtxAlive(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if primaryCtxSeen == nil || primaryCtxSeen.Err() != nil {
 		t.Fatalf("主胜后主请求 ctx 被误掐: ctx=%v err=%v", primaryCtxSeen, primaryCtxSeen.Err())
+	}
+	res.resp.Body.Close()
+}
+
+// TestHedgedUpstreamDo_ImmediateHedgeWinsWithoutTimer 锁定:即刻模式下定时器被完全旁路
+// (delay 设为 60s 不可得值),主与对冲同刻出发,对冲照样可胜,败方主 ctx 被掐断。
+func TestHedgedUpstreamDo_ImmediateHedgeWinsWithoutTimer(t *testing.T) {
+	hedgeBody := newHedgeTrackBody()
+	primaryKilled := make(chan struct{})
+	client := &http.Client{Transport: hedgeRTFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasPrefix(r.Header.Get("X-Test-Role"), "hedge-") {
+			return hedgeOKResp(hedgeBody), nil
+		}
+		<-r.Context().Done()
+		close(primaryKilled)
+		return nil, r.Context().Err()
+	})}
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 60*time.Second, true, 2, hedgeBuilder(t, nil))
+	if res.err != nil || res.resp == nil {
+		t.Fatalf("即刻模式应对冲胜,实际 err=%v", res.err)
+	}
+	if !res.hedgeFired || !res.hedgeWon || res.winnerHedgeIdx != 1 {
+		t.Fatalf("即刻模式对冲应立即胜(定时器旁路): fired=%v won=%v idx=%d", res.hedgeFired, res.hedgeWon, res.winnerHedgeIdx)
+	}
+	select {
+	case <-primaryKilled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("即刻对冲胜后主派生 ctx 未被掐断")
+	}
+	res.resp.Body.Close()
+}
+
+// TestHedgedUpstreamDo_ImmediatePrimaryWinsHedgesCanceled 锁定:即刻模式下主仍可最快,
+// 主胜后全部对冲派生 ctx 被掐断(竞速纪律与延迟模式完全一致)。
+func TestHedgedUpstreamDo_ImmediatePrimaryWinsHedgesCanceled(t *testing.T) {
+	primaryBody := newHedgeTrackBody()
+	hedgeKilled := make(chan struct{}, 2)
+	client := &http.Client{Transport: hedgeRTFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasPrefix(r.Header.Get("X-Test-Role"), "hedge-") {
+			<-r.Context().Done()
+			hedgeKilled <- struct{}{}
+			return nil, r.Context().Err()
+		}
+		return hedgeOKResp(primaryBody), nil // 主立即回响应头
+	})}
+	var built int32
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 60*time.Second, true, 3, hedgeBuilder(t, &built))
+	if res.hedgeWon || res.err != nil || res.resp == nil {
+		t.Fatalf("即刻模式主应先胜: won=%v err=%v", res.hedgeWon, res.err)
+	}
+	if atomic.LoadInt32(&built) != 2 {
+		t.Fatalf("即刻模式主+2对冲应同刻出发(built=2),实际 %d", built)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-hedgeKilled:
+		case <-time.After(2 * time.Second):
+			t.Fatal("即刻模式主胜后对冲派生 ctx 未被掐断")
+		}
+	}
+	res.resp.Body.Close()
+}
+
+// TestHedgedUpstreamDo_ImmediateMaxParallelOneDegrades 锁定:即刻+单边形态 = 逐字裸 Do,
+// 对冲构建器绝不被调用。
+func TestHedgedUpstreamDo_ImmediateMaxParallelOneDegrades(t *testing.T) {
+	body := newHedgeTrackBody()
+	client := &http.Client{Transport: hedgeRTFunc(func(r *http.Request) (*http.Response, error) {
+		return hedgeOKResp(body), nil
+	})}
+	var built int32
+	res := hedgedUpstreamDo(context.Background(), client, hedgeTestReq(t, context.Background()), 60*time.Second, true, 1, hedgeBuilder(t, &built))
+	if res.err != nil || res.resp == nil {
+		t.Fatalf("即刻单边形态应照常返回,实际 err=%v", res.err)
+	}
+	if res.hedgeFired || res.hedgeWon || atomic.LoadInt32(&built) != 0 {
+		t.Fatalf("即刻+maxParallel=1 不得触发任何对冲: fired=%v won=%v built=%d", res.hedgeFired, res.hedgeWon, built)
 	}
 	res.resp.Body.Close()
 }

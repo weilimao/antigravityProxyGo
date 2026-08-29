@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"antigravity-proxy/internal/fileutil"
 )
 
 type LogEntry struct {
@@ -147,7 +149,7 @@ func (l *RetryErrorLogger) SaveToDisk() {
 		return
 	}
 
-	err = os.WriteFile(path, bytesData, 0644)
+	err = fileutil.WriteFileAtomic(path, bytesData, 0644)
 	if err != nil {
 		fmt.Printf("[RetryErrorLogger] Failed to write logs: %v\n", err)
 	}

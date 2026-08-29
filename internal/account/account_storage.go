@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"antigravity-proxy/internal/fileutil"
 )
 
 // account_storage.go: 账号池分区化磁盘读写层。
@@ -168,7 +170,8 @@ func (m *Manager) saveOnePartition(kind string) error {
 	}
 
 	m.fileLock.Lock()
-	err = os.WriteFile(path, data, 0644)
+	// 原子写 + .bak 快照:磁盘写满时 tmp 写失败,原分区文件分毫未动(治本,防截断丢数据)。
+	err = fileutil.WriteFileAtomicWithBak(path, data, 0644)
 	m.fileLock.Unlock()
 	if err != nil {
 		return fmt.Errorf("write partition %q: %w", kind, err)
@@ -261,21 +264,24 @@ func (m *Manager) loadFromPartitions() {
 	m.loadPoolConfigIntoMemory()
 }
 
-// readAccountsPartition 读单个账号分区文件(provider 或 2fa)。文件缺失返回 nil。
+// readAccountsPartition 读单个账号分区文件(provider 或 2fa)。文件缺失返回 nil;
+// 主文件损坏自动回退 .bak 快照,双毁时主文件被旁移为 .corrupt(保留字节),返回 nil。
 func (m *Manager) readAccountsPartition(kind string) []*Account {
 	path := m.partitionFilePath(kind)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		fmt.Printf("[AccountManager] Failed to read %s: %v\n", partitionFileName(kind), err)
+	if path == "" {
 		return nil
 	}
 	var shell accountsFileShell
-	if err := json.Unmarshal(data, &shell); err != nil {
-		fmt.Printf("[AccountManager] Failed to parse %s: %v\n", partitionFileName(kind), err)
+	fromBak, err := fileutil.ReadJSONWithBak(path, &shell)
+	if err != nil {
+		// 全新安装(分区文件尚不存在)静默;真损坏才告警。
+		if !os.IsNotExist(err) {
+			fmt.Printf("[AccountManager] ⚠️ 分区 %s 加载失败: %v\n", partitionFileName(kind), err)
+		}
 		return nil
+	}
+	if fromBak {
+		fmt.Printf("[AccountManager] ⚠️ 分区 %s 主文件损坏,已从 .bak 快照恢复\n", partitionFileName(kind))
 	}
 	return shell.Accounts
 }
@@ -284,18 +290,19 @@ func (m *Manager) readAccountsPartition(kind string) []*Account {
 // 与旧 LoadAccounts 中解析 AccountsData 的字段规整逻辑同口径(小写规范化、负数钳 0 等)。
 func (m *Manager) loadPoolConfigIntoMemory() {
 	path := m.partitionFilePath(poolPartKind)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		fmt.Printf("[AccountManager] Failed to read %s: %v\n", partitionFileName(poolPartKind), err)
+	if path == "" {
 		return
 	}
 	var cfg poolConfigOnDisk
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		fmt.Printf("[AccountManager] Failed to parse %s: %v\n", partitionFileName(poolPartKind), err)
+	fromBak, err := fileutil.ReadJSONWithBak(path, &cfg)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Printf("[AccountManager] ⚠️ 加载 %s 失败: %v\n", partitionFileName(poolPartKind), err)
+		}
 		return
+	}
+	if fromBak {
+		fmt.Printf("[AccountManager] ⚠️ %s 主文件损坏,已从 .bak 快照恢复\n", partitionFileName(poolPartKind))
 	}
 
 	m.poolMode = cfg.PoolMode
@@ -447,7 +454,7 @@ func (m *Manager) migrateLegacyFile() error {
 			return fmt.Errorf("marshal partition %s: %w", p, mErr)
 		}
 		m.fileLock.Lock()
-		wErr := os.WriteFile(m.partitionFilePath(p), bytesData, 0644)
+		wErr := fileutil.WriteFileAtomicWithBak(m.partitionFilePath(p), bytesData, 0644)
 		m.fileLock.Unlock()
 		if wErr != nil {
 			return fmt.Errorf("write partition %s: %w", p, wErr)
@@ -460,7 +467,7 @@ func (m *Manager) migrateLegacyFile() error {
 		return fmt.Errorf("marshal partition 2fa: %w", mErr)
 	}
 	m.fileLock.Lock()
-	wErr := os.WriteFile(m.partitionFilePath(twoFAPartKind), bytesData, 0644)
+	wErr := fileutil.WriteFileAtomicWithBak(m.partitionFilePath(twoFAPartKind), bytesData, 0644)
 	m.fileLock.Unlock()
 	if wErr != nil {
 		return fmt.Errorf("write partition 2fa: %w", wErr)
@@ -488,7 +495,7 @@ func (m *Manager) migrateLegacyFile() error {
 		return fmt.Errorf("marshal partition pool: %w", pErr)
 	}
 	m.fileLock.Lock()
-	pWriteErr := os.WriteFile(m.partitionFilePath(poolPartKind), poolBytes, 0644)
+	pWriteErr := fileutil.WriteFileAtomicWithBak(m.partitionFilePath(poolPartKind), poolBytes, 0644)
 	m.fileLock.Unlock()
 	if pWriteErr != nil {
 		return fmt.Errorf("write partition pool: %w", pWriteErr)

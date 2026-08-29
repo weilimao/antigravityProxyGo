@@ -9,6 +9,7 @@ import (
 	"antigravity-proxy/internal/dialogs"
 	"antigravity-proxy/internal/eventsgate"
 	"antigravity-proxy/internal/externalconfig"
+	"antigravity-proxy/internal/fileutil"
 	"antigravity-proxy/internal/patch"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/proxy"
@@ -33,6 +34,34 @@ import (
 
 // app_lifecycle.go: App 生命周期 — startup 启动 / startNetWatch-onNetRecover-reconnectRemoteSafely 网络恢复重连 / shutdown 收尾 / domReady DOM 就绪。
 // 从 app.go 按职责拆分而出,同 main 包内共享 App 结构体与全局符号,物理搬移,逻辑逐行等价,零回归。
+
+// warnIfDiskSpaceLow 启动期磁盘空间预检:数据目录所在卷剩余空间低于告警线时,
+// 经 AddLog 向用户高声量通告(前端日志面板可见)。纯预警、不拦截启动;
+// 真正的写盘保护在 fileutil.WriteFileAtomic 的预检里(剩余 <8MiB+写入量时拒绝落盘并保留原文件)。
+func (a *App) warnIfDiskSpaceLow(dir string) {
+	const warnBytes = 512 << 20 // 512 MiB
+	avail, err := fileutil.AvailableBytes(dir)
+	if err != nil || avail >= warnBytes {
+		return
+	}
+	a.AddLog(fmt.Sprintf("💾 [磁盘告警] 数据目录所在磁盘剩余空间仅 %.0f MB(低于 %d MB 告警线)。继续用满时本应用将进入落盘保护(拒绝写盘、原有数据文件保持不动),请尽快清理磁盘空间。",
+		float64(avail)/(1<<20), warnBytes>>20))
+}
+
+// enabledNvidiaAccountCount 返回当前启用中的 NVIDIA 账号数 —— 对冲并发上限的动态基准
+// (禁用账号不参与对冲候选,不计入上限;号池 0/1 时返回原值,由 min(2) 口径兜住下限)。
+func (a *App) enabledNvidiaAccountCount() int {
+	if a.accountMgr == nil {
+		return 0
+	}
+	n := 0
+	for _, acc := range a.accountMgr.GetRawAccountsByProvider("nvidia") {
+		if acc != nil && acc.Enabled {
+			n++
+		}
+	}
+	return n
+}
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
@@ -69,6 +98,9 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	activeDir := a.settingsMgr.GetActiveDataDirectory()
+
+	// [P2] 启动期磁盘空间预检:数据盘接近写满时第一时间告警(落盘防线见 internal/fileutil)。
+	a.warnIfDiskSpaceLow(activeDir)
 
 	// 0a. 接线周期性 goroutine 全栈快照落盘 (每 5s 滚动保留 6 份)。
 	// 当程序出现死等型整体卡死、连 pprof HTTP 端点 (18765) 也连不上时，
@@ -465,10 +497,13 @@ func (a *App) domReady(ctx context.Context) {
 			"password": a.settingsMgr.GetNvidiaDedicatedProxyPassword(),
 		},
 		// NVIDIA 对冲请求(默认关):前端 sendSync 读 wailsConfigCache(见 ipc.ts)。
+		// poolSize 为当前启用中的 NVIDIA 账号数,前端据此动态渲染并发上限。
 		"settings:get-nvidia-hedge": map[string]interface{}{
 			"enabled":     a.settingsMgr.IsNvidiaHedgeEnabled(),
 			"delayMs":     a.settingsMgr.GetNvidiaHedgeDelayMs(),
 			"maxParallel": a.settingsMgr.GetNvidiaHedgeMaxParallel(),
+			"immediate":   a.settingsMgr.IsNvidiaHedgeImmediate(),
+			"poolSize":    a.enabledNvidiaAccountCount(),
 		},
 	}
 

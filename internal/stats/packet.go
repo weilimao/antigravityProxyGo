@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"antigravity-proxy/internal/fileutil"
 	"sync"
 	"time"
 
@@ -92,7 +94,7 @@ func (pc *PacketCapturer) SaveToDisk() {
 		return
 	}
 
-	err = os.WriteFile(path, bytesData, 0644)
+	err = fileutil.WriteFileAtomic(path, bytesData, 0644)
 	if err != nil {
 		fmt.Printf("[PacketCapturer] Failed to write packets: %v\n", err)
 	}
