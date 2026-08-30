@@ -222,8 +222,8 @@ func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 //
 // 识别优先级(整段 UUID 落地,跨进程重启稳定可对照,与 X-Claude-Code-Session-Id 同口径):
 //  1. X-Claude-Code-Session-Id  → "claude:<UUID>"  (Claude Code CLI/VSCode 原生会话头)
-//  2. X-Session-Id              → "opencode:<UUID>" (OpenCode 原生会话头)
-//  3. X-Session-Affinity        → "opencode:<UUID>" (OpenCode 会话亲和性头,兜底同 X-Session-Id)
+//  2. X-Session-Id              → "<客户端前缀>:<UUID>" (OpenCode/ZCode 共用此头,前缀按 UA 区分)
+//  3. X-Session-Affinity        → 同上 (OpenCode/ZCode 会话亲和性头,兜底同 X-Session-Id)
 //  4. Session-Id                → "codex:<UUID>"   (Codex TUI 原生会话头,与 Thread-Id 等值)
 //  5. Thread-Id                 → "codex:<UUID>"   (Codex 会话线程头,兜底同 Session-Id)
 // 任一命中即返回对应前缀的整段值;全部缺失/纯空白返回空串,调用方据此回退 ExtractSessionKey。
@@ -238,10 +238,10 @@ func (r *Router) ExtractClientSessionHeader(req *http.Request) string {
 		return "claude:" + sid
 	}
 	if sid := strings.TrimSpace(req.Header.Get("X-Session-Id")); sid != "" {
-		return "opencode:" + sid
+		return sessionHeaderClientPrefix(req.Header.Get("User-Agent")) + sid
 	}
 	if sid := strings.TrimSpace(req.Header.Get("X-Session-Affinity")); sid != "" {
-		return "opencode:" + sid
+		return sessionHeaderClientPrefix(req.Header.Get("User-Agent")) + sid
 	}
 	if sid := strings.TrimSpace(req.Header.Get("Session-Id")); sid != "" {
 		return "codex:" + sid
@@ -250,6 +250,22 @@ func (r *Router) ExtractClientSessionHeader(req *http.Request) string {
 		return "codex:" + tid
 	}
 	return ""
+}
+
+// sessionHeaderClientPrefix 按 User-Agent 区分 X-Session-Id / X-Session-Affinity 的来源客户端。
+// 历史实现一律标 "opencode:"(该约定随 OpenCode 接入时写死),ZCode 等同样携带这些头的
+// 客户端会被误标成 opencode;现按 UA 细分,ZCode(UA 形如 ZCode/x.y.z)标 "zcode:",
+// 识别不出保持历史 "opencode:" 兜底,避免既有“opencode:”前缀键的粘贴粘性会话断层。
+func sessionHeaderClientPrefix(ua string) string {
+	u := strings.ToLower(strings.TrimSpace(ua))
+	switch {
+	case strings.Contains(u, "zcode"):
+		return "zcode:"
+	case strings.Contains(u, "opencode"):
+		return "opencode:"
+	default:
+		return "opencode:"
+	}
 }
 
 func (r *Router) GetOrAssignAccount(sessionKey string, availableAccounts []*account.Account, logFn func(string)) *account.Account {

@@ -2070,8 +2070,8 @@ func TestPullAnthropicStream_ClientCancelInInterCycleWait(t *testing.T) {
 
 	acc := mkNvidiaAccount("nv-cancel-cw", "cancelcw@nexusquantum.cloud", "k", upstream.URL, "z-ai/glm-5.2")
 	handler, _, _, _ := newNvidiaTestHandler(t, []*account.Account{acc})
-	handler.nvidiaStreamRetryWait = 5 * time.Millisecond   // 每次退避极短,5 次直连快速耗尽进周期间等待
-	handler.nvidiaStreamCycleWait = 800 * time.Millisecond // 周期间等待设大,取消前确实挂在此 select 上
+	handler.nvidiaStreamRetryWait = 5 * time.Millisecond    // 每次退避极短,5 次直连快速耗尽进周期间等待
+	handler.nvidiaStreamCycleWait = 2500 * time.Millisecond // 周期间等待设大,取消前确实挂在此 select 上
 
 	anthReq := &AnthropicRequest{
 		Model:    "claude-sonnet-4-5",

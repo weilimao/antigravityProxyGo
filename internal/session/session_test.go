@@ -86,6 +86,21 @@ func TestExtractClientSessionHeader(t *testing.T) {
 			want:    "opencode:" + opencodeSID,
 		},
 		{
+			name:    "ZCode UA 下 X-Session-Id 标 zcode 前缀",
+			headers: map[string]string{"User-Agent": "ZCode/3.10.1 ai-sdk/provider-utils/4.0.27 runtime/node.js/24", "X-Session-Id": opencodeSID},
+			want:    "zcode:" + opencodeSID,
+		},
+		{
+			name:    "ZCode UA 下 X-Session-Affinity 亦标 zcode 前缀",
+			headers: map[string]string{"User-Agent": "ZCode/3.10.1", "X-Session-Affinity": opencodeSID},
+			want:    "zcode:" + opencodeSID,
+		},
+		{
+			name:    "UA 含 opencode 保持 opencode 前缀",
+			headers: map[string]string{"User-Agent": "opencode/1.18.18", "X-Session-Id": opencodeSID},
+			want:    "opencode:" + opencodeSID,
+		},
+		{
 			name:    "OpenCode X-Session-Id 优先于 X-Session-Affinity",
 			headers: map[string]string{"X-Session-Id": opencodeSID, "X-Session-Affinity": "other-affinity"},
 			want:    "opencode:" + opencodeSID,

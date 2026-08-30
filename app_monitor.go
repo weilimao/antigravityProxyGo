@@ -37,9 +37,13 @@ func (a *App) startMemoryMonitor(ctx context.Context) {
 				if a.IsWindowVisibleAndActive() {
 					a.emitEvent("stats-updated", a.getStatsPayload(false))
 				}
-				// 周期性平滑修剪工作集与主动释放未使用堆内存，使前台常驻与后台挂机均维持在两三百兆以内的极低内存水位
-				stats.TrimProcessWorkingSet()
-				debug.FreeOSMemory()
+				// 仅后台/挂机态修剪:窗口可见/前台使用时,TrimProcessWorkingSet(EmptyWorkingSet 全进程树)
+				// 会把 Go 主进程及所有 WebView2 子进程的物理内存页驱逐回磁盘,下一次交互即触发缺页回盘风暴,
+				// 这正是"每 30s 卡一下"的最强嫌疑源;故前台绝不修剪,只在后台托盘挂机时维持低内存水位。
+				if !a.IsWindowVisibleAndActive() {
+					stats.TrimProcessWorkingSet()
+					debug.FreeOSMemory()
+				}
 			}
 		}
 	}

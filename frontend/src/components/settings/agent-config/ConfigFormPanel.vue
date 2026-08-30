@@ -206,13 +206,23 @@
                     <span class="material-symbols-outlined text-[14px] text-primary transition-transform duration-200" :style="{ transform: isModelCardExpanded(field.key + '.' + item + '.' + childName) ? 'rotate(0deg)' : 'rotate(-90deg)' }">expand_more</span>
                     <span class="text-[11px] font-bold text-primary dark:text-primary-fixed-dim">{{ field.childKeyLabel || '名称' }}: {{ childName }}</span>
                   </div>
-                  <button
-                    class="text-[10px] text-error hover:text-error/80 font-medium flex items-center gap-0.5 cursor-pointer"
-                    @click.stop="removeRepeatableObjectChild(field, item, childName)"
-                  >
-                    <span class="material-symbols-outlined text-[12px]">delete</span>
-                    删除
-                  </button>
+                  <div class="flex items-center gap-2">
+                    <button
+                      class="text-[10px] text-outline hover:text-primary font-medium flex items-center gap-0.5 cursor-pointer"
+                      :title="isModelCopied(field.key + '.' + item + '.' + childName) ? '已复制' : '复制模型名'"
+                      @click.stop="copyModelName(field, item, childName)"
+                    >
+                      <span class="material-symbols-outlined text-[12px]">{{ isModelCopied(field.key + '.' + item + '.' + childName) ? 'check' : 'content_copy' }}</span>
+                      {{ isModelCopied(field.key + '.' + item + '.' + childName) ? '已复制' : '复制' }}
+                    </button>
+                    <button
+                      class="text-[10px] text-error hover:text-error/80 font-medium flex items-center gap-0.5 cursor-pointer"
+                      @click.stop="removeRepeatableObjectChild(field, item, childName)"
+                    >
+                      <span class="material-symbols-outlined text-[12px]">delete</span>
+                      删除
+                    </button>
+                  </div>
                 </div>
                 <div v-show="isModelCardExpanded(field.key + '.' + item + '.' + childName)" class="px-3 pb-3 flex flex-col gap-0.5">
                   <div v-for="(childField, cfIdx) in field.children" :key="cfIdx" class="flex flex-col gap-0.5">
@@ -808,6 +818,44 @@ function removeRepeatableObjectChild(field: ConfigField, parentName: string, chi
   }
   localFormData.value = { ...localFormData.value };
   emit('update:formData', { ...localFormData.value });
+}
+
+// ===== 模型名一键复制 =====
+// 复制成功的卡片 key 集合,用于把按钮图标/文案临时切为"已复制",定时器恢复。
+const copiedModelKeys = ref<Set<string>>(new Set());
+const copyTimers = new Map<string, number>();
+
+function isModelCopied(key: string): boolean {
+  return copiedModelKeys.value.has(key);
+}
+
+async function copyModelName(field: ConfigField, parentName: string, childName: string) {
+  const key = `${field.key}.${parentName}.${childName}`;
+  try {
+    await navigator.clipboard.writeText(childName);
+  } catch {
+    // clipboard API 不可用(如旧 WebView 非安全上下文)时回退 execCommand
+    const ta = document.createElement('textarea');
+    ta.value = childName;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+    } finally {
+      document.body.removeChild(ta);
+    }
+  }
+  copiedModelKeys.value.add(key);
+  copiedModelKeys.value = new Set(copiedModelKeys.value);
+  const prev = copyTimers.get(key);
+  if (prev) window.clearTimeout(prev);
+  copyTimers.set(key, window.setTimeout(() => {
+    copiedModelKeys.value.delete(key);
+    copiedModelKeys.value = new Set(copiedModelKeys.value);
+    copyTimers.delete(key);
+  }, 1500));
 }
 
 // ===== 嵌套 repeatable-object 辅助（模型内的 variants 变体列表） =====

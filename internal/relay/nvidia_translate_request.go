@@ -188,10 +188,13 @@ func anthropicToOpenAIChat(req *AnthropicRequest, preserveImages bool, targetPro
 	return out, nil
 }
 
-// isOpenCodeUA 判定 User-Agent 是否来自 OpenCode 客户端(如 opencode/1.18.18, ai-sdk 等)。
+// isOpenCodeUA 判定 User-Agent 是否来自「纯 output_config.effort 驱动思考」的客户端
+// (OpenCode: opencode/1.18.18;ZCode: ZCode/3.10.1 ai-sdk/... 等)。
+// 这类客户端开思考只发 output_config.effort、不发 Anthropic thinking 字段,
+// 与 Claude Code 关思考时 body 残留 output_config:{effort:max} 的行为可区分。
 func isOpenCodeUA(ua string) bool {
 	u := strings.ToLower(strings.TrimSpace(ua))
-	return strings.Contains(u, "opencode")
+	return strings.Contains(u, "opencode") || strings.Contains(u, "zcode")
 }
 
 // thinkingRequested 判定客户端是否显式请求思考(ON)。
@@ -200,7 +203,7 @@ func isOpenCodeUA(ua string) bool {
 //    - type == "enabled" | "adaptive" -> true (ON)
 //    - type == "disabled" -> false (OFF)
 // 2. 若 req.Thinking == nil (缺省):
-//    - OpenCode 客户端 (User-Agent 含 opencode) 仅通过 output_config.effort 传达思考指令:
+//    - OpenCode/ZCode 客户端 (User-Agent 含 opencode|zcode) 仅通过 output_config.effort 传达思考指令:
 //      若 output_config 包含有效 effort (low/medium/high/max) -> true (ON)
 //    - 其余客户端 (如 Claude Code 关思考时 body 残留 output_config.effort:max):
 //      保持 opt-in 默认，返回 false (OFF)
@@ -216,7 +219,7 @@ func thinkingRequested(req *AnthropicRequest) bool {
 			return false
 		}
 	}
-	// req.Thinking == nil 场景: OpenCode 客户端由 output_config.effort 驱动思考
+	// req.Thinking == nil 场景: OpenCode/ZCode 客户端由 output_config.effort 驱动思考
 	if isOpenCodeUA(req.UserAgent) {
 		return resolveReasoningEffort(req) != ""
 	}
