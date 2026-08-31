@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -288,27 +289,34 @@ func (pf *passthroughForward) run(
 
 		// 上游 URL:OpenAI 格式 → BuildOpenAIChatURL;Anthropic 格式 → BuildAnthropicMessagesURL。
 		// 自动识别 BaseURL 末尾自带的 /v1, /v2, /v3, /v4 等版本号，避免重复拼 /v1（如智谱 /api/paas/v4）。
-		// Other 号池组级 Cloudflare Worker 出口代理:组启用且 URL 非空时,用 Worker URL 覆盖 acc.BaseURL。
+		// Other 号池组级 Cloudflare Worker 出口代理:组启用且 URL 非空时,仅改写 targetURL 的 scheme/host。
 		// 与 NVIDIA 链路(nvidia.go:460)同口径,通过 X-Egress-IP 头透传账号专属出口伪装 IP,
 		// 通过 X-Target-Upstream 头让通用 Worker 知道真正上游地址。
 		baseURL := strings.TrimRight(acc.BaseURL, "/")
-		workerProxyActive := false
-		if poolChannel == "other" && targetGroupID != "" && pf.accountMgr != nil {
-			if pf.accountMgr.IsOtherWorkerProxyEnabled(targetGroupID) {
-				workerURL := strings.TrimRight(pf.accountMgr.GetOtherWorkerProxyURL(targetGroupID), "/")
-				if workerURL != "" {
-					baseURL = workerURL
-					workerProxyActive = true
-				}
-			}
-		}
-		// 原始上游 BaseURL,供 Worker 代理时注入 X-Target-Upstream 头。
-		originalBaseURL := strings.TrimRight(acc.BaseURL, "/")
 		var targetURL string
 		if upstreamFormat == "anthropic" {
 			targetURL = BuildAnthropicMessagesURL(baseURL)
 		} else {
 			targetURL = BuildOpenAIChatURL(baseURL)
+		}
+		// Other 号池组级 Cloudflare Worker 出口代理:组启用且 URL 非空时,仅改写 targetURL 的
+		// scheme/host(path/query 保留),不覆盖 BaseURL,避免 BuildOpenAIChatURL 在裸 Worker 域名上
+		// 重拼 /v1/chat/completions 丢掉 /api 等前缀导致上游 404(与 Antigravity 号池 compat.go 同口径)。
+		originalURL := targetURL
+		workerProxyActive := false
+		if poolChannel == "other" && targetGroupID != "" && pf.accountMgr != nil {
+			if pf.accountMgr.IsOtherWorkerProxyEnabled(targetGroupID) {
+				if workerURL := strings.TrimRight(pf.accountMgr.GetOtherWorkerProxyURL(targetGroupID), "/"); workerURL != "" {
+					if u, err := url.Parse(targetURL); err == nil {
+						if wu, err := url.Parse(workerURL); err == nil {
+							u.Scheme = wu.Scheme
+							u.Host = wu.Host
+							targetURL = u.String()
+							workerProxyActive = true
+						}
+					}
+				}
+			}
 		}
 
 		workerProxyTag := ""
@@ -336,7 +344,7 @@ func (pf *passthroughForward) run(
 			}
 			// Worker 通用代理出口：注入 X-Target-Upstream 头让 Worker 知道真正上游地址。
 			if workerProxyActive {
-				req.Header.Set("X-Target-Upstream", originalBaseURL)
+				req.Header.Set("X-Target-Upstream", originalURL)
 			}
 			if upstreamFormat == "anthropic" {
 				req.Header.Set("Accept", "application/json")
