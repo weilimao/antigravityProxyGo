@@ -837,6 +837,43 @@ export function renderModelsTable(stats: any) {
     }
 }
 
+// initModelRangeFilter 绑定模型统计表的时间范围筛选按钮(全部/今日/近三日/近七天)。
+// 「全部」复用 state.statsData.models(全量累计, 零开销零回归); 其余范围 invoke stats:model-range
+// 取后端 request_logs 范围聚合, 存 filteredModelStats 喂给 renderModelsTable。stats-updated tick
+// 不改写 filteredModelStats, 故范围视图冻结到下次切换(聚合视图不需秒级实时)。
+export function initModelRangeFilter() {
+    const sel = document.getElementById('modelRangeSelector');
+    if (!sel) return;
+    const buttons = sel.querySelectorAll('button[data-mrange]');
+    const activeClass = 'px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold';
+    const inactiveClass = 'px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium';
+
+    const applyRange = async (range: string) => {
+        state.currentModelRange = range as any;
+        buttons.forEach((b: any) => {
+            b.className = b.getAttribute('data-mrange') === range ? activeClass : inactiveClass;
+        });
+        if (range === 'all') {
+            state.filteredModelStats = null;
+            if (state.statsData) renderModelsTable(state.statsData);
+        } else {
+            try {
+                const resRaw = await ipcRenderer.invoke('stats:model-range', range);
+                const res = typeof resRaw === 'string' ? JSON.parse(resRaw) : resRaw;
+                const stats = (res && res.stats) ? res.stats : res;
+                state.filteredModelStats = stats || { models: {} };
+                renderModelsTable(state.filteredModelStats);
+            } catch (e) {
+                console.error('[Dashboard] model range fetch failed', e);
+            }
+        }
+    };
+
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => applyRange(btn.getAttribute('data-mrange') || 'all'));
+    });
+}
+
 export function renderActiveView() {
     if (state.activeView === 'dashboard') {
         const stats = state.statsData;
@@ -891,7 +928,13 @@ export function renderActiveView() {
 
         // 3. Render sub-tabs table (only the active one!)
         if (state.activeTab === 'models') {
-            renderModelsTable(stats);
+            // 模型统计表按 currentModelRange 取数据源: 'all' 复用全量 statsData(零开销零回归);
+            // 范围模式用 filteredModelStats(切换时 invoke 取得, tick 不改写故冻结到下次切换)。
+            if (state.currentModelRange === 'all' || !state.filteredModelStats) {
+                renderModelsTable(stats);
+            } else {
+                renderModelsTable(state.filteredModelStats);
+            }
         } else if (state.activeTab === 'logs') {
             renderLogsTable();
         }

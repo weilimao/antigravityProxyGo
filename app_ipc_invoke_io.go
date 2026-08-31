@@ -139,6 +139,31 @@ func (a *App) handleIOInvokeIPC(channel string, args []interface{}) (string, boo
 		a.AddLog(fmt.Sprintf("📥 [请求日志导出] 成功导出请求日志到: %s", filePath))
 		a.dialogSvc.RevealFile(filePath)
 		return marshalResponse(true)
+
+	case "stats:model-range":
+		// 模型统计表按时间范围筛选(今日/近三日/近七天)。「全部」由前端复用 statsData.models,
+		// 不走本通道; 本 case 只处理范围聚合: 从 request_logs 按 timestamp(RFC3339) >= sinceISO
+		// + GROUP BY model_name 聚合。返回形状镜像 getStatsPayload 的 stats.models, 前端复用 renderModelsTable。
+		rangeKey := getStringArg(0)
+		now := time.Now()
+		var since string
+		switch rangeKey {
+		case "today":
+			since = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Format(time.RFC3339)
+		case "3d":
+			since = now.Add(-72 * time.Hour).Format(time.RFC3339)
+		case "7d":
+			since = now.Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+		case "all", "":
+			since = ""
+		default:
+			return "", false, nil // 未识别 range, 交后续 handler fall-through
+		}
+		models := db.QueryModelStatsSince(since)
+		return marshalResponse(map[string]interface{}{
+			"range": rangeKey,
+			"stats": map[string]interface{}{"models": models},
+		})
 	}
 
 	return "", false, nil

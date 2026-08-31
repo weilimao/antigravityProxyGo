@@ -81,6 +81,47 @@ func QuerySummaryStats(userID, mode string) SummaryStats {
 	return sum
 }
 
+// QueryModelStatsSince 聚合指定时间点之后的 per-model 统计,供「模型统计」表按时间范围筛选。
+// sinceISO 为 RFC3339 字符串(timestamp 列同为 RFC3339, 可安全字符串范围比较, 见
+// GetTokensForUserModelFamilySince 的既有验证); 空串表示不过滤(全量), 用于「全部」口径对齐
+// statsData.models 的全量累计。刻意不按 user_id/mode 过滤: 贴近 statsData.models 全链路口径。
+func QueryModelStatsSince(sinceISO string) map[string]*ModelStatsSummary {
+	out := make(map[string]*ModelStatsSummary)
+	if GlobalDB == nil {
+		return out
+	}
+
+	query := `SELECT model_name, count(*), sum(in_tokens), sum(out_tokens), sum(cached_tokens), sum(cost) FROM request_logs`
+	var args []interface{}
+	if sinceISO != "" {
+		query += " WHERE timestamp >= ?"
+		args = append(args, sinceISO)
+	}
+	query += " GROUP BY model_name"
+
+	rows, err := GlobalDB.Query(query, args...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var m string
+		var reqs, inT, outT, cacheT int
+		var cost float64
+		if err := rows.Scan(&m, &reqs, &inT, &outT, &cacheT, &cost); err == nil {
+			out[m] = &ModelStatsSummary{
+				Reqs:         reqs,
+				InTokens:     inT,
+				OutTokens:    outT,
+				CachedTokens: cacheT,
+				Cost:         math.Round(cost*1000000.0) / 1000000.0,
+			}
+		}
+	}
+	return out
+}
+
 func QueryRecentRequests(userID, mode string, limit int) []*RequestLog {
 	if GlobalDB == nil {
 		return []*RequestLog{}

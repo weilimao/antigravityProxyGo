@@ -434,6 +434,16 @@
 <div class="flex-grow overflow-y-auto">
 <!-- 模型统计面板 -->
 <div class="hidden" id="modelsContent">
+<!-- 时间范围筛选: 全部(复用全量累计) / 今日 / 近三日 / 近七天(后端 request_logs 聚合) -->
+<div class="flex items-center gap-2 p-3 border-b border-outline-variant/30 bg-slate-50/60 dark:bg-white/[0.02]" id="modelRangeBar">
+<span class="text-[11px] font-bold text-outline dark:text-outline-variant mr-1" data-i18n="rangeLabel">范围</span>
+<div class="flex gap-1 bg-slate-100 dark:bg-white/5 p-0.5 rounded-lg text-[10px]" id="modelRangeSelector">
+<button class="px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold" data-mrange="all" data-i18n="rangeAll">全部</button>
+<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-mrange="today" data-i18n="rangeToday">今日</button>
+<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-mrange="3d" data-i18n="range3d">近三天</button>
+<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-mrange="7d" data-i18n="range7d">近七天</button>
+</div>
+</div>
 <table class="w-full text-left border-collapse" id="modelsTable">
 <thead>
 <tr class="border-b border-outline-variant/50 bg-slate-50/50 dark:bg-white/5">

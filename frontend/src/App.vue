@@ -203,7 +203,7 @@ import GrokAccountModal from './components/modals/GrokAccountModal.vue';
 import GrokThawModal from './components/modals/GrokThawModal.vue';
 import OtherAccountModal from './components/modals/OtherAccountModal.vue';
 import { initRemoteEvents } from './ui/remoteController';
-import { setLanguage, switchView, initDashboardEvents } from './ui/dashboard';
+import { setLanguage, switchView, initDashboardEvents, initModelRangeFilter } from './ui/dashboard';
 import { ipcRenderer } from './shared/ipc';
 import { initAutotriggerHistoryEvents } from './ui/autotriggerHistoryController';
 import { initPricingEvents } from './ui/pricingController';
@@ -380,6 +380,7 @@ onMounted(() => {
     // Only init controllers whose DOM is always present (Dashboard + global modules)
     initDashboardEvents();
     initChartFilters();
+    initModelRangeFilter();
     initMigrationEvents();
     initUpdaterEvents();
     initRemoteEvents();
