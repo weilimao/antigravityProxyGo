@@ -6,6 +6,7 @@ import (
 	"bytes"
 	_ "embed"
 	"image/png"
+	"runtime"
 	"syscall"
 
 	"github.com/energye/systray"
@@ -28,7 +29,15 @@ func setupTray(onShow func(), onQuit func()) {
 	onShowCallback = onShow
 	onQuitCallback = onQuit
 
-	go systray.Run(onReady, onExit)
+	// 必须锁定 OS 线程:Windows 托盘窗口的消息队列线程亲和,
+	// GetMessage 必须在创建窗口的那个线程上泵送。库自身的 init() 虽
+	// 调了 LockOSThread,但锁的是主 goroutine,不覆盖此处新启的 goroutine。
+	// 未锁定的 goroutine 会被 runtime 迁移到其他 OS 线程,届时点击消息滞留
+	// 旧线程队列、GetMessage 在新线程取空队列 → 幽灵图标(可见但点击无响应)。
+	go func() {
+		runtime.LockOSThread()
+		systray.Run(onReady, onExit)
+	}()
 }
 
 func quitTray() {

@@ -26,13 +26,14 @@ func (a *App) SetQuitting(quitting bool) {
 func (a *App) initTray() {
 	tray.SetupTray(
 		func() {
-			// 点击"显示控制面板"/双击托盘图标:恢复原实现 — 走 wailsRuntime.WindowShow,
-			// 异步化仅为了避免阻塞 systray 自身事件协程。
+			// 点击"显示控制面板"/双击托盘图标:WindowShow 与 stats 补偿全部异步,
+			// 避免 SetWindowVisible→eventsGate.Emit 在 systray 线程同步阻塞消息泵
+			// (该回调由 WndProc 在 systray 线程同步调用)。
 			go func() {
 				defer func() { _ = recover() }()
 				wailsRuntime.WindowShow(a.ctx)
+				a.SetWindowVisible(true)
 			}()
-			a.SetWindowVisible(true)
 		},
 		func() {
 			// 点击"退出代理引擎":设置退出标志并异步调用退出,避免阻塞托盘事件协程
