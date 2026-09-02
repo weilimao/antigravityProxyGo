@@ -9,6 +9,8 @@ export interface ModelMappingEntry {
   multimodal?: boolean | null;
   variantEfforts?: string[];
   maxInputTokens?: number | null;
+  /** 前端行渲染专用稳定 key(仅 UI 分页/vdom diff 用,保存时剔除,不落盘) */
+  _rowKey?: string;
 }
 
 export interface PoolTabInfo {

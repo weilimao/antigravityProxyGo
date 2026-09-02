@@ -600,7 +600,7 @@ async function loadRemoteKeys() {
 
         if (keys.length === 0) {
 
-            tbody.innerHTML = isZH ? `<tr><td colspan="5" class="text-center py-4 text-outline/60">暂无 API Key，请点击上方创建</td></tr>` : `<tr><td colspan="5" class="text-center py-4 text-outline/60">No API Keys, click above to create</td></tr>`;
+            tbody.innerHTML = isZH ? `<tr><td colspan="6" class="text-center py-4 text-outline/60">暂无 API Key，请点击上方创建</td></tr>` : `<tr><td colspan="6" class="text-center py-4 text-outline/60">No API Keys, click above to create</td></tr>`;
 
             return;
 
@@ -618,23 +618,35 @@ async function loadRemoteKeys() {
 
             const geminiQuota = formatQuota(k.usedGeminiTokens || 0, k.limitGeminiTokens || 0);
 
-            const claudeQuota = formatQuota(k.usedClaudeTokens || 0, k.limitClaudeTokens || 0);
+    const claudeQuota = formatQuota(k.usedClaudeTokens || 0, k.limitClaudeTokens || 0);
 
-            tr.innerHTML = `
+    const allowedModels: string[] = Array.isArray(k.allowedModels) ? k.allowedModels : [];
+    let modelsCell: string;
+    if (allowedModels.length === 0) {
+        modelsCell = `<span class="text-[11px] text-outline/50">${isZH ? '全部' : 'All'}</span>`;
+    } else {
+        const shown = allowedModels.slice(0, 2).map(m => `<span class="inline-block px-1.5 py-0.5 text-[10px] rounded bg-primary/10 text-primary truncate max-w-[80px]" title="${m}">${m}</span>`).join(' ');
+        const extra = allowedModels.length > 2 ? ` <span class="text-[10px] text-outline/60">+${allowedModels.length - 2}</span>` : '';
+        modelsCell = shown + extra;
+    }
+
+    tr.innerHTML = `
 
                 <td class="py-2.5 px-2 font-medium truncate max-w-[110px]" title="${k.name}">${k.name}</td>
 
                 <td class="py-2.5 font-mono text-outline/80">${displayKey}</td>
 
-                <td class="py-2.5 font-medium">${geminiQuota}</td>
+                <td class="py-2.5 font-medium whitespace-nowrap">${geminiQuota}</td>
 
-                <td class="py-2.5 font-medium">${claudeQuota}</td>
+        <td class="py-2.5 font-medium whitespace-nowrap">${claudeQuota}</td>
 
-                <td class="py-2.5 text-center">
+        <td class="py-2.5"><div class="flex flex-wrap items-center gap-1">${modelsCell}</div></td>
+
+        <td class="py-2.5 text-center">
 
                     <button class="btn-copy-remote-key text-primary hover:text-primary/80 mr-2" data-key="${k.key}" title="${isZH ? '复制' : 'Copy'}"><span class="material-symbols-outlined text-[16px] align-middle">content_copy</span></button>
 
-                    <button class="btn-edit-remote-key-quota text-primary hover:text-primary/80 mr-2" data-id="${k.id}" data-name="${k.name}" data-gemini="${k.limitGeminiTokens || 0}" data-claude="${k.limitClaudeTokens || 0}" title="${isZH ? '修改限额' : 'Modify Limit'}"><span class="material-symbols-outlined text-[16px] align-middle">edit</span></button>
+                    <button class="btn-edit-remote-key-quota text-primary hover:text-primary/80 mr-2" data-id="${k.id}" data-name="${k.name}" data-gemini="${k.limitGeminiTokens || 0}" data-claude="${k.limitClaudeTokens || 0}" data-models="${(k.allowedModels || []).join(',')}" title="${isZH ? '修改限额' : 'Modify Limit'}"><span class="material-symbols-outlined text-[16px] align-middle">edit</span></button>
 
                     <button class="btn-del-remote-key text-red-400 hover:text-red-600" data-id="${k.id}" title="${isZH ? '删除' : 'Delete'}"><span class="material-symbols-outlined text-[16px] align-middle">delete</span></button>
 
@@ -680,6 +692,9 @@ async function loadRemoteKeys() {
 
                 const currentClaude = parseInt(b.getAttribute('data-claude') || '0') || 0;
 
+                const modelsAttr = b.getAttribute('data-models') || '';
+                const currentModels = modelsAttr ? modelsAttr.split(',').filter((m: string) => m) : [];
+
                 const idEl = document.getElementById('remoteQuotaEditId') as HTMLInputElement;
 
                 const titleEl = document.getElementById('remoteQuotaEditTitle');
@@ -695,6 +710,8 @@ async function loadRemoteKeys() {
                 if (geminiEl) geminiEl.value = formatLimitForInput(currentGemini);
 
                 if (claudeEl) claudeEl.value = formatLimitForInput(currentClaude);
+
+                (window as any)._remoteKeyAllowedModelsSet?.(currentModels);
 
                 (window as any)._relayOpenModal('remoteKeyQuotaModal');
 
@@ -744,6 +761,7 @@ async function openRemoteKeysModal() {
     
 
     await loadRemoteKeys();
+    (window as any)._remoteKeyAllowedModelsLoad?.();
 
 }
 
@@ -855,7 +873,8 @@ async function handleSaveKeyQuota() {
 
     try {
 
-        const res = await ipcRenderer.invoke('remote:update-key-quota', id, limitGemini, limitClaude);
+        const allowedModels = (window as any)._remoteKeyAllowedModelsGet?.() || [];
+        const res = await ipcRenderer.invoke('remote:update-key-quota', id, limitGemini, limitClaude, allowedModels);
 
         if (res && res.success) {
 

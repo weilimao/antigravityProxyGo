@@ -56,6 +56,20 @@ type nvidiaLogCtx struct {
 	ReasoningEffort string
 }
 
+// bodyWithTiming 将 upstreamTimingReader 紧贴原始 resp.Body 并把它的引用带到下游。
+// 问题：nvidia.go:812 的 bufio.NewReader(resp.Body) 会在 Peek(1024) 时把
+// 最多 1024 字节预读到 bufio 内存缓冲区。若下游再建 upstreamTimingReader（包装
+// 已被缓冲的 reader），首次 Read 直接从内存返回，导致 FirstByteWait 永远≈0。
+// 解决：把 upstreamTimingReader 插在 resp.Body 和 bufReader 之间。
+// Peek(1024) 会成为第一个 Read → timing 正确记录首字节等待；下游通过 type-assert
+// 到 peekTiming() 提取 timing reader 的 FirstByteWait, 其余 reads/gap/bytes
+// 仍用下游再建的完整 timing。
+type bodyWithTiming struct {
+	io.Reader
+	io.Closer
+	peekTiming *upstreamTimingReader
+}
+
 // nvidiaHostFromBaseURL 从上游账号 BaseURL(如 https://integrate.api.nvidia.com/v1)
 // 提取裸 host(如 integrate.api.nvidia.com), 与 gemini/claude 直连链路 RequestLog.Host 只存
 // 裸 host 的口径一致。解析失败时回退为去掉协议前缀的 BaseURL, 仍保可读性。
@@ -212,6 +226,19 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 		isStreaming = req.Stream
 	}
 	// 流式也可能通过 Accept: text/event-stream 或 stream=true 表达，此处仅以 body.stream 为准。
+
+	// API Key 模型授权校验: 在 NVIDIA 配额校验前拦截未授权模型(精确匹配 inModel)。
+	// 仅当本 handler 作为一级入口(客户端直连 /nvidia/* 或 /vc/*)时执行; route 链路
+	// (/route/* 命中 nvidia 复用本 handler)时 body model 已被 patchRoutedBodyModel 改写为
+	// 无前缀上游名, 而授权列表配的是暴露名(带前缀), 两者无法精确匹配 —— 此时改在前置
+	// handleRoutedForward 用原始 inModel 校验过, 这里跳过避免误伤。
+	if h.authMgr != nil && h.authMgr.userMgr != nil && !routedRoutePrefixMatch(r.URL.Path) {
+		if err := h.authMgr.userMgr.IsModelAuthorizedForAPIKey(userSession.UserID, userSession.APIKeyID, inModel); err != nil {
+			h.log("🚫 [NVIDIA 中继] API Key 模型授权校验未通过: %v (User: %s)", err, userSession.UserKey)
+			writeModelNotAuthorized(w, inModel)
+			return
+		}
+	}
 
 	// NVIDIA family 配额预扣额校验（独立于 gemini/claude）
 	if h.authMgr != nil && h.authMgr.userMgr != nil {
@@ -787,7 +814,11 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 			// 这样小首帧(<1024B)场景下 FirstByteMs 如实反映上游响应头到达时刻, 不再被 Peek 推迟成≈DurationMs。
 			firstByteRec.MarkFirstByte()
 			if isStreaming {
-				bufReader := bufio.NewReader(resp.Body)
+				// 在 resp.Body 和 bufReader 之间插入 upstreamTimingReader：
+				// Peek(1024) 会触发真实网络 Read → timing 正确记录首字节等待；
+				// 下游通过 bodyWithTiming.peekTiming 提取该值与下游再建的完整 timing 组合成真实统计。
+				peekTiming := newUpstreamTimingReader(resp.Body)
+				bufReader := bufio.NewReader(peekTiming)
 				peekBytes, _ := bufReader.Peek(1024)
 				peekStr := string(peekBytes)
 				if strings.Contains(peekStr, `"error"`) && (strings.Contains(peekStr, `"ResourceExhausted"`) || strings.Contains(peekStr, `"internal_server_error"`) || strings.Contains(peekStr, `"Internal server error"`)) {
@@ -838,12 +869,10 @@ func (h *APICompatHandler) handleNvidia(w http.ResponseWriter, r *http.Request, 
 					h.accountMgr.ReleaseAccount(poolAccount.ID)
 					break
 				}
-				resp.Body = struct {
-					io.Reader
-					io.Closer
-				}{
-					Reader: bufReader,
-					Closer: resp.Body,
+				resp.Body = &bodyWithTiming{
+					Reader:     bufReader,
+					Closer:     resp.Body,
+					peekTiming: peekTiming,
 				}
 			}
 

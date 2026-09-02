@@ -381,6 +381,14 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 			case ctx != nil && ctx.Err() != nil:
 				attemptResult = "客户端取消"
 			}
+			// 首轮(cycle 0 attempt 0)的 firstResp.Body 已在 nvidia.go 被替换为
+			// *bodyWithTiming(紧贴原始 socket,在 bufReader 之前)。下游 timing 包装的是
+			// 已被 bufio 缓冲后的 reader,FirstByteWait≈0;需从 bodyWithTiming.peekTiming
+			// 提取真实的「响应头→首数据字节」等待,其余 reads/gap/bytes 仍用下游 timing。
+			fbWait := upStat.FirstByteWait
+			if bwt, ok := activeBody.(*bodyWithTiming); ok && bwt.peekTiming != nil {
+				fbWait = bwt.peekTiming.snapshot().FirstByteWait
+			}
 			// poolAccount 可能为 nil(测试路径如 TestWriteNvidiaAnthropicStream_FlusherInvoked
 			// 仅需验证 Flusher 被调用,不关心账号),故取 Email速空前先防御。
 			accountLabel := "(nil)"
@@ -389,7 +397,7 @@ func (h *APICompatHandler) pullAnthropicStreamWithRetry(r *http.Request, firstRe
 			}
 			h.log("📊 [NVIDIA 流式统计] 周期 %d/%d 第 %d/%d 次 账号 %s | 首字节等待 %v | 读批 %d gapMax %v gapP95 %v | 字节 %d | 本批耗时 %v | 结果 %s",
 				cycle+1, maxCycles, attempt+1, maxRetries, accountLabel,
-				upStat.FirstByteWait.Round(time.Millisecond), upStat.Reads,
+				fbWait.Round(time.Millisecond), upStat.Reads,
 				upStat.GapMax.Round(time.Millisecond), upStat.GapP95.Round(time.Millisecond),
 				upStat.Bytes, upStat.Elapsed.Round(time.Millisecond), attemptResult)
 			// ID 一致性锚定:首轮(无 pin)之后,持续持有 emitted 作为后续轮的 pin。

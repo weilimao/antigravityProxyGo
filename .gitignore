@@ -26,3 +26,6 @@ preload.js
 
 # 临时备份文件
 *.bak
+
+# 本地 agent 工作产物
+.zcode/

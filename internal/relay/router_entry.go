@@ -120,6 +120,16 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// API Key 模型授权校验: 在路由解析前拦截未授权模型(精确匹配客户端请求的原始 inModel,
+	// 与 nvidia/grok/gemini 链路同口径)。空 AllowedModels = 不限制(全部授权), 兼容旧数据。
+	if h.authMgr != nil && h.authMgr.userMgr != nil {
+		if err := h.authMgr.userMgr.IsModelAuthorizedForAPIKey(userSession.UserID, userSession.APIKeyID, inModel); err != nil {
+			h.log("🚫 [路由转发] API Key 模型授权校验未通过: %v (User: %s)", err, userSession.UserKey)
+			writeModelNotAuthorized(w, inModel)
+			return
+		}
+	}
+
 	// 变体后缀虚项感知: 若 inModel 形如 "{ClientModel}-{effort}" 且 stripping 出的 baseModel
 	// 与 effort 均已在 mapping 表的 VariantEfforts 集合内声明, 视为客户端选择了思考等级变体虚项。
 	// 剥离出 baseModel 作为路由查找依据, effort 作为请求体思考强度兜底注入(仅当客户端未显式带时);

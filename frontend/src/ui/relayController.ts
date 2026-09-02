@@ -1,5 +1,6 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
+import { modelMappingEverActive } from './relaySubTabState';
 
 // Force import the modules to ensure window bindings are registered
 import { refreshRelayPackages } from './relayPackages';
@@ -151,7 +152,8 @@ export function initRelayEvents() {
         if (btnRelaySubTabTutorial) btnRelaySubTabTutorial.className = active === 'tutorial' ? subTabActiveClass : subTabInactiveClass;
 
         if (active === 'modelmapping') {
-            // Model mapping panel loads data via Vue onMounted in ModelMappingPanel.vue
+            // 首次激活才挂载模型映射面板(重型组件,82+ 行组合框),避免设置页一打开就全量渲染。
+            modelMappingEverActive.value = true;
         }
     }
 

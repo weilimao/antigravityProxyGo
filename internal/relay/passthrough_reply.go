@@ -372,8 +372,8 @@ func (h *APICompatHandler) proxyPassthroughAnthropic(w http.ResponseWriter, resp
 			doneSent = true
 			continue
 		}
-		// Anthropic SSE 事件:取 message_delta.usage 的累计 input/output/cached 作为权威。
-		// message_start 不带 message_delta,但若上游给了 message_start.usage 也读一次作初值兜底。
+		// Anthropic SSE 事件:message_start.message.usage.input_tokens 为输入 token 权威来源,
+		// message_delta.usage 的累计 output_tokens 为输出权威;两者均嗅探。
 		var ev struct {
 			Type  string                  `json:"type"`
 			Delta json.RawMessage         `json:"delta,omitempty"`
@@ -382,23 +382,55 @@ func (h *APICompatHandler) proxyPassthroughAnthropic(w http.ResponseWriter, resp
 		if json.Unmarshal([]byte(data), &ev) != nil {
 			continue
 		}
-		if ev.Type == "message_delta" {
-			// message_delta 的 usage 在顶层(与 delta 平级),且为累计值。
+		if ev.Type == "message_start" {
+			// message_start.message.usage.input_tokens 是输入 token 的权威来源
+			// (Anthropic 协议: message_delta 通常只带 output_tokens, 不带 input_tokens)。
+			// 此前注释声明"若上游给了 message_start.usage 也读一次作初值兜底"但未实现,
+			// 导致遵循标准协议的第三方镜像(如 api.radium.cloud)统计 ↑ 恒为 0。
+			var ms struct {
+				Message struct {
+					Usage AnthropicResponseUsage `json:"usage"`
+				} `json:"message"`
+			}
+			if json.Unmarshal([]byte(data), &ms) == nil && ms.Message.Usage.InputTokens > 0 {
+				inUsage = ms.Message.Usage.InputTokens
+			}
+		} else if ev.Type == "message_delta" {
+			// message_delta 的 usage 在 delta 内或事件顶层,且为累计值。
+			// 仅当字段 > 0 时才覆盖,避免标准 Anthropic 的 message_delta(无 input_tokens)
+			// 把 message_start 已设的 inUsage 清零。
 			var d struct {
 				Usage AnthropicResponseUsage `json:"usage"`
 			}
 			if json.Unmarshal(ev.Delta, &d) == nil && (d.Usage.InputTokens > 0 || d.Usage.OutputTokens > 0) {
-				inUsage = d.Usage.InputTokens
-				outUsage = d.Usage.OutputTokens
-				cachedUsage = d.Usage.CachedTokens()
+				if d.Usage.InputTokens > 0 {
+					inUsage = d.Usage.InputTokens
+				}
+				if d.Usage.OutputTokens > 0 {
+					outUsage = d.Usage.OutputTokens
+				}
+				if c := d.Usage.CachedTokens(); c > 0 {
+					cachedUsage = c
+				}
 			}
 			// 部分 Anthropic 镜像把 usage 放在事件顶层而非 delta 内,作兜底。
 			if ev.Usage != nil && (ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0) {
-				inUsage = ev.Usage.InputTokens
-				outUsage = ev.Usage.OutputTokens
-				cachedUsage = ev.Usage.CachedTokens()
+				if ev.Usage.InputTokens > 0 {
+					inUsage = ev.Usage.InputTokens
+				}
+				if ev.Usage.OutputTokens > 0 {
+					outUsage = ev.Usage.OutputTokens
+				}
+				if c := ev.Usage.CachedTokens(); c > 0 {
+					cachedUsage = c
+				}
 			}
 		}
+	}
+	// 流末兜底:上游 message_start 缺 input_tokens 且 message_delta 也未带时,
+	// 按入站请求体估算(与非流式分支同口径),避免统计落库 ↑0。
+	if inUsage == 0 && outUsage > 0 {
+		inUsage = EnsureInputTokens(0, inboundBody)
 	}
 	if !doneSent {
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))

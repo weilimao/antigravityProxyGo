@@ -27,18 +27,25 @@ export const ipcRenderer = {
         }
     },
 
-    on(channel: string, callback: (event: any, ...args: any[]) => void): void {
-        if (wailsRuntime && wailsRuntime.EventsOn) {
-            wailsRuntime.EventsOn(channel, (...args: any[]) => {
+    // 返回取消订阅函数:调用方(如 useModelMapping)在组件卸载时调用,避免监听器随挂载次数累积泄漏。
+    // 注意: wailsjs 模块导出的 EventsOn 永远存在,真实可用性取决于 window.runtime 是否已注入,
+    // 未就绪时缓存到 pending 队列由 initWailsReady 统一 flush(与 ipc.test.ts 契约一致)。
+    on(channel: string, callback: (event: any, ...args: any[]) => void): () => void {
+        if (wailsRuntime && wailsRuntime.EventsOn && (window as any).runtime) {
+            return wailsRuntime.EventsOn(channel, (...args: any[]) => {
                 // Electron listener signature is (event, ...args).
                 // We mock the event object with a sender reference.
                 callback({ sender: ipcRenderer }, ...args);
             });
-        } else {
-            const pending = (window as any).wailsPendingListeners || [];
-            pending.push({ channel, callback });
-            (window as any).wailsPendingListeners = pending;
         }
+        const pending = (window as any).wailsPendingListeners || [];
+        pending.push({ channel, callback });
+        (window as any).wailsPendingListeners = pending;
+        return () => {
+            const list = (window as any).wailsPendingListeners || [];
+            const idx = list.findIndex((item: any) => item.channel === channel && item.callback === callback);
+            if (idx >= 0) list.splice(idx, 1);
+        };
     }
 };
 

@@ -52,6 +52,9 @@ type UserAPIKey struct {
 	UsedClaudeTokens  int64     `json:"usedClaudeTokens"`
 	UsedNvidiaTokens  int64     `json:"usedNvidiaTokens"`
 	UsedGrokTokens    int64     `json:"usedGrokTokens"`
+	// AllowedModels 是该 API Key 授权可调用的模型白名单(精确匹配)。
+	// 空/nil = 不限制(全部模型授权,兼容旧数据); 非空 = 仅允许列表中的模型名完全一致时调用。
+	AllowedModels []string `json:"allowedModels,omitempty"`
 }
 
 type RelayUser struct {
@@ -285,7 +288,7 @@ func (m *UserManager) ValidateAPIKey(token string) (*RelayUser, *UserAPIKey, err
 	return nil, nil, fmt.Errorf("invalid api key")
 }
 
-func (m *UserManager) UpdateAPIKeyQuota(userID string, keyID string, limitGemini, limitClaude int64) error {
+func (m *UserManager) UpdateAPIKeyQuota(userID string, keyID string, limitGemini, limitClaude int64, allowedModels []string) error {
 	m.Lock()
 	defer m.Unlock()
 
@@ -295,6 +298,7 @@ func (m *UserManager) UpdateAPIKeyQuota(userID string, keyID string, limitGemini
 				if k.ID == keyID {
 					u.APIKeys[i].LimitGeminiTokens = limitGemini
 					u.APIKeys[i].LimitClaudeTokens = limitClaude
+					u.APIKeys[i].AllowedModels = allowedModels
 					m.saveToDiskLocked()
 					return nil
 				}
@@ -303,6 +307,49 @@ func (m *UserManager) UpdateAPIKeyQuota(userID string, keyID string, limitGemini
 		}
 	}
 	return fmt.Errorf("user not found")
+}
+
+// IsModelAuthorizedForAPIKey 校验某 API Key 是否授权了指定模型(精确匹配)。
+// 语义: key.AllowedModels 为空→放行(全部允许,兼容旧数据); 非空→model 必须与列表
+// 某项完全一致才放行。找不到 user 或 key(如 official_bypass/default_bypass 兜底分支
+// 经 ValidateToken 赋的标记 APIKeyID, 无对应 UserAPIKey 实体)→放行,不阻断兜底链路。
+func (m *UserManager) IsModelAuthorizedForAPIKey(userID, apiKeyID, model string) error {
+	if apiKeyID == "" || model == "" {
+		return nil
+	}
+	m.RLock()
+	defer m.RUnlock()
+
+	var user *RelayUser
+	for _, u := range m.users {
+		if u.ID == userID {
+			user = u
+			break
+		}
+	}
+	if user == nil {
+		return nil
+	}
+
+	var key *UserAPIKey
+	for i := range user.APIKeys {
+		if user.APIKeys[i].ID == apiKeyID {
+			key = &user.APIKeys[i]
+			break
+		}
+	}
+	if key == nil {
+		return nil
+	}
+	if len(key.AllowedModels) == 0 {
+		return nil
+	}
+	for _, allowed := range key.AllowedModels {
+		if allowed == model {
+			return nil
+		}
+	}
+	return fmt.Errorf("model %q is not authorized for this API key; allowed: %v", model, key.AllowedModels)
 }
 
 func (m *UserManager) RecordAPIKeyUsage(userID string, apiKeyID string, isClaude bool, tokens int64) {

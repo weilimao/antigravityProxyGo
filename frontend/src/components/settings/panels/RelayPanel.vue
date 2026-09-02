@@ -172,7 +172,8 @@
 
 <!-- 模型映射面板 (Vue SFC，复用 ModelSearchSelect 公共组件) -->
 <div id="relay-sub-panel-modelmapping" class="flex flex-col gap-6 w-full hidden">
-    <ModelMappingPanel />
+    <!-- 懒挂载:首次点击「模型映射」子 Tab 才渲染该重型面板;激活后保持挂载以保留未保存的行内编辑 -->
+    <ModelMappingPanel v-if="modelMappingEverActive" />
 </div>
 <!-- 教程子面板(中继服务器子 tab) -->
 <div id="relay-sub-panel-tutorial" class="flex flex-col gap-6 w-full hidden">
@@ -339,5 +340,12 @@ Authorization: Bearer sk-ant-...</pre>
 </template>
 
 <script setup lang="ts">
+import { onUnmounted } from 'vue';
 import ModelMappingPanel from '../relay-mapping/ModelMappingPanel.vue';
+import { modelMappingEverActive } from '../../../ui/relaySubTabState';
+
+// 设置页卸载(路由离开)时复位懒挂载标记,下次进入设置页仍是首次激活才挂载。
+onUnmounted(() => {
+  modelMappingEverActive.value = false;
+});
 </script>

@@ -70,7 +70,6 @@ import type { ModelMappingEntry } from './types';
 
 const props = defineProps<{
   item: ModelMappingEntry;
-  index: number;
   rowModels: string[];
   showInjectKwargs: boolean;
   isStale: boolean;

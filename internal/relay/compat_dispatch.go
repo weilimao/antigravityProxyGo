@@ -28,6 +28,19 @@ func (h *APICompatHandler) handleOpenAIChat(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// API Key 模型授权校验: 仅允许 key.AllowedModels 白名单内的模型调用(精确匹配)。
+	// 空 AllowedModels = 不限制(全部授权, 兼容旧数据)。校验客户端请求的原始模型名,
+	// 在 model 映射(MapClientModelToGemini)之前拦截, 符合"授权了哪个模型名就只让调哪个"的语义。
+	// route 链路(/route/* 复用本 handler 作 google 族分发)时 body model 已被改写为上游名,
+	// 授权校验改在前置 handleRoutedForward 用原始 inModel 执行, 这里跳过。
+	if h.authMgr != nil && h.authMgr.userMgr != nil && !routedRoutePrefixMatch(r.URL.Path) {
+		if err := h.authMgr.userMgr.IsModelAuthorizedForAPIKey(userSession.UserID, userSession.APIKeyID, openReq.Model); err != nil {
+			h.log("🚫 [Relay Compat] API Key 模型授权校验未通过: %v (User: %s)", err, userSession.UserKey)
+			writeModelNotAuthorized(w, openReq.Model)
+			return
+		}
+	}
+
 	geminiModel := MapClientModelToGemini(openReq.Model, h.getModelMapping())
 	geminiReq := TranslateOpenAIToGemini(openReq)
 
@@ -204,6 +217,16 @@ func (h *APICompatHandler) handleAnthropicMessages(w http.ResponseWriter, r *htt
 		return
 	}
 	anthReq.UserAgent = r.Header.Get("User-Agent")
+
+	// API Key 模型授权校验(与 handleOpenAIChat 同口径, 在 model 映射前拦截客户端原始模型名)。
+	// route 链路(/route/* 复用本 handler)时 body model 已被改写, 改在前置 handleRoutedForward 校验。
+	if h.authMgr != nil && h.authMgr.userMgr != nil && !routedRoutePrefixMatch(r.URL.Path) {
+		if err := h.authMgr.userMgr.IsModelAuthorizedForAPIKey(userSession.UserID, userSession.APIKeyID, anthReq.Model); err != nil {
+			h.log("🚫 [Relay Compat] API Key 模型授权校验未通过: %v (User: %s)", err, userSession.UserKey)
+			writeModelNotAuthorized(w, anthReq.Model)
+			return
+		}
+	}
 
 	geminiModel := MapClientModelToGemini(anthReq.Model, h.getModelMapping())
 	geminiReq := TranslateAnthropicToGemini(&anthReq)

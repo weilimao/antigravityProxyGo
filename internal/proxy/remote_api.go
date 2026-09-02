@@ -131,8 +131,10 @@ func (rr *RemoteRelay) DeleteRemoteKey(id string) error {
 	return nil
 }
 
-// UpdateRemoteKeyQuota updates the Gemini and Claude token quotas for a specific API Key on the remote server
-func (rr *RemoteRelay) UpdateRemoteKeyQuota(id string, limitGemini, limitClaude int64) error {
+// UpdateRemoteKeyQuota updates the Gemini/Claude token quotas and the allowed-models
+// whitelist for a specific API Key on the remote server.
+// allowedModels == nil/empty 表示全部允许(不限制), 与后端 UserAPIKey.AllowedModels 语义一致。
+func (rr *RemoteRelay) UpdateRemoteKeyQuota(id string, limitGemini, limitClaude int64, allowedModels []string) error {
 	rr.RLock()
 	config := rr.config
 	rr.RUnlock()
@@ -143,9 +145,10 @@ func (rr *RemoteRelay) UpdateRemoteKeyQuota(id string, limitGemini, limitClaude 
 
 	url := rr.buildURL("/api/keys/update-quota")
 	payload := map[string]interface{}{
-		"id":                 id,
-		"limitGeminiTokens":  limitGemini,
-		"limitClaudeTokens":  limitClaude,
+		"id":                id,
+		"limitGeminiTokens": limitGemini,
+		"limitClaudeTokens": limitClaude,
+		"allowedModels":     allowedModels,
 	}
 	body, _ := json.Marshal(payload)
 
@@ -171,6 +174,47 @@ func (rr *RemoteRelay) UpdateRemoteKeyQuota(id string, limitGemini, limitClaude 
 	}
 
 	return nil
+}
+
+// FetchRemoteKeyModels retrieves the list of exposed models from the remote relay server,
+// 供前端编辑 API Key 授权模型时作为可选候选下拉。
+func (rr *RemoteRelay) FetchRemoteKeyModels() ([]string, error) {
+	rr.RLock()
+	config := rr.config
+	rr.RUnlock()
+
+	if !config.Connected {
+		return nil, fmt.Errorf("not connected to remote relay")
+	}
+
+	url := rr.buildURL("/api/keys/models")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+config.Token)
+
+	resp, err := noProxyClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result struct {
+		Models []string `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result.Models, nil
 }
 
 // FetchRemoteStats retrieves statistics from the remote relay server

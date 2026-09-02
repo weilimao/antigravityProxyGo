@@ -389,7 +389,7 @@ func TestAPIKeyQuotaLimits(t *testing.T) {
 	}
 
 	// 4. 更新 API Key 配额限制
-	err = userMgr.UpdateAPIKeyQuota(user.ID, apiKey.ID, 500000, 100000)
+	err = userMgr.UpdateAPIKeyQuota(user.ID, apiKey.ID, 500000, 100000, nil)
 	if err != nil {
 		t.Fatalf("failed to update API Key quota: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestAPIHandlerRoutes(t *testing.T) {
 	authMgr := NewAuthManager(userMgr)
 	statsMgr := NewStatsTracker(nil)
 	pkgMgr := NewPackageManager()
-	handler := NewAPIHandler(authMgr, statsMgr, pkgMgr, func(s string) {}, "")
+	handler := NewAPIHandler(authMgr, statsMgr, pkgMgr, func(s string) {}, "", nil)
 
 	// Test POST /api/keys/update-quota
 	req, _ := http.NewRequest(http.MethodPost, "/api/keys/update-quota", nil)

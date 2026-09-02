@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 
 	"antigravity-proxy/internal/db"
+	"antigravity-proxy/internal/settings"
 )
 
 type APIHandler struct {
@@ -17,6 +19,7 @@ type APIHandler struct {
 	logFn        func(string)
 	caCertPath   string // 服务器 CA 证书路径，供远程客户端下载
 	loginLimiter *RateLimiter
+	settingsMgr  settings.ManagerInterface
 }
 
 func compareQuotas(q1, q2 UserQuotas) bool {
@@ -45,7 +48,7 @@ func compareQuotas(q1, q2 UserQuotas) bool {
 		rl1 == rl2
 }
 
-func NewAPIHandler(authMgr *AuthManager, statsMgr *StatsTracker, packageMgr *PackageManager, logFn func(string), caCertPath string) *APIHandler {
+func NewAPIHandler(authMgr *AuthManager, statsMgr *StatsTracker, packageMgr *PackageManager, logFn func(string), caCertPath string, settingsMgr settings.ManagerInterface) *APIHandler {
 	return &APIHandler{
 		authMgr:      authMgr,
 		statsMgr:     statsMgr,
@@ -53,6 +56,7 @@ func NewAPIHandler(authMgr *AuthManager, statsMgr *StatsTracker, packageMgr *Pac
 		logFn:        logFn,
 		caCertPath:   caCertPath,
 		loginLimiter: NewRateLimiter(),
+		settingsMgr:  settingsMgr,
 	}
 }
 
@@ -82,6 +86,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleCreateAPIKey(w, r)
 	case path == "/api/keys/update-quota" && r.Method == http.MethodPost:
 		h.handleUpdateAPIKeyQuota(w, r)
+	case path == "/api/keys/models" && r.Method == http.MethodGet:
+		h.handleGetAPIKeyModels(w, r)
 	case strings.HasPrefix(path, "/api/keys/") && r.Method == http.MethodDelete:
 		h.handleDeleteAPIKey(w, r)
 	default:
@@ -254,9 +260,10 @@ func (h *APIHandler) handleUpdateAPIKeyQuota(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var req struct {
-		ID                string `json:"id"`
-		LimitGeminiTokens int64  `json:"limitGeminiTokens"`
-		LimitClaudeTokens int64  `json:"limitClaudeTokens"`
+		ID                string   `json:"id"`
+		LimitGeminiTokens int64    `json:"limitGeminiTokens"`
+		LimitClaudeTokens int64    `json:"limitClaudeTokens"`
+		AllowedModels     []string `json:"allowedModels"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid request body"})
@@ -266,13 +273,65 @@ func (h *APIHandler) handleUpdateAPIKeyQuota(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "missing key id"})
 		return
 	}
-	err = h.authMgr.userMgr.UpdateAPIKeyQuota(session.UserID, req.ID, req.LimitGeminiTokens, req.LimitClaudeTokens)
+	err = h.authMgr.userMgr.UpdateAPIKeyQuota(session.UserID, req.ID, req.LimitGeminiTokens, req.LimitClaudeTokens, req.AllowedModels)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
+	})
+}
+
+// handleGetAPIKeyModels 返回当前中继对外暴露的模型清单(模型映射里 Expose==true 的
+// ClientModel 去重排序),供前端在编辑 API Key 授权模型时作为可选候选下拉。
+func (h *APIHandler) handleGetAPIKeyModels(w http.ResponseWriter, r *http.Request) {
+	token := extractBearerToken(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing token"})
+		return
+	}
+	if _, err := h.authMgr.ValidateToken(token); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	var mapping []settings.ModelMappingEntry
+	if h.settingsMgr != nil {
+		mapping = h.settingsMgr.GetRelayModelMapping()
+	}
+	if len(mapping) == 0 {
+		mapping = settings.GetDefaultModelMappings()
+	}
+	seen := make(map[string]bool)
+	var models []string
+	for _, e := range mapping {
+		if !e.Expose {
+			continue
+		}
+		if seen[e.ClientModel] {
+			continue
+		}
+		seen[e.ClientModel] = true
+		models = append(models, e.ClientModel)
+	}
+	sort.Strings(models)
+	if models == nil {
+		models = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"models":  models,
+	})
+}
+
+// writeModelNotAuthorized 写 403 模型未授权响应,供各号池 handler 在
+// IsModelAuthorizedForAPIKey 校验失败时统一回写(OpenAI/Anthropic 客户端均可识别)。
+func writeModelNotAuthorized(w http.ResponseWriter, model string) {
+	writeJSON(w, http.StatusForbidden, map[string]interface{}{
+		"error": map[string]interface{}{
+			"type":    "model_not_authorized",
+			"message": fmt.Sprintf("model %q is not authorized for this API key", model),
+		},
 	})
 }
 

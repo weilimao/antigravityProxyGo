@@ -96,7 +96,7 @@ func openAIChatSSEToAnthropicSSEIntoPinned(ctx context.Context, reader io.Reader
 		pinnedToolIDs:  pinnedToolIDs,
 		emittedToolIDs: map[int]string{},
 		// 心跳看门狗:让 sseBlockStates 能在每次真正写出业务 delta 后通知看门狗刷新时间戳。
-		heartbeat:      hb,
+		heartbeat: hb,
 	}
 	stopReason := ""
 
@@ -239,15 +239,26 @@ func openAIChatSSEToAnthropicSSEIntoPinned(ctx context.Context, reader io.Reader
 // kind 取值:"text" | "tool_use" | "thinking"。thinking 块固定占 index 0,先于 text/tool 块,
 // 一旦开过即永久占位(不从 map 删除),保证后续 text/tool 块按官方"index 单调递增不复用"分配。
 type sseBlock struct {
-	index           int
-	kind            string // "text" | "tool_use" | "thinking"
-	toolID          string
-	toolName        string
+	index    int
+	kind     string // "text" | "tool_use" | "thinking"
+	toolID   string
+	toolName string
+	// pendingArgs 暂存"名字尚未到达"期间收到的 arguments 分片(emitToolCallDelta 延迟开块用),
+	// 名字到达补发 content_block_start 后一次性 flush 出去,保证参数顺序不乱。
+	pendingArgs     string
 	textStarted     bool
 	toolStarted     bool
 	thinkingStarted bool // thinking 块已开块且至少发过一条 thinking_delta 的标志
 	closed          bool // 该块是否已发过 content_block_stop,避免 closeAll 重复关块
 }
+
+// toolKeyNS 是 tool_use 块在 sseBlockStates.blocks 中的 map key 命名空间起点:
+// thinking/text 块占据 0/1 等小键位(key==Anthropic index),tool 块用 toolKeyNS+上游 tc.Index,
+// 两类键位永不相交。旧实现 key = base + tc.Index,base 随 thinking/text 开块状态在分片间漂移:
+// 同一 tc.Index 的分片在"名字未到延迟开块"期间可能前后落到不同 key,后段命中 text/thinking 块,
+// 把工具名/参数写进文本块 → 同 index 二次 start、缓存参数前半丢失 → 客户端拿到残缺 JSON 的
+// tool_use(ZCode: "Tool call ended without a terminal event")。
+const toolKeyNS = 1 << 20
 
 type sseBlockStates struct {
 	mu          sync.Mutex
@@ -274,12 +285,24 @@ type sseBlockStates struct {
 	heartbeat *heartbeatWatchdog
 }
 
-// nextFreeIndex 返回当前 blocks 中未占用的最小 index,供 text/tool 块分配使用。
-// 引入 thinking 块(固定占 index 0)后,text 与 tool 块需据此整体后移一位,避免与 thinking 块抢同 index。
+// nextFreeIndex 返回下一个可用的 Anthropic content_block index。
+// 以"已实际开块(start)的块"占用的 index 为准(而非 map key):延迟开块的工具块在名字到达前
+// 不占位,保证其开块时刻分配到的 index 严格大于所有已发出块的 index(单调递增),
+// 不会回填已被 text/thinking 用过的旧 index。
 func (s *sseBlockStates) nextFreeIndex() int {
 	used := map[int]bool{}
-	for k := range s.blocks {
-		used[k] = true
+	for _, blk := range s.blocks {
+		if blk == nil {
+			continue
+		}
+		switch {
+		case blk.kind == "tool_use" && !blk.toolStarted:
+			// 延迟未开块的工具块:尚无 Anthropic index,不占位
+		case blk.kind == "thinking" && !blk.thinkingStarted:
+			// 从未下发 thinking_delta 的空思考块:不占位
+		default:
+			used[blk.index] = true
+		}
 	}
 	for i := 0; ; i++ {
 		if !used[i] {
@@ -328,23 +351,23 @@ func (s *sseBlockStates) emitTextDelta(text string, fw sseEventSink) {
 	}
 }
 
-// closeThinkingIfOpen 在锁内调用:若 blocks[0] 是已开块(thinkingStarted)且尚未关闭的 thinking 块,
-// 按 official 序列发 signature_delta(空)+content_block_stop 闭合它,并标记 closed,
-// 但不从 map 删除——以保证后续 text/tool 块按官方"index 单调递增不复用 thinking 的 0 位"分配。
+// closeThinkingIfOpen 在锁内调用:闭合所有已开块(thinkingStarted)且尚未关闭的 thinking 块,
+// 按官方序列发 signature_delta(空)+content_block_stop,并标记 closed,
+// 但不从 map 删除——以保证后续 text/tool 块按官方"index 单调递增不复用 thinking 的位"分配。
 // 仅可开块却从未下发 thinking_delta 的异常 thinking 块(thinkingStarted==false)静默丢弃且不占位。
 func (s *sseBlockStates) closeThinkingIfOpen(fw sseEventSink) {
-	b, ok := s.blocks[0]
-	if !ok || b == nil || b.kind != "thinking" || b.closed {
-		return
-	}
-	if b.thinkingStarted {
-		fw.writeEvent("content_block_delta", contentBlockSignatureDeltaPayload(b.index, ""))
-		fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
-		b.closed = true
-	}
-	// 未发过 thinking_delta 的空块:丢弃,不占位(无推理模型守卫),从 map 删除
-	if !b.thinkingStarted {
-		delete(s.blocks, 0)
+	for k, b := range s.blocks {
+		if b == nil || b.kind != "thinking" || b.closed {
+			continue
+		}
+		if b.thinkingStarted {
+			fw.writeEvent("content_block_delta", contentBlockSignatureDeltaPayload(b.index, ""))
+			fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
+			b.closed = true
+		} else {
+			// 未发过 thinking_delta 的空块:丢弃,不占位(无推理模型守卫),从 map 删除
+			delete(s.blocks, k)
+		}
 	}
 }
 
@@ -450,27 +473,19 @@ func rewriteToolCallID(upstreamID string, index int) string {
 func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.hasToolCall = true
 	// 若 thinking 块当前已开:先按官方序列完整闭合它(signature_delta → stop)再开 tool_use,
 	// 保证"思考先于正文/工具"且 thinking 块在 tool_use 块之前完全闭合。
 	s.closeThinkingIfOpen(fw)
 	// 若 text 块当前已开:先闭合 text 块(content_block_stop)再开 tool_use,
 	// 保证 content_block 严格串行闭合，杜绝 text 与 tool_use 块交错重叠导致 SDK 报「工具被中断」。
 	s.closeTextIfOpen(fw)
-	// tool_use 块 index 分配:base = 已开(含已关)块数量 —— thinking 开过占 1 位 + text 开过占 1 位。
-	// 上游 tc.Index 是该工具调用在上游工具列表里的位次,key = base + tc.Index 保证多工具不抢 index,
-	// 且工具块严格排在 thinking/text 之后,符合官方"思考→正文→工具"或"思考→工具"顺序。
-	base := 0
-	if b0, ok := s.blocks[0]; ok && b0 != nil && b0.kind == "thinking" {
-		base = 1
+	// tool 块的 map key 固定用 toolKeyNS+tc.Index,与 thinking/text 的小键位命名空间隔离,
+	// 同一工具调用的所有分片无论 thinking/text 开块状态如何变化都命中同一块(根因见 toolKeyNS 注释)。
+	upstreamIdx := tc.Index
+	if upstreamIdx < 0 {
+		upstreamIdx = 0 // 防御:负 index 会落进 text/thinking 键位区间
 	}
-	if s.textEmitted {
-		base = 1
-		if b0, ok := s.blocks[0]; ok && b0 != nil && b0.kind == "thinking" {
-			base = 2
-		}
-	}
-	key := base + tc.Index
+	key := toolKeyNS + upstreamIdx
 	b, ok := s.blocks[key]
 	if !ok {
 		// 若此前有其他已开启但未闭合的 tool_use 块，在新 tool_use 开启前先闭合前一个工具块，
@@ -486,30 +501,56 @@ func (s *sseBlockStates) emitToolCallDelta(tc ChatToolCall, fw sseEventSink) {
 		toolID := ""
 		pinned := false
 		if s.pinnedToolIDs != nil {
-			if p, has := s.pinnedToolIDs[tc.Index]; has && p != "" {
+			if p, has := s.pinnedToolIDs[upstreamIdx]; has && p != "" {
 				toolID = p
 				pinned = true
 			}
 		}
 		if toolID == "" {
-			toolID = rewriteToolCallID(tc.ID, tc.Index)
+			toolID = rewriteToolCallID(tc.ID, upstreamIdx)
 		}
-		b = &sseBlock{index: key, kind: "tool_use", toolID: toolID, toolName: tc.Function.Name}
+		b = &sseBlock{kind: "tool_use", toolID: toolID, toolName: tc.Function.Name}
 		s.blocks[key] = b
 		// 同步累积 emitted 快照(首轮无 pin 时被调用方取走,后续重试轮据此 pin)。
 		// 关键:重试轮若遇到 pinned 未覆盖的新 index(罕见的工具列表变化/上游对同一 index
 		// 重命名),必须把它并进 pinnedToolIDs,保证后续轮次仍能复用同一 ID——避免"本轮用新 ID、
 		// 下轮再换 ID"导致同一 message 内出现多个半截 tool 块。emittedToolIDs 同步供观测/测试。
 		if s.emittedToolIDs != nil {
-			s.emittedToolIDs[tc.Index] = toolID
+			s.emittedToolIDs[upstreamIdx] = toolID
 		}
 		if s.pinnedToolIDs != nil && !pinned {
-			s.pinnedToolIDs[tc.Index] = toolID
+			s.pinnedToolIDs[upstreamIdx] = toolID
 		}
 	}
+	// 名字补齐:部分 OpenAI 兼容上游(20260901 bitdeer/DeepSeek-V4-Flash 实测)把工具名放在
+	// 后续分片下发,首帧 function.name 为空。旧实现首帧立即开块并从此丢弃后续名字分片,
+	// 客户端收到 "name":"" 的 tool_use 块被判定 invalid tool call(ZCode: "tool name is empty",
+	// reason=invalid_request, retryable=false)。toolName 先到先得:仅在尚无名字时用后续非空名补齐。
+	if b.toolName == "" && tc.Function.Name != "" {
+		b.toolName = tc.Function.Name
+	}
 	if !b.toolStarted {
+		if b.toolName == "" {
+			// 名字未到,延迟开块:先缓存参数分片,等名字到达的那一帧再补发
+			// content_block_start + 一次性 flush 缓存参数,保证 start 先于任何 input_json_delta。
+			if tc.Function.Arguments != "" {
+				b.pendingArgs += tc.Function.Arguments
+			}
+			return
+		}
+		// Anthropic index 在开块时刻才分配(排在所有已发出的 thinking/text 块之后):
+		// 延迟开块期间若有 text/thinking 块先行发出,工具块不得回填创建时占住的旧 index,
+		// 否则产生非单调 index / 与未闭合块重叠的协议违规。
+		// 顺序敏感:先分配 index 再置 toolStarted——nextFreeIndex 跳过"未开块"的本块,
+		// 若先置位,本块会以零值 index 把自己数进占用集,导致纯工具流跳号到 1。
+		b.index = s.nextFreeIndex()
 		b.toolStarted = true
+		s.hasToolCall = true
 		fw.writeEvent("content_block_start", contentBlockStartPayload(b.index, "tool_use", b.toolID, b.toolName))
+		if b.pendingArgs != "" {
+			fw.writeEvent("content_block_delta", contentBlockInputJSONDeltaPayload(b.index, b.pendingArgs))
+			b.pendingArgs = ""
+		}
 	}
 	// OpenAI 流式 tool_calls 的 arguments 是增量字符串，Anthropic 用 input_json_delta 直传
 	if tc.Function.Arguments != "" {
@@ -540,32 +581,39 @@ func (s *sseBlockStates) snapshotEmittedToolIDs() map[int]string {
 // 已经被 closeThinkingIfOpen/emitThinkingDelta 切换逻辑提前闭合(closed==true)的块跳过,避免重复关门。
 // 对只开块却从未下发 thinking_delta 的异常 thinking 块(无推理模型误触发 / 上游异常握手帧):
 // 直接丢弃,不发 signature_delta、不发 stop,避免客户端 SDK 收到空 thinking 块报错或卡等。
+// 对名字直到流结束都未到达、从未开块的 tool_use 块(延迟开块兜底):整体丢弃,不发 start/delta/stop,
+// 避免向客户端输出无名工具块或孤立 input_json_delta。
+// 已开块按 index 升序闭合(工具块 index 为开块时刻分配,不再与 map key 同义)。
 func (s *sseBlockStates) closeAll(fw sseEventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	keys := make([]int, 0, len(s.blocks))
-	for k := range s.blocks {
-		keys = append(keys, k)
-	}
-	sort.Ints(keys)
-	for _, k := range keys {
-		b := s.blocks[k]
-		if b.closed {
-			continue // 已被切换逻辑提前闭合,不重复关块
+	started := make([]*sseBlock, 0, len(s.blocks))
+	for k, b := range s.blocks {
+		if b == nil {
+			continue
 		}
 		if b.kind == "thinking" && !b.thinkingStarted {
 			// 空块丢弃:从未实际下发 thinking_delta 的 thinking 块,当作没开过。
 			delete(s.blocks, k)
 			continue
 		}
+		if b.kind == "tool_use" && !b.toolStarted {
+			// 空 tool_use 块丢弃:名字未到达、从未发过 content_block_start,当作没开过。
+			delete(s.blocks, k)
+			continue
+		}
+		if b.closed {
+			continue // 已被切换逻辑提前闭合,不重复关块
+		}
+		started = append(started, b)
+	}
+	sort.Slice(started, func(i, j int) bool { return started[i].index < started[j].index })
+	for _, b := range started {
 		if b.thinkingStarted {
 			fw.writeEvent("content_block_delta", contentBlockSignatureDeltaPayload(b.index, ""))
-			fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
-			b.closed = true
-		} else if b.textStarted || b.toolStarted {
-			fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
-			b.closed = true
 		}
+		fw.writeEvent("content_block_stop", contentBlockStopPayload(b.index))
+		b.closed = true
 	}
 }
 
@@ -592,6 +640,9 @@ func (s *sseBlockStates) ensureAtLeastOneBlock(fw sseEventSink) {
 
 // determineStopReason 根据本轮是否发出过工具块及上游 finishReason 精准计算 Anthropic stop_reason。
 // 若包含工具调用，必定返回 "tool_use"，确保 Claude Code 等 Agent 客户端能自动驱动后续工具执行。
+// hasToolCall 仅在工具块实际开块(名字已知)时置位:无名块被丢弃后消息里没有任何可执行的
+// tool_use 块,此时即便上游 finish_reason=tool_calls 也必须降级 end_turn——硬报 tool_use 会让
+// 客户端进入"该执行工具却没有调用"的异常路径(ZCode: "Tool call ended without a terminal event")。
 func (s *sseBlockStates) determineStopReason(rawFinishReason string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -602,7 +653,7 @@ func (s *sseBlockStates) determineStopReason(rawFinishReason string) string {
 	case "length":
 		return "max_tokens"
 	case "tool_calls", "function_call":
-		return "tool_use"
+		return "end_turn"
 	default:
 		return "end_turn"
 	}

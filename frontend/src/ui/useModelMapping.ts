@@ -1,4 +1,4 @@
-import { ref, computed, type Ref } from 'vue';
+import { ref, computed, watch, getCurrentScope, onScopeDispose, type Ref } from 'vue';
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
@@ -7,6 +7,16 @@ import {
   shouldMarkNew, shouldMarkStale,
 } from './relayModelDiff';
 import type { ModelMappingEntry, PoolTabInfo, OtherGroupInfo } from '../components/settings/relay-mapping/types';
+
+// 无缓存渠道时共享的空数组引用:避免模板里 getRowModels 每次渲染都返回新 [],导致所有行组件 props 变化全量重渲染。
+const EMPTY_MODELS: string[] = [];
+
+// 行稳定 key 生成器:替代 v-for 的 :key="index",过滤/删除/翻页时能按 key 复用行组件而非按位置补丁。
+let rowKeySeq = 0;
+function nextRowKey(): string {
+  rowKeySeq += 1;
+  return `mmr_${Date.now().toString(36)}_${rowKeySeq.toString(36)}`;
+}
 
 function isGoogleProviderKind(p: string): boolean {
   const c = (p || '').trim().toLowerCase();
@@ -82,15 +92,37 @@ export function useModelMapping() {
     });
   });
 
+  // ===== 分页:映射行数可达数百条,全部平铺渲染(每行含组合框)会导致整页卡顿,只渲染当前页 =====
+  const pageSize = 15;
+  const currentPage = ref(1);
+  const totalPages = computed(() => Math.max(1, Math.ceil(filteredMappings.value.length / pageSize)));
+  const pagedMappings = computed(() => {
+    const total = filteredMappings.value.length;
+    if (total === 0) return [];
+    const page = Math.min(currentPage.value, totalPages.value);
+    const start = (page - 1) * pageSize;
+    return filteredMappings.value.slice(start, start + pageSize);
+  });
+
+  function gotoPage(p: number) {
+    currentPage.value = Math.min(Math.max(1, p), totalPages.value);
+  }
+
+  // 搜索词变化回到第 1 页;删除/清除失效导致总页数缩小时自动夹回边界。
+  watch(searchQuery, () => { currentPage.value = 1; });
+  watch(totalPages, (pages) => {
+    if (currentPage.value > pages) currentPage.value = pages;
+  });
+
   function getRowModels(item: ModelMappingEntry): string[] {
     if (!isOtherTab.value) {
       const ch = currentTab.value?.targetProvider || currentTab.value?.id || '';
-      return channelModelsCache.value[ch] || [];
+      return channelModelsCache.value[ch] || EMPTY_MODELS;
     }
     const cm = (item.clientModel || '').trim();
     const m = cm.match(/^other\/([^/]+)\//);
     const gid = m ? m[1] : '';
-    return gid ? (channelModelsCache.value[`other/${gid}`] || []) : [];
+    return gid ? (channelModelsCache.value[`other/${gid}`] || EMPTY_MODELS) : EMPTY_MODELS;
   }
 
   function isStaleItem(item: ModelMappingEntry): boolean {
@@ -137,9 +169,11 @@ export function useModelMapping() {
   function collectStaleMappingsInTab(tabId: string): ModelMappingEntry[] {
     const tab = poolTabs.value.find(t => t.id === tabId) || poolTabs.value[0];
     if (!tab) return [];
-    const provider = (tab.targetProvider || tab.id || '').trim();
+    const provider = (tab.targetProvider || tab.id).trim();
     const isOther = tab.targetProvider === 'other' || tab.id === 'other';
     const staleToRemove: ModelMappingEntry[] = [];
+    // 同一 liveKey 的远端全集小写 Set 只建一次(原先逐条映射重建,O(n*m) → O(n+m))。
+    const liveSetCache = new Map<string, Set<string>>();
     for (const m of allMappings.value) {
       if (getMappingTab(m) !== tabId) continue;
       const cm = (m.clientModel || '').trim();
@@ -153,7 +187,11 @@ export function useModelMapping() {
       }
       const live = channelModelsCache.value[liveKey];
       if (!live || live.length === 0) continue;
-      const liveSet = buildLiveSetLower(live);
+      let liveSet = liveSetCache.get(liveKey);
+      if (!liveSet) {
+        liveSet = buildLiveSetLower(live);
+        liveSetCache.set(liveKey, liveSet);
+      }
       if (shouldMarkStale(m, liveSet)) staleToRemove.push(m);
     }
     return staleToRemove;
@@ -171,7 +209,7 @@ export function useModelMapping() {
       }
 
       const list = await ipcRenderer.invoke('relay:get-model-mapping');
-      allMappings.value = (list || []).map((m: any) => ({ ...m }));
+      allMappings.value = (list || []).map((m: any) => ({ ...m, _rowKey: nextRowKey() }));
 
       poolTabs.value = [
         { id: 'google', name: 'Gemini (Google)', targetProvider: 'google' },
@@ -204,8 +242,9 @@ export function useModelMapping() {
     }
   }
 
-  // 监听 accounts-res 广播, 当 Other 账号添加/修改/删除/改名时, 即时同步 otherGroups 供模型映射面板展示
-  ipcRenderer.on('accounts-res', (_event: any, data: any) => {
+  // 监听 accounts-res 广播, 当 Other 账号添加/修改/删除/改名时, 即时同步 otherGroups 供模型映射面板展示。
+  // 每次挂载都会执行, 必须随组件作用域销毁解绑, 否则设置页反复进出会累积死监听器(泄漏 + 空转)。
+  const offAccountsRes = ipcRenderer.on('accounts-res', (_event: any, data: any) => {
     if (data && Array.isArray(data.otherGroups)) {
       otherGroups.value = data.otherGroups.map((g: any) => ({
         groupId: String(g.groupId || g.groupID || g.id || ''),
@@ -216,6 +255,9 @@ export function useModelMapping() {
       })).filter((g: OtherGroupInfo) => g.groupId);
     }
   });
+  if (getCurrentScope()) {
+    onScopeDispose(() => offAccountsRes());
+  }
 
   async function refreshOtherGroups() {
     otherGroups.value = await getOtherGroups();
@@ -339,8 +381,11 @@ export function useModelMapping() {
           const tabId = tab.id;
           for (const ne of newEntries) {
             ne.ownedBy = tabId;
+            ne._rowKey = nextRowKey();
             allMappings.value.push(ne);
           }
+          // 新条目追加在列表尾部,跳到最后一页让用户立即看到带「新增」徽章的行。
+          currentPage.value = totalPages.value;
         }
       } else {
         fetchStatusMsg.value = `❌ 获取失败: ${res?.error || '网络超时'}`;
@@ -411,7 +456,11 @@ export function useModelMapping() {
           existingSameGroupTargetSet.add(model.toLowerCase());
         }
         if (newEntries.length > 0) {
-          for (const ne of newEntries) allMappings.value.push(ne);
+          for (const ne of newEntries) {
+            ne._rowKey = nextRowKey();
+            allMappings.value.push(ne);
+          }
+          currentPage.value = totalPages.value;
         }
       } else if (res && res.allowManualInput) {
         fetchStatusMsg.value = `⚠️ [${groupName}] 上游暂不支持模型列表,请手动填写(前缀 other/${groupId}/)`;
@@ -429,6 +478,7 @@ export function useModelMapping() {
   function selectTab(tabId: string) {
     activeTabId.value = tabId;
     searchQuery.value = '';
+    currentPage.value = 1;
   }
 
   function addTab() {
@@ -472,16 +522,16 @@ export function useModelMapping() {
       ownedBy: activeTabId.value,
       targetProvider: targetProv,
       variantEfforts: [],
+      _rowKey: nextRowKey(),
     });
+    // unshift 在列表头部,回到第 1 页让新空行立即可见。
+    currentPage.value = 1;
   }
 
-  function deleteMapping(index: number) {
-    const filtered = filteredMappings.value;
-    const targetItem = filtered[index];
-    if (!targetItem) return;
-    const mainIdx = allMappings.value.indexOf(targetItem);
-    if (mainIdx !== -1) {
-      allMappings.value.splice(mainIdx, 1);
+  function deleteMapping(item: ModelMappingEntry) {
+    const idx = allMappings.value.indexOf(item);
+    if (idx !== -1) {
+      allMappings.value.splice(idx, 1);
     }
   }
 
@@ -540,13 +590,12 @@ export function useModelMapping() {
             m.clientModel = `other/${gid}/${cm}`;
           }
         }
-        mappingsToSave.push(m);
       } else if (!isGoogleProviderKind(provider) && cm === tm && !cm.toLowerCase().startsWith(`${provider.toLowerCase()}/`)) {
         m.clientModel = `${provider}/${cm}`;
-        mappingsToSave.push(m);
-      } else {
-        mappingsToSave.push(m);
       }
+      // _rowKey 是前端行渲染专用字段,剔除后再落盘。
+      const { _rowKey, ...entryWithoutRowKey } = m;
+      mappingsToSave.push(entryWithoutRowKey);
     }
 
     try {
@@ -601,6 +650,11 @@ export function useModelMapping() {
     isOtherTab,
     filteredMappings,
     currentTabMappings,
+    pageSize,
+    currentPage,
+    totalPages,
+    pagedMappings,
+    gotoPage,
     staleCount,
     loadModelMappings,
     refreshOtherGroups,

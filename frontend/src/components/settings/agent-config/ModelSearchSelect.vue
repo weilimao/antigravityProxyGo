@@ -86,7 +86,7 @@
         v-if="isOpen"
         ref="dropdownRef"
         :style="dropdownStyle"
-        class="fixed z-[9999] bg-white dark:bg-[#1a1f30] border border-outline-variant/40 dark:border-white/10 rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100"
+        class="fixed z-[100000] bg-white dark:bg-[#1a1f30] border border-outline-variant/40 dark:border-white/10 rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100"
       >
         <!-- 浮层顶部统计信息 -->
         <div class="flex items-center justify-between px-3 py-1.5 bg-slate-50 dark:bg-white/5 border-b border-outline-variant/30 text-[11px] text-slate-500 dark:text-slate-400 font-medium shrink-0">
@@ -130,9 +130,9 @@
             <span v-if="!modelValue" class="material-symbols-outlined text-[16px] text-primary">check</span>
           </div>
 
-          <!-- 匹配的模型项列表 -->
+          <!-- 匹配的模型项列表(仅渲染前 MAX_RENDER_OPTIONS 条,超大号池全量平铺会卡) -->
           <div
-            v-for="(item, idx) in filteredOptions"
+            v-for="(item, idx) in visibleOptions"
             :key="item"
             class="flex items-center justify-between px-3 py-2 text-[12px] cursor-pointer transition-colors font-mono"
             :class="[
@@ -155,13 +155,21 @@
             <span v-if="!multiple && item === modelValue" class="material-symbols-outlined text-[16px] text-primary shrink-0">check</span>
           </div>
 
+          <!-- 截断提示:过滤结果超出渲染上限时引导输入关键词缩小范围 -->
+          <div
+            v-if="hasMoreOptions"
+            class="px-3 py-1.5 text-[11px] text-slate-400 dark:text-slate-500 italic border-t border-outline-variant/20"
+          >
+            仅渲染前 {{ visibleOptions.length }} 项(共 {{ filteredOptions.length }} 个匹配)，输入关键词可缩小范围
+          </div>
+
           <!-- 自定义输入选项（当搜索词不在选项列表中时） -->
           <div
             v-if="allowCustom !== false && isCustomOptionAvailable"
-            class="flex items-center justify-between px-3 py-2 text-[12px] text-amber-600 dark:text-amber-400 bg-amber-500/5 hover:bg-amber-500/10 cursor-pointer transition-colors border-t border-dashed border-amber-500/30"
-            :class="highlightedIndex === filteredOptions.length ? 'bg-amber-500/20' : ''"
+            class="flex items-center justify-between px-3 py-2 text-[12px] cursor-pointer transition-colors border-t border-dashed border-amber-500/30"
+            :class="highlightedIndex === visibleOptions.length ? 'bg-amber-500/20' : ''"
             @click="selectOption(searchQuery.trim())"
-            @mouseenter="highlightedIndex = filteredOptions.length"
+            @mouseenter="highlightedIndex = visibleOptions.length"
           >
             <div class="flex items-center gap-2 truncate min-w-0">
               <span class="material-symbols-outlined text-[15px] text-amber-500 shrink-0">edit_note</span>
@@ -306,6 +314,11 @@ const filteredOptions = computed(() => {
   }
   return list.filter(item => item.toLowerCase().includes(q));
 });
+
+// 实际渲染的选项上限:几百个模型的全量平铺(每项含正则高亮)会让下拉打开/输入明显卡顿。
+const MAX_RENDER_OPTIONS = 100;
+const visibleOptions = computed(() => filteredOptions.value.slice(0, MAX_RENDER_OPTIONS));
+const hasMoreOptions = computed(() => filteredOptions.value.length > visibleOptions.value.length);
 
 // 是否展示“使用自定义模型”
 const isCustomOptionAvailable = computed(() => {
@@ -452,7 +465,8 @@ function onKeyDown(e: KeyboardEvent) {
     return;
   }
 
-  const listLength = filteredOptions.value.length;
+  // 键盘导航以实际渲染的 visibleOptions 为准(截断时下标与 DOM 一一对应)。
+  const listLength = visibleOptions.value.length;
   const maxIndex = isCustomOptionAvailable.value ? listLength : listLength - 1;
 
   if (e.key === 'ArrowDown') {
@@ -474,14 +488,14 @@ function onKeyDown(e: KeyboardEvent) {
     if (props.multiple) {
       // 多选: Enter = 切换当前高亮项(保持下拉打开), 与点击行为一致
       if (highlightedIndex.value >= 0 && highlightedIndex.value < listLength) {
-        toggleItem(filteredOptions.value[highlightedIndex.value]);
+        toggleItem(visibleOptions.value[highlightedIndex.value]);
       }
       return;
     }
     if (highlightedIndex.value === -1) {
       selectOption('');
     } else if (highlightedIndex.value >= 0 && highlightedIndex.value < listLength) {
-      selectOption(filteredOptions.value[highlightedIndex.value]);
+      selectOption(visibleOptions.value[highlightedIndex.value]);
     } else if (highlightedIndex.value === listLength && isCustomOptionAvailable.value) {
       selectOption(searchQuery.value.trim());
     } else if (searchQuery.value.trim() && props.allowCustom !== false) {

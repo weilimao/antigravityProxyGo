@@ -18,5 +18,5 @@ var appVersion = func() string {
 	if err := json.Unmarshal(wailsJSON, &cfg); err == nil && cfg.Info.ProductVersion != "" {
 		return cfg.Info.ProductVersion
 	}
-	return "1.6.0" // fallback
+	return "1.6.1" // fallback
 }()

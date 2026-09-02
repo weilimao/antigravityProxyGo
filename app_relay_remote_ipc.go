@@ -36,6 +36,24 @@ func (a *App) handleRelayRemoteIPC(channel string, args []interface{}) (string, 
 		return 0
 	}
 
+	// getStringSliceArg 从 args[idx] 提取 []string(用于 allowedModels 等)。
+	// IPC 经 JSON 序列化后, 前端的 string[] 反序列化为 []interface{}{string,...};
+	// 不存在/nil → 返回 nil(语义: 全部允许/不限制, 与后端 UserAPIKey.AllowedModels 空值一致)。
+	getStringSliceArg := func(idx int) []string {
+		if idx < len(args) {
+			if arr, ok := args[idx].([]interface{}); ok {
+				out := make([]string, 0, len(arr))
+				for _, v := range arr {
+					if s, ok := v.(string); ok {
+						out = append(out, s)
+					}
+				}
+				return out
+			}
+		}
+		return nil
+	}
+
 	marshalResponse := func(val interface{}) (string, bool, error) {
 		b, err := json.Marshal(val)
 		if err != nil {
@@ -173,11 +191,22 @@ func (a *App) handleRelayRemoteIPC(channel string, args []interface{}) (string, 
 		id := getStringArg(0)
 		limitGemini := getInt64Arg(1)
 		limitClaude := getInt64Arg(2)
-		err := a.remoteRelay.UpdateRemoteKeyQuota(id, limitGemini, limitClaude)
+		allowedModels := getStringSliceArg(3)
+		err := a.remoteRelay.UpdateRemoteKeyQuota(id, limitGemini, limitClaude, allowedModels)
 		if err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
 		return marshalResponse(map[string]interface{}{"success": true})
+
+	case "remote:get-key-models":
+		if a.remoteRelay == nil || !a.remoteRelay.IsConnected() {
+			return marshalResponse(map[string]interface{}{"success": false, "error": "not connected"})
+		}
+		models, err := a.remoteRelay.FetchRemoteKeyModels()
+		if err != nil {
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		return marshalResponse(map[string]interface{}{"success": true, "models": models})
 	}
 
 	return "", false, nil

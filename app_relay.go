@@ -95,7 +95,7 @@ func (a *App) ensureRelayInitialized() {
 	a.relayStatsMgr.Init(activeDir)
 
 	caCertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
-	a.relayAPIMgr = relay.NewAPIHandler(a.relayAuthMgr, a.relayStatsMgr, a.relayPackageMgr, a.AddLog, caCertPath)
+	a.relayAPIMgr = relay.NewAPIHandler(a.relayAuthMgr, a.relayStatsMgr, a.relayPackageMgr, a.AddLog, caCertPath, a.settingsMgr)
 
 	a.relayCompatAPIMgr = relay.NewAPICompatHandler(
 		a.relayAuthMgr,

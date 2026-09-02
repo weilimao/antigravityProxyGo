@@ -148,6 +148,17 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 		isStreaming = req.Stream
 	}
 
+	// API Key 模型授权校验: 在 Grok 配额校验前拦截未授权模型(精确匹配 inModel, 与 handleNvidia 同口径)。
+	// 仅一级入口(直连 /grok/*、/xai/*)执行; route 链路(/route/* 命中 grok 复用本 handler)时
+	// body model 已被改写为无前缀上游名, 改在前置 handleRoutedForward 用原始 inModel 校验, 这里跳过。
+	if h.authMgr != nil && h.authMgr.userMgr != nil && !routedRoutePrefixMatch(r.URL.Path) {
+		if err := h.authMgr.userMgr.IsModelAuthorizedForAPIKey(userSession.UserID, userSession.APIKeyID, inModel); err != nil {
+			h.log("🚫 [Grok 中继] API Key 模型授权校验未通过: %v (User: %s)", err, userSession.UserKey)
+			writeModelNotAuthorized(w, inModel)
+			return
+		}
+	}
+
 	// Grok family 配额预扣额校验(独立于 gemini/claude, 与 handleNvidia 的 nvidiaQuotaCheck 同构):
 	// 走 UserQuotas.Grok 的 hourly/daily 滚动窗口 + "grok/" 前缀 LIKE 命中族用量, 超额回写 429。
 	// 未配置任何限额(EnableHourly==false && EnableDaily==false)时 grokQuotaCheck 直接放行(nil), 零影响。

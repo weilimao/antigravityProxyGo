@@ -156,10 +156,9 @@
               </tr>
             </template>
             <ModelMappingRow
-              v-for="(item, index) in mm.filteredMappings.value"
-              :key="index"
+              v-for="item in mm.pagedMappings.value"
+              :key="item._rowKey"
               :item="item"
-              :index="index"
               :row-models="mm.getRowModels(item)"
               :show-inject-kwargs="mm.isNvidiaTab.value"
               :is-stale="mm.isStaleItem(item)"
@@ -169,10 +168,36 @@
               @update:expose="(val) => item.expose = val"
               @update:inject-kwargs="(val) => item.injectChatTemplateKwargs = val"
               @update:multimodal="(val) => item.multimodal = val"
-              @delete="mm.deleteMapping(index)"
+              @delete="mm.deleteMapping(item)"
             />
           </tbody>
         </table>
+      </div>
+
+      <!-- 分页:映射条目多时避免整表平铺渲染卡顿,每页仅渲染 pageSize 行 -->
+      <div class="flex items-center justify-between border-t border-outline-variant/20 pt-3 mt-4">
+        <span class="text-[11px] text-outline">
+          共 {{ mm.filteredMappings.value.length }} 条映射{{ mm.searchQuery.value ? ` (筛选自 ${mm.currentTabMappings.value.length} 条)` : '' }} · 第 {{ mm.currentPage.value }} / {{ mm.totalPages.value }} 页
+        </span>
+        <div class="flex items-center gap-1">
+          <button
+            class="px-2.5 py-1 text-[11px] font-medium border border-outline-variant/30 rounded-md hover:bg-slate-50 dark:hover:bg-white/5 text-on-surface dark:text-white disabled:opacity-50 disabled:pointer-events-none flex items-center gap-0.5 cursor-pointer"
+            :disabled="mm.currentPage.value <= 1"
+            @click="mm.gotoPage(mm.currentPage.value - 1)"
+          >
+            <span class="material-symbols-outlined text-[14px]">chevron_left</span>
+            <span>上一页</span>
+          </button>
+          <span class="text-[11px] px-2 text-on-surface dark:text-white font-bold">{{ mm.currentPage.value }}</span>
+          <button
+            class="px-2.5 py-1 text-[11px] font-medium border border-outline-variant/30 rounded-md hover:bg-slate-50 dark:hover:bg-white/5 text-on-surface dark:text-white disabled:opacity-50 disabled:pointer-events-none flex items-center gap-0.5 cursor-pointer"
+            :disabled="mm.currentPage.value >= mm.totalPages.value"
+            @click="mm.gotoPage(mm.currentPage.value + 1)"
+          >
+            <span>下一页</span>
+            <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+          </button>
+        </div>
       </div>
 
       <div class="flex justify-end gap-3 mt-5 border-t border-outline-variant/20 pt-4">
