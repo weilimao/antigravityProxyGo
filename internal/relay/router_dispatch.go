@@ -223,3 +223,54 @@ func (h *APICompatHandler) resolveRoutedTarget(model string) (targetProvider, ta
 	}
 	return rule.TargetProvider, "", tm, true
 }
+
+// ResolveBenchmarkEntryPath 返回测速回环请求发往指定模型应使用的入口路径, 使测速与
+// 真实客户端(18444 入站)按模型走同一条号池/上游链路:
+//
+//   - 非 Google 族号池模型(nvidia/grok/xai/other/deepseek 命名空间前缀, 或
+//     RelayModelMapping 显式声明了非 Google TargetProvider, 或特定路由规则命中)
+//     → /route/v1/chat/completions(handleRoutedForward → 对应号池);
+//   - 其余(Google 族 / 仅兜底通配命中 / 未命中)→ /v1/chat/completions
+//     (dispatchToGemini → 本地 18443 官方/网页号池)。
+//
+// 与 OCR 引擎 resolveOcrTarget 的「模型 → 号池」判定同口径, 测速/OCR/真实客户端一致。
+// 注意必须把兜底通配 "*"(默认 → nvidia)排除: gemini-2.5-flash 等 Google 名会被该规则
+// 误判为非 Google 池, 而真实客户端对 Google 模型从来不开 /route, 测速也不应按它走。
+func (h *APICompatHandler) ResolveBenchmarkEntryPath(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "/v1/chat/completions"
+	}
+
+	// 1) 映射显式声明 TargetProvider: 以它为准(Google 族走官方/网页池, 其余走 /route)。
+	if h.settingsMgr != nil {
+		for _, m := range h.settingsMgr.GetRelayModelMapping() {
+			prov := strings.TrimSpace(m.TargetProvider)
+			if prov == "" || !strings.EqualFold(strings.TrimSpace(m.ClientModel), model) {
+				continue
+			}
+			if isGoogleProvider(prov) {
+				return "/v1/chat/completions"
+			}
+			return "/route/v1/chat/completions"
+		}
+	}
+
+	// 2) 非 Google 命名空间前缀 → /route(与 ocr_engine 的非 Google 族判定一致)。
+	lower := strings.ToLower(model)
+	if strings.HasPrefix(lower, "nvidia/") || strings.HasPrefix(lower, "grok/") ||
+		strings.HasPrefix(lower, "xai/") || strings.HasPrefix(lower, "other/") ||
+		strings.HasPrefix(lower, "deepseek/") {
+		return "/route/v1/chat/completions"
+	}
+
+	// 3) 特定路由规则命中非 Google 号池 → /route(通配 "*" 除外, 理由见函数注释)。
+	if h.settingsMgr != nil {
+		if rule := routeMatch(h.settingsMgr.GetRelayModelRoutes(), model); rule != nil &&
+			rule.Pattern != "*" && !isGoogleProvider(rule.TargetProvider) {
+			return "/route/v1/chat/completions"
+		}
+	}
+
+	return "/v1/chat/completions"
+}

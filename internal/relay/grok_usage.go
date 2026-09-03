@@ -95,6 +95,10 @@ func grokHostFromBaseURL(baseURL string) string {
 //   - 落点3b 号池命中率筛选(TrackRequestForPool("grok") → Pools["grok"] 子聚合, 不动全局标量);
 //   - 落点4  请求日志(AddRequestLogForFamily, family="grok"), 绕过 isRealModel 过滤显式入库。
 func (h *APICompatHandler) recordGrokUsage(userSession *RelaySession, model string, input, output, cached int, poolAccount *account.Account, logCtx grokLogCtx) {
+	// 测速回环探测请求(IsBenchmark)不计入任何统计, 不污染仪表盘请求/成功率/Token。
+	if userSession != nil && userSession.IsBenchmark {
+		return
+	}
 	if input == 0 && output == 0 {
 		return
 	}

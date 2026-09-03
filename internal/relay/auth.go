@@ -34,6 +34,11 @@ type RelaySession struct {
 	SessionKey string
 	CreatedAt  time.Time
 	ExpiresAt  time.Time
+	// IsBenchmark 标记本请求来自「模型测速」回环探测(internal/benchmark 调度器)。
+	// 由 APICompatHandler.ServeHTTP 据 X-Antigravity-Benchmark 头置位(并拷贝 session 防共享态),
+	// 各 record*Usage 统计落库函数据此早退, 使测速请求不污染仪表盘的请求/成功率/Token 统计。
+	// 测速请求仍走完整路由/转译链路得真实端到端延迟, 仅统计落库被跳过。
+	IsBenchmark bool
 }
 
 type AuthManager struct {

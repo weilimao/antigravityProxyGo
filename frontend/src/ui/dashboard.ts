@@ -3,6 +3,7 @@ import { formatDuration } from './dashboardUtils';
 import { maybeDrawTrendChart, redrawTrendChartAnimated } from './dashboardTrends';
 import { LogsRowSlot, logsRowSlots, viewBtnLogMap, buildLogsRowSlot, updateLogsRowSlot, mergeRetryRows } from './dashboardLogs';
 import { renderModelPerfBar } from './dashboardModelPerf';
+import { initBenchmarkEvents, refreshBenchmarkI18n } from './dashboardBenchmark';
 import { initModalDom, showModal, hideModal } from './dashboardModal';
 import { initConsoleEvents } from './dashboardConsole';
 import state from './dashboardState';
@@ -362,6 +363,8 @@ export function setLanguage(lang: string) {
     // 需显式重刷避免弹窗重开时冒旧语言。NVIDIA 专属模型来源徽标同理(经 __dict 注入失败兜底)。
     refreshOtherGroupSelectI18n();
     refreshNvidiaPreferredSourceI18n();
+    // 测速卡片动态文案(间隔徽章/状态/趋势)与弹窗下拉选项随语言重刷。
+    refreshBenchmarkI18n();
 }
 
 export function updateStatusLabel() {
@@ -537,6 +540,7 @@ export function switchView(viewName: string) {
 export function initDashboardEvents() {
     initModalDom();
     scheduleInitialTrendsRecovery();
+    initBenchmarkEvents();
 
     proxyToggle = document.getElementById('proxyToggle') as HTMLInputElement | null;
     btnInstallCert = document.getElementById('btnInstallCert') as HTMLButtonElement | null;
@@ -838,9 +842,11 @@ export function renderModelsTable(stats: any) {
 }
 
 // initModelRangeFilter 绑定模型统计表的时间范围筛选按钮(全部/今日/近三日/近七天)。
-// 「全部」复用 state.statsData.models(全量累计, 零开销零回归); 其余范围 invoke stats:model-range
-// 取后端 request_logs 范围聚合, 存 filteredModelStats 喂给 renderModelsTable。stats-updated tick
-// 不改写 filteredModelStats, 故范围视图冻结到下次切换(聚合视图不需秒级实时)。
+// 全部范围统一走 stats:model-range 后端聚合(request_logs 全量), 与今日/3d/7d 同源同口径,
+// 保证「全部 ⊇ 近七日 ⊇ 近三日 ⊇ 今日」恒成立。此前「全部」复用内存 statsData.models(stats.json
+// 累计) 会与 DB 范围口径漂移, 出现「全部 < 今日」的悖论(stats.json 重启/迁移可能丢量, 或 DB
+// 计重试而内存只计最终成功)。范围视图冻结到下次切换(聚合视图不需秒级实时, stats-updated tick
+// 不改写 filteredModelStats); 初始未选过范围时 filteredModelStats 为 null, 兜底用实时 statsData。
 export function initModelRangeFilter() {
     const sel = document.getElementById('modelRangeSelector');
     if (!sel) return;
@@ -853,19 +859,18 @@ export function initModelRangeFilter() {
         buttons.forEach((b: any) => {
             b.className = b.getAttribute('data-mrange') === range ? activeClass : inactiveClass;
         });
-        if (range === 'all') {
+        // 全部范围同样走后端 DB 聚合(since=""), 与今日/3d/7d 同源, 保证 全部 >= 今日。
+        try {
+            const resRaw = await ipcRenderer.invoke('stats:model-range', range);
+            const res = typeof resRaw === 'string' ? JSON.parse(resRaw) : resRaw;
+            const stats = (res && res.stats) ? res.stats : res;
+            state.filteredModelStats = stats || { models: {} };
+            renderModelsTable(state.filteredModelStats);
+        } catch (e) {
+            console.error('[Dashboard] model range fetch failed', e);
+            // 拉取失败兜底: 用内存 statsData(对全部范围)或空, 不阻断展示。
             state.filteredModelStats = null;
             if (state.statsData) renderModelsTable(state.statsData);
-        } else {
-            try {
-                const resRaw = await ipcRenderer.invoke('stats:model-range', range);
-                const res = typeof resRaw === 'string' ? JSON.parse(resRaw) : resRaw;
-                const stats = (res && res.stats) ? res.stats : res;
-                state.filteredModelStats = stats || { models: {} };
-                renderModelsTable(state.filteredModelStats);
-            } catch (e) {
-                console.error('[Dashboard] model range fetch failed', e);
-            }
         }
     };
 
@@ -928,12 +933,12 @@ export function renderActiveView() {
 
         // 3. Render sub-tabs table (only the active one!)
         if (state.activeTab === 'models') {
-            // 模型统计表按 currentModelRange 取数据源: 'all' 复用全量 statsData(零开销零回归);
-            // 范围模式用 filteredModelStats(切换时 invoke 取得, tick 不改写故冻结到下次切换)。
-            if (state.currentModelRange === 'all' || !state.filteredModelStats) {
-                renderModelsTable(stats);
-            } else {
+            // 模型统计表: 用户选过任一范围(含「全部」)后 filteredModelStats 已是后端 DB 聚合快照,
+            // 复用它(范围视图冻结到下次切换); 未选过(null)兜底用实时 statsData。
+            if (state.filteredModelStats) {
                 renderModelsTable(state.filteredModelStats);
+            } else {
+                renderModelsTable(stats);
             }
         } else if (state.activeTab === 'logs') {
             renderLogsTable();

@@ -182,7 +182,7 @@ function openNvidiaPreferredModelsModal(): void {
     nvidiaPreferredCurrentSource = 'local';
     applySourceHighlightNvidiaPreferred();
     void fetchAndRenderNvidiaPreferredModels(true, undefined);
-    nvidiaPreferredModal.classList.remove('opacity-0', 'pointer-events-none');
+    nvidiaPreferredModal.classList.remove('opacity-0', 'pointer-events-none', 'hidden');
     nvidiaPreferredModalContainer.classList.remove('scale-95');
     nvidiaPreferredModalContainer.classList.add('scale-100');
 }

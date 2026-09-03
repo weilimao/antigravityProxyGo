@@ -13,6 +13,7 @@ import (
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/antigravitybg"
 	"antigravity-proxy/internal/autotrigger"
+	"antigravity-proxy/internal/benchmark"
 	"antigravity-proxy/internal/corelog"
 	"antigravity-proxy/internal/dialogs"
 	"antigravity-proxy/internal/eventsgate"
@@ -69,6 +70,9 @@ type App struct {
 	relayServer          *relay.RelayServer
 	remoteRelay          *proxy.RemoteRelay
 	autoTriggerScheduler *autotrigger.Scheduler
+	// benchmarkScheduler 定时向配置的模型列表发最小流式请求测首帧/总耗时,
+	// 经中继回环复用全部路由链路, 结果落 benchmark_results 并推 benchmark-updated 事件。
+	benchmarkScheduler *benchmark.Scheduler
 	pendingLogs          []string
 	pendingLogsMu        sync.Mutex
 

@@ -74,6 +74,10 @@ var googleReqLogSeq uint64
 // 注意: 本函数只应被 handleV1Internal 直连出站路径调用——任何经 18443 的请求已由
 // proxy.classifyResponse 记过, 在此再记会造成 antigravity 池桶/全局/请求日志全部翻倍。
 func (h *APICompatHandler) recordGoogleUsage(userSession *RelaySession, model string, input, output, cached int, poolAccount *account.Account, logCtx googleLogCtx) {
+	// 测速回环探测请求(IsBenchmark)不计入任何统计, 不污染仪表盘请求/成功率/Token。
+	if userSession != nil && userSession.IsBenchmark {
+		return
+	}
 	if input == 0 && output == 0 {
 		return
 	}

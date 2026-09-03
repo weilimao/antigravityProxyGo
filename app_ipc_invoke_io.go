@@ -141,8 +141,9 @@ func (a *App) handleIOInvokeIPC(channel string, args []interface{}) (string, boo
 		return marshalResponse(true)
 
 	case "stats:model-range":
-		// 模型统计表按时间范围筛选(今日/近三日/近七天)。「全部」由前端复用 statsData.models,
-		// 不走本通道; 本 case 只处理范围聚合: 从 request_logs 按 timestamp(RFC3339) >= sinceISO
+		// 模型统计表按时间范围筛选(全部/今日/近三日/近七天), 统一从 request_logs DB 聚合,
+		// 保证「全部 ⊇ 近七日 ⊇ 近三日 ⊇ 今日」恒成立(此前「全部」走内存 statsData.models 会与
+		// DB 范围口径漂移, 出现「全部 < 今日」悖论)。从 request_logs 按 timestamp(RFC3339) >= sinceISO
 		// + GROUP BY model_name 聚合。返回形状镜像 getStatsPayload 的 stats.models, 前端复用 renderModelsTable。
 		rangeKey := getStringArg(0)
 		now := time.Now()

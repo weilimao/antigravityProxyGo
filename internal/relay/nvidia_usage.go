@@ -30,6 +30,10 @@ import (
 // 不污染 gemini/claude 统计；usageTracker 侧去前缀喂入，前端模型列显示为 upstreamModel(如 z-ai/glm-5.2)，
 // pricing 的 fuzzy 匹配仍能按子串(kimi/llama/nemotron)命价。
 func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model string, input, output, cached int, poolAccount *account.Account, logCtx nvidiaLogCtx) {
+	// 测速回环探测请求(IsBenchmark)不计入任何统计, 不污染仪表盘请求/成功率/Token。
+	if userSession != nil && userSession.IsBenchmark {
+		return
+	}
 	// usageAvailable marks whether upstream returned real usage (input/output nonzero).
 	// Some upstreams omit usage in their final frame; here input/output come in as 0/0. We still
 	// must record the request log (points 3+) for every completed 200 request, so only skip

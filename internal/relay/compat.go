@@ -268,6 +268,16 @@ func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 模型测速回环探测标记: 携带 X-Antigravity-Benchmark: 1 的请求来自 internal/benchmark
+	// 调度器的 127.0.0.1 回环, 走完整路由/转译链路得真实端到端延迟, 但经 session.IsBenchmark
+	// 让各 record*Usage 统计落库早退, 不污染仪表盘的请求/成功率/Token 统计。
+	// 拷贝 session 再置位, 避免改到 ValidateToken 返回的共享会话对象(真实登录态 session)。
+	if r.Header.Get("X-Antigravity-Benchmark") == "1" {
+		cp := *session
+		cp.IsBenchmark = true
+		session = &cp
+	}
+
 	// 1. 模型列表接口
 	if path == "/v1/models" && r.Method == http.MethodGet {
 		h.handleModels(w, r)

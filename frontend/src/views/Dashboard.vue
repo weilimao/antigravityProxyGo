@@ -167,6 +167,35 @@
 </div>
 </div>
 </div>
+<!-- 模型响应测速卡片: 定时测首帧/总耗时, 结果由 dashboardBenchmark.ts 渲染 -->
+<div class="glass-card rounded-xl p-5 flex flex-col gap-2 relative" id="benchmarkCard">
+<div class="flex justify-between items-center flex-wrap gap-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px] text-amber-500">speed</span>
+<div class="flex flex-col">
+<span class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="benchmarkTitle">模型响应测速</span>
+<span class="text-[10px] text-outline/70 dark:text-outline-variant/60" data-i18n="benchmarkSubtitle">定时测量模型首帧与总耗时</span>
+</div>
+<span class="hidden text-[10px] px-2 py-0.5 bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400 rounded-full font-semibold" id="benchmarkIntervalChip"></span>
+<span class="inline-block w-2 h-2 rounded-full bg-slate-400" id="benchmarkStatusDot" title="未启用"></span>
+</div>
+<div class="flex items-center gap-2">
+<button class="flex items-center gap-1 px-2.5 py-1 text-[11px] bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-600 dark:text-amber-400 rounded-md font-semibold transition-colors disabled:opacity-50" id="btnBenchmarkRun" data-i18n-title="benchmarkRunNow">
+<span class="material-symbols-outlined text-[13px]">play_arrow</span>
+<span data-i18n="benchmarkRunNow">立即测速</span>
+</button>
+<button class="flex items-center gap-1 px-2.5 py-1 text-[11px] bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 border border-outline-variant/40 text-on-surface dark:text-white rounded-md font-semibold transition-colors" id="btnBenchmarkConfig" data-i18n-title="benchmarkConfig">
+<span class="material-symbols-outlined text-[13px]">settings</span>
+<span data-i18n="benchmarkConfig">配置</span>
+</button>
+</div>
+</div>
+<div id="benchmarkCardBody" class="flex flex-col gap-1"></div>
+<div class="flex justify-between items-center text-[11px] text-outline dark:text-outline-variant/70 pt-1.5 border-t border-outline-variant/10">
+<span id="benchmarkCardMeta"></span>
+<span class="text-amber-600 dark:text-amber-400/70 text-[10px]">TTFT / Latency</span>
+</div>
+</div>
 <!-- 使用趋势折线图 (SVG 矢量绘图) -->
 <div class="glass-card rounded-xl p-5 flex flex-col relative">
 <div class="flex justify-between items-center mb-3 flex-wrap gap-2">

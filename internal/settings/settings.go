@@ -231,6 +231,15 @@ type Config struct {
 	// 落 config.json 而非前端 localStorage,规避 WebView2 localStorage 按 exe 构建隔离导致的重启回退。
 	AccountLayout      string `json:"accountLayout"`
 	AccountGridColumns int    `json:"accountGridColumns"`
+	// Benchmark 模型测速(首帧/耗时)配置: 定时向所选模型发送最小流式请求测量 TTFT 与总耗时,
+	// 结果落 SQLite(benchmark_results)并经 benchmark-updated 事件推送前端仪表盘卡片。
+	// 测速请求走中继回环(127.0.0.1 专用监听), 复用全部路由/转译链路得真实端到端延迟,
+	// 经 RelaySession.IsBenchmark 标记跳过 stats 落库, 不污染仪表盘的请求/成功率/Token 统计。
+	BenchmarkEnabled         bool     `json:"benchmarkEnabled,omitempty"`
+	BenchmarkModels          []string `json:"benchmarkModels,omitempty"`
+	BenchmarkIntervalMinutes int      `json:"benchmarkIntervalMinutes,omitempty"`
+	BenchmarkPrompt          string   `json:"benchmarkPrompt,omitempty"`
+	BenchmarkTimeoutMs       int      `json:"benchmarkTimeoutMs,omitempty"`
 }
 
 // DefaultOcrModel 是入站 image 自愈降级时调用的本地 Gemini OCR 模型默认值。
@@ -483,6 +492,10 @@ type ManagerInterface interface {
 	// /route/* 专属入口按入站 model 命中规则,分发到 TargetProvider 号池。
 	GetRelayModelRoutes() []ModelRouteRule
 	SetRelayModelRoutes(val []ModelRouteRule) error
+	// GetBenchmarkConfig/SetBenchmarkConfig: 模型测速(首帧/耗时)配置聚合读写。
+	// 聚合 Enabled/Models/IntervalMinutes/Prompt/TimeoutMs 五字段, 读写两侧共用归一化兜底。
+	GetBenchmarkConfig() BenchmarkConfig
+	SetBenchmarkConfig(cfg BenchmarkConfig) error
 	SaveConfig() error
 	MigrateData(
 		targetPath string,

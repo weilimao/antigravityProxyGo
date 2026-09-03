@@ -63,6 +63,10 @@ var otherReqLogSeq uint64
 // cached 为上游回报的缓存命中 token(cachedTokens), 决定 CacheStatus 与缓存命中率口径:
 // >0 → "HIT", 否则维持 "NONE"(兼容 OpenRF 之下无 cache 的第三方上游)。
 func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model string, input, output, cached int, poolAccount *account.Account, logCtx passthroughLogCtx) {
+	// 测速回环探测请求(IsBenchmark)不计入任何统计, 不污染仪表盘请求/成功率/Token。
+	if userSession != nil && userSession.IsBenchmark {
+		return
+	}
 	// usageAvailable marks whether upstream returned real usage (input/output nonzero).
 	// Some third-party upstreams (e.g. OpenRouter free models like kimi-k3-free) omit usage
 	// in their SSE final frame; here input/output come in as 0/0. We still must record the

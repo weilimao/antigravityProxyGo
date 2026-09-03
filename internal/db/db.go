@@ -160,9 +160,23 @@ func runMigrations(db *sql.DB, dataDir string) error {
 			cache_key TEXT PRIMARY KEY,
 			ocr_text TEXT NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			expires_at DATETIME NOT NULL
+			expires_at TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_ocr_cache_expires ON ocr_cache(expires_at);`,
+		// benchmark_results: 模型测速(首帧/耗时)最新结果, 每模型一行(PRIMARY KEY=model)。
+		// ttft_ms=首字响应延迟, total_ms=端到端总耗时, prev_*=上一轮值(供前端趋势箭头),
+		// status=ok/warning/error, error=失败原因(空=成功), tested_at=本轮测试时刻(RFC3339)。
+		// 由 internal/benchmark 调度器经 UpsertBenchmarkResult 写入(旧 current→prev 再覆盖)。
+		`CREATE TABLE IF NOT EXISTS benchmark_results (
+			model TEXT PRIMARY KEY,
+			ttft_ms INTEGER NOT NULL DEFAULT 0,
+			total_ms INTEGER NOT NULL DEFAULT 0,
+			prev_ttft_ms INTEGER NOT NULL DEFAULT 0,
+			prev_total_ms INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'ok',
+			error TEXT NOT NULL DEFAULT '',
+			tested_at TEXT NOT NULL DEFAULT ''
+		);`,
 	}
 
 	for _, schema := range schemas {

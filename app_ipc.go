@@ -86,6 +86,9 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 	if res, handled, err := a.handleAutoTriggerIPC(channel, args); handled {
 		return res, err
 	}
+	if res, handled, err := a.handleBenchmarkIPC(channel, args); handled {
+		return res, err
+	}
 	if res, handled, err := a.handleAppInvokeIPC(channel, args); handled {
 		return res, err
 	}

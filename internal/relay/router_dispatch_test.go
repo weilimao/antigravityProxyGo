@@ -122,3 +122,84 @@ func TestResolveRoutedTarget_WithModelMappingTargetProvider(t *testing.T) {
 		t.Fatalf("expected deepseek / deepseek-chat for my-custom-ds, got provider=%q tm=%q matched=%v", provider, tm, matched)
 	}
 }
+
+type benchEntrySettings struct {
+	settings.ManagerInterface
+	mappings []settings.ModelMappingEntry
+	routes   []settings.ModelRouteRule
+}
+
+func (s *benchEntrySettings) GetRelayModelMapping() []settings.ModelMappingEntry {
+	return s.mappings
+}
+
+func (s *benchEntrySettings) GetRelayModelRoutes() []settings.ModelRouteRule {
+	return s.routes
+}
+
+func TestResolveBenchmarkEntryPath(t *testing.T) {
+	stub := &benchEntrySettings{
+		mappings: []settings.ModelMappingEntry{
+			{ClientModel: "nvidia/moonshotai/kimi-k3", TargetModel: "moonshotai/kimi-k3", Expose: true},
+			{ClientModel: "gemini-2.5-flash", TargetModel: "gemini-2.5-flash", Expose: true},
+			{ClientModel: "other/openai/gpt-4o", TargetModel: "gpt-4o", Expose: true},
+		},
+		routes: settings.GetDefaultModelRoutes(),
+	}
+	h := &APICompatHandler{settingsMgr: stub}
+
+	cases := []struct {
+		model string
+		want  string
+	}{
+		// 非 Google 命名空间前缀 → /route(与真实客户端 BaseURL=/route 同口径)
+		{"nvidia/moonshotai/kimi-k3", "/route/v1/chat/completions"},
+		{"nvidia/deepseek-ai/deepseek-r1", "/route/v1/chat/completions"},
+		{"grok/grok-3", "/route/v1/chat/completions"},
+		{"xai/grok-3-mini", "/route/v1/chat/completions"},
+		{"other/openai/gpt-4o", "/route/v1/chat/completions"},
+		{"deepseek/deepseek-chat", "/route/v1/chat/completions"},
+		// Google 名即使被默认兜底通配 * → nvidia 误命中, 也不得走 /route
+		{"gemini-2.5-flash", "/v1/chat/completions"},
+		{"gemini-3-flash", "/v1/chat/completions"},
+		{"unknown-model", "/v1/chat/completions"},
+		{"", "/v1/chat/completions"},
+	}
+	for _, c := range cases {
+		if got := h.ResolveBenchmarkEntryPath(c.model); got != c.want {
+			t.Errorf("ResolveBenchmarkEntryPath(%q) = %q, want %q", c.model, got, c.want)
+		}
+	}
+
+	// 映射显式声明 Google Provider 时以映射为准(即使模型名带非 Google 前缀)
+	prov := &benchEntrySettings{
+		mappings: []settings.ModelMappingEntry{
+			{ClientModel: "nvidia/gemini-x", TargetModel: "gemini-x", TargetProvider: "antigravity", Expose: true},
+		},
+		routes: settings.GetDefaultModelRoutes(),
+	}
+	h2 := &APICompatHandler{settingsMgr: prov}
+	if got := h2.ResolveBenchmarkEntryPath("nvidia/gemini-x"); got != "/v1/chat/completions" {
+		t.Errorf("explicit google provider: got %q, want /v1/chat/completions", got)
+	}
+
+	// 映射显式声明非 Google Provider → /route
+	h3 := &APICompatHandler{settingsMgr: &benchEntrySettings{
+		mappings: []settings.ModelMappingEntry{
+			{ClientModel: "my-custom-ds", TargetModel: "deepseek-chat", TargetProvider: "deepseek", Expose: true},
+		},
+		routes: settings.GetDefaultModelRoutes(),
+	}}
+	if got := h3.ResolveBenchmarkEntryPath("my-custom-ds"); got != "/route/v1/chat/completions" {
+		t.Errorf("explicit non-google provider: got %q, want /route/v1/chat/completions", got)
+	}
+
+	// settingsMgr 为 nil(单测/退化态): 前缀与默认规则仍应正确判向
+	h4 := &APICompatHandler{}
+	if got := h4.ResolveBenchmarkEntryPath("nvidia/moonshotai/kimi-k3"); got != "/route/v1/chat/completions" {
+		t.Errorf("nil settingsMgr nvidia prefix: got %q, want /route/v1/chat/completions", got)
+	}
+	if got := h4.ResolveBenchmarkEntryPath("gemini-2.5-flash"); got != "/v1/chat/completions" {
+		t.Errorf("nil settingsMgr gemini: got %q, want /v1/chat/completions", got)
+	}
+}

@@ -42,6 +42,9 @@ export interface DashboardState {
     // stats-updated tick 不改写本字段, 故范围视图冻结到下次切换(聚合视图不需秒级实时)。
     filteredModelStats: any | null;
     usageData: any | null;
+    // benchmarkData: 模型测速(首帧/耗时)卡片的最新载荷({config, results, lastRun, running}),
+    // 由 benchmark-updated 事件与 benchmark:get 初始拉取写入, 供 renderBenchmarkCard 渲染。
+    benchmarkData: any | null;
 
     // Pagination
     currentPage: number;
@@ -126,6 +129,7 @@ const state: DashboardState = {
     currentModelRange: 'all',
     filteredModelStats: null,
     usageData: null,
+    benchmarkData: null,
 
     // Pagination
     currentPage: 1,

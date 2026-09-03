@@ -128,6 +128,16 @@ func (a *App) shutdown() {
 			},
 		},
 		{
+			Name:    "benchmark",
+			Timeout: 600 * time.Millisecond,
+			Run: func(ctx context.Context) error {
+				if a.benchmarkScheduler != nil {
+					a.benchmarkScheduler.Stop()
+				}
+				return nil
+			},
+		},
+		{
 			Name:    "monitorCancel",
 			Timeout: 200 * time.Millisecond,
 			Run: func(ctx context.Context) error {

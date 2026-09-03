@@ -4,6 +4,7 @@ import (
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/antigravitybg"
 	"antigravity-proxy/internal/autotrigger"
+	"antigravity-proxy/internal/benchmark"
 	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/diagserver"
 	"antigravity-proxy/internal/dialogs"
@@ -425,6 +426,12 @@ func (a *App) startup(ctx context.Context) {
 
 	// 初始化 Antigravity 桌面端壁纸与外观管理器
 	a.antigravityBgMgr = antigravitybg.NewManager(a.settingsMgr.GetActiveDataDirectory())
+
+	// 启动模型测速调度器: 定时向配置模型发最小流式请求测首帧/总耗时, 经中继回环复用
+	// 全部路由链路; 回环监听 127.0.0.1:0, handler 复用已装配的 relayCompatAPIMgr。
+	// 放在 eventsGate 构造之后, 使 benchmark-updated 事件走节流门派发。
+	a.benchmarkScheduler = benchmark.NewScheduler(a.settingsMgr, a.relayCompatAPIMgr, a.AddLog, a.emitEvent)
+	a.benchmarkScheduler.Start()
 
 	// 启动网络连通性监听:网络从断→通时触发连接池重置 + 远程中继自动重连,
 	// 从根本修复"网络断开后程序废了、再联网也无法使用中继服务"的问题。

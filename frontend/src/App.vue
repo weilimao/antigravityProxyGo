@@ -170,6 +170,7 @@
     <GrokAccountModal />
     <GrokThawModal />
     <OtherAccountModal />
+    <BenchmarkConfigModal />
   </div>
 </template>
 
@@ -202,6 +203,7 @@ import NvidiaBatchAssignIPModal from './components/modals/NvidiaBatchAssignIPMod
 import GrokAccountModal from './components/modals/GrokAccountModal.vue';
 import GrokThawModal from './components/modals/GrokThawModal.vue';
 import OtherAccountModal from './components/modals/OtherAccountModal.vue';
+import BenchmarkConfigModal from './components/modals/BenchmarkConfigModal.vue';
 import { initRemoteEvents } from './ui/remoteController';
 import { setLanguage, switchView, initDashboardEvents, initModelRangeFilter } from './ui/dashboard';
 import { ipcRenderer } from './shared/ipc';
