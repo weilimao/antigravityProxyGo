@@ -57,6 +57,9 @@ type Scheduler struct {
 	runningMu sync.Mutex
 	running   bool
 	lastRun   time.Time
+
+	testingMu     sync.Mutex
+	pendingModels map[string]bool
 }
 
 // NewScheduler 构造测速调度器。handler 须为 relay.APICompatHandler(已装配好号池/settings)。
@@ -150,12 +153,24 @@ func (s *Scheduler) RunModelNow(model string) {
 // runModelOnce 探测单个模型并落库 + 推事件。与 runOnce 共用 probeModel, 仅范围不同。
 func (s *Scheduler) runModelOnce(model string) {
 	defer func() {
+		s.testingMu.Lock()
+		delete(s.pendingModels, model)
+		s.testingMu.Unlock()
 		if r := recover(); r != nil {
 			if s.addLog != nil {
 				s.addLog(fmt.Sprintf("⚠️ [测速] 单模型重测异常 %s: %v", model, r))
 			}
 		}
 	}()
+
+	s.testingMu.Lock()
+	if s.pendingModels == nil {
+		s.pendingModels = make(map[string]bool)
+	}
+	s.pendingModels[model] = true
+	s.testingMu.Unlock()
+	s.EmitResults()
+
 	cfg := s.settings.GetBenchmarkConfig()
 	prompt := cfg.Prompt
 	if strings.TrimSpace(prompt) == "" {
@@ -172,6 +187,11 @@ func (s *Scheduler) runModelOnce(model string) {
 		r.TestedAt = time.Now().Format(time.RFC3339)
 	}
 	_ = db.UpsertBenchmarkResult(&r)
+
+	s.testingMu.Lock()
+	delete(s.pendingModels, model)
+	s.testingMu.Unlock()
+
 	s.runningMu.Lock()
 	s.lastRun = time.Now()
 	s.runningMu.Unlock()
@@ -197,6 +217,17 @@ func (s *Scheduler) ResetLastRun() {
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
 	s.lastRun = time.Time{}
+}
+
+// PendingModels 返回当前正在等待或测试中的模型列表。
+func (s *Scheduler) PendingModels() []string {
+	s.testingMu.Lock()
+	defer s.testingMu.Unlock()
+	out := make([]string, 0, len(s.pendingModels))
+	for m := range s.pendingModels {
+		out = append(out, m)
+	}
+	return out
 }
 
 // maybeRun 节拍回调: 启用且到点则跑一轮。
@@ -235,11 +266,17 @@ func (s *Scheduler) runOnce() {
 	s.running = true
 	s.runningMu.Unlock()
 
+	// 立即广播 running=true, 使前端卡片立即进入测速中(全部模型测试图标旋转)
+	s.EmitResults()
+
 	// defer 兜底置 running=false(防早返/异常路径遗漏); 正常路径在 emit 前已显式置 false。
 	defer func() {
 		s.runningMu.Lock()
 		s.running = false
 		s.runningMu.Unlock()
+		s.testingMu.Lock()
+		s.pendingModels = nil
+		s.testingMu.Unlock()
 		if r := recover(); r != nil {
 			if s.addLog != nil {
 				s.addLog(fmt.Sprintf("⚠️ [测速] 运行异常: %v", r))
@@ -253,6 +290,17 @@ func (s *Scheduler) runOnce() {
 		return
 	}
 
+	// 初始化当前轮次待测模型集合
+	s.testingMu.Lock()
+	s.pendingModels = make(map[string]bool, len(cfg.Models))
+	for _, m := range cfg.Models {
+		s.pendingModels[m] = true
+	}
+	s.testingMu.Unlock()
+
+	// 立即广播 running=true 与 pendingModels, 使前端卡片立即进入测速中(全部待测模型测试图标旋转)
+	s.EmitResults()
+
 	timeout := time.Duration(cfg.TimeoutMs) * time.Millisecond
 	if timeout < 5*time.Second {
 		timeout = 30 * time.Second
@@ -262,33 +310,39 @@ func (s *Scheduler) runOnce() {
 		prompt = "Hi"
 	}
 
-	results := make([]Result, len(cfg.Models))
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
-	for i, model := range cfg.Models {
+	for _, model := range cfg.Models {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(idx int, m string) {
+		go func(m string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
-			results[idx] = s.probeModel(ctx, m, prompt)
-		}(i, model)
+			res := s.probeModel(ctx, m, prompt)
+			if res.TestedAt == "" {
+				res.TestedAt = time.Now().Format(time.RFC3339)
+			}
+			// 单个模型测试完成(成功或失败均已出结果): 立即落库!
+			_ = db.UpsertBenchmarkResult(&res)
+			// 从当前待测集合中移除该模型
+			s.testingMu.Lock()
+			delete(s.pendingModels, m)
+			s.testingMu.Unlock()
+			// 一个完成立即推送显示, 不需要等全部测完才显示
+			s.EmitResults()
+		}(model)
 	}
 	wg.Wait()
-
-	for i := range results {
-		if results[i].TestedAt == "" {
-			results[i].TestedAt = time.Now().Format(time.RFC3339)
-		}
-		_ = db.UpsertBenchmarkResult(&results[i])
-	}
 
 	s.runningMu.Lock()
 	s.lastRun = time.Now()
 	s.running = false
 	s.runningMu.Unlock()
+	s.testingMu.Lock()
+	s.pendingModels = nil
+	s.testingMu.Unlock()
 	s.EmitResults()
 }
 
@@ -367,16 +421,25 @@ func (s *Scheduler) probeModel(ctx context.Context, model, prompt string) Result
 	}
 
 	end := time.Now()
-	totalMs := end.Sub(start).Milliseconds()
-	if totalMs <= 0 {
-		totalMs = 1
-	}
 	ttftMs := int64(0)
 	if !firstByte.IsZero() {
 		ttftMs = firstByte.Sub(start).Milliseconds()
 	}
-	if ttftMs <= 0 {
-		ttftMs = totalMs // 兜底: 非流式/未扫到 data 行时取端到端
+	if ttftMs <= 0 && !firstByte.IsZero() {
+		ttftMs = 1
+	}
+
+	// 耗时: 依用户需求只统计「首帧到结束的时间」(即模型流式输出阶段耗时)
+	// 若未采集到首帧(如非流式或直接报错), 则兜底统计端到端总时间
+	totalMs := int64(0)
+	if !firstByte.IsZero() {
+		totalMs = end.Sub(firstByte).Milliseconds()
+	} else {
+		totalMs = end.Sub(start).Milliseconds()
+		ttftMs = totalMs
+	}
+	if totalMs <= 0 {
+		totalMs = 1
 	}
 
 	status := "ok"
@@ -401,6 +464,14 @@ func (s *Scheduler) EmitResults() {
 	if s.settings != nil {
 		cfg = s.settings.GetBenchmarkConfig()
 	}
+
+	s.testingMu.Lock()
+	pendingList := make([]string, 0, len(s.pendingModels))
+	for m := range s.pendingModels {
+		pendingList = append(pendingList, m)
+	}
+	s.testingMu.Unlock()
+
 	payload := map[string]interface{}{
 		"config": map[string]interface{}{
 			"enabled":         cfg.Enabled,
@@ -409,9 +480,10 @@ func (s *Scheduler) EmitResults() {
 			"prompt":          cfg.Prompt,
 			"timeoutMs":       cfg.TimeoutMs,
 		},
-		"results": results,
-		"lastRun": s.LastRun().Format(time.RFC3339),
-		"running": s.IsRunning(),
+		"results":       results,
+		"pendingModels": pendingList,
+		"lastRun":       s.LastRun().Format(time.RFC3339),
+		"running":       s.IsRunning(),
 	}
 	if s.emit != nil {
 		s.emit("benchmark-updated", payload)

@@ -35,9 +35,11 @@ func (a *App) handleBenchmarkIPC(channel string, args []interface{}) (string, bo
 		results, _ := db.ListBenchmarkResults()
 		lastRun := time.Time{}
 		running := false
+		pendingModels := []string{}
 		if a.benchmarkScheduler != nil {
 			lastRun = a.benchmarkScheduler.LastRun()
 			running = a.benchmarkScheduler.IsRunning()
+			pendingModels = a.benchmarkScheduler.PendingModels()
 		}
 		data, _ := marshalResponse(map[string]interface{}{
 			"success": true,
@@ -48,9 +50,10 @@ func (a *App) handleBenchmarkIPC(channel string, args []interface{}) (string, bo
 				"prompt":          cfg.Prompt,
 				"timeoutMs":       cfg.TimeoutMs,
 			},
-			"results": results,
-			"lastRun": lastRun.Format(time.RFC3339),
-			"running": running,
+			"results":       results,
+			"pendingModels": pendingModels,
+			"lastRun":       lastRun.Format(time.RFC3339),
+			"running":       running,
 		})
 		return data, true, nil
 
@@ -72,6 +75,8 @@ func (a *App) handleBenchmarkIPC(channel string, args []interface{}) (string, bo
 		cfg := a.settingsMgr.GetBenchmarkConfig()
 		a.AddLog(fmt.Sprintf("⚡ [测速] 配置已保存: %d 个模型, 间隔 %d 分钟, 已%s",
 			len(cfg.Models), cfg.IntervalMinutes, enabledText(cfg.Enabled)))
+		// 清理已不再配置列表里的旧模型测速结果, 保持卡片与配置一致
+		_ = db.PruneBenchmarkResults(cfg.Models)
 		// 按钮文案为「保存并测速」: 无论是否启用定时, 只要配了模型就立即跑一轮,
 		// 让用户配置完即时看到数据。启用开关仅控制后续周期性定时触发(maybeRun 判 enabled)。
 		if len(cfg.Models) > 0 && a.benchmarkScheduler != nil {

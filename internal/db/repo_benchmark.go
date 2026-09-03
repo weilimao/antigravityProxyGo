@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // repo_benchmark.go: 模型测速(首帧/耗时)最新结果持久化。
@@ -94,3 +95,26 @@ func ClearBenchmarkResults() error {
 	_, err := GlobalDB.Exec("DELETE FROM benchmark_results")
 	return err
 }
+
+// PruneBenchmarkResults 清理不在 activeModels 清单中的残留测速记录(配置修改模型时调用, 保持卡片与配置一致)。
+func PruneBenchmarkResults(activeModels []string) error {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+	if GlobalDB == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	if len(activeModels) == 0 {
+		_, err := GlobalDB.Exec("DELETE FROM benchmark_results")
+		return err
+	}
+	placeholders := make([]string, len(activeModels))
+	args := make([]interface{}, len(activeModels))
+	for i, m := range activeModels {
+		placeholders[i] = "?"
+		args[i] = m
+	}
+	query := fmt.Sprintf("DELETE FROM benchmark_results WHERE model NOT IN (%s)", strings.Join(placeholders, ","))
+	_, err := GlobalDB.Exec(query, args...)
+	return err
+}
+

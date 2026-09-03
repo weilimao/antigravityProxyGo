@@ -28,9 +28,14 @@ export function initBenchmarkEvents(): void {
     const btnConfig = el('btnBenchmarkConfig');
     if (btnRun) {
         btnRun.addEventListener('click', () => {
-            ipcRenderer.invoke('benchmark:run-now').catch((e) => console.error('[Benchmark] run-now failed', e));
             const p = state.benchmarkData || {};
-            renderBenchmarkCard({ ...p, running: true });
+            const cfg = p.config || {};
+            const allModels = Array.isArray(cfg.models) ? cfg.models : [];
+            renderBenchmarkCard({ ...p, pendingModels: allModels, running: true });
+            ipcRenderer.invoke('benchmark:run-now').catch((e) => {
+                console.error('[Benchmark] run-now failed', e);
+                renderBenchmarkCard({ ...p, pendingModels: [], running: false });
+            });
         });
     }
     if (btnConfig) btnConfig.addEventListener('click', () => openBenchmarkConfig());
@@ -71,7 +76,14 @@ export function initBenchmarkEvents(): void {
 
     // ---- 订阅后端测速结果推送 ----
     ipcRenderer.on('benchmark-updated', (_e: any, payload: any) => {
-        benchRetestingSet.clear();
+        const pending = new Set<string>(Array.isArray(payload?.pendingModels) ? payload.pendingModels : []);
+        if (Array.isArray(payload?.pendingModels)) {
+            for (const m of benchRetestingSet) {
+                if (!pending.has(m)) benchRetestingSet.delete(m);
+            }
+        } else if (!payload?.running) {
+            benchRetestingSet.clear();
+        }
         state.benchmarkData = payload || {};
         renderBenchmarkCard(payload);
     });
@@ -112,6 +124,7 @@ export function renderBenchmarkCard(payload: any): void {
     const d = dict(); const zh = isZh();
     const p = payload || {};
     const config = p.config || {};
+    const configModels: string[] = Array.isArray(config.models) ? config.models : [];
     const results: any[] = Array.isArray(p.results) ? p.results : [];
     const running: boolean = !!p.running;
 
@@ -133,12 +146,15 @@ export function renderBenchmarkCard(payload: any): void {
             statusDot.title = zh ? '已启用定时测速' : 'Scheduled benchmark enabled';
         } else {
             statusDot.className = 'inline-block w-2 h-2 rounded-full bg-slate-400';
-            statusDot.title = zh ? '未启用' : 'Disabled';
+            statusDot.title = d.benchmarkManualMode || (zh ? '手动测速模式(定时未启用)' : 'Manual Mode (Scheduled disabled)');
         }
     }
     if (runBtn) {
         const icon = runBtn.querySelector('.material-symbols-outlined');
-        if (icon) icon.classList.toggle('animate-spin', running);
+        if (icon) {
+            icon.classList.add('inline-block');
+            icon.classList.toggle('animate-spin', running);
+        }
         runBtn.disabled = running;
     }
 
@@ -151,7 +167,8 @@ export function renderBenchmarkCard(payload: any): void {
         meta.textContent = `${d.benchmarkLastTest || (zh ? '最新测试' : 'Last test')}: ${timeText}`;
     }
 
-    if (results.length === 0) {
+    // 若既没有配置模型，也无历史测速结果，展示空态提示
+    if (configModels.length === 0 && results.length === 0) {
         body.innerHTML = `
             <div class="flex flex-col items-center justify-center gap-1.5 py-6 text-outline dark:text-outline-variant/70">
                 <span class="material-symbols-outlined text-[28px] text-outline/40">speed</span>
@@ -161,26 +178,73 @@ export function renderBenchmarkCard(payload: any): void {
         return;
     }
 
-    // 紧凑网格: 每模型一张小卡(状态点 + 名称 + 指标 + 单模型 ▷ 重测按钮), 不再通栏单行浪费空间。
+    // 建立现有测速结果 Map，以配置的模型列表为准对齐补齐
+    const resultMap = new Map<string, any>();
+    results.forEach((r) => {
+        if (r && r.model) resultMap.set(r.model, r);
+    });
+
+    const displayList: any[] = [];
+    if (configModels.length > 0) {
+        for (const m of configModels) {
+            if (resultMap.has(m)) {
+                displayList.push(resultMap.get(m));
+            } else {
+                // 尚未有测试结果的模型(如刚添加) -> 自动补齐为待测/测速中项
+                displayList.push({
+                    model: m,
+                    ttftMs: 0,
+                    totalMs: 0,
+                    prevTtftMs: 0,
+                    prevTotalMs: 0,
+                    status: 'pending',
+                    error: '',
+                    testedAt: '',
+                });
+            }
+        }
+    } else {
+        displayList.push(...results);
+    }
+
+    const pendingSet = new Set<string>(Array.isArray(p.pendingModels) ? p.pendingModels : []);
+
+    // 紧凑网格: 每模型一张小卡(状态点 + 名称 + 指标 + 单模型 ▷ 重测按钮)
     const retestTitle = d.benchmarkRetest || (zh ? '重测此模型' : 'Retest this model');
-    const cards = results.map((r: any) => {
+    const cards = displayList.map((r: any) => {
         const model = esc(r.model || '-');
         const st = r.status || 'ok';
+        const isPending = st === 'pending';
+        // 单个模型测试中判定:
+        // 若后端传入 pendingModels，则精准以是否在此名单中为准(不在名单代表已出结果, 立即显示且停转);
+        // 否则以本地重测集合或全局测速中待测状态兜底。
+        const isTestingThisModel = pendingSet.size > 0
+            ? pendingSet.has(r.model)
+            : (benchRetestingSet.has(r.model) || (running && isPending));
+        const isSpinning = isTestingThisModel;
+
         const ttft = formatDuration(r.ttftMs > 0 ? r.ttftMs : 0);
         const total = formatDuration(r.totalMs > 0 ? r.totalMs : 0);
 
         let ttftCls = 'text-slate-700 dark:text-slate-200';
-        if (st === 'ok') ttftCls = 'text-emerald-600 dark:text-emerald-400 font-semibold';
+        if (isPending) ttftCls = 'text-amber-500 dark:text-amber-400 font-normal';
+        else if (st === 'ok') ttftCls = 'text-emerald-600 dark:text-emerald-400 font-semibold';
         else if (st === 'warning') ttftCls = 'text-amber-600 dark:text-amber-400 font-semibold';
         else if (st === 'error') ttftCls = 'text-rose-500 dark:text-rose-400 font-semibold';
 
         let dotCls = 'bg-emerald-500', dotTitle = d.benchmarkStatusOk || (zh ? '正常' : 'OK');
-        if (st === 'warning') { dotCls = 'bg-amber-500'; dotTitle = d.benchmarkStatusWarn || (zh ? '稍慢' : 'Slow'); }
-        else if (st === 'error') { dotCls = 'bg-rose-500'; dotTitle = d.benchmarkStatusError || (zh ? '异常' : 'Error'); }
+        if (isPending) {
+            dotCls = isSpinning ? 'bg-amber-500 animate-pulse' : 'bg-slate-400 dark:bg-slate-500';
+            dotTitle = isSpinning ? (d.benchmarkRunning || (zh ? '测速中...' : 'running...')) : (d.benchmarkPending || (zh ? '待测' : 'Pending'));
+        } else if (st === 'warning') {
+            dotCls = 'bg-amber-500'; dotTitle = d.benchmarkStatusWarn || (zh ? '稍慢' : 'Slow');
+        } else if (st === 'error') {
+            dotCls = 'bg-rose-500'; dotTitle = d.benchmarkStatusError || (zh ? '异常' : 'Error');
+        }
 
         // 趋势: 与小卡同宽紧凑展示(↑/↓/≈ 符号即可, 悬停 title 显示差值)
         let trendHtml = '<span class="text-slate-400 dark:text-slate-500">—</span>';
-        if (st !== 'error' && r.prevTtftMs > 0 && r.ttftMs > 0) {
+        if (!isPending && st !== 'error' && r.prevTtftMs > 0 && r.ttftMs > 0) {
             const delta = r.ttftMs - r.prevTtftMs;
             if (Math.abs(delta) < 20) trendHtml = `<span class="text-slate-400 dark:text-slate-500" title="${zh ? '无变化' : 'no change'}">≈</span>`;
             else if (delta < 0) trendHtml = `<span class="text-emerald-500" title="${zh ? '比上次快' : 'faster'} ${formatDuration(Math.abs(delta))}">↓</span>`;
@@ -188,17 +252,23 @@ export function renderBenchmarkCard(payload: any): void {
         }
 
         const errTitle = r.error ? ` title="${esc(r.error)}"` : '';
-        const ttftShown = st === 'error' ? (zh ? '失败' : 'fail') : ttft;
-        const totalShown = st === 'error' ? '-' : total;
-        const retesting = benchRetestingSet.has(r.model);
+        let ttftShown = ttft;
+        let totalShown = total;
+        if (isPending) {
+            ttftShown = isSpinning ? (d.benchmarkRunning || (zh ? '测速中...' : 'running...')) : (d.benchmarkPending || (zh ? '待测' : 'Pending'));
+            totalShown = '--';
+        } else if (st === 'error') {
+            ttftShown = zh ? '失败' : 'fail';
+            totalShown = '-';
+        }
 
         return `
             <div class="flex flex-col gap-1 p-2 rounded-lg border border-outline-variant/20 bg-slate-50/40 dark:bg-white/[0.02] hover:border-primary/30 transition-colors">
                 <div class="flex items-center gap-1.5 min-w-0">
                     <span class="w-1.5 h-1.5 rounded-full ${dotCls} shrink-0" title="${dotTitle}"></span>
                     <span class="font-medium text-[11px] text-slate-700 dark:text-slate-100 truncate flex-1 min-w-0" title="${model}">${model}</span>
-                    <button class="bench-retest-btn shrink-0 p-0.5 rounded text-amber-500 hover:bg-amber-500/10 transition-colors disabled:opacity-50" data-model="${model}" title="${retestTitle}">
-                        <span class="material-symbols-outlined text-[13px] ${retesting ? 'animate-spin' : ''}">refresh</span>
+                    <button class="bench-retest-btn shrink-0 p-0.5 rounded text-amber-500 hover:bg-amber-500/10 transition-colors disabled:opacity-50" data-model="${model}" title="${retestTitle}" ${isSpinning ? 'disabled' : ''}>
+                        <span class="material-symbols-outlined text-[13px] inline-block ${isSpinning ? 'animate-spin' : ''}">refresh</span>
                     </button>
                 </div>
                 <div class="flex items-center justify-between text-[10px] font-mono" ${errTitle}>
@@ -216,11 +286,16 @@ export function renderBenchmarkCard(payload: any): void {
         btn.addEventListener('click', () => {
             const model = (btn as HTMLButtonElement).getAttribute('data-model') || '';
             if (!model) return;
-            ipcRenderer.invoke('benchmark:run-model', model).catch((e) => console.error('[Benchmark] run-model failed', e));
             benchRetestingSet.add(model);
             const icon = btn.querySelector('.material-symbols-outlined');
-            if (icon) icon.classList.add('animate-spin');
+            if (icon) icon.classList.add('inline-block', 'animate-spin');
             (btn as HTMLButtonElement).disabled = true;
+            ipcRenderer.invoke('benchmark:run-model', model).catch((e) => {
+                console.error('[Benchmark] run-model failed', e);
+                benchRetestingSet.delete(model);
+                if (icon) icon.classList.remove('animate-spin');
+                (btn as HTMLButtonElement).disabled = false;
+            });
         });
     });
 }
@@ -352,6 +427,15 @@ async function saveBenchmarkConfig(): Promise<void> {
         const res = await ipcRenderer.invoke('benchmark:save', payload);
         if (res && res.success) {
             closeBenchmarkConfig();
+            // 保存成功后立即补齐新模型列表并置为测速态回显，无论是否启用定时测速
+            const oldData = state.benchmarkData || {};
+            state.benchmarkData = {
+                ...oldData,
+                config: payload,
+                pendingModels: models,
+                running: models.length > 0,
+            };
+            renderBenchmarkCard(state.benchmarkData);
         } else {
             alert((zh ? '保存失败: ' : 'Save failed: ') + (res?.error || (zh ? '未知错误' : 'Unknown error')));
         }

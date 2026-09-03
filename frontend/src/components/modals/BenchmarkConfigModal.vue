@@ -67,10 +67,13 @@
     </div>
 
     <!-- 启用开关 -->
-    <label class="flex items-center gap-2 text-[12px] font-medium text-on-surface dark:text-white cursor-pointer select-none pt-1">
-      <input type="checkbox" id="benchmarkEnabledToggle" class="rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-      <span data-i18n="benchmarkEnabledLabel">启用定时测速</span>
-    </label>
+    <div class="flex flex-col gap-1 pt-1">
+      <label class="flex items-center gap-2 text-[12px] font-medium text-on-surface dark:text-white cursor-pointer select-none">
+        <input type="checkbox" id="benchmarkEnabledToggle" class="rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
+        <span data-i18n="benchmarkEnabledLabel">启用定时测速</span>
+      </label>
+      <span class="text-[10.5px] text-outline/80 dark:text-outline-variant/70 pl-6 select-none" data-i18n="benchmarkEnabledHint">未勾选时仅在仪表盘手动测速，不执行后台定时探测</span>
+    </div>
 
     <template #footer>
       <button class="px-4 py-1.5 text-[12px] font-medium text-on-surface dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg border border-outline-variant/40 transition-colors cursor-pointer select-none" id="btnBenchmarkConfigCancel" data-i18n="benchmarkCancel">取消</button>
