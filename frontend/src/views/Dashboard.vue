@@ -177,6 +177,10 @@
 <span class="text-[10px] text-outline/70 dark:text-outline-variant/60" data-i18n="benchmarkSubtitle">定时测量模型首帧与总耗时</span>
 </div>
 <span class="hidden text-[10px] px-2 py-0.5 bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400 rounded-full font-semibold" id="benchmarkIntervalChip"></span>
+<span class="hidden text-[10px] px-2 py-0.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-500/20 text-amber-600 dark:text-amber-400 rounded-full font-semibold font-mono flex items-center gap-1" id="benchmarkCountdownChip">
+<span class="material-symbols-outlined text-[11px]" id="benchmarkCountdownChipIcon">schedule</span>
+<span id="benchmarkCountdownChipText">00:00</span>
+</span>
 <span class="inline-block w-2 h-2 rounded-full bg-slate-400" id="benchmarkStatusDot" title="未启用"></span>
 </div>
 <div class="flex items-center gap-2">
@@ -192,7 +196,10 @@
 </div>
 <div id="benchmarkCardBody" class="flex flex-col gap-1"></div>
 <div class="flex justify-between items-center text-[11px] text-outline dark:text-outline-variant/70 pt-1.5 border-t border-outline-variant/10">
+<div class="flex items-center gap-1.5 flex-wrap">
 <span id="benchmarkCardMeta"></span>
+<span id="benchmarkCountdownMeta" class="hidden font-mono text-amber-600 dark:text-amber-400/90 font-medium"></span>
+</div>
 <span class="text-amber-600 dark:text-amber-400/70 text-[10px]">TTFT / Latency</span>
 </div>
 </div>

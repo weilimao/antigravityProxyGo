@@ -4,6 +4,7 @@ import { maybeDrawTrendChart, redrawTrendChartAnimated } from './dashboardTrends
 import { LogsRowSlot, logsRowSlots, viewBtnLogMap, buildLogsRowSlot, updateLogsRowSlot, mergeRetryRows } from './dashboardLogs';
 import { renderModelPerfBar } from './dashboardModelPerf';
 import { initBenchmarkEvents, refreshBenchmarkI18n } from './dashboardBenchmark';
+import { ensureBenchmarkTimer, stopBenchmarkTimer } from './dashboardBenchmarkTimer';
 import { initModalDom, showModal, hideModal } from './dashboardModal';
 import { initConsoleEvents } from './dashboardConsole';
 import state from './dashboardState';
@@ -503,6 +504,12 @@ export function switchView(viewName: string) {
         stopOtpTimer();
     }
 
+    if (viewName === 'dashboard') {
+        ensureBenchmarkTimer();
+    } else {
+        stopBenchmarkTimer();
+    }
+
     if (viewName === 'settings') {
         refreshDataDir();
         initAppVersion();
@@ -846,7 +853,9 @@ export function renderModelsTable(stats: any) {
 // 保证「全部 ⊇ 近七日 ⊇ 近三日 ⊇ 今日」恒成立。此前「全部」复用内存 statsData.models(stats.json
 // 累计) 会与 DB 范围口径漂移, 出现「全部 < 今日」的悖论(stats.json 重启/迁移可能丢量, 或 DB
 // 计重试而内存只计最终成功)。范围视图冻结到下次切换(聚合视图不需秒级实时, stats-updated tick
-// 不改写 filteredModelStats); 初始未选过范围时 filteredModelStats 为 null, 兜底用实时 statsData。
+// 不改写 filteredModelStats)。
+// 初始化时即按当前高亮范围(默认「全部」)自动拉取一次 DB 聚合, 使首屏口径与手动点击完全一致,
+// 避免「首屏展示内存累计、切走再切回全部变成 DB 全量」导致数字跳变。
 export function initModelRangeFilter() {
     const sel = document.getElementById('modelRangeSelector');
     if (!sel) return;
@@ -862,12 +871,16 @@ export function initModelRangeFilter() {
         // 全部范围同样走后端 DB 聚合(since=""), 与今日/3d/7d 同源, 保证 全部 >= 今日。
         try {
             const resRaw = await ipcRenderer.invoke('stats:model-range', range);
+            // 竞态守卫: 拉取期间用户又切换了范围(含初始化自动拉取与手动点击交叠), 丢弃过期响应,
+            // 避免旧范围数据覆盖新选择(否则会出现"数据莫名变回上一个范围"的跳变)。
+            if (state.currentModelRange !== range) return;
             const res = typeof resRaw === 'string' ? JSON.parse(resRaw) : resRaw;
             const stats = (res && res.stats) ? res.stats : res;
             state.filteredModelStats = stats || { models: {} };
             renderModelsTable(state.filteredModelStats);
         } catch (e) {
             console.error('[Dashboard] model range fetch failed', e);
+            if (state.currentModelRange !== range) return;
             // 拉取失败兜底: 用内存 statsData(对全部范围)或空, 不阻断展示。
             state.filteredModelStats = null;
             if (state.statsData) renderModelsTable(state.statsData);
@@ -877,6 +890,13 @@ export function initModelRangeFilter() {
     buttons.forEach(btn => {
         btn.addEventListener('click', () => applyRange(btn.getAttribute('data-mrange') || 'all'));
     });
+
+    // 首屏统一走 DB 聚合口径: 高亮默认虽是「全部」, 但不自动拉取的话首次展示用的是内存
+    // statsData(实时累计), 与手动点击「全部」后拿到的 DB 全量口径不一致 —— 即用户切走范围
+    // 再切回「全部」时数字跳变的根因。这里启动即按当前范围拉取一次, 高亮与数据真正对齐。
+    if (state.filteredModelStats === null) {
+        applyRange(state.currentModelRange || 'all');
+    }
 }
 
 export function renderActiveView() {
@@ -933,8 +953,8 @@ export function renderActiveView() {
 
         // 3. Render sub-tabs table (only the active one!)
         if (state.activeTab === 'models') {
-            // 模型统计表: 用户选过任一范围(含「全部」)后 filteredModelStats 已是后端 DB 聚合快照,
-            // 复用它(范围视图冻结到下次切换); 未选过(null)兜底用实时 statsData。
+            // 模型统计表: 初始化自动拉取或用户选过任一范围(含「全部」)后, filteredModelStats 已是
+            // 后端 DB 聚合快照, 复用它(范围视图冻结到下次切换); 仅当拉取失败(null)时兜底实时 statsData。
             if (state.filteredModelStats) {
                 renderModelsTable(state.filteredModelStats);
             } else {

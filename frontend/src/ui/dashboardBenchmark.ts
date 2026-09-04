@@ -12,6 +12,7 @@ import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
 import { formatDuration } from './dashboardUtils';
+import { ensureBenchmarkTimer, updateBenchmarkCountdownDom } from './dashboardBenchmarkTimer';
 
 function el(id: string): HTMLElement | null { return document.getElementById(id); }
 function dict(): any { return (i18n as any)[state.currentLanguage] || {}; }
@@ -95,21 +96,9 @@ export function initBenchmarkEvents(): void {
     }).catch((e) => console.error('[Benchmark] get failed', e));
 }
 
-/** refreshBenchmarkI18n: 语言切换后按缓存数据重渲染卡片 + 刷新弹窗下拉文案。 */
+/** refreshBenchmarkI18n: 语言切换后按缓存数据重渲染卡片。 */
 export function refreshBenchmarkI18n(): void {
     if (state.benchmarkData) renderBenchmarkCard(state.benchmarkData);
-    const intervalSel = el('benchmarkIntervalSelect') as HTMLSelectElement | null;
-    if (intervalSel) {
-        const d = dict();
-        const opts: Array<[string, string]> = [
-            ['1', d.benchmarkInterval1 || '1 min'],
-            ['5', d.benchmarkInterval5 || '5 min'],
-            ['15', d.benchmarkInterval15 || '15 min'],
-            ['30', d.benchmarkInterval30 || '30 min'],
-            ['60', d.benchmarkInterval60 || '1 hour'],
-        ];
-        intervalSel.querySelectorAll('option').forEach((opt, i) => { if (opts[i]) opt.textContent = opts[i][1]; });
-    }
     // 弹窗若开着, 刷新模型清单文案
     if (el('benchmarkConfigModal') && !el('benchmarkConfigModal')?.classList.contains('opacity-0')) {
         renderBenchmarkModelList();
@@ -169,6 +158,7 @@ export function renderBenchmarkCard(payload: any): void {
 
     // 若既没有配置模型，也无历史测速结果，展示空态提示
     if (configModels.length === 0 && results.length === 0) {
+        updateBenchmarkCountdownDom(p);
         body.innerHTML = `
             <div class="flex flex-col items-center justify-center gap-1.5 py-6 text-outline dark:text-outline-variant/70">
                 <span class="material-symbols-outlined text-[28px] text-outline/40">speed</span>
@@ -226,6 +216,12 @@ export function renderBenchmarkCard(payload: any): void {
         const ttft = formatDuration(r.ttftMs > 0 ? r.ttftMs : 0);
         const total = formatDuration(r.totalMs > 0 ? r.totalMs : 0);
 
+        // 上次对照数据: 后端把旧 current 平移进 prevTtftMs/prevTotalMs 持久化, 任一有值即补一行灰色对照; 首测(全 0)不显示
+        const hasPrev = (r.prevTtftMs > 0) || (r.prevTotalMs > 0);
+        const prevTtft = r.prevTtftMs > 0 ? formatDuration(r.prevTtftMs) : '-';
+        const prevTotal = r.prevTotalMs > 0 ? formatDuration(r.prevTotalMs) : '-';
+        const prevLabel = d.benchmarkPrev || (zh ? '上次' : 'Prev');
+
         let ttftCls = 'text-slate-700 dark:text-slate-200';
         if (isPending) ttftCls = 'text-amber-500 dark:text-amber-400 font-normal';
         else if (st === 'ok') ttftCls = 'text-emerald-600 dark:text-emerald-400 font-semibold';
@@ -276,6 +272,12 @@ export function renderBenchmarkCard(payload: any): void {
                     <span class="text-slate-400 dark:text-slate-500">${d.benchmarkColTotal || (zh ? '耗时' : 'Total')}<span class="text-blue-600 dark:text-blue-400 ml-0.5">${totalShown}</span></span>
                     <span class="w-6 text-center">${trendHtml}</span>
                 </div>
+                ${hasPrev ? `
+                <div class="flex items-center justify-between text-[10px] font-mono text-slate-400/80 dark:text-slate-500/80" title="${zh ? '上一轮测速数据' : 'Previous round data'}">
+                    <span>${prevLabel}<span class="ml-0.5 text-slate-500 dark:text-slate-400">${prevTtft}</span></span>
+                    <span>${d.benchmarkColTotal || (zh ? '耗时' : 'Total')}<span class="ml-0.5 text-slate-500 dark:text-slate-400">${prevTotal}</span></span>
+                    <span class="w-6"></span>
+                </div>` : ''}
             </div>`;
     }).join('');
 
@@ -298,6 +300,9 @@ export function renderBenchmarkCard(payload: any): void {
             });
         });
     });
+
+    updateBenchmarkCountdownDom(p);
+    ensureBenchmarkTimer();
 }
 
 // ============ 配置弹窗(公共 BaseModal + 搜索式模型多选) ============
@@ -306,19 +311,36 @@ let benchSelectedSet = new Set<string>();
 let benchCandidateList: string[] = [];
 let benchSearchQuery = '';
 
-function openBenchmarkConfig(): void {
+async function openBenchmarkConfig(): Promise<void> {
     const modal = el('benchmarkConfigModal');
     const container = el('benchmarkConfigModalContainer');
     if (!modal || !container) return;
 
-    const cfg = (state.benchmarkData || {}).config || {};
+    // 打开前先拉一次最新配置作为回显基准: 保证输入框展示的是后端持久化值,
+    // 而非可能过期/缺失的本地缓存(避免应用重启后缓存为空时回落到 HTML 默认值)。
+    // 截图场景: config.json 持久化 120000, 若仍显示 30000 即为缓存未就绪所致。
+    let cfg: any = {};
+    try {
+        const fresh: any = await ipcRenderer.invoke('benchmark:get');
+        if (fresh && typeof fresh === 'object' && fresh.config) {
+            state.benchmarkData = fresh;
+            cfg = fresh.config || {};
+        }
+    } catch (e) {
+        console.warn('[Benchmark] refresh config on open failed', e);
+    }
+    if (!cfg || typeof cfg !== 'object' || Object.keys(cfg).length === 0) {
+        // 拉取失败时退回本地缓存兜底(过期值仍优于静默回退默认值)
+        cfg = (state.benchmarkData || {}).config || {};
+    }
+
     benchSelectedSet = new Set((cfg.models || []) as string[]);
     benchSearchQuery = '';
 
     const search = el('benchmarkModelSearch') as HTMLInputElement | null;
     if (search) search.value = '';
-    const intervalSel = el('benchmarkIntervalSelect') as HTMLSelectElement | null;
-    if (intervalSel) intervalSel.value = String(cfg.intervalMinutes ?? 5);
+    const intervalInput = el('benchmarkIntervalInput') as HTMLInputElement | null;
+    if (intervalInput) intervalInput.value = String(cfg.intervalMinutes ?? 5);
     const promptInput = el('benchmarkPromptInput') as HTMLInputElement | null;
     if (promptInput) promptInput.value = cfg.prompt || 'Hi';
     const timeoutInput = el('benchmarkTimeoutInput') as HTMLInputElement | null;
@@ -402,7 +424,7 @@ function renderBenchmarkModelList(): void {
 
 async function saveBenchmarkConfig(): Promise<void> {
     const d = dict(); const zh = isZh();
-    const intervalSel = el('benchmarkIntervalSelect') as HTMLSelectElement | null;
+    const intervalInput = el('benchmarkIntervalInput') as HTMLInputElement | null;
     const promptInput = el('benchmarkPromptInput') as HTMLInputElement | null;
     const timeoutInput = el('benchmarkTimeoutInput') as HTMLInputElement | null;
     const enabledToggle = el('benchmarkEnabledToggle') as HTMLInputElement | null;
@@ -415,10 +437,12 @@ async function saveBenchmarkConfig(): Promise<void> {
         const ok = await $confirm(d.benchmarkClearConfirm || (zh ? '当前未选择任何模型，保存将清空测速配置与历史结果，确定清空吗？' : 'No models selected. Saving will clear the benchmark config and history. Continue?'));
         if (!ok) return;
     }
+    const rawInterval = parseInt(intervalInput?.value || '', 10);
+    const intervalMinutes = Number.isFinite(rawInterval) && rawInterval > 0 ? rawInterval : 5;
     const payload = {
         enabled: !!enabledToggle?.checked,
         models,
-        intervalMinutes: parseInt(intervalSel?.value || '5', 10) || 5,
+        intervalMinutes,
         prompt: (promptInput?.value || '').trim() || 'Hi',
         timeoutMs: parseInt(timeoutInput?.value || '30000', 10) || 30000,
     };

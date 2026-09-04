@@ -170,9 +170,15 @@ func (a *App) SetWindowVisible(v bool) {
 	a.isWindowVisibleMu.Lock()
 	a.isWindowVisible = v
 	a.isWindowVisibleMu.Unlock()
-	if v && a.eventsGate != nil {
-		// 窗口恢复可见时,立刻补偿推送一次最新日志数据,防止后台静默状态期间漏刷
-		a.eventsGate.Emit("stats-updated", a.getStatsPayload(false))
+	if v {
+		if a.eventsGate != nil {
+			// 窗口恢复可见时,立刻补偿推送一次最新日志数据,防止后台静默状态期间漏刷
+			a.eventsGate.Emit("stats-updated", a.getStatsPayload(false))
+		}
+		if a.benchmarkScheduler != nil {
+			// 窗口恢复可见时,立刻补偿推送最新测速结果与调度时刻,使前端倒计时毫秒级对齐
+			a.benchmarkScheduler.EmitResults()
+		}
 	}
 }
 

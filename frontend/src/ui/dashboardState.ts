@@ -34,12 +34,14 @@ export interface DashboardState {
     maxMemoryHistoryPoints: number;
     activeView: string;
     statsData: any | null;
-    // currentModelRange: 模型统计表的时间范围筛选。'all' = 全量累计(复用 statsData.models,
-    // 零开销零回归, 与现状口径一致); 'today'/'3d'/'7d' = 走后端 request_logs 范围聚合。
-    // 切范围时前端 invoke stats:model-range 取 filteredModelStats 喂给 renderModelsTable。
+    // currentModelRange: 模型统计表的时间范围筛选。'all' = 全部(request_logs 全量聚合,
+    // 与 'today'/'3d'/'7d' 同源同口径, 保证「全部 ⊇ 近七日 ⊇ 近三日 ⊇ 今日」恒成立, 不再复用
+    // statsData.models 内存累计, 避免与 DB 口径漂移)。切范围时前端 invoke stats:model-range
+    // 取 filteredModelStats 喂给 renderModelsTable; 初始化时也会自动拉取一次当前范围。
     currentModelRange: 'all' | 'today' | '3d' | '7d';
     // filteredModelStats: 范围筛选模式下的 per-model 聚合结果缓存({models:{...}} 形状)。
-    // stats-updated tick 不改写本字段, 故范围视图冻结到下次切换(聚合视图不需秒级实时)。
+    // 初始化自动拉取或用户切范围后写入; stats-updated tick 不改写本字段, 故范围视图冻结到
+    // 下次切换(聚合视图不需秒级实时)。null 表示尚未拉到(初始拉取失败兜底用实时 statsData)。
     filteredModelStats: any | null;
     usageData: any | null;
     // benchmarkData: 模型测速(首帧/耗时)卡片的最新载荷({config, results, lastRun, running}),

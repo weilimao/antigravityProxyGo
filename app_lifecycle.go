@@ -411,6 +411,7 @@ func (a *App) startup(ctx context.Context) {
 		},
 		a.IsWindowVisibleAndActive,
 		eventsgate.WithMinInterval(1*time.Second),
+		eventsgate.WithAlwaysKeep("benchmark-updated"),
 	)
 
 	// 初始化外部 Agent 配置管理器:管理 OpenCode / Claude Code 等 CLI Agent 的配置文件。

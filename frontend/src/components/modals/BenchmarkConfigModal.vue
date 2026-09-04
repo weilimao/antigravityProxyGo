@@ -43,14 +43,9 @@
     <!-- 间隔 + 超时 -->
     <div class="grid grid-cols-2 gap-3">
       <div class="flex flex-col gap-1.5">
-        <label class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="benchmarkIntervalLabel">触发间隔</label>
-        <select id="benchmarkIntervalSelect" class="px-3 py-1.5 text-[12px] bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-on-surface dark:text-white cursor-pointer focus:outline-none focus:border-primary transition-all">
-          <option value="1" data-i18n="benchmarkInterval1">1 分钟</option>
-          <option value="5" data-i18n="benchmarkInterval5">5 分钟</option>
-          <option value="15" data-i18n="benchmarkInterval15">15 分钟</option>
-          <option value="30" data-i18n="benchmarkInterval30">30 分钟</option>
-          <option value="60" data-i18n="benchmarkInterval60">1 小时</option>
-        </select>
+        <label class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="benchmarkIntervalLabel">触发间隔(分钟)</label>
+        <input type="number" min="1" max="1440" step="1" id="benchmarkIntervalInput" value="5"
+          class="px-3 py-1.5 text-[12px] font-mono bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" />
       </div>
       <div class="flex flex-col gap-1.5">
         <label class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="benchmarkTimeoutLabel">单模型超时(毫秒)</label>
