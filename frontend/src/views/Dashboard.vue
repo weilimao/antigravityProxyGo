@@ -192,6 +192,9 @@
 <span class="material-symbols-outlined text-[13px]">settings</span>
 <span data-i18n="benchmarkConfig">配置</span>
 </button>
+<button class="flex items-center p-1 text-outline hover:text-primary dark:hover:text-primary-fixed-dim hover:bg-white/5 rounded-md transition-colors" id="btnBenchmarkCollapse" data-i18n-title="benchmarkCollapse" title="收起测速列表">
+<span class="material-symbols-outlined text-[16px]" id="benchmarkCollapseIcon">expand_less</span>
+</button>
 </div>
 </div>
 <div id="benchmarkCardBody" class="flex flex-col gap-1"></div>

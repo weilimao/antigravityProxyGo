@@ -85,6 +85,8 @@ export const dashboardZh: Record<string, string> = {
     benchmarkCountdownDisabled: "定时未启用",
     benchmarkCountdownNoModels: "未配置模型",
     benchmarkPrev: "上次",
+    benchmarkCollapse: "收起测速列表",
+    benchmarkExpand: "展开测速列表",
 };
 
 export const dashboardEn: Record<string, string> = {
@@ -170,4 +172,6 @@ export const dashboardEn: Record<string, string> = {
     benchmarkCountdownDisabled: "Schedule disabled",
     benchmarkCountdownNoModels: "No models configured",
     benchmarkPrev: "Prev",
+    benchmarkCollapse: "Collapse benchmark list",
+    benchmarkExpand: "Expand benchmark list",
 };

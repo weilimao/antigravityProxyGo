@@ -106,8 +106,23 @@ const emit = defineEmits(['close']);
 
 function handleClose() {
   emit('close');
-  if (props.id && (window as any)._relayCloseModal) {
-    (window as any)._relayCloseModal(props.id);
+  if (!props.id) return;
+  if (props.hideType === 'hidden') {
+    if ((window as any)._relayCloseModal) {
+      (window as any)._relayCloseModal(props.id);
+    }
+  } else {
+    const modal = document.getElementById(props.id);
+    if (modal) {
+      modal.classList.add('opacity-0', 'pointer-events-none');
+    }
+    if (props.containerId) {
+      const container = document.getElementById(props.containerId);
+      if (container) {
+        container.classList.remove('scale-100');
+        container.classList.add('scale-95');
+      }
+    }
   }
 }
 </script>

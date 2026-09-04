@@ -22,6 +22,33 @@ function isZh(): boolean { return state.currentLanguage === 'zh'; }
 // benchmark-updated 事件到达时整体清空(该事件携带最新结果 = 单模型重测/整批测速均已完成)。
 const benchRetestingSet = new Set<string>();
 
+// BENCH_COLLAPSED_KEY: 卡片折叠状态持久化 key(localStorage, 与 accounts_layout 等 UI pref 同机制)。
+// 折叠后仅保留 header + 底部 meta 行(高度约 1/5), 解决「测速网格一夜占一屏、请求日志需滚动」的痛点。
+const BENCH_COLLAPSED_KEY = 'benchmark_card_collapsed';
+
+function isBenchmarkCollapsed(): boolean {
+    try { return localStorage.getItem(BENCH_COLLAPSED_KEY) === '1'; } catch { return false; }
+}
+
+/** applyBenchmarkCollapse: 按 target 显示/隐藏模型网格并刷新三角图标与 title 文案。 */
+function applyBenchmarkCollapse(collapsed: boolean): void {
+    const body = el('benchmarkCardBody');
+    if (body) body.classList.toggle('hidden', collapsed);
+    const icon = el('benchmarkCollapseIcon');
+    if (icon) icon.textContent = collapsed ? 'expand_more' : 'expand_less';
+    const btn = el('btnBenchmarkCollapse') as HTMLButtonElement | null;
+    if (btn) {
+        const d = dict();
+        btn.title = collapsed ? (d.benchmarkExpand || '展开测速列表') : (d.benchmarkCollapse || '收起测速列表');
+    }
+}
+
+function toggleBenchmarkCollapse(): void {
+    const next = !isBenchmarkCollapsed();
+    try { localStorage.setItem(BENCH_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* localStorage 不可用时静默忽略 */ }
+    applyBenchmarkCollapse(next);
+}
+
 /** initBenchmarkEvents: 绑定卡片/弹窗按钮 + 订阅事件 + 初装数据。幂等。 */
 export function initBenchmarkEvents(): void {
     // ---- 卡片按钮 ----
@@ -40,6 +67,11 @@ export function initBenchmarkEvents(): void {
         });
     }
     if (btnConfig) btnConfig.addEventListener('click', () => openBenchmarkConfig());
+
+    // 折叠按钮: 保存偏好状态并在初始应用(应用重启后保持上次用户的折叠选择)
+    const btnCollapse = el('btnBenchmarkCollapse');
+    if (btnCollapse) btnCollapse.addEventListener('click', toggleBenchmarkCollapse);
+    applyBenchmarkCollapse(isBenchmarkCollapsed());
 
     // ---- 弹窗按钮 ----
     const btnClose = el('btnBenchmarkConfigClose');
@@ -99,6 +131,7 @@ export function initBenchmarkEvents(): void {
 /** refreshBenchmarkI18n: 语言切换后按缓存数据重渲染卡片。 */
 export function refreshBenchmarkI18n(): void {
     if (state.benchmarkData) renderBenchmarkCard(state.benchmarkData);
+    applyBenchmarkCollapse(isBenchmarkCollapsed());
     // 弹窗若开着, 刷新模型清单文案
     if (el('benchmarkConfigModal') && !el('benchmarkConfigModal')?.classList.contains('opacity-0')) {
         renderBenchmarkModelList();
@@ -352,8 +385,8 @@ async function openBenchmarkConfig(): Promise<void> {
     loadCandidateModels(true).then(() => renderBenchmarkModelList());
     renderBenchmarkModelList();
 
-    // 过渡动画: 移除 opacity-0/scale-95, 由 BaseModal 的 transition-opacity/transition-transform 接管
-    modal.classList.remove('opacity-0', 'pointer-events-none');
+    // 过渡动画: 移除 opacity-0/pointer-events-none/hidden, 由 BaseModal 的 transition-opacity/transition-transform 接管
+    modal.classList.remove('opacity-0', 'pointer-events-none', 'hidden');
     container.classList.remove('scale-95');
     container.classList.add('scale-100');
 }
