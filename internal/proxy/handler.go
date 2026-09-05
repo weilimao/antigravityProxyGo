@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -209,15 +210,26 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		hasLocalAccounts = len(h.accountMgr.GetRawAccounts()) > 0
 	}
 
+	authHeader := r.Header.Get("Authorization")
+	isGoogleAuth := isGoogleOAuthToken(authHeader)
+
 	if (isRelayConnected || hasLocalAccounts) && strings.Contains(targetPath, "v1internal") {
+		// 如果客户端已携带合法 Google 官方登录态 (ya29.)，放行 fetchUserInfo、listExperiments 和 fetchAdminControls
+		// 使客户端能从 Google 原生获取完整的用户设置及 200+ 实验特性标志（包括 remote-control-setting-enabled）；
+		// 仅对免登录模式或未认证请求，执行高保真 Mock 兜底，确保无论何种环境 Remote Control 均能正常显示。
 		if strings.Contains(targetPath, "fetchUserInfo") {
-			if h.logFn != nil {
-				h.logFn("⚖️ [Mock] 拦截并放行客户端登录验证 (fetchUserInfo)")
+			if !isGoogleAuth {
+				if h.logFn != nil {
+					h.logFn("⚖️ [Mock] 拦截并放行免登录客户端用户验证 (fetchUserInfo, 注入高保真配置)")
+				}
+				mockUser := buildMockUserInfoResponse()
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Content-Length", strconv.Itoa(len(mockUser)))
+				w.WriteHeader(200)
+				w.Write(mockUser)
+				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(200)
-			w.Write([]byte(`{"regionCode":"JP","userSettings":{}}`))
-			return
+			// 已登录 Google 账号 (ya29.)，跳过拦截透传至上游获取真实用户设置
 		} else if strings.Contains(targetPath, "loadCodeAssist") {
 			if h.logFn != nil {
 				h.logFn("⚖️ [Mock] 拦截并放行客户端权限验证 (loadCodeAssist)")
@@ -227,14 +239,30 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(200)
 			w.Write([]byte(mockCodeAssist))
 			return
-		} else if strings.Contains(targetPath, "fetchAdminControls") || strings.Contains(targetPath, "listExperiments") {
-			if h.logFn != nil {
-				h.logFn(fmt.Sprintf("⚖️ [Mock] 拦截并响应客户端配置请求 (%s)", targetPath))
+		} else if strings.Contains(targetPath, "listExperiments") {
+			if !isGoogleAuth {
+				if h.logFn != nil {
+					h.logFn("⚖️ [Mock] 响应免登录客户端实验特性请求 (listExperiments, 开启 RemoteControl 特性)")
+				}
+				mockExp := buildMockExperimentsResponse()
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Content-Length", strconv.Itoa(len(mockExp)))
+				w.WriteHeader(200)
+				w.Write(mockExp)
+				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(200)
-			w.Write([]byte(`{}`))
-			return
+			// 已登录 Google 账号 (ya29.)，跳过拦截透传至上游获取完整实验特性列表
+		} else if strings.Contains(targetPath, "fetchAdminControls") {
+			if !isGoogleAuth {
+				if h.logFn != nil {
+					h.logFn(fmt.Sprintf("⚖️ [Mock] 拦截并响应客户端配置请求 (%s)", targetPath))
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(200)
+				w.Write([]byte(`{}`))
+				return
+			}
+			// 已登录 Google 账号 (ya29.)，跳过拦截透传至上游
 		}
 	}
 

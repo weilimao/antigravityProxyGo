@@ -1,3 +1,18 @@
+### v1.6.2 更新日志
+
+- **Antigravity 远程连接 (Remote Control) 支持**：
+  - 重构代理网关对 `v1internal` 接口的拦截与透传逻辑，支持智能检测 Google 官方 OAuth 登录态（`ya29.`）；
+  - 当客户端已登录 Google 账号时，放行 `listExperiments`、`fetchUserInfo` 与 `fetchAdminControls` 请求，透传至官方上游获取原生完整实验特性标志与用户设置；
+  - 当客户端处于未登录或免登录模式时，注入包含 `remote-control-setting-enabled: true` 与 `remote-control-proxy-server-url: "jetski-webchannel.googleapis.com:443"` 的高保真 Mock 实验特性响应，并同步注入 `remoteControlEnabled: true` 用户配置，彻底解决开启代理拦截时客户端应用设置中「Remote Control」区域不显示的问题。
+
+- **Other 分组冷却时间与 CLI 劫持配置**：
+  - 支持 Other 分组账号的自定义冷却时间配置与持久化存储；
+  - 完善 CLI 命令行劫持补丁测试与旁路转发健壮性。
+
+- **模型测速与 UI 优化**：
+  - 优化模型响应测速卡片工具栏排版，增强不同屏幕尺寸下的自适应显示；
+  - 修复 BaseModal 组件在特定透明度模式下的状态重置问题。
+
 ### v1.6.1 更新日志
 
 - **API Key 模型授权白名单**：

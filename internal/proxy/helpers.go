@@ -8,6 +8,8 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -139,6 +141,9 @@ func (h *ProxyHandler) handleProjectIntercept(w http.ResponseWriter, targetPath 
 	}
 
 	if strings.Contains(targetPath, "v1internal") && !isRealModelRequest(targetPath) && !isAgentRequest(targetPath) {
+		if strings.Contains(targetPath, "listExperiments") || strings.Contains(targetPath, "fetchUserInfo") {
+			return false
+		}
 		h.logFn("⚖️ [project 拦截] 拦截并 Mock 遥测请求 (" + targetPath + ")")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
@@ -305,3 +310,63 @@ func decompressIfNeeded(body []byte, headers http.Header) []byte {
 	}
 	return body
 }
+
+// isGoogleOAuthToken 检查 Authorization 标头是否为官方 Google OAuth 访问令牌 (ya29.)
+func isGoogleOAuthToken(authHeader string) bool {
+	token := strings.TrimSpace(authHeader)
+	if strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+	return strings.HasPrefix(token, "ya29.")
+}
+
+// buildMockExperimentsResponse 构造包含 Remote Control 特性标志的高保真 ListExperimentsResponse 响应
+func buildMockExperimentsResponse() []byte {
+	resp := map[string]interface{}{
+		"experimentIds": []int{105979552},
+		"flags": []map[string]interface{}{
+			{
+				"name":      "remote-control-setting-enabled",
+				"boolValue": true,
+			},
+			{
+				"name":        "remote-control-proxy-server-url",
+				"stringValue": "jetski-webchannel.googleapis.com:443",
+			},
+		},
+	}
+	data, _ := json.Marshal(resp)
+	return data
+}
+
+// buildMockUserInfoResponse 构造客户端登录验证响应，注入包含 remoteControlEnabled 的 userSettings
+func buildMockUserInfoResponse() []byte {
+	userSettings := map[string]interface{}{
+		"remoteControlEnabled": true,
+	}
+
+	// 尝试读取本地 ~/.gemini/config/config.json 以还原用户本地真实配置
+	if home, err := os.UserHomeDir(); err == nil {
+		cfgPath := filepath.Join(home, ".gemini", "config", "config.json")
+		if content, err := os.ReadFile(cfgPath); err == nil {
+			var localCfg struct {
+				UserSettings map[string]interface{} `json:"userSettings"`
+			}
+			if json.Unmarshal(content, &localCfg) == nil && localCfg.UserSettings != nil {
+				for k, v := range localCfg.UserSettings {
+					userSettings[k] = v
+				}
+				// 强制保证 remoteControlEnabled 为 true，防止被历史残留关闭覆盖
+				userSettings["remoteControlEnabled"] = true
+			}
+		}
+	}
+
+	resp := map[string]interface{}{
+		"regionCode":   "JP",
+		"userSettings": userSettings,
+	}
+	data, _ := json.Marshal(resp)
+	return data
+}
+
