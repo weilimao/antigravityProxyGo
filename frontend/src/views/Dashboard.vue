@@ -173,15 +173,31 @@
 <div class="flex items-center gap-2">
 <span class="material-symbols-outlined text-[18px] text-amber-500">speed</span>
 <div class="flex flex-col">
-<span class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="benchmarkTitle">模型响应测速</span>
-<span class="text-[10px] text-outline/70 dark:text-outline-variant/60" data-i18n="benchmarkSubtitle">定时测量模型首帧与总耗时</span>
+<span class="text-[12px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="benchmarkTitle">模型响应测速</span>
+<span class="text-[11px] text-outline/70 dark:text-outline-variant/60" data-i18n="benchmarkSubtitle">定时测量模型首帧与总耗时</span>
 </div>
-<span class="hidden text-[10px] px-2 py-0.5 bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400 rounded-full font-semibold" id="benchmarkIntervalChip"></span>
-<span class="hidden text-[10px] px-2 py-0.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-500/20 text-amber-600 dark:text-amber-400 rounded-full font-semibold font-mono flex items-center gap-1" id="benchmarkCountdownChip">
+<span class="hidden text-[11px] px-2 py-0.5 bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400 rounded-full font-semibold" id="benchmarkIntervalChip"></span>
+<span class="hidden text-[11px] px-2 py-0.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-500/20 text-amber-600 dark:text-amber-400 rounded-full font-semibold font-mono flex items-center gap-1" id="benchmarkCountdownChip">
 <span class="material-symbols-outlined text-[11px]" id="benchmarkCountdownChipIcon">schedule</span>
 <span id="benchmarkCountdownChipText">00:00</span>
 </span>
 <span class="inline-block w-2 h-2 rounded-full bg-slate-400" id="benchmarkStatusDot" title="未启用"></span>
+</div>
+<!-- 搜索 + 排序嵌入标题行中部, 不单独占一行(折叠或无数据时隐藏) -->
+<div id="benchmarkToolbar" class="hidden flex items-center gap-2 flex-1 min-w-[240px] max-w-2xl justify-end px-2">
+<div class="relative flex-1 min-w-[120px] max-w-[380px]">
+<span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-[14px] text-outline/60 pointer-events-none">search</span>
+<input id="benchmarkCardSearch" type="text" class="w-full pl-7 pr-2 py-1 text-[12px] bg-slate-100 dark:bg-white/5 border border-outline-variant/30 rounded-md text-on-surface dark:text-white placeholder:text-outline/50 focus:outline-none focus:border-primary/50 transition-colors" data-i18n-placeholder="benchmarkCardSearchPlaceholder" placeholder="搜索模型..." />
+</div>
+<select id="benchmarkSortSelect" class="py-1 pl-2 pr-1 text-[12px] bg-slate-100 dark:bg-white/5 border border-outline-variant/30 rounded-md text-slate-600 dark:text-slate-400 focus:outline-none focus:ring-1 focus:ring-primary/40 cursor-pointer" data-i18n-title="benchmarkSortLabel" title="排序方式">
+<option value="rank" data-i18n="benchmarkSortRank">按速度排名</option>
+<option value="total" data-i18n="benchmarkSortTotal">按总耗时</option>
+<option value="name" data-i18n="benchmarkSortName">按模型名称</option>
+<option value="config" data-i18n="benchmarkSortConfig">按配置顺序</option>
+</select>
+<button id="benchmarkSortDir" class="p-1 text-outline hover:text-primary dark:hover:text-primary-fixed-dim hover:bg-white/5 rounded-md transition-colors disabled:opacity-40 disabled:pointer-events-none" data-i18n-title="benchmarkSortAsc" title="升序(最快在前)">
+<span class="material-symbols-outlined text-[16px]" id="benchmarkSortDirIcon">arrow_upward</span>
+</button>
 </div>
 <div class="flex items-center gap-2">
 <button class="flex items-center gap-1 px-2.5 py-1 text-[11px] bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-600 dark:text-amber-400 rounded-md font-semibold transition-colors disabled:opacity-50" id="btnBenchmarkRun" data-i18n-title="benchmarkRunNow">
@@ -198,12 +214,12 @@
 </div>
 </div>
 <div id="benchmarkCardBody" class="flex flex-col gap-1"></div>
-<div class="flex justify-between items-center text-[11px] text-outline dark:text-outline-variant/70 pt-1.5 border-t border-outline-variant/10">
+<div class="flex justify-between items-center text-[12px] text-outline dark:text-outline-variant/70 pt-1.5 border-t border-outline-variant/10">
 <div class="flex items-center gap-1.5 flex-wrap">
 <span id="benchmarkCardMeta"></span>
 <span id="benchmarkCountdownMeta" class="hidden font-mono text-amber-600 dark:text-amber-400/90 font-medium"></span>
 </div>
-<span class="text-amber-600 dark:text-amber-400/70 text-[10px]">TTFT / Latency</span>
+<span class="text-amber-600 dark:text-amber-400/70 text-[11px]">TTFT / Latency</span>
 </div>
 </div>
 <!-- 使用趋势折线图 (SVG 矢量绘图) -->

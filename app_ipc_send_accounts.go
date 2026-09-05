@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/cert"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -236,6 +238,27 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		enabled := getBoolArg(1)
 		_ = a.accountMgr.SetOtherWorkerProxyEnabled(groupID, enabled)
 		a.AddLog(fmt.Sprintf("⚙️ [Other] group %s Cloudflare Worker 代理出口启用: %v", groupID, a.accountMgr.IsOtherWorkerProxyEnabled(groupID)))
+		a.emitAccountsRes()
+		return true
+
+	case "other:set-cooldown-rule":
+		// args: [groupID, ruleJSON]。组级自定义冷却策略,与 app_account_ipc_other.go 的 invoke 分支同构:
+		// 前端走 ipcRenderer.send 时必须在此处理,否则规则永不落盘、切 tab 回显丢失。
+		groupID := getStringArg(0)
+		ruleJSON := getStringArg(1)
+		var rule account.OtherCooldownRule
+		if strings.TrimSpace(ruleJSON) != "" {
+			if err := json.Unmarshal([]byte(ruleJSON), &rule); err != nil {
+				a.AddLog(fmt.Sprintf("❌ [Other] group %s 解析冷却规则 JSON 失败: %v", groupID, err))
+				return true
+			}
+		}
+		saved := a.accountMgr.SetOtherCooldownRule(groupID, rule)
+		if saved.Enabled && len(saved.StatusCodes) > 0 {
+			a.AddLog(fmt.Sprintf("🧊 [Other] group %s 自定义冷却已启用: 状态码 %v → 冷却 %ds, 模型 %v", groupID, saved.StatusCodes, saved.CooldownSecs, saved.Models))
+		} else {
+			a.AddLog(fmt.Sprintf("🧊 [Other] group %s 自定义冷却已关闭/清除", groupID))
+		}
 		a.emitAccountsRes()
 		return true
 

@@ -49,7 +49,7 @@
       </div>
       <div class="flex flex-col gap-1.5">
         <label class="text-[11px] font-bold text-outline dark:text-outline-variant uppercase tracking-wider" data-i18n="benchmarkTimeoutLabel">单模型超时(毫秒)</label>
-        <input type="number" min="5000" max="120000" step="1000" id="benchmarkTimeoutInput" value="30000"
+        <input type="number" min="5000" step="1000" id="benchmarkTimeoutInput" value="30000"
           class="px-3 py-1.5 text-[12px] font-mono bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" />
       </div>
     </div>

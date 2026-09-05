@@ -231,6 +231,9 @@ type Manager struct {
 	otherWorkerProxyURLs map[string]string
 	// otherWorkerProxyEnabled 按 GroupID 维度保存各组是否启用 Worker 代理出口,与 otherWorkerProxyURLs 同范式。
 	otherWorkerProxyEnabled map[string]bool
+	// otherCooldownRules 按 GroupID 维度保存各组自定义冷却策略(远端状态码 → 冷却时长 + 模型过滤),
+	// 与 otherLBModes 同范式。详见 account_other.go 的 OtherCooldownRule 注释。
+	otherCooldownRules map[string]*OtherCooldownRule
 	// antigravityCliVersion 持久化 Antigravity 号池全局 Hub/客户端版本号(单池单值,对仗 antigravityMaxConcurrency);
 	// 空串=未配置, GetAntigravityCliVersion 回退默认 DefaultAntigravityCliVersion("2.3.1")。
 	antigravityCliVersion string

@@ -15,6 +15,7 @@ import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
 import { renderAccounts } from './accountsRenderer';
+import { renderOtherCooldownEntry } from './otherCooldownModal';
 
 let otherGroupTabs: HTMLDivElement | null;
 let otherLBModeContainer: HTMLDivElement | null;
@@ -280,6 +281,9 @@ export function renderOtherLBMode() {
     if (otherWorkerProxyUrl && g) {
         otherWorkerProxyUrl.value = String((g as any).workerProxyUrl || '');
     }
+
+    // 冷却规则配置已迁至弹窗(OtherCooldownConfigModal):此处仅渲染工具栏入口按钮的启用高亮态。
+    renderOtherCooldownEntry();
 }
 
 // otherLBModeSelectorVisible:工具栏 LB 模式下拉是否可见(选中具体 Other 组时)。

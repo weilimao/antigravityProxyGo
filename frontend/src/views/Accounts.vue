@@ -216,6 +216,12 @@
                         </label>
                         <input type="text" id="otherWorkerProxyUrl" class="w-40 px-2 py-0.5 bg-transparent border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary font-mono" placeholder="https://your-worker.workers.dev" data-i18n-placeholder="otherWorkerProxyUrlPlaceholder" />
                     </div>
+                    <!-- Other 池组级自定义冷却入口按钮(与 LB 下拉同显隐):点击打开配置弹窗(OtherCooldownConfigModal)。
+                         启用中由 renderOtherCooldownEntry 高亮为冰蓝。 -->
+                    <button type="button" id="btnOtherCooldownConfig" data-i18n-title="otherCooldownEntryTip" title="按远端报错状态码冻结账号,可自定义冷却时长与生效模型" class="flex items-center gap-1 px-2 py-1 text-[12px] font-medium text-outline dark:text-outline-variant bg-outline-variant/10 border border-outline-variant/20 hover:border-primary/30 hover:bg-primary/10 rounded-lg transition-all duration-200 select-none cursor-pointer whitespace-nowrap">
+                        <span class="material-symbols-outlined text-[14px]">ac_unit</span>
+                        <span data-i18n="otherCooldownLabel">自定义冷却</span>
+                    </button>
                 </div>
                 <!-- 布局切换按钮组 -->
                 <div class="flex items-center bg-slate-100 dark:bg-white/5 p-0.5 rounded-lg border border-outline-variant/10 ml-1 flex-shrink-0">

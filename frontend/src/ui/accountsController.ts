@@ -21,6 +21,7 @@ import { initSessionBindingsModalEvents } from './sessionBindingsModal';
 import { initNvidiaAccountModalEvents, writeNvidiaModalError, openNvidiaAccountModal } from './nvidiaAccountModal';
 import { initNvidiaBatchAssignIPModal } from './nvidiaBatchAssignIPModal';
 import { initOtherAccountModalEvents, writeOtherModalError, openOtherAccountModal } from './otherAccountModal';
+import { initOtherCooldownModalEvents } from './otherCooldownModal';
 import { initGrokAccountModalEvents, writeGrokModalError, openGrokAccountModal } from './grokAccountModal';
 import { initGrokThawModalEvents } from './grokThawModal';
 import { initGrokCheckAuthEvents } from './grokCheckAuth';
@@ -409,6 +410,10 @@ export function initAccountsEvents() {
 
     // Other 账号 Modal：句柄赋值 + 事件绑定（已抽离 otherAccountModal.ts）
     initOtherAccountModalEvents();
+
+    // Other 组级自定义冷却 Modal:句柄赋值 + 事件绑定(已抽离 otherCooldownModal.ts,
+    // 工具栏入口按钮 btnOtherCooldownConfig 在 Other 通道选中具体组时显示)。
+    initOtherCooldownModalEvents();
 
     // NVIDIA 账号 Modal：句柄赋值 + 事件绑定（已抽离 nvidiaAccountModal.ts）
     initNvidiaAccountModalEvents();

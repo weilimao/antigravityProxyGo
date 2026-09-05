@@ -243,6 +243,39 @@ func (a *App) handleAccountIPCOther(channel string, args []interface{}) (string,
 		data, _ := marshalResponse(map[string]interface{}{"success": true})
 		return data, true, nil
 
+	case "other:set-cooldown-rule":
+		// args: [groupID, ruleJSON]。组级自定义冷却策略(状态码→冷却时长+模型过滤),见
+		// account.OtherCooldownRule。ruleJSON 为 {enabled,statusCodes[],cooldownSecs,models[]};
+		// 全字段为空等价清除该组规则。与 other:set-lb-mode 同走 invoke 双通道并广播 accounts-res 回显。
+		groupID := ""
+		ruleJSON := ""
+		if len(args) > 0 {
+			if s, ok := args[0].(string); ok {
+				groupID = s
+			}
+		}
+		if len(args) > 1 {
+			if s, ok := args[1].(string); ok {
+				ruleJSON = s
+			}
+		}
+		var rule account.OtherCooldownRule
+		if strings.TrimSpace(ruleJSON) != "" {
+			if err := json.Unmarshal([]byte(ruleJSON), &rule); err != nil {
+				data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "解析冷却规则 JSON 失败: " + err.Error()})
+				return data, true, nil
+			}
+		}
+		saved := a.accountMgr.SetOtherCooldownRule(groupID, rule)
+		if saved.Enabled && len(saved.StatusCodes) > 0 {
+			a.AddLog(fmt.Sprintf("🧊 [Other] group %s 自定义冷却已启用: 状态码 %v → 冷却 %ds, 模型 %v", groupID, saved.StatusCodes, saved.CooldownSecs, saved.Models))
+		} else {
+			a.AddLog(fmt.Sprintf("🧊 [Other] group %s 自定义冷却已关闭/清除", groupID))
+		}
+		a.emitAccountsRes()
+		data, _ := marshalResponse(map[string]interface{}{"success": true, "cooldown": saved})
+		return data, true, nil
+
 	case "other:list-groups":
 		groups := a.accountMgr.GetOtherGroups()
 		data, _ := marshalResponse(map[string]interface{}{"success": true, "groups": groups})

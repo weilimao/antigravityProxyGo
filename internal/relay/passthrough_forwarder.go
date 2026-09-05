@@ -79,13 +79,31 @@ const passthroughMaxAttempts = 5
 const passthroughSingleAcc429Retries = 5
 
 // passthroughCooldownShort / Long: 429/5xx / 401-403 网络错的冷却时长。
-// 仅对非 Other 号池生效:Other 号池(provider=="other")不启用请求冷却,
+// 仅对非 Other 号池生效:Other 号池(provider=="other")默认不启用请求冷却,
 // 上游 429/5xx/401/403/网络错仅触发同请求内换号(skipped),不写账号冷静期。
 // Other 多为 free 档自定义上游,限流频繁,冷却 60s/5min 反而误冻账号导致连续 503。
+// Other 组若配置了组级自定义冷却规则(OtherCooldownRule:状态码→冷却时长+模型过滤,
+// 见 accountMgr.GetOtherCooldownDurationMs),命中的状态码按规则写冷却,未命中仍仅换号。
 const (
 	passthroughCooldownShortMs = 60 * 1000     // 60s
 	passthroughCooldownLongMs  = 5 * 60 * 1000 // 5min
 )
+
+// cooldownOtherIfConfigured 按 Other 组级自定义冷却规则裁决是否给账号挂冷却。
+// 规则未启用/状态码未命中/模型白名单未命中时不做任何事(保持 Other 仅换号不冷却的默认语义)。
+// statusCode 传上游真实响应码;网络错误无响应码传 0(合法规则码域 [100,599],永不命中,即
+// 网络错无法被配置为冷却触发源——与「按远端报错状态码判定」的产品语义一致)。
+func (pf *passthroughForward) cooldownOtherIfConfigured(targetGroupID string, acc *account.Account, statusCode int, inModel, upstreamModel string) {
+	if pf.accountMgr == nil || acc == nil || targetGroupID == "" {
+		return
+	}
+	d := pf.accountMgr.GetOtherCooldownDurationMs(targetGroupID, statusCode, inModel, upstreamModel)
+	if d <= 0 {
+		return
+	}
+	pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+d, "other", inModel)
+	pf.h.log("🧊 [路由转发] 账号 %s 上游 %d 命中组 %s 自定义冷却规则,冻结 %ds(model %s)", acc.Email, statusCode, targetGroupID, d/1000, inModel)
+}
 
 // runPassthroughForward 是路由转发器主流程。
 //
@@ -372,9 +390,12 @@ func (pf *passthroughForward) run(
 				res.err = errDo
 				res.statusCode = http.StatusBadGateway
 				pf.h.log("⚠️ [路由转发] 账号 %s 访问上游失败: %v", acc.Email, errDo)
-				// Other 号池不启用请求冷却:网络错仅换号,不写冷静(见 passthroughCooldownShort 注释)。
+				// Other 号池默认不启用请求冷却:网络错仅换号,不写冷静(见 passthroughCooldownShort 注释)。
+				// 网络错无远端状态码(传 0),组级自定义冷却规则永不命中——按「远端状态码判定」语义不支持网络错触发。
 				if poolChannel != "other" {
 					pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
+				} else {
+					pf.cooldownOtherIfConfigured(targetGroupID, acc, 0, inModel, upstreamModel)
 				}
 				skipped[acc.ID] = true
 				// 网络错误换号前释放该账号并发槽(下次 attempt 选新号会重新 Acquire)。
@@ -391,9 +412,12 @@ func (pf *passthroughForward) run(
 					continue // 同号续用,不释放并发槽
 				}
 				pf.h.log("⚠️ [路由转发] 账号 %s 重试 %d 次仍 429,冷冻换号", acc.Email, passthroughSingleAcc429Retries)
-				// Other 号池不启用请求冷却:429 退避耗尽仅换号,不写冷静。
+				// Other 号池默认不启用请求冷却:429 退避耗尽仅换号,不写冷静;
+				// 组级自定义冷却规则含 429 时按规则时长写入。
 				if poolChannel != "other" {
 					pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
+				} else {
+					pf.cooldownOtherIfConfigured(targetGroupID, acc, resp.StatusCode, inModel, upstreamModel)
 				}
 				skipped[acc.ID] = true
 				// 429 退避耗尽换号前释放并发槽。
@@ -408,9 +432,12 @@ func (pf *passthroughForward) run(
 				res.body = body
 				res.err = fmt.Errorf("upstream %s %d", poolChannel, resp.StatusCode)
 				pf.h.log("⚠️ [路由转发] 账号 %s 上游 %d,剔除换号", acc.Email, resp.StatusCode)
-				// Other 号池不启用请求冷却:401/403 仅换号,不写 5min 冷静。
+				// Other 号池默认不启用请求冷却:401/403 仅换号,不写 5min 冷静;
+				// 组级自定义冷却规则含该码时按规则时长写入。
 				if poolChannel != "other" {
 					pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownLongMs, poolChannel, inModel)
+				} else {
+					pf.cooldownOtherIfConfigured(targetGroupID, acc, resp.StatusCode, inModel, upstreamModel)
 				}
 				skipped[acc.ID] = true
 				// 401/403 剔除换号前释放并发槽。
@@ -425,14 +452,34 @@ func (pf *passthroughForward) run(
 				res.body = body
 				res.err = fmt.Errorf("upstream %s server error %d", poolChannel, resp.StatusCode)
 				pf.h.log("⚠️ [路由转发] 账号 %s 上游 5xx(%d),换号", acc.Email, resp.StatusCode)
-				// Other 号池不启用请求冷却:5xx 仅换号,不写冷静。
+				// Other 号池默认不启用请求冷却:5xx 仅换号,不写冷静;
+				// 组级自定义冷却规则含该码时按规则时长写入。
 				if poolChannel != "other" {
 					pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+passthroughCooldownShortMs, poolChannel, inModel)
+				} else {
+					pf.cooldownOtherIfConfigured(targetGroupID, acc, resp.StatusCode, inModel, upstreamModel)
 				}
 				skipped[acc.ID] = true
 				// 5xx 换号前释放并发槽。
 				pf.accountMgr.ReleaseAccount(acc.ID)
 				break
+			}
+
+			// Other 组级自定义冷却:规则命中且既有 429/401/403/5xx 分支未覆盖的状态码(如 402/404/408)
+			// 在此拦截:按规则时长写冷却 + 换号;未命中则原样透传给客户端(保持既有裸透传语义)。
+			if poolChannel == "other" && targetGroupID != "" && pf.accountMgr != nil {
+				if d := pf.accountMgr.GetOtherCooldownDurationMs(targetGroupID, resp.StatusCode, inModel, upstreamModel); d > 0 {
+					body, _ := io.ReadAll(resp.Body)
+					resp.Body.Close()
+					res.statusCode = resp.StatusCode
+					res.body = body
+					res.err = fmt.Errorf("upstream %s %d (group %s cooldown rule)", poolChannel, resp.StatusCode, targetGroupID)
+					pf.h.log("🧊 [路由转发] 账号 %s 上游 %d 命中组 %s 自定义冷却规则,冻结 %ds 后换号(model %s)", acc.Email, resp.StatusCode, targetGroupID, d/1000, inModel)
+					pf.accountMgr.SetAccountCooldownForChannel(acc.ID, time.Now().UnixNano()/1e6+d, poolChannel, inModel)
+					skipped[acc.ID] = true
+					pf.accountMgr.ReleaseAccount(acc.ID)
+					break
+				}
 			}
 
 			// 200 (含 SSE/JSON)。回写由调用方处理,此处只落 activeResp。

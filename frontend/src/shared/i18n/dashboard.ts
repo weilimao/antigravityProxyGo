@@ -87,6 +87,15 @@ export const dashboardZh: Record<string, string> = {
     benchmarkPrev: "上次",
     benchmarkCollapse: "收起测速列表",
     benchmarkExpand: "展开测速列表",
+    benchmarkCardSearchPlaceholder: "搜索模型...",
+    benchmarkSortLabel: "排序方式",
+    benchmarkSortRank: "按速度排名",
+    benchmarkSortTotal: "按总耗时",
+    benchmarkSortName: "按模型名称",
+    benchmarkSortConfig: "按配置顺序",
+    benchmarkSortAsc: "升序(最快在前)",
+    benchmarkSortDesc: "降序(最慢在前)",
+    benchmarkRankTitle: "响应速度排名第 {n}",
 };
 
 export const dashboardEn: Record<string, string> = {
@@ -174,4 +183,13 @@ export const dashboardEn: Record<string, string> = {
     benchmarkPrev: "Prev",
     benchmarkCollapse: "Collapse benchmark list",
     benchmarkExpand: "Expand benchmark list",
+    benchmarkCardSearchPlaceholder: "Search models...",
+    benchmarkSortLabel: "Sort by",
+    benchmarkSortRank: "Speed rank",
+    benchmarkSortTotal: "Total latency",
+    benchmarkSortName: "Model name",
+    benchmarkSortConfig: "Config order",
+    benchmarkSortAsc: "Ascending (fastest first)",
+    benchmarkSortDesc: "Descending (slowest first)",
+    benchmarkRankTitle: "Speed rank #{n}",
 };

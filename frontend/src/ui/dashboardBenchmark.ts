@@ -30,10 +30,12 @@ function isBenchmarkCollapsed(): boolean {
     try { return localStorage.getItem(BENCH_COLLAPSED_KEY) === '1'; } catch { return false; }
 }
 
-/** applyBenchmarkCollapse: 按 target 显示/隐藏模型网格并刷新三角图标与 title 文案。 */
+/** applyBenchmarkCollapse: 按 target 显示/隐藏模型网格与工具栏并刷新三角图标与 title 文案。 */
 function applyBenchmarkCollapse(collapsed: boolean): void {
     const body = el('benchmarkCardBody');
     if (body) body.classList.toggle('hidden', collapsed);
+    const toolbar = el('benchmarkToolbar');
+    if (toolbar) toolbar.classList.toggle('hidden', collapsed || !benchHasData);
     const icon = el('benchmarkCollapseIcon');
     if (icon) icon.textContent = collapsed ? 'expand_more' : 'expand_less';
     const btn = el('btnBenchmarkCollapse') as HTMLButtonElement | null;
@@ -49,6 +51,54 @@ function toggleBenchmarkCollapse(): void {
     applyBenchmarkCollapse(next);
 }
 
+// ---- 卡片工具栏状态: 模糊搜索 + 排序(排序偏好持久化, 搜索词仅会话内有效) ----
+let benchHasData = false;   // 当前是否有可展示的模型卡(决定工具栏是否显示)
+let benchFilterQuery = '';  // 卡片模糊搜索关键字(小写)
+const BENCH_SORT_KEY = 'benchmark_card_sort';
+const BENCH_SORT_DIR_KEY = 'benchmark_card_sort_dir';
+
+type BenchSortMode = 'rank' | 'total' | 'name' | 'config';
+
+function benchSortMode(): BenchSortMode {
+    try {
+        const v = localStorage.getItem(BENCH_SORT_KEY);
+        if (v === 'total' || v === 'name' || v === 'config') return v;
+    } catch { /* localStorage 不可用时回落默认 */ }
+    return 'rank';
+}
+
+function setBenchSortMode(m: BenchSortMode): void {
+    try { localStorage.setItem(BENCH_SORT_KEY, m); } catch { /* ignore */ }
+}
+
+function benchSortAsc(): boolean {
+    try { return localStorage.getItem(BENCH_SORT_DIR_KEY) !== 'desc'; } catch { return true; }
+}
+
+function setBenchSortAsc(asc: boolean): void {
+    try { localStorage.setItem(BENCH_SORT_DIR_KEY, asc ? 'asc' : 'desc'); } catch { /* ignore */ }
+}
+
+/** updateSortDirBtn: 同步方向按钮图标/悬停文案/禁用态(配置顺序无方向语义)。 */
+function updateSortDirBtn(): void {
+    const btn = el('benchmarkSortDir') as HTMLButtonElement | null;
+    const icon = el('benchmarkSortDirIcon');
+    const d = dict(); const zh = isZh();
+    const asc = benchSortAsc();
+    if (icon) icon.textContent = asc ? 'arrow_upward' : 'arrow_downward';
+    if (btn) {
+        btn.title = asc
+            ? (d.benchmarkSortAsc || (zh ? '升序(最快在前)' : 'Ascending (fastest first)'))
+            : (d.benchmarkSortDesc || (zh ? '降序(最慢在前)' : 'Descending (slowest first)'));
+        btn.disabled = benchSortMode() === 'config';
+    }
+}
+
+/** rerenderBenchmarkCards: 搜索/排序交互后按缓存数据即时重画。 */
+function rerenderBenchmarkCards(): void {
+    if (state.benchmarkData) renderBenchmarkCard(state.benchmarkData);
+}
+
 /** initBenchmarkEvents: 绑定卡片/弹窗按钮 + 订阅事件 + 初装数据。幂等。 */
 export function initBenchmarkEvents(): void {
     // ---- 卡片按钮 ----
@@ -59,7 +109,8 @@ export function initBenchmarkEvents(): void {
             const p = state.benchmarkData || {};
             const cfg = p.config || {};
             const allModels = Array.isArray(cfg.models) ? cfg.models : [];
-            renderBenchmarkCard({ ...p, pendingModels: allModels, running: true });
+            state.benchmarkData = { ...p, pendingModels: allModels, running: true };
+            renderBenchmarkCard(state.benchmarkData);
             ipcRenderer.invoke('benchmark:run-now').catch((e) => {
                 console.error('[Benchmark] run-now failed', e);
                 renderBenchmarkCard({ ...p, pendingModels: [], running: false });
@@ -72,6 +123,30 @@ export function initBenchmarkEvents(): void {
     const btnCollapse = el('btnBenchmarkCollapse');
     if (btnCollapse) btnCollapse.addEventListener('click', toggleBenchmarkCollapse);
     applyBenchmarkCollapse(isBenchmarkCollapsed());
+
+    // ---- 卡片工具栏: 模糊搜索 + 排序方式/方向 ----
+    const cardSearch = el('benchmarkCardSearch') as HTMLInputElement | null;
+    if (cardSearch) cardSearch.addEventListener('input', (e: any) => {
+        benchFilterQuery = String((e.target as HTMLInputElement).value || '').toLowerCase();
+        rerenderBenchmarkCards();
+    });
+    const sortSelect = el('benchmarkSortSelect') as HTMLSelectElement | null;
+    if (sortSelect) {
+        sortSelect.value = benchSortMode();
+        sortSelect.addEventListener('change', () => {
+            const v = sortSelect.value;
+            setBenchSortMode(v === 'total' || v === 'name' || v === 'config' ? v : 'rank');
+            updateSortDirBtn();
+            rerenderBenchmarkCards();
+        });
+    }
+    const sortDirBtn = el('benchmarkSortDir');
+    if (sortDirBtn) sortDirBtn.addEventListener('click', () => {
+        setBenchSortAsc(!benchSortAsc());
+        updateSortDirBtn();
+        rerenderBenchmarkCards();
+    });
+    updateSortDirBtn();
 
     // ---- 弹窗按钮 ----
     const btnClose = el('btnBenchmarkConfigClose');
@@ -132,6 +207,7 @@ export function initBenchmarkEvents(): void {
 export function refreshBenchmarkI18n(): void {
     if (state.benchmarkData) renderBenchmarkCard(state.benchmarkData);
     applyBenchmarkCollapse(isBenchmarkCollapsed());
+    updateSortDirBtn();
     // 弹窗若开着, 刷新模型清单文案
     if (el('benchmarkConfigModal') && !el('benchmarkConfigModal')?.classList.contains('opacity-0')) {
         renderBenchmarkModelList();
@@ -189,6 +265,11 @@ export function renderBenchmarkCard(payload: any): void {
         meta.textContent = `${d.benchmarkLastTest || (zh ? '最新测试' : 'Last test')}: ${timeText}`;
     }
 
+    // 工具栏跟随数据/折叠状态显隐(空态时隐藏, 避免孤零零一条搜索框)
+    benchHasData = !(configModels.length === 0 && results.length === 0);
+    const toolbar = el('benchmarkToolbar');
+    if (toolbar) toolbar.classList.toggle('hidden', !benchHasData || isBenchmarkCollapsed());
+
     // 若既没有配置模型，也无历史测速结果，展示空态提示
     if (configModels.length === 0 && results.length === 0) {
         updateBenchmarkCountdownDom(p);
@@ -232,9 +313,50 @@ export function renderBenchmarkCard(payload: any): void {
 
     const pendingSet = new Set<string>(Array.isArray(p.pendingModels) ? p.pendingModels : []);
 
-    // 紧凑网格: 每模型一张小卡(状态点 + 名称 + 指标 + 单模型 ▷ 重测按钮)
+    // ---- 排名: 仅对有有效首帧的成功模型排名(首帧升序, 并列按总耗时); 失败/待测不参与排名 ----
+    const rankMap = new Map<string, number>();
+    displayList
+        .filter((r: any) => {
+            const st = r.status || 'ok';
+            return st !== 'error' && st !== 'pending' && r.ttftMs > 0;
+        })
+        .slice()
+        .sort((a: any, b: any) => (a.ttftMs - b.ttftMs) || ((a.totalMs || 0) - (b.totalMs || 0)))
+        .forEach((r: any, i: number) => rankMap.set(r.model, i + 1));
+
+    // ---- 模糊搜索 + 排序(卡片左上工具栏交互) ----
+    const q = benchFilterQuery.trim().toLowerCase();
+    const mode = benchSortMode();
+    const asc = benchSortAsc();
+    // 失败/待测固定垫底, 成功组内按所选指标排序 —— 避免降序时待测/失败项霸占榜首
+    const groupOf = (r: any): number => {
+        const st = r.status || 'ok';
+        return st === 'error' ? 1 : st === 'pending' ? 2 : 0;
+    };
+    const metricOf = (r: any): number => {
+        const m = mode === 'total' ? r.totalMs : r.ttftMs;
+        return m > 0 ? m : Number.MAX_SAFE_INTEGER;
+    };
+    const sortedList = displayList.slice();
+    if (mode === 'rank' || mode === 'total') {
+        sortedList.sort((a: any, b: any) => {
+            const ga = groupOf(a); const gb = groupOf(b);
+            if (ga !== gb) return ga - gb;
+            if (ga !== 0) return 0;
+            const diff = metricOf(a) - metricOf(b);
+            return asc ? diff : -diff;
+        });
+    } else if (mode === 'name') {
+        sortedList.sort((a: any, b: any) => asc
+            ? String(a.model || '').localeCompare(String(b.model || ''))
+            : String(b.model || '').localeCompare(String(a.model || '')));
+    } // config: 保持用户配置顺序
+    const finalList = q ? sortedList.filter((r: any) => String(r.model || '').toLowerCase().includes(q)) : sortedList;
+
+    // 紧凑网格: 每模型一张小卡(状态点 + 排名徽章 + 名称 + 指标 + 单模型 ▷ 重测按钮)
     const retestTitle = d.benchmarkRetest || (zh ? '重测此模型' : 'Retest this model');
-    const cards = displayList.map((r: any) => {
+    const rankTitleTpl = d.benchmarkRankTitle || (zh ? '响应速度排名第 {n}' : 'Speed rank #{n}');
+    const cards = finalList.map((r: any) => {
         const model = esc(r.model || '-');
         const st = r.status || 'ok';
         const isPending = st === 'pending';
@@ -291,30 +413,47 @@ export function renderBenchmarkCard(payload: any): void {
             totalShown = '-';
         }
 
+        // 排名徽章: 前三名高亮(金/银/铜), 其余灰色; 失败/待测/无首帧数据不参与排名, 占位对齐
+        const rank = rankMap.get(r.model) || 0;
+        let rankHtml = '<span class="shrink-0 min-w-[26px]"></span>';
+        if (rank > 0) {
+            const rankCls = rank === 1 ? 'text-amber-500 bg-amber-500/10 dark:text-amber-400'
+                : rank === 2 ? 'text-slate-500 bg-slate-500/10 dark:text-slate-300'
+                : rank === 3 ? 'text-orange-500 bg-orange-500/10 dark:text-orange-400'
+                : 'text-slate-400 bg-slate-400/10 dark:text-slate-500';
+            rankHtml = `<span class="shrink-0 min-w-[26px] text-center px-1 py-px rounded text-[11px] font-bold font-mono ${rankCls}" title="${rankTitleTpl.replace('{n}', String(rank))}">#${rank}</span>`;
+        }
+
         return `
-            <div class="flex flex-col gap-1 p-2 rounded-lg border border-outline-variant/20 bg-slate-50/40 dark:bg-white/[0.02] hover:border-primary/30 transition-colors">
+            <div class="flex flex-col gap-1.5 p-2.5 rounded-lg border border-outline-variant/20 bg-slate-50/40 dark:bg-white/[0.02] hover:border-primary/30 transition-colors">
                 <div class="flex items-center gap-1.5 min-w-0">
-                    <span class="w-1.5 h-1.5 rounded-full ${dotCls} shrink-0" title="${dotTitle}"></span>
-                    <span class="font-medium text-[11px] text-slate-700 dark:text-slate-100 truncate flex-1 min-w-0" title="${model}">${model}</span>
-                    <button class="bench-retest-btn shrink-0 p-0.5 rounded text-amber-500 hover:bg-amber-500/10 transition-colors disabled:opacity-50" data-model="${model}" title="${retestTitle}" ${isSpinning ? 'disabled' : ''}>
-                        <span class="material-symbols-outlined text-[13px] inline-block ${isSpinning ? 'animate-spin' : ''}">refresh</span>
+                    <span class="w-2 h-2 rounded-full ${dotCls} shrink-0" title="${dotTitle}"></span>
+                    ${rankHtml}
+                    <span class="font-medium text-[13px] text-slate-700 dark:text-slate-100 truncate flex-1 min-w-0" title="${model}">${model}</span>
+                    <button class="bench-retest-btn shrink-0 p-1 rounded text-amber-500 hover:bg-amber-500/10 transition-colors disabled:opacity-50" data-model="${model}" title="${retestTitle}" ${isSpinning ? 'disabled' : ''}>
+                        <span class="material-symbols-outlined text-[16px] inline-block ${isSpinning ? 'animate-spin' : ''}">refresh</span>
                     </button>
                 </div>
-                <div class="flex items-center justify-between text-[10px] font-mono" ${errTitle}>
-                    <span class="text-slate-400 dark:text-slate-500">${d.benchmarkColTtft || (zh ? '首帧' : 'TTFT')}<span class="${ttftCls} ml-0.5">${ttftShown}</span></span>
-                    <span class="text-slate-400 dark:text-slate-500">${d.benchmarkColTotal || (zh ? '耗时' : 'Total')}<span class="text-blue-600 dark:text-blue-400 ml-0.5">${totalShown}</span></span>
-                    <span class="w-6 text-center">${trendHtml}</span>
+                <div class="flex items-center justify-between text-[12px] font-mono" ${errTitle}>
+                    <span class="text-slate-400 dark:text-slate-500">${d.benchmarkColTtft || (zh ? '首帧' : 'TTFT')}<span class="${ttftCls} ml-1">${ttftShown}</span></span>
+                    <span class="text-slate-400 dark:text-slate-500">${d.benchmarkColTotal || (zh ? '耗时' : 'Total')}<span class="text-blue-600 dark:text-blue-400 ml-1">${totalShown}</span></span>
+                    <span class="w-7 text-center">${trendHtml}</span>
                 </div>
                 ${hasPrev ? `
-                <div class="flex items-center justify-between text-[10px] font-mono text-slate-400/80 dark:text-slate-500/80" title="${zh ? '上一轮测速数据' : 'Previous round data'}">
-                    <span>${prevLabel}<span class="ml-0.5 text-slate-500 dark:text-slate-400">${prevTtft}</span></span>
-                    <span>${d.benchmarkColTotal || (zh ? '耗时' : 'Total')}<span class="ml-0.5 text-slate-500 dark:text-slate-400">${prevTotal}</span></span>
-                    <span class="w-6"></span>
+                <div class="flex items-center justify-between text-[12px] font-mono text-slate-400/80 dark:text-slate-500/80" title="${zh ? '上一轮测速数据' : 'Previous round data'}">
+                    <span>${prevLabel}<span class="ml-1 text-slate-500 dark:text-slate-400">${prevTtft}</span></span>
+                    <span>${d.benchmarkColTotal || (zh ? '耗时' : 'Total')}<span class="ml-1 text-slate-500 dark:text-slate-400">${prevTotal}</span></span>
+                    <span class="w-7"></span>
                 </div>` : ''}
             </div>`;
     }).join('');
 
-    body.innerHTML = `<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2 max-h-[200px] overflow-y-auto pr-0.5">${cards}</div>`;
+    if (finalList.length === 0) {
+        // 搜索关键字无命中: 展示空态而非空网格
+        body.innerHTML = `<div class="text-center text-[12px] text-outline dark:text-outline-variant/70 py-6 select-none">${d.benchmarkNoMatch || (zh ? '无匹配模型' : 'No matching models')}</div>`;
+    } else {
+        body.innerHTML = `<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5 max-h-[280px] overflow-y-auto pr-0.5">${cards}</div>`;
+    }
 
     // 绑定单模型重测按钮
     body.querySelectorAll('.bench-retest-btn').forEach((btn) => {

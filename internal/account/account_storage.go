@@ -108,6 +108,8 @@ type poolConfigOnDisk struct {
 	OtherMaxConcurrency       map[string]int  `json:"otherMaxConcurrency,omitempty"`
 	OtherWorkerProxyURLs    map[string]string `json:"otherWorkerProxyUrls,omitempty"`
 	OtherWorkerProxyEnabled map[string]bool   `json:"otherWorkerProxyEnabled,omitempty"`
+	// OtherCooldownRules 按 GroupID 持久化 Other 号池各组自定义冷却策略(状态码→冷却时长+模型过滤)。
+	OtherCooldownRules map[string]*OtherCooldownRule `json:"otherCooldownRules,omitempty"`
 	GrokMaxConcurrency        int             `json:"grokMaxConcurrency,omitempty"`
 	GrokCliVersion            string          `json:"grokCliVersion,omitempty"`
 	GrokQuotaCooldownHours   int             `json:"grokQuotaCooldownHours,omitempty"`
@@ -235,6 +237,7 @@ func (m *Manager) marshalPoolConfig() ([]byte, error) {
 		OtherMaxConcurrency:       m.otherMaxConcurrency,
 		OtherWorkerProxyURLs:    m.otherWorkerProxyURLs,
 		OtherWorkerProxyEnabled: m.otherWorkerProxyEnabled,
+		OtherCooldownRules:      m.otherCooldownRules,
 		GrokMaxConcurrency:        m.grokMaxConcurrency,
 		GrokCliVersion:            m.grokCliVersion,
 		GrokQuotaCooldownHours:   m.grokQuotaCooldownHours,
@@ -367,6 +370,22 @@ func (m *Manager) loadPoolConfigIntoMemory() {
 				continue
 			}
 			m.otherWorkerProxyEnabled[lgid] = en
+		}
+	}
+	if cfg.OtherCooldownRules != nil {
+		// 载入时逐组规整(小写 groupID + normalizeOtherCooldownRule),与 SetOtherCooldownRule 落盘口径一致,
+		// 兜底手工编辑 accounts_pool.json 写入的脏数据(非法状态码/越界时长)。
+		m.otherCooldownRules = make(map[string]*OtherCooldownRule, len(cfg.OtherCooldownRules))
+		for gid, r := range cfg.OtherCooldownRules {
+			lgid := strings.ToLower(strings.TrimSpace(gid))
+			if lgid == "" || r == nil {
+				continue
+			}
+			nr := normalizeOtherCooldownRule(r)
+			if nr == nil || (!nr.Enabled && len(nr.StatusCodes) == 0 && len(nr.Models) == 0) {
+				continue
+			}
+			m.otherCooldownRules[lgid] = nr
 		}
 	}
 	if m.activeChannel == "gemini-cli" {

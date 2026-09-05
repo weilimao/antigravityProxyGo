@@ -6,7 +6,7 @@ import "strings"
 //
 // BenchmarkConfig 聚合 Config 里散落的 5 个测速字段(Enabled/Models/IntervalMinutes/
 // Prompt/TimeoutMs), 经泛型 getSetting/setSetting 落盘, 与 SessionOptimization 同构。
-// 读写两侧共用同一归一化(interval 钳 [1,1440]→5, timeout 钳 [5000,120000]→30000,
+// 读写两侧共用同一归一化(interval 钳 [1,1440]→5, timeout 钳下限 5000→30000、无上限,
 // prompt 空→"Hi", models 去空去重), 保证 Get 返回值恒可直接使用、Set 落盘值与生效值一致。
 //
 // 测速调度器(internal/benchmark)只读本配置; IPC(app_benchmark_ipc.go)负责写。
@@ -28,7 +28,6 @@ const (
 	minBenchmarkIntervalMinutes     = 1
 	maxBenchmarkIntervalMinutes     = 1440
 	minBenchmarkTimeoutMs           = 5000
-	maxBenchmarkTimeoutMs           = 120000
 )
 
 func normalizeBenchmarkInterval(v int) int {
@@ -51,9 +50,7 @@ func normalizeBenchmarkTimeout(v int) int {
 	if v < minBenchmarkTimeoutMs {
 		return minBenchmarkTimeoutMs
 	}
-	if v > maxBenchmarkTimeoutMs {
-		return maxBenchmarkTimeoutMs
-	}
+	// 无上限: 允许自定义任意大的超时(如慢思考模型), 由调用方自行承担时长。
 	return v
 }
 

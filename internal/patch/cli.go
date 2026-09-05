@@ -90,6 +90,70 @@ func getCliCandidates(appData, homeDir string) []string {
 	return candidates
 }
 
+const cliProxyProbeAddr = "127.0.0.1:18443"
+
+// buildBatWrapperContent 生成 Windows 批处理包装脚本：
+// 先探测 127.0.0.1:18443 是否有代理服务监听；服务在线才注入代理环境变量调用 agy_real；
+// 服务未启动时自愈——把 agy_real 改回 agy、清理包装脚本并直连执行原始 CLI，
+// 避免本应用未运行时 agy 命令直接报代理连接错误（应用下次启动会重新劫持）。
+// 注意：批处理里的 echo 文案必须保持纯 ASCII，避免 GBK 控制台上 UTF-8 乱码。
+func buildBatWrapperContent(proxyUrl, combinedCa, exeName, realExeName string) string {
+	return fmt.Sprintf("@echo off\r\n"+
+		"setlocal\r\n"+
+		"powershell -NoProfile -NonInteractive -Command \"try { $c = New-Object System.Net.Sockets.TcpClient; $r = $c.BeginConnect('127.0.0.1',18443,$null,$null); if ($r.AsyncWaitHandle.WaitOne(800)) { $c.EndConnect($r); $c.Close(); exit 0 }; $c.Close(); exit 1 } catch { exit 1 }\" >nul 2>&1\r\n"+
+		"if errorlevel 1 goto restore\r\n"+
+		"set HTTP_PROXY=%s\r\n"+
+		"set HTTPS_PROXY=%s\r\n"+
+		"set NO_PROXY=localhost,127.0.0.1\r\n"+
+		"set SSL_CERT_FILE=%s\r\n"+
+		"\"%%~dp0%s\" %%*\r\n"+
+		"exit /b %%ERRORLEVEL%%\r\n"+
+		":restore\r\n"+
+		"echo [antigravity-proxy] local proxy %s not running - restoring original agy CLI. 1>&2\r\n"+
+		"move /y \"%%~dp0%s\" \"%%~dp0%s\" >nul 2>&1\r\n"+
+		"if not exist \"%%~dp0%s\" goto fallback\r\n"+
+		"del /f /q \"%%~dp0agy\" >nul 2>&1\r\n"+
+		"\"%%~dp0%s\" %%*\r\n"+
+		"exit /b %%ERRORLEVEL%%\r\n"+
+		":fallback\r\n"+
+		"\"%%~dp0%s\" %%*\r\n"+
+		"exit /b %%ERRORLEVEL%%\r\n",
+		proxyUrl, proxyUrl, combinedCa, realExeName,
+		cliProxyProbeAddr, realExeName, exeName, exeName, exeName, realExeName)
+}
+
+// buildShWrapperContent 生成 Unix / Git Bash 壳包装脚本，自愈逻辑与批处理版一致。
+// exeBase/realBase 均为不带扩展名/平台后缀的基础名，脚本内部会按是否存在 .exe 自动适配 Windows。
+// 注意 /dev/tcp 必须用 bash 规范的 host/port 斜杠形式：冒号形式在 Git Bash(MSYS2) 下会静默失败。
+func buildShWrapperContent(proxyUrl, exeBase, realBase string) string {
+	probePath := strings.Replace(cliProxyProbeAddr, ":", "/", 1)
+	return fmt.Sprintf("#!/bin/bash\n"+
+		"BASE=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n"+
+		"REAL=\"%s\"\n"+
+		"ORIG=\"%s\"\n"+
+		"if [ -f \"$BASE/%s.exe\" ]; then\n"+
+		"  REAL=\"%s.exe\"\n"+
+		"  ORIG=\"%s.exe\"\n"+
+		"fi\n"+
+		"if (exec 3<>/dev/tcp/%s) 2>/dev/null; then\n"+
+		"  export HTTP_PROXY=\"%s\"\n"+
+		"  export HTTPS_PROXY=\"%s\"\n"+
+		"  export NO_PROXY=\"localhost,127.0.0.1\"\n"+
+		"  exec \"$BASE/$REAL\" \"$@\"\n"+
+		"fi\n"+
+		"echo \"[antigravity-proxy] local proxy %s not running - restoring original agy CLI.\" >&2\n"+
+		"if mv \"$BASE/$REAL\" \"$BASE/$ORIG\" 2>/dev/null; then\n"+
+		"  rm -f \"$BASE/agy.bat\"\n"+
+		"  if [ \"$ORIG\" != \"agy\" ]; then\n"+
+		"    rm -f \"$BASE/agy\"\n"+
+		"  fi\n"+
+		"  exec \"$BASE/$ORIG\" \"$@\"\n"+
+		"fi\n"+
+		"exec \"$BASE/$REAL\" \"$@\"\n",
+		realBase, exeBase, realBase, realBase, exeBase,
+		probePath, proxyUrl, proxyUrl, cliProxyProbeAddr)
+}
+
 // HijackCli injects wrapper scripts to route native 'agy' CLI traffic through proxy
 func HijackCli(enable bool, appData, homeDir, caPath string, logCallback func(string)) {
 	binDirs := getCliCandidates(appData, homeDir)
@@ -142,22 +206,13 @@ func HijackCli(enable bool, appData, homeDir, caPath string, logCallback func(st
 			if realExeExists {
 				// 1. Write Windows Batch Wrapper
 				combinedCa := getCombinedCaPath(caPath)
-				batContent := fmt.Sprintf("@echo off\r\n"+
-					"set HTTP_PROXY=%s\r\n"+
-					"set HTTPS_PROXY=%s\r\n"+
-					"set NO_PROXY=localhost,127.0.0.1\r\n"+
-					"set SSL_CERT_FILE=%s\r\n"+
-					"\"%%~dp0%s\" %%*\r\n", proxyUrl, proxyUrl, combinedCa, realExeName)
-
+				batContent := buildBatWrapperContent(proxyUrl, combinedCa, exeName, realExeName)
 				_ = os.WriteFile(batWrapperPath, []byte(batContent), 0644)
 
 				// 2. Write Unix Shell Wrapper (无需注入 SSL_CERT_FILE，回退由系统 Keychain 信任)
-				shContent := fmt.Sprintf("#!/bin/bash\n"+
-					"export HTTP_PROXY=%s\n"+
-					"export HTTPS_PROXY=%s\n"+
-					"export NO_PROXY=localhost,127.0.0.1\n"+
-					"exec \"$(dirname \"$0\")/%s\" \"$@\"\n", proxyUrl, proxyUrl, realExeName)
-
+				exeBase := strings.TrimSuffix(exeName, ".exe")
+				realBase := strings.TrimSuffix(realExeName, ".exe")
+				shContent := buildShWrapperContent(proxyUrl, exeBase, realBase)
 				_ = os.WriteFile(shWrapperPath, []byte(shContent), 0755)
 
 				logCallback(fmt.Sprintf("[CliHijacker] Successfully hijacked agy CLI in %s", dir))

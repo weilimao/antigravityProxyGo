@@ -3,6 +3,7 @@ package account
 import (
 	"errors"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -53,6 +54,9 @@ type OtherGroupInfo struct {
 	WorkerProxyURL string `json:"workerProxyUrl,omitempty"`
 	// WorkerProxyEnabled 是该组是否启用 Worker 代理出口(回显供前端组 tab checkbox 回填)。
 	WorkerProxyEnabled bool `json:"workerProxyEnabled"`
+	// Cooldown 是该组自定义冷却策略(远端状态码→冷却时长+模型过滤),nil=未配置。
+	// 回显供前端组 tab 冷却配置控件回填,见 OtherCooldownRule(account_other.go)。
+	Cooldown *OtherCooldownRule `json:"cooldown,omitempty"`
 }
 
 // reserveOtherProviderGroupIDs 是禁止用作 GroupID 的保留值,避免与现有号池 Provider 冲突导致路由歧义。
@@ -298,6 +302,10 @@ func (m *Manager) GetOtherGroups() []OtherGroupInfo {
 				WorkerProxyURL:     m.getOtherWorkerProxyURLUnsafe(gid),
 				WorkerProxyEnabled: m.isOtherWorkerProxyEnabledUnsafe(gid),
 			}
+			if cr := m.otherCooldownRules[gid]; cr != nil {
+				cp := *cr
+				gi.Cooldown = &cp
+			}
 			if gi.LbMode == "" {
 				gi.LbMode = "round-robin"
 			}
@@ -444,4 +452,171 @@ func (m *Manager) SetOtherWorkerProxyEnabled(groupID string, enabled bool) error
 	m.otherWorkerProxyEnabled[gid] = enabled
 	m.Unlock()
 	return m.SaveAccountsFor(true, poolPartKind)
+}
+
+// ============ 组级自定义冷却策略(远端状态码 → 冷却) ============
+
+// DefaultOtherCooldownSecs 是组级自定义冷却时长缺省值:启用规则但未填时长时回退 60s。
+const DefaultOtherCooldownSecs = 60
+
+// maxOtherCooldownSecs 是冷却时长入参上限(7 天),防手滑填 999999 把账号冻到天荒地老。
+const maxOtherCooldownSecs = 7 * 24 * 3600
+
+// OtherCooldownRule 是 Other 号池单个上游组的自定义冷却策略(组级一份,存 accounts_pool.json)。
+//
+// 语义:该组账号向上游请求失败且远端返回 StatusCodes 中的状态码时,把该账号按 CooldownSecs 写入
+// 冷却(冷却键为 "other" 类别,选号热路径 GetAvailableAccountsForChannelAndGroup 原生过滤,零改动)。
+//   - Enabled=false 或 StatusCodes 为空 → 该组永不因远端错误写冷却(与历史行为一致:仅换号不冷却);
+//   - Models 为空 → 任意模型失败都触发;非空 → 仅入站/上游模型名命中(大小写不敏感精确匹配,
+//     或 trailing-* 前缀匹配)才触发,未命中模型仍只换号不冷却;
+//   - 该规则只影响「是否写冷却/冷却多久」,换号重试行为不受影响(仍按既有链路换下一账号)。
+type OtherCooldownRule struct {
+	// Enabled 是否启用该组自定义冷却。
+	Enabled bool `json:"enabled"`
+	// StatusCodes 触发冷却的远端 HTTP 状态码集合(如 429/401/403/402/500..599),合法域 [100,599]。
+	StatusCodes []int `json:"statusCodes,omitempty"`
+	// CooldownSecs 冷却时长(秒),[1,604800];0/负数在 Set 时规整为 DefaultOtherCooldownSecs(60)。
+	CooldownSecs int `json:"cooldownSecs,omitempty"`
+	// Models 模型白名单(可选):空=全部模型;非空=仅命中模型触发冷却。支持 trailing-* 前缀通配。
+	Models []string `json:"models,omitempty"`
+}
+
+// normalizeOtherCooldownRule 规整冷却规则:状态码去重/排序/钳合法域,时长钳正并回退默认,
+// 模型去空格/去重(大小写不敏感,保留首个原始大小写)。返回 nil 表示规则为空(等价未启用)。
+func normalizeOtherCooldownRule(rule *OtherCooldownRule) *OtherCooldownRule {
+	if rule == nil {
+		return nil
+	}
+	out := &OtherCooldownRule{Enabled: rule.Enabled, CooldownSecs: rule.CooldownSecs}
+	codeSeen := make(map[int]bool, len(rule.StatusCodes))
+	for _, c := range rule.StatusCodes {
+		if c < 100 || c > 599 || codeSeen[c] {
+			continue
+		}
+		codeSeen[c] = true
+		out.StatusCodes = append(out.StatusCodes, c)
+	}
+	sort.Ints(out.StatusCodes)
+	if out.CooldownSecs <= 0 {
+		out.CooldownSecs = DefaultOtherCooldownSecs
+	}
+	if out.CooldownSecs > maxOtherCooldownSecs {
+		out.CooldownSecs = maxOtherCooldownSecs
+	}
+	modelSeen := make(map[string]bool, len(rule.Models))
+	for _, mm := range rule.Models {
+		t := strings.TrimSpace(mm)
+		if t == "" {
+			continue
+		}
+		k := strings.ToLower(t)
+		if modelSeen[k] {
+			continue
+		}
+		modelSeen[k] = true
+		out.Models = append(out.Models, t)
+	}
+	if len(out.StatusCodes) == 0 {
+		// 无状态码的规则永远不可能触发,视作空规则(仍保留 Enabled 标记供前端回显,不落码)。
+		out.Models = nil
+		out.StatusCodes = nil
+		return out
+	}
+	return out
+}
+
+// otherCooldownRuleMatchesModel 判定模型是否命中规则白名单:白名单空=全放行;
+// 否则大小写不敏感精确匹配或 trailing-* 前缀匹配任一白名单项。
+func otherCooldownRuleMatchesModel(rule *OtherCooldownRule, models []string) bool {
+	if len(rule.Models) == 0 {
+		return true
+	}
+	for _, m := range models {
+		t := strings.ToLower(strings.TrimSpace(m))
+		if t == "" {
+			continue
+		}
+		for _, pat := range rule.Models {
+			p := strings.ToLower(pat)
+			if strings.HasSuffix(p, "*") {
+				if strings.HasPrefix(t, strings.TrimSuffix(p, "*")) {
+					return true
+				}
+				continue
+			}
+			if t == p {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// GetOtherCooldownRule 返回某组自定义冷却规则(未配置返回零值规则 Enabled=false)。
+func (m *Manager) GetOtherCooldownRule(groupID string) OtherCooldownRule {
+	gid := strings.ToLower(strings.TrimSpace(groupID))
+	m.RLock()
+	defer m.RUnlock()
+	if m.otherCooldownRules == nil {
+		return OtherCooldownRule{}
+	}
+	if r := m.otherCooldownRules[gid]; r != nil {
+		return *r
+	}
+	return OtherCooldownRule{}
+}
+
+// SetOtherCooldownRule 设置某组自定义冷却规则并持久化到 accounts_pool.json。
+// 入参先经 normalizeOtherCooldownRule 规整(非法状态码剔除、时长回退默认、模型去重),
+// StatusCodes 为空且 Enabled=false 时清除该组规则。返回规整后的规则供 IPC 回显/日志。
+func (m *Manager) SetOtherCooldownRule(groupID string, rule OtherCooldownRule) OtherCooldownRule {
+	gid := strings.ToLower(strings.TrimSpace(groupID))
+	if gid == "" {
+		return OtherCooldownRule{}
+	}
+	nr := normalizeOtherCooldownRule(&rule)
+	m.Lock()
+	if m.otherCooldownRules == nil {
+		m.otherCooldownRules = make(map[string]*OtherCooldownRule)
+	}
+	if nr == nil || (!nr.Enabled && len(nr.StatusCodes) == 0 && len(nr.Models) == 0) {
+		delete(m.otherCooldownRules, gid)
+		m.Unlock()
+		return OtherCooldownRule{}
+	}
+	m.otherCooldownRules[gid] = nr
+	snapshot := *nr
+	m.Unlock()
+	_ = m.SaveAccountsFor(true, poolPartKind)
+	return snapshot
+}
+
+// GetOtherCooldownDurationMs 是转发热路径的冷却裁决:该组该状态码该模型应写多长的账号冷却(ms)。
+// 0 = 不冷却(未配置/未启用/状态码未命中/模型白名单未命中)。models 可传多个候选
+// (入站模型名与上游模型名),任一命中白名单即算命中。
+func (m *Manager) GetOtherCooldownDurationMs(groupID string, statusCode int, models ...string) int64 {
+	gid := strings.ToLower(strings.TrimSpace(groupID))
+	m.RLock()
+	defer m.RUnlock()
+	if m.otherCooldownRules == nil {
+		return 0
+	}
+	r := m.otherCooldownRules[gid]
+	if r == nil || !r.Enabled || len(r.StatusCodes) == 0 {
+		return 0
+	}
+	hit := false
+	for _, c := range r.StatusCodes {
+		if c == statusCode {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return 0
+	}
+	if !otherCooldownRuleMatchesModel(r, models) {
+		return 0
+	}
+	return int64(r.CooldownSecs) * 1000
 }
