@@ -76,7 +76,7 @@ export function useModelMapping() {
   );
 
   const currentTabMappings = computed(() =>
-    allMappings.value.filter(m => getMappingTab(m) === activeTabId.value)
+    allMappings.value.filter(m => (m.clientModel || '').trim().toLowerCase() !== 'auto' && getMappingTab(m) === activeTabId.value)
   );
 
   const filteredMappings = computed(() => {
@@ -631,8 +631,42 @@ export function useModelMapping() {
     allMappings.value = allMappings.value.filter(m => !removeSet.has(m));
   }
 
+  const allKnownModelOptions = computed(() => {
+    const set = new Set<string>();
+    allMappings.value.forEach(m => {
+      const cm = (m.clientModel || '').trim();
+      const tm = (m.targetModel || '').trim();
+      if (cm && cm.toLowerCase() !== 'auto') set.add(cm);
+      if (tm && tm.toLowerCase() !== 'auto' && tm.toLowerCase() !== 'benchmark-pool') set.add(tm);
+      if (Array.isArray(m.candidateModels)) {
+        m.candidateModels.forEach(c => {
+          if (c && c.trim()) set.add(c.trim());
+        });
+      }
+    });
+    Object.values(channelModelsCache.value).forEach(list => {
+      if (Array.isArray(list)) {
+        list.forEach(m => {
+          if (m && m.trim()) set.add(m.trim());
+        });
+      }
+    });
+    return Array.from(set);
+  });
+
+  function updateAutoMapping(entry: ModelMappingEntry) {
+    const idx = allMappings.value.findIndex(m => (m.clientModel || '').trim().toLowerCase() === 'auto');
+    if (idx >= 0) {
+      allMappings.value[idx] = { ...allMappings.value[idx], ...entry };
+    } else {
+      allMappings.value.unshift({ ...entry, _rowKey: nextRowKey() });
+    }
+  }
+
   return {
     allMappings,
+    allKnownModelOptions,
+    updateAutoMapping,
     poolTabs,
     activeTabId,
     availableChannels,

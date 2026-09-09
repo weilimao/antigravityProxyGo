@@ -64,7 +64,9 @@ function makeMappingEntry(clientModel: string, targetModel: string, provider: st
         expose,
         ownedBy: '',
         injectChatTemplateKwargs: provider !== 'other',
-        variantEfforts: []
+        variantEfforts: [],
+        candidateModels: [],
+        useBenchmarkPool: false
     };
 }
 

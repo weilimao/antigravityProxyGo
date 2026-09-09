@@ -74,6 +74,21 @@ type ModelMappingEntry struct {
 	// 供转发层在客户端未显式带 output_config.effort 时兜底注入到上游。
 	// 不配置或空则不展开,保持原有仅暴露裸 ClientModel 一项的行为。
 	VariantEfforts []string `json:"variantEfforts,omitempty"`
+	// CandidateModels 是 auto 竞速模式下配置的自定义候选模型清单。
+	// 当客户端请求该映射模型时, 多个候选模型将并发发送请求, 谁先成功响应就使用谁。
+	// 默认严格为空(nil/空切片), 由用户在配置面板按需添加。
+	CandidateModels []string `json:"candidateModels,omitempty"`
+	// UseBenchmarkPool 是否将控制台「模型响应测速」配置的模型池(BenchmarkModels)动态加入并发竞速候选。
+	// 指针类型: nil/false 为不加入, 显式为 true 时动态融合测速池中的有效模型。
+	UseBenchmarkPool *bool `json:"useBenchmarkPool,omitempty"`
+}
+
+// IsUseBenchmarkPool 返回该映射项是否启用了控制台测速池联动。
+func (m ModelMappingEntry) IsUseBenchmarkPool() bool {
+	if m.UseBenchmarkPool == nil {
+		return false
+	}
+	return *m.UseBenchmarkPool
 }
 
 // IsMultimodal 返回该映射项是否声明为多模态模型。
@@ -248,6 +263,7 @@ const DefaultOcrModel = "gemini-2.5-flash"
 
 func GetDefaultModelMappings() []ModelMappingEntry {
 	return []ModelMappingEntry{
+		{ClientModel: "auto", TargetModel: "auto", Expose: true, TargetProvider: "google"},
 		{ClientModel: "gemini-3-flash-agent", TargetModel: "gemini-3-flash-agent", Expose: true},
 		{ClientModel: "gemini-2.5-flash-thinking", TargetModel: "gemini-2.5-flash-thinking", Expose: true},
 		{ClientModel: "gemini-2.5-pro", TargetModel: "gemini-2.5-pro", Expose: true},

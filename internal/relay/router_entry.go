@@ -135,6 +135,33 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 	// 剥离出 baseModel 作为路由查找依据, effort 作为请求体思考强度兜底注入(仅当客户端未显式带时);
 	// 未命中(无 VariantEfforts 配置/strip 不命中已知 effort/baseModel)则保持原 inModel 行为不变。
 	routeModel := inModel
+	if baseModel, _, variantMatched := h.resolveVariantEffort(inModel); variantMatched {
+		routeModel = baseModel
+	}
+
+	// 优先检查是否为 auto 竞速模型(配置了候选池或开启了测速池, 或模型名即为 auto)
+	if _, candidates, isAuto := h.isAutoModel(routeModel); isAuto {
+		h.handleAutoRace(w, r, userSession, inModel, bodyBytes, isStreaming, isChat, isResponses, isMessages, candidates)
+		return
+	}
+
+	// 常规单模型转发
+	h.executeForwardModel(w, r, userSession, inModel, bodyBytes, isStreaming, isChat, isResponses, isMessages)
+}
+
+// executeForwardModel 执行单模型的路由解析、目标号池分发与协议转译回写。
+func (h *APICompatHandler) executeForwardModel(
+	w http.ResponseWriter,
+	r *http.Request,
+	userSession *RelaySession,
+	inModel string,
+	bodyBytes []byte,
+	isStreaming bool,
+	isChat bool,
+	isResponses bool,
+	isMessages bool,
+) {
+	routeModel := inModel
 	strippedEffort := ""
 	if baseModel, effort, variantMatched := h.resolveVariantEffort(inModel); variantMatched {
 		routeModel = baseModel

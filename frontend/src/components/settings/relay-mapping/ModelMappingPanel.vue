@@ -1,5 +1,13 @@
 <template>
   <div class="flex flex-col gap-6 w-full">
+    <!-- 顶部: Auto 竞速模型专属独立配置项卡片 -->
+    <AutoModelConfigCard
+      :all-mappings="mm.allMappings.value"
+      :available-model-options="mm.allKnownModelOptions.value"
+      @update:auto-mapping="mm.updateAutoMapping"
+    />
+
+    <!-- 常规中继模型映射与号池绑定卡片 -->
     <div class="bg-white dark:bg-[#1e2538] rounded-xl border border-outline-variant/20 p-5">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-[14px] font-bold text-on-surface dark:text-white flex items-center gap-2">
@@ -220,6 +228,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
 import { useModelMapping } from '../../../ui/useModelMapping';
+import AutoModelConfigCard from './AutoModelConfigCard.vue';
 import ModelMappingRow from './ModelMappingRow.vue';
 
 const mm = useModelMapping();

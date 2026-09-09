@@ -41,6 +41,14 @@ func (h *APICompatHandler) handleOpenAIChat(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	// 针对入站请求检查是否为 auto 竞速模型(仅非 /route 链路在此拦截, /route 链路已在前置 handleRoutedForward 统一处理)
+	if !routedRoutePrefixMatch(r.URL.Path) {
+		if _, candidates, isAuto := h.isAutoModel(openReq.Model); isAuto {
+			h.handleAutoRace(w, r, userSession, openReq.Model, bodyBytes, openReq.Stream, !strings.Contains(r.URL.Path, "responses"), strings.Contains(r.URL.Path, "responses"), false, candidates)
+			return
+		}
+	}
+
 	geminiModel := MapClientModelToGemini(openReq.Model, h.getModelMapping())
 	geminiReq := TranslateOpenAIToGemini(openReq)
 
@@ -224,6 +232,14 @@ func (h *APICompatHandler) handleAnthropicMessages(w http.ResponseWriter, r *htt
 		if err := h.authMgr.userMgr.IsModelAuthorizedForAPIKey(userSession.UserID, userSession.APIKeyID, anthReq.Model); err != nil {
 			h.log("🚫 [Relay Compat] API Key 模型授权校验未通过: %v (User: %s)", err, userSession.UserKey)
 			writeModelNotAuthorized(w, anthReq.Model)
+			return
+		}
+	}
+
+	// 针对入站请求检查是否为 auto 竞速模型(仅非 /route 链路在此拦截, /route 链路已在前置 handleRoutedForward 统一处理)
+	if !routedRoutePrefixMatch(r.URL.Path) {
+		if _, candidates, isAuto := h.isAutoModel(anthReq.Model); isAuto {
+			h.handleAutoRace(w, r, userSession, anthReq.Model, bodyBytes, anthReq.Stream, false, false, true, candidates)
 			return
 		}
 	}

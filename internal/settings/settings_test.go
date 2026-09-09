@@ -509,3 +509,59 @@ func TestLoadConfig_BothCorrupt_Quarantine(t *testing.T) {
 		t.Fatal("保存后主文件应重建")
 	}
 }
+
+// TestSettings_AutoModelMapping_DualPool 验证 Auto 模型双配置项(自定义模型池+测速池)的默认值与持久化
+func TestSettings_AutoModelMapping_DualPool(t *testing.T) {
+	tempDir := t.TempDir()
+	mgr := NewManager()
+	mgr.Init(tempDir)
+
+	// 1. 默认 auto 映射存在且候选池严格为空
+	defaults := mgr.GetRelayModelMapping()
+	var autoEntry *ModelMappingEntry
+	for _, m := range defaults {
+		if m.ClientModel == "auto" {
+			autoEntry = &m
+			break
+		}
+	}
+	if autoEntry == nil {
+		t.Fatal("默认模型映射列表必须包含预置 auto 模型")
+	}
+	if len(autoEntry.CandidateModels) != 0 {
+		t.Fatalf("默认 auto 模型的 CandidateModels 必须严格为空, 实际为: %v", autoEntry.CandidateModels)
+	}
+	if autoEntry.IsUseBenchmarkPool() {
+		t.Fatal("默认 auto 模型的 UseBenchmarkPool 必须为 false")
+	}
+
+	// 2. 配置自定义池 + 启用测速池并保存
+	useBenchmark := true
+	customMappings := []ModelMappingEntry{
+		{
+			ClientModel:      "auto",
+			TargetModel:      "auto",
+			Expose:           true,
+			CandidateModels:  []string{"gemini-2.5-flash", "deepseek-chat"},
+			UseBenchmarkPool: &useBenchmark,
+		},
+	}
+	if err := mgr.SetRelayModelMapping(customMappings); err != nil {
+		t.Fatalf("SetRelayModelMapping failed: %v", err)
+	}
+
+	// 3. 重新初始化 Manager 并验证落盘持久化与恢复
+	newMgr := NewManager()
+	newMgr.Init(tempDir)
+	reloaded := newMgr.GetRelayModelMapping()
+	if len(reloaded) != 1 {
+		t.Fatalf("期望恢复 1 个映射项, 实际得到 %d", len(reloaded))
+	}
+	reloadedAuto := reloaded[0]
+	if len(reloadedAuto.CandidateModels) != 2 || reloadedAuto.CandidateModels[0] != "gemini-2.5-flash" || reloadedAuto.CandidateModels[1] != "deepseek-chat" {
+		t.Fatalf("CandidateModels 恢复不匹配: %v", reloadedAuto.CandidateModels)
+	}
+	if !reloadedAuto.IsUseBenchmarkPool() {
+		t.Fatal("UseBenchmarkPool 恢复应为 true")
+	}
+}
