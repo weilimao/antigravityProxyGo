@@ -486,7 +486,7 @@ export function initSettings() {
 				enableCustomCompression: chkEnableCustomCompression.checked,
 				maxTokensThreshold: parseInt(numMaxTokensThreshold.value, 10) || 100000,
 				compressionStrategy: 'summarize',
-				summaryModel: selSummaryModel.value || 'gemini-2.5-flash-lite',
+				summaryModel: selSummaryModel.value || '',
 				keepRecentTurns: parseInt(numKeepRecentTurns.value, 10) || 5
 			};
 			try {
@@ -710,29 +710,40 @@ export function refreshSettingsUI() {
 				ipcRenderer.invoke('relay:get-model-mapping').then((mappings: any) => {
 					const modelNames = (mappings || []).map((m: any) => m.clientModel).filter(Boolean);
 					selSummaryModel.innerHTML = '';
-					const defaultModels = ['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
-					const allModels = Array.from(new Set([...modelNames, ...defaultModels]));
-					allModels.forEach(m => {
+					const allModels = Array.from(new Set<string>(modelNames));
+					if (cfg.summaryModel && !allModels.includes(cfg.summaryModel)) {
+						allModels.unshift(cfg.summaryModel);
+					}
+					if (allModels.length === 0) {
 						const opt = document.createElement('option');
-						opt.value = m;
-						opt.textContent = m;
-						if (m === cfg.summaryModel) {
-							opt.selected = true;
-						}
+						opt.value = '';
+						opt.textContent = state.currentLanguage === 'zh' ? '暂无可用模型' : 'No available models';
 						selSummaryModel.appendChild(opt);
-					});
+					} else {
+						allModels.forEach(m => {
+							const opt = document.createElement('option');
+							opt.value = m;
+							opt.textContent = m;
+							if (m === cfg.summaryModel) {
+								opt.selected = true;
+							}
+							selSummaryModel.appendChild(opt);
+						});
+					}
 				}).catch(() => {
-					const defaultModels = ['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
 					selSummaryModel.innerHTML = '';
-					defaultModels.forEach(m => {
+					if (cfg.summaryModel) {
 						const opt = document.createElement('option');
-						opt.value = m;
-						opt.textContent = m;
-						if (m === cfg.summaryModel) {
-							opt.selected = true;
-						}
+						opt.value = cfg.summaryModel;
+						opt.textContent = cfg.summaryModel;
+						opt.selected = true;
 						selSummaryModel.appendChild(opt);
-					});
+					} else {
+						const opt = document.createElement('option');
+						opt.value = '';
+						opt.textContent = state.currentLanguage === 'zh' ? '暂无可用模型' : 'No available models';
+						selSummaryModel.appendChild(opt);
+					}
 				});
 			}
 		}

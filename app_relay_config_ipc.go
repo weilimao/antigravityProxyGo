@@ -70,6 +70,9 @@ func (a *App) handleRelayConfigIPC(channel string, args []interface{}) (string, 
 		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "relay:get-model-mapping":
+		if !a.hasAccountsInPool() {
+			return marshalResponse([]settings.ModelMappingEntry{})
+		}
 		return marshalResponse(a.settingsMgr.GetRelayModelMapping())
 
 	case "relay:set-model-mapping":

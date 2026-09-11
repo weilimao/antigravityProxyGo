@@ -235,3 +235,13 @@ func (a *App) IsWindowVisibleAndActive() bool {
 	defer a.isWindowVisibleMu.RUnlock()
 	return a.isWindowVisible
 }
+
+// hasAccountsInPool 检查当前账号池中是否存在账号。
+// 当号池为空时，用于防御中继模型映射、测速模型列表等向下透传伪造的默认模型。
+func (a *App) hasAccountsInPool() bool {
+	if a.accountMgr == nil {
+		return false
+	}
+	return len(a.accountMgr.GetRawAccountsByProvider("all")) > 0
+}
+

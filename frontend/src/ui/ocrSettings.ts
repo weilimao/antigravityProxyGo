@@ -10,7 +10,7 @@ import { ref } from 'vue';
 import { ipcRenderer } from '../shared/ipc';
 import { buildOcrCandidates } from '../components/settings/agent-config/modelSelectCore';
 
-export const ocrModel = ref<string>('gemini-2.5-flash');
+export const ocrModel = ref<string>('');
 export const ocrModelOptions = ref<string[]>([]);
 
 let isOcrEventsInited = false;
@@ -19,7 +19,7 @@ let isOcrEventsInited = false;
  * 读取当前已保存的 OCR 模型名称
  */
 export function getSavedOcrModel(): string {
-  let val = 'gemini-2.5-flash';
+  let val = '';
   if ((window as any).wailsConfigCache && (window as any).wailsConfigCache['settings:get-ocr-model']) {
     val = (window as any).wailsConfigCache['settings:get-ocr-model'];
   } else {
@@ -29,7 +29,7 @@ export function getSavedOcrModel(): string {
         val = m;
       }
     } catch (_) {
-      /* 兜底默认 gemini-2.5-flash */
+      /* 异常时保持 val 为空 */
     }
   }
   return val;
@@ -45,7 +45,7 @@ export async function refreshOcrModelOptions(): Promise<void> {
     ocrModelOptions.value = buildOcrCandidates(mappings || [], ocrModel.value);
   } catch (e) {
     console.error('[OcrSettings] Failed to fetch relay model mapping:', e);
-    const fallback = ocrModel.value ? [ocrModel.value] : ['gemini-2.5-flash'];
+    const fallback = ocrModel.value ? [ocrModel.value] : [];
     ocrModelOptions.value = fallback;
   }
 }

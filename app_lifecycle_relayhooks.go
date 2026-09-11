@@ -53,6 +53,11 @@ func (a *App) relayRecordUsage(allocatedAccount, userID, apiKeyID, modelName str
 		}
 		_ = db.InsertRequestLog(dbItem)
 
+		// 方案 B: 将远程中继请求同步计入主仪表盘全局指标与综合趋势桶 trends
+		if a.statsTracker != nil {
+			a.statsTracker.TrackRequestForModel(modelName, inTokens, outTokens, cachedTokens)
+		}
+
 		a.statsTracker.AddRequestLogInMemoryOnly(&stats.RequestLog{
 			ID:           reqID,
 			Timestamp:    time.Now().Format("01/02 15:04:05"),

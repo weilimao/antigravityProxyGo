@@ -41,7 +41,10 @@ type GlobalStats struct {
 	// 历史 NVIDIA 请求量只躺在 usage.json 未进 stats.Models 模型表。首次 LoadFromDisk
 	// 检测到该标志缺失时, 从 usage.json 聚合 nvidia 账号差量合并进 Models + 全局标量 +
 	// Pools["nvidia"], 置 true 落盘, 再次启动即跳过。详见 stats_migrate_nvidia.go。
-	NvidiaUsageBackfillDone bool                   `json:"nvidiaUsageBackfillDone,omitempty"`
+	NvidiaUsageBackfillDone bool `json:"nvidiaUsageBackfillDone,omitempty"`
+	// RelayTrendsBackfillDone 是「远程中继历史用量回填趋势桶」一次性迁移标志。
+	// 将 SQLite 中已有 mode='remote_relay' 的请求按小时桶回填进 trends 桶，使折线图与模型表口径对齐。
+	RelayTrendsBackfillDone bool `json:"relayTrendsBackfillDone,omitempty"`
 	TotalCost               float64                `json:"totalCost"`
 	TotalRetries            int                    `json:"totalRetries"`
 	TotalErrors             int                    `json:"totalErrors"`

@@ -1,3 +1,20 @@
+### v1.6.3 更新日志
+
+- **Auto 竞速模型并发分发与测速池联动配置**：
+  - 支持中继 Auto 竞速模型多路并发分发机制（`relay_auto.go`），针对 `auto-speed`、`auto-smart` 等动态路由策略实现毫秒级首字竞速探测与最优链路自动选择；
+  - 测速池深度联动：支持基于历史测速与实时响应延时动态调整分发权重，提供配置卡片（`AutoModelConfigCard.vue`）支持阈值、超时及候选模型自由编排。
+
+- **远程中继趋势图统计与 30 天历史用量回填**：
+  - 远程中继流量（`mode = 'remote_relay'`）全面计入主仪表盘全局指标与综合趋势小时桶（`trends`），彻底对齐折线图与模型表统计口径；
+  - 内置一次性幂等回填机制（`RelayTrendsBackfillDone`），应用启动时自动从 SQLite `request_logs` 聚合过去 30 天的历史中继数据补齐趋势桶与全局标量，无痛衔接历史数据。
+
+- **空账号池场景模型透传保护**：
+  - 增加号池防御校验（`hasAccountsInPool()`），当用户未配置任何账号时，中继模型映射 IPC (`relay:get-model-mapping`) 与测速模型候选 IPC (`benchmark:models`) 严格返回空列表，杜绝向前端强行塞入 70+ 个内置默认模型的“幽灵数据”。
+
+- **模型候选下拉组件与 OCR/会话压缩重构**：
+  - 重构 `ModelSearchSelect`、`ocrSettings` 及 `settingsController`，彻底剔除硬编码写死的 Gemini 默认模型假数据；
+  - 无可用模型时统一展示友好的「暂无可用模型」空状态提示；在有已存有效配置时确保平滑可选与准确回显。
+
 ### v1.6.2 更新日志
 
 - **Antigravity 远程连接 (Remote Control) 支持**：

@@ -226,6 +226,11 @@ func (t *Tracker) LoadFromDisk() {
 		t.backfillNvidiaModelsFromUsageLocked(agg)
 	}
 
+	// 远程中继历史用量回填趋势桶: 若尚未执行过回填，从 request_logs 聚合过去 30 天的 remote_relay 记录合并进 trends
+	if !t.stats.RelayTrendsBackfillDone {
+		t.BackfillRelayTrendsFromDBLocked()
+	}
+
 	// 综合趋势桶以盘上数据为准, 不再设"桶数过少则清空"的门槛:
 	// 旧实现 len(t.trends) <= 6 时强制 seedEmptyTrends(), 在 stats.json 被重建/截断后
 	// 会进入死循环式清空——重启即归零、永远涨不过 6 桶, 而 nvidiaTrends 无此门槛,

@@ -91,7 +91,7 @@
         <!-- 浮层顶部统计信息 -->
         <div class="flex items-center justify-between px-3 py-1.5 bg-slate-50 dark:bg-white/5 border-b border-outline-variant/30 text-[11px] text-slate-500 dark:text-slate-400 font-medium shrink-0">
           <span>
-            {{ searchQuery ? `找到 ${filteredOptions.length} 个匹配` : `共 ${options.length} 个模型可用` }}
+            {{ searchQuery ? `找到 ${filteredOptions.length} 个匹配` : (options.length === 0 ? '暂无可用模型' : `共 ${options.length} 个模型可用`) }}
           </span>
           <!-- 多选模式: 全选当前过滤结果 / 清空 -->
           <div v-if="multiple" class="flex items-center gap-2 shrink-0">
@@ -183,7 +183,7 @@
             v-if="filteredOptions.length === 0 && (!isCustomOptionAvailable || allowCustom === false)"
             class="px-3 py-4 text-center text-[12px] text-slate-400 dark:text-slate-500 italic"
           >
-            无匹配的模型
+            {{ (!options || options.length === 0) && !searchQuery ? '暂无可用模型（号池无账号或未同步模型）' : '无匹配的模型' }}
           </div>
         </div>
       </div>

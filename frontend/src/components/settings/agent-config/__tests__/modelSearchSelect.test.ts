@@ -1,4 +1,5 @@
 // modelSearchSelect.test.ts: 验证 ModelSearchSelect 核心算法与过滤逻辑
+import { buildSummaryCandidates, buildOcrCandidates } from '../modelSelectCore';
 
 function filterModelOptions(options: string[], query: string): string[] {
   const q = query.trim().toLowerCase();
@@ -86,6 +87,22 @@ async function runModelSearchSelectTests() {
     throw new Error(`测试 6 失败: 已有模型不应判定为自定义新项: ${JSON.stringify(existingRes)}`);
   }
   console.log('✓ 测试 6 通过: 完全匹配已有模型时正确抑制自定义提示。\n');
+
+  // 测试 7: 空号池/无映射时 buildSummaryCandidates 严格返回空，拒绝硬编码默认模型
+  console.log('测试 7: 验证 buildSummaryCandidates 在空映射下不含任何默认模型...');
+  const emptySummaryRes = buildSummaryCandidates([], '');
+  if (emptySummaryRes.length !== 0) {
+    throw new Error(`测试 7 失败: 空映射下期望返回 0 个候选，实际返回: ${JSON.stringify(emptySummaryRes)}`);
+  }
+  console.log('✓ 测试 7 通过: buildSummaryCandidates 空映射严格返回空数组。\n');
+
+  // 测试 8: 空号池/无映射时 buildOcrCandidates 严格返回空，拒绝默认 gemini-2.5-flash
+  console.log('测试 8: 验证 buildOcrCandidates 在空映射下不含默认模型...');
+  const emptyOcrRes = buildOcrCandidates([], '');
+  if (emptyOcrRes.length !== 0) {
+    throw new Error(`测试 8 失败: 空映射下期望返回 0 个候选，实际返回: ${JSON.stringify(emptyOcrRes)}`);
+  }
+  console.log('✓ 测试 8 通过: buildOcrCandidates 空映射严格返回空数组。\n');
 
   console.log('>>> ModelSearchSelect 自动化测试全部绿灯通过！ <<<\n');
 }

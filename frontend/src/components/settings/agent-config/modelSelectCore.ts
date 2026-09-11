@@ -20,7 +20,7 @@ export function uniqueSorted(list: string[]): string[] {
 /**
  * buildOcrCandidates: OCR 模型下拉候选组装。
  * - 仅取 expose=true 的 clientModel
- * - 追加当前已存值（若值不在候选内，末尾保证可选回显）
+ * - 追加当前已存值（若值存在且不在候选内，保证可选回显）
  */
 export function buildOcrCandidates(
     mappings: MappingLike[],
@@ -34,13 +34,13 @@ export function buildOcrCandidates(
 
 /**
  * buildSummaryCandidates: 会话压缩/摘要模型候选。
- * - 取所有映射的 clientModel（不再限 expose=true，保持旧行为）
- * - 追加一组 defaultModels + 已存值
+ * - 取映射中的 clientModel，仅在存在真实映射或有效已存值时提供选项
+ * - 拒绝硬编码假数据，号池无账号时严格为空
  */
 export function buildSummaryCandidates(
     mappings: MappingLike[],
     currentValue: string,
-    defaultModels: string[] = ['gemini-2.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'],
+    defaultModels: string[] = [],
 ): string[] {
     const fromRelay = (mappings || [])
         .map(m => (m && m.clientModel ? String(m.clientModel) : ''))

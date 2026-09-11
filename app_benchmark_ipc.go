@@ -127,6 +127,10 @@ func (a *App) handleBenchmarkIPC(channel string, args []interface{}) (string, bo
 		return data, true, nil
 
 	case "benchmark:models":
+		if !a.hasAccountsInPool() {
+			data, _ := marshalResponse(map[string]interface{}{"success": true, "models": []string{}})
+			return data, true, nil
+		}
 		mapping := a.settingsMgr.GetRelayModelMapping()
 		seen := make(map[string]bool)
 		out := []string{}
