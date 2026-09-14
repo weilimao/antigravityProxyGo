@@ -126,14 +126,14 @@
         </label>
       </div>
 
-      <!-- array (textarea, newline-separated) -->
+      <!-- array (textarea, newline-separated, supports objects as JSON per line) -->
       <textarea
         v-else-if="field.type === 'array'"
-        :value="displayValue"
+        :value="arrayDisplayValue"
         :placeholder="field.description || '每行一个'"
-        @input="emitValue(($event.target as HTMLTextAreaElement).value)"
+        @input="onArrayInput(($event.target as HTMLTextAreaElement).value)"
         class="px-3 py-2 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white w-full font-mono resize-y"
-        style="min-height: 60px;"
+        style="min-height: 80px;"
       ></textarea>
 
       <!-- kv-list (textarea, KEY=VALUE per line) -->
@@ -288,5 +288,34 @@ function onToggleEnable(e: Event) {
 
 function emitValue(val: any) {
   emit('update:value', val);
+}
+
+// ===== array 字段双向解析与安全显示（防止对象数组渲染为 [object Object]） =====
+const arrayDisplayValue = computed(() => {
+  const val = props.value !== undefined ? props.value : fieldDefault.value;
+  if (!Array.isArray(val)) {
+    return typeof val === 'string' ? val : (val ? String(val) : '');
+  }
+  return val.map((item) => {
+    if (typeof item === 'object' && item !== null) {
+      return JSON.stringify(item);
+    }
+    return String(item);
+  }).join('\n');
+});
+
+function onArrayInput(text: string) {
+  const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  const parsed = lines.map((line) => {
+    if ((line.startsWith('{') && line.endsWith('}')) || (line.startsWith('[') && line.endsWith(']'))) {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return line;
+      }
+    }
+    return line;
+  });
+  emitValue(parsed);
 }
 </script>

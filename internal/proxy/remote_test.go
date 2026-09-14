@@ -426,5 +426,3 @@ func TestDialThroughRemote407TriggersTokenExpired(t *testing.T) {
 	}
 }
 
-
-

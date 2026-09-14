@@ -109,8 +109,8 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 	// 完全未注入会话键,sticky 用 UserID(按用户);本步首次让 Codex Session-Id 进入 Other 池。
 	h.ensureSessionKey(userSession, r, bodyBytes)
 
-	// 抽取入站 model 与 stream 字段(三协议取同名字段)。
-	inModel, isStreaming, perr := extractRoutedModelStream(path, bodyBytes)
+	// 抽取入站 model 与 stream 字段(三协议取同名字段,结合 Accept 协议头与 Responses 规范识别流式)。
+	inModel, isStreaming, perr := extractRoutedModelStream(path, r.Header, bodyBytes)
 	if perr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": perr.Error()})
 		return
@@ -140,7 +140,7 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 	}
 
 	// 优先检查是否为 auto 竞速模型(配置了候选池或开启了测速池, 或模型名即为 auto)
-	if _, candidates, isAuto := h.isAutoModel(routeModel); isAuto {
+	if _, candidates, isAuto := h.isAutoModelForSession(routeModel, userSession); isAuto {
 		h.handleAutoRace(w, r, userSession, inModel, bodyBytes, isStreaming, isChat, isResponses, isMessages, candidates)
 		return
 	}
@@ -487,22 +487,39 @@ func isGoogleProvider(p string) bool {
 	return c == "google" || c == "antigravity" || c == "gcp" || c == "project" || c == "gemini-cli" || c == ""
 }
 
-// extractRoutedModelStream 从入站 body 抽 model 与 stream。
-// 三协议字段同构(model/stream),按路径分支选结构解析。
-func extractRoutedModelStream(path string, body []byte) (model string, streaming bool, err error) {
+// extractRoutedModelStream 从入站 body 与 header 抽 model 与 stream。
+// 三协议字段同构(model/stream),按路径分支选结构解析,同时识别 Accept: text/event-stream 与 Responses 规范。
+func extractRoutedModelStream(path string, header http.Header, body []byte) (model string, streaming bool, err error) {
+	acceptSSE := false
+	if header != nil {
+		acceptSSE = strings.Contains(strings.ToLower(header.Get("Accept")), "text/event-stream")
+	}
+
 	switch {
-	case strings.HasSuffix(path, "/v1/messages"):
+	case strings.HasSuffix(path, "/v1/messages") || strings.HasSuffix(path, "/messages"):
 		var req AnthropicRequest
 		if e := json.Unmarshal(body, &req); e != nil {
 			return "", false, errors.New("invalid anthropic request: " + e.Error())
 		}
-		return req.Model, req.Stream, nil
-	case strings.HasSuffix(path, "/v1/responses"):
+		return req.Model, req.Stream || acceptSSE, nil
+	case strings.HasSuffix(path, "/v1/responses") || strings.HasSuffix(path, "/responses") || strings.HasSuffix(path, "/responses/compact"):
 		req, e := ParseUnifiedOpenAIRequest(body)
 		if e != nil {
 			return "", false, errors.New("invalid responses request: " + e.Error())
 		}
-		return req.Model, req.Stream, nil
+		// Responses API (Codex CLI) 官方规范以 SSE 驱动:
+		// 凡请求本端点且未显式在请求体写明 stream: false (或请求头明确 Accept: text/event-stream),
+		// 恒视为流式请求, 驱动下游 OpenAIChatSSEToResponsesSSE 吐出完整事件流, 杜绝单包 JSON 导致客户端报 stream disconnected。
+		isStream := true
+		var rawMap map[string]interface{}
+		if errJSON := json.Unmarshal(body, &rawMap); errJSON == nil {
+			if sVal, exists := rawMap["stream"]; exists {
+				if sBool, ok := sVal.(bool); ok && !sBool && !acceptSSE {
+					isStream = false
+				}
+			}
+		}
+		return req.Model, isStream, nil
 	default: // /v1/chat/completions
 		var req struct {
 			Model  string `json:"model"`
@@ -511,13 +528,18 @@ func extractRoutedModelStream(path string, body []byte) (model string, streaming
 		if e := json.Unmarshal(body, &req); e != nil {
 			return "", false, errors.New("invalid openai request: " + e.Error())
 		}
-		return req.Model, req.Stream, nil
+		return req.Model, req.Stream || acceptSSE, nil
 	}
 }
 
 // patchRoutedBodyModel 替换入站 body 的顶层 model 字段(最小侵入)。
 // 用 map 合并避免对各种协议结构体各写一份;model 之外的其它字段原样保留。
 func patchRoutedBodyModel(body []byte, model string) string {
+	return patchRoutedBodyModelAndStream(body, model, false)
+}
+
+// patchRoutedBodyModelAndStream 替换入站 body 的顶层 model 字段, 并在 isStreaming=true 时确保请求体带有 stream: true。
+func patchRoutedBodyModelAndStream(body []byte, model string, isStreaming bool) string {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(body, &obj); err != nil {
 		// body 不是合法 JSON 对象(极罕见),整体回退:不 patch 直接返回原 body。
@@ -525,6 +547,10 @@ func patchRoutedBodyModel(body []byte, model string) string {
 	}
 	mb, _ := json.Marshal(model)
 	obj["model"] = mb
+	if isStreaming {
+		sb, _ := json.Marshal(true)
+		obj["stream"] = sb
+	}
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return string(body)

@@ -140,6 +140,27 @@ export async function saveAgentCatalogFull(agentId: string, jsonStr: string): Pr
   }
 }
 
+// fetchAgentAuthFull: 拉取指定 Agent 的认证文件完整 JSON 字符串（如 Codex 的 ~/.codex/auth.json）。
+export async function fetchAgentAuthFull(agentId: string): Promise<string> {
+  try {
+    const res = await ipcRenderer.invoke('externalconfig:get-auth', agentId);
+    if (!res || !res.success || typeof res.jsonStr !== 'string') return '{}';
+    return res.jsonStr;
+  } catch (err) {
+    console.error('[AgentConfigController] Failed to fetch agent auth full:', err);
+    return '{}';
+  }
+}
+
+// saveAgentAuthFull: 将认证 JSON 字符串写入指定 Agent 的认证文件。
+export async function saveAgentAuthFull(agentId: string, jsonStr: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    return await ipcRenderer.invoke('externalconfig:save-auth', agentId, jsonStr);
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
 // ===== OpenCode Provider AI 一键生成 =====
 
 // DEFAULT_PROVIDER_GEN_PROMPT: AI 生成 provider 配置的默认系统提示词模板。
@@ -521,7 +542,19 @@ function processValueForJSON(field: ConfigField, rawVal: any): any {
       return Boolean(rawVal);
     case 'array':
       if (typeof rawVal === 'string') {
-        return rawVal.split('\n').map((s) => s.trim()).filter((s) => s !== '');
+        // 每行先尝试 JSON.parse：对象行（如 {"effort":"high",...}）还原为对象元素，
+        // 解析失败则保留原字符串，避免把对象元素降级成 "[object Object]" 字符串。
+        return rawVal
+          .split('\n')
+          .map((s) => s.trim())
+          .filter((s) => s !== '')
+          .map((line) => {
+            try {
+              return JSON.parse(line);
+            } catch {
+              return line;
+            }
+          });
       }
       return rawVal;
     case 'kv-list':
@@ -536,6 +569,16 @@ function processValueForJSON(field: ConfigField, rawVal: any): any {
           }
         }
         return obj;
+      }
+      return rawVal;
+    case 'object':
+      // 对象字段：表单里是 JSON 文本时解析回对象，避免把对象写成 "[object Object]" 字符串。
+      if (typeof rawVal === 'string') {
+        try {
+          return JSON.parse(rawVal);
+        } catch {
+          return rawVal;
+        }
       }
       return rawVal;
     default:
@@ -633,12 +676,22 @@ function processValueForForm(field: ConfigField, val: any): any {
   switch (field.type) {
     case 'array':
       if (Array.isArray(val)) {
-        return val.join('\n');
+        // 对象元素逐个 JSON.stringify 成单行文本，保存时 JSON.parse 还原，
+        // 避免 Array.join 把对象降级成 "[object Object]" 字符串。
+        return val
+          .map((el) => (el !== null && typeof el === 'object' ? JSON.stringify(el) : String(el)))
+          .join('\n');
       }
       return '';
     case 'kv-list':
       if (val && typeof val === 'object') {
         return Object.entries(val).map(([k, v]) => `${k}=${v}`).join('\n');
+      }
+      return '';
+    case 'object':
+      // 对象字段序列化为单行 JSON 文本，保存时 JSON.parse 还原。
+      if (val !== null && typeof val === 'object') {
+        return JSON.stringify(val);
       }
       return '';
     case 'boolean':

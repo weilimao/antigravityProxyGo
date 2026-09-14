@@ -4,6 +4,22 @@
 
 import { AgentSchema, ConfigSection } from '../types';
 
+// ===== 中继与网关认证 =====
+const authSettings: ConfigSection = {
+  title: '中继与网关认证 (Auth)',
+  icon: 'key',
+  fields: [
+    {
+      key: 'auth.OPENAI_API_KEY',
+      label: '网关 API Key (OPENAI_API_KEY)',
+      type: 'string',
+      secret: true,
+      placeholder: 'sk-ant-...',
+      description: 'Codex 请求中继网关服务时使用的访问认证密钥，保存后自动同步至 ~/.codex/auth.json',
+    },
+  ],
+};
+
 // ===== 基础与模型设置 =====
 const basicSettings: ConfigSection = {
   title: '基础与模型设置',
@@ -79,6 +95,7 @@ const modelProviders: ConfigSection = {
     name: '',
     base_url: 'http://127.0.0.1:18444/v1',
     env_key: 'OPENAI_API_KEY',
+    requires_openai_auth: true,
     wire_api: 'responses',
   },
   fields: [
@@ -95,6 +112,13 @@ const modelProviders: ConfigSection = {
       type: 'string',
       placeholder: 'http://127.0.0.1:18444/v1',
       description: '该提供商的 API 基础端点地址',
+    },
+    {
+      key: 'model_providers.{name}.requires_openai_auth',
+      label: '携带网关认证 (requires_openai_auth)',
+      type: 'boolean',
+      default: true,
+      description: '启用后，Codex 请求该提供商时将自动携带上述网关 API Key 进行身份认证',
     },
     {
       key: 'model_providers.{name}.env_key',
@@ -135,6 +159,7 @@ const modelCatalog: ConfigSection = {
   title: '模型列表 (Catalog)',
   icon: 'view_list',
   repeatable: true,
+  isModelList: true,
   itemKeyField: 'slug',
   itemTemplate: {
     display_name: '',
@@ -151,7 +176,20 @@ const modelCatalog: ConfigSection = {
     visibility: 'list',
     priority: 1000,
     truncation_policy: { limit: 10000, mode: 'bytes' },
+    supported_reasoning_levels: [
+      { effort: 'none', description: 'Disable Thinking' },
+      { effort: 'low', description: 'Low Thinking Effort' },
+      { effort: 'medium', description: 'Medium Thinking Effort' },
+      { effort: 'high', description: 'High Thinking Effort' },
+      { effort: 'max', description: 'Max Thinking Effort' },
+    ],
     base_instructions: "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals.",
+    additional_speed_tiers: [],
+    availability_nux: null,
+    default_reasoning_summary: 'none',
+    experimental_supported_tools: [],
+    service_tiers: [],
+    upgrade: null,
     shell_type: 'shell_command',
     supported_in_api: true,
     effective_context_window_percent: 95,
@@ -219,7 +257,7 @@ const modelCatalog: ConfigSection = {
       key: 'models.{name}.input_modalities',
       label: '输入模态',
       type: 'array',
-      description: '模型支持的输入模态列表（每行一个，如 text, image）',
+      description: '模型支持的输入模态列表（每行一个：text / image / audio；多个模态分多行填写，不要在同一行用逗号分隔）',
     },
     {
       key: 'models.{name}.supports_reasoning_summaries',
@@ -303,7 +341,7 @@ const modelCatalog: ConfigSection = {
       key: 'models.{name}.supported_reasoning_levels',
       label: '支持的思考等级',
       type: 'array',
-      description: '模型支持的思考等级列表（每行一个等级 effort 值：none, low, medium, high, max）',
+      description: '模型支持的思考等级列表（每行一个 JSON 对象，如 {"effort": "high", "description": "High Thinking Effort"}）',
     },
   ],
 };
@@ -501,6 +539,7 @@ const tuiSettings: ConfigSection = {
 export const codexSchema: AgentSchema = {
   agentId: 'codex',
   sections: [
+    authSettings,
     basicSettings,
     modelProviders,
     modelCatalog,

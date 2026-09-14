@@ -158,6 +158,7 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 			}
 		}
 		_ = a.settingsMgr.SetNvidiaPreferredModels(models)
+		a.SyncFileToRemoteIfServerMode("config.json")
 		savedCount := len(models)
 		a.AddLog(fmt.Sprintf("⚙️ NVIDIA 专属模型清单已更新: %d 个", savedCount))
 		wailsRuntime.EventsEmit(a.ctx, "settings:nvidia-preferred-models-res", map[string]interface{}{

@@ -231,6 +231,8 @@ const emit = defineEmits<{
   /** 多选模式专用: 选中数组整体变化 */
   'update:modelIds': [val: string[]];
   'changeMultiple': [val: string[]];
+  /** 下拉未打开且有值时按 Enter 触发快捷提交 */
+  'submit': [val: string];
 }>();
 
 const containerRef = ref<HTMLElement | null>(null);
@@ -458,6 +460,11 @@ function selectOption(val: string) {
 
 function onKeyDown(e: KeyboardEvent) {
   if (!isOpen.value) {
+    if (e.key === 'Enter' && props.modelValue) {
+      e.preventDefault();
+      emit('submit', props.modelValue);
+      return;
+    }
     if (e.key === 'ArrowDown' || e.key === 'Enter') {
       e.preventDefault();
       openDropdown();

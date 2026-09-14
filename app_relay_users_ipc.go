@@ -136,6 +136,7 @@ func (a *App) handleRelayUsersIPC(channel string, args []interface{}) (string, b
 		if err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
+		a.SyncFileToRemoteIfServerMode("relay_users.json")
 		a.AddLog(fmt.Sprintf("🔑 Relay user added: %s", key))
 		return marshalResponse(map[string]interface{}{"success": true, "user": user})
 
@@ -148,6 +149,7 @@ func (a *App) handleRelayUsersIPC(channel string, args []interface{}) (string, b
 		if err := a.relayUserMgr.RemoveUser(userId); err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
+		a.SyncFileToRemoteIfServerMode("relay_users.json")
 		a.AddLog(fmt.Sprintf("🗑️ Relay user removed: %s", userId))
 		return marshalResponse(map[string]interface{}{"success": true})
 
@@ -159,6 +161,7 @@ func (a *App) handleRelayUsersIPC(channel string, args []interface{}) (string, b
 		}
 
 		a.relayUserMgr.UpdateUserEnabled(userId, enabled)
+		a.SyncFileToRemoteIfServerMode("relay_users.json")
 		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "relay:update-user-quota":
@@ -176,6 +179,7 @@ func (a *App) handleRelayUsersIPC(channel string, args []interface{}) (string, b
 		if err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
+		a.SyncFileToRemoteIfServerMode("relay_users.json")
 		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "relay:get-packages":
@@ -205,6 +209,7 @@ func (a *App) handleRelayUsersIPC(channel string, args []interface{}) (string, b
 				return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 			}
 		}
+		a.SyncFileToRemoteIfServerMode("relay_packages.json")
 		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "relay:delete-package":
@@ -216,6 +221,7 @@ func (a *App) handleRelayUsersIPC(channel string, args []interface{}) (string, b
 		if err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
+		a.SyncFileToRemoteIfServerMode("relay_packages.json")
 		return marshalResponse(map[string]interface{}{"success": true})
 
 	case "relay:get-user-stats":

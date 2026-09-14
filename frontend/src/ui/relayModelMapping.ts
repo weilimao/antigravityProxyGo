@@ -1060,8 +1060,11 @@ export function initRelayModelMapping() {
         try {
             const res = await ipcRenderer.invoke('relay:set-model-mapping', mappingsToSave);
             const isSuccess = res && res.success;
+            const successMsg = (res && res.isRemote)
+                ? (dict.relaySaveRemoteSuccess || '已同步至远程服务器')
+                : (dict.relaySaveSuccess || '保存成功');
             btnSaveModelMapping.innerHTML = isSuccess
-                ? `<span class="material-symbols-outlined text-[16px]">done</span><span>${dict.relaySaveSuccess || '保存成功'}</span>`
+                ? `<span class="material-symbols-outlined text-[16px]">done</span><span>${successMsg}</span>`
                 : `<span class="material-symbols-outlined text-[16px]">error</span><span>${dict.relaySaveFailed || '保存失败'}</span>`;
             setTimeout(() => { btnSaveModelMapping.innerHTML = originalText; }, 2000);
         } catch (err) {

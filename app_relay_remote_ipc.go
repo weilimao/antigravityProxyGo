@@ -74,11 +74,19 @@ func (a *App) handleRelayRemoteIPC(channel string, args []interface{}) (string, 
 
 		portArg := port
 
+		// 1. 先在切入沙箱前的本地 settingsMgr 中持久化远程凭据，确保本地配置永久持有
+		_ = a.settingsMgr.SetRemoteHost(host)
+		_ = a.settingsMgr.SetRemotePort(portArg)
+		_ = a.settingsMgr.SetRemotePath(path)
+		_ = a.settingsMgr.SetRemoteKey(key)
+		_ = a.settingsMgr.SetRemotePassword(password)
+		_ = a.settingsMgr.SetRemoteEnabled(true)
+
 		if err := a.connectRemote(host, port, path, key, password); err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
 
-		// Save config to settings
+		// 2. 切入沙箱后，在沙箱内的 settingsMgr 也同步写入
 		_ = a.settingsMgr.SetRemoteHost(host)
 		_ = a.settingsMgr.SetRemotePort(portArg)
 		_ = a.settingsMgr.SetRemotePath(path)

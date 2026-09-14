@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/pelletier/go-toml/v2"
@@ -385,6 +386,12 @@ func (m *Manager) WriteModelCatalogFull(agentID, jsonStr string) error {
 		return fmt.Errorf("invalid catalog JSON: %w", err)
 	}
 
+	// 防御护栏：检测 JS 端对象序列化损坏标志 "[object Object]"，命中即拒绝写入，
+	// 避免坏 catalog 落盘导致 codex-cli 拒绝加载配置。
+	if containsCorruptedObjectString(rawMap) {
+		return fmt.Errorf(`catalog JSON contains corrupted "[object Object]" string values, refusing to write`)
+	}
+
 	if _, err := os.Stat(catalogPath); err == nil {
 		bakPath := catalogPath + ".bak"
 		origData, readErr := os.ReadFile(catalogPath)
@@ -398,3 +405,86 @@ func (m *Manager) WriteModelCatalogFull(agentID, jsonStr string) error {
 	}
 	return nil
 }
+
+// containsCorruptedObjectString 递归检查 JSON 值中是否存在字面量 "[object Object]" 字符串。
+// 该字符串是 JS 端把对象误序列化（String(obj) / Array.join）产生的损坏标志。
+func containsCorruptedObjectString(v interface{}) bool {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t) == "[object Object]"
+	case []interface{}:
+		for _, el := range t {
+			if containsCorruptedObjectString(el) {
+				return true
+			}
+		}
+	case map[string]interface{}:
+		for _, val := range t {
+			if containsCorruptedObjectString(val) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resolveAuthPath 解析指定 Agent 认证文件（如 Codex 的 auth.json）的绝对路径。
+// 目前对 codex 生效（位于其 configPath 同目录下的 auth.json）。对其他 Agent 返回空字符串。
+func (m *Manager) resolveAuthPath(agentID string) string {
+	profile, err := m.GetAgent(agentID)
+	if err != nil {
+		return ""
+	}
+	if agentID == "codex" {
+		return filepath.Join(filepath.Dir(profile.ConfigPath), "auth.json")
+	}
+	return ""
+}
+
+// ReadAuthFull 读取指定 Agent 的认证文件完整 JSON 字符串返回前端。
+// 文件不存在或 Agent 无单独 auth 文件时返回空 JSON 对象 "{}"（非错误）。
+func (m *Manager) ReadAuthFull(agentID string) (string, error) {
+	authPath := m.resolveAuthPath(agentID)
+	if authPath == "" {
+		return "{}", nil
+	}
+
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		return "{}", nil
+	}
+
+	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+		data = data[3:]
+	}
+
+	return string(data), nil
+}
+
+// WriteAuthFull 将前端传入的 JSON 字符串写入指定 Agent 的认证文件（如 Codex 的 auth.json）。
+// 写前自动创建 .bak 备份；若未声明 auth 路径，返回错误。
+func (m *Manager) WriteAuthFull(agentID, jsonStr string) error {
+	authPath := m.resolveAuthPath(agentID)
+	if authPath == "" {
+		return fmt.Errorf("agent %s has no auth file defined, cannot write auth", agentID)
+	}
+
+	var rawMap map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &rawMap); err != nil {
+		return fmt.Errorf("invalid auth JSON: %w", err)
+	}
+
+	if _, err := os.Stat(authPath); err == nil {
+		bakPath := authPath + ".bak"
+		origData, readErr := os.ReadFile(authPath)
+		if readErr == nil && len(origData) > 0 {
+			_ = os.WriteFile(bakPath, origData, 0644)
+		}
+	}
+
+	if err := os.WriteFile(authPath, []byte(jsonStr), 0644); err != nil {
+		return fmt.Errorf("failed to write auth file: %w", err)
+	}
+	return nil
+}
+

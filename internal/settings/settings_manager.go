@@ -576,3 +576,21 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 	}
 	return configPath, nil
 }
+
+// UpdatePath 切换配置读取与落盘的目录路径，并重载配置
+func (m *Manager) UpdatePath(newPath string) {
+	m.Lock()
+	m.defaultUserDataPath = newPath
+	m.activeDataDirectory = newPath
+	m.loadConfig()
+	m.Unlock()
+	m.updateNetutilConfig()
+}
+
+// Reload 从当前目录重新加载配置
+func (m *Manager) Reload() {
+	m.Lock()
+	m.loadConfig()
+	m.Unlock()
+	m.updateNetutilConfig()
+}

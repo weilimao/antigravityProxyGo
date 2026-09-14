@@ -43,7 +43,7 @@ func (h *APICompatHandler) handleOpenAIChat(w http.ResponseWriter, r *http.Reque
 
 	// 针对入站请求检查是否为 auto 竞速模型(仅非 /route 链路在此拦截, /route 链路已在前置 handleRoutedForward 统一处理)
 	if !routedRoutePrefixMatch(r.URL.Path) {
-		if _, candidates, isAuto := h.isAutoModel(openReq.Model); isAuto {
+		if _, candidates, isAuto := h.isAutoModelForSession(openReq.Model, userSession); isAuto {
 			h.handleAutoRace(w, r, userSession, openReq.Model, bodyBytes, openReq.Stream, !strings.Contains(r.URL.Path, "responses"), strings.Contains(r.URL.Path, "responses"), false, candidates)
 			return
 		}
@@ -238,7 +238,7 @@ func (h *APICompatHandler) handleAnthropicMessages(w http.ResponseWriter, r *htt
 
 	// 针对入站请求检查是否为 auto 竞速模型(仅非 /route 链路在此拦截, /route 链路已在前置 handleRoutedForward 统一处理)
 	if !routedRoutePrefixMatch(r.URL.Path) {
-		if _, candidates, isAuto := h.isAutoModel(anthReq.Model); isAuto {
+		if _, candidates, isAuto := h.isAutoModelForSession(anthReq.Model, userSession); isAuto {
 			h.handleAutoRace(w, r, userSession, anthReq.Model, bodyBytes, anthReq.Stream, false, false, true, candidates)
 			return
 		}

@@ -1,5 +1,6 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
+import { loadModelMappings } from './relayModelMapping';
 let statsSyncTimer: ReturnType<typeof setInterval> | null = null;
 export function initRemoteEvents() {
     const btnRemoteConnect = document.getElementById('btnRemoteConnect');
@@ -9,6 +10,7 @@ export function initRemoteEvents() {
     const btnRemoteCancel = document.getElementById('btnRemoteCancel');
     const btnRemoteEnable = document.getElementById('btnRemoteEnable');
     const btnRemoteDisable = document.getElementById('btnRemoteDisable');
+
     if (btnRemoteConnect) {
         btnRemoteConnect.addEventListener('click', openRemoteModal);
     }
@@ -59,6 +61,23 @@ export function initRemoteEvents() {
     // Listen for remote state changes
     ipcRenderer.on('remote-state', (_e: any, config: any) => {
         updateRemoteStatusUI(config);
+    });
+
+    ipcRenderer.on('remote:mode-changed', (_e: any, _payload: any) => {
+        try {
+            if (typeof (window as any).refreshRelayUsers === 'function') {
+                (window as any).refreshRelayUsers();
+            }
+            if (typeof (window as any).refreshRelayPackages === 'function') {
+                (window as any).refreshRelayPackages();
+            }
+            if (typeof (window as any).refreshSettingsUI === 'function') {
+                (window as any).refreshSettingsUI();
+            }
+            ipcRenderer.send('get-accounts');
+        } catch (e) {
+            console.warn('[RemoteController] Failed to refresh views on remote:mode-changed:', e);
+        }
     });
 
     // Register shared callback
@@ -205,231 +224,125 @@ async function handleLogin() {
         const res = await ipcRenderer.invoke('remote:login', host, port, key, password, path);
 
         if (res?.success) {
-
-            showLoginResult(isZH ? '✅ 登录成功，正在切换到远程模式...' : '✅ Login successful, switching to remote mode...', false);
-
+            showLoginResult(isZH ? '✅ 登录成功，正在同步数据...' : '✅ Login successful, syncing data...', false);
+            await checkRemoteStatus();
+            loadModelMappings();
             setTimeout(() => closeRemoteModal(), 800);
-
         } else {
-
             showLoginResult(isZH ? `❌ 登录失败: ${res?.error || '未知错误'}` : `❌ Login failed: ${res?.error || 'Unknown error'}`, true);
-
         }
-
     } catch (err) {
-
         showLoginResult(isZH ? '❌ 登录失败: 网络错误' : '❌ Login failed: Network error', true);
-
     }
-
 }
 
 async function handleDisconnect() {
-
     try {
-
         await ipcRenderer.invoke('remote:disconnect');
-
         await checkRemoteStatus();
-
+        loadModelMappings();
     } catch (err) {
-
         console.error('[RemoteController] Failed to disconnect:', err);
-
     }
-
 }
 
 async function handleEnableRemote() {
-
     const isZH = state.currentLanguage === 'zh';
-
     const statusText = document.getElementById('remoteStatusText');
-
-    if (statusText) statusText.textContent = isZH ? '⏳ 正在启用远程...' : '⏳ Enabling remote...';
+    if (statusText) statusText.textContent = isZH ? '⏳ 启用中...' : '⏳ Enabling...';
 
     try {
-
         const res = await ipcRenderer.invoke('remote:enable');
-
         if (res?.success) {
-
             await checkRemoteStatus();
-
+            loadModelMappings();
         } else {
-
-            alert(isZH ? `❌ 启用远程模式失败: ${res?.error || '未知错误'}` : `❌ Failed to enable remote mode: ${res?.error || 'Unknown error'}`);
-
+            alert(isZH ? `启用失败: ${res?.error || '未知错误'}` : `Failed to enable: ${res?.error || 'Unknown error'}`);
             await checkRemoteStatus();
-
         }
-
     } catch (err) {
-
-        alert(isZH ? '❌ 启用远程模式失败: 网络错误' : '❌ Failed to enable remote mode: Network error');
-
+        alert(isZH ? '启用失败: 网络错误' : 'Failed to enable: Network error');
         await checkRemoteStatus();
-
     }
-
 }
 
 async function handleDisableRemote() {
-
+    const isZH = state.currentLanguage === 'zh';
     try {
-
         const res = await ipcRenderer.invoke('remote:disable');
-
         if (res?.success) {
-
             await checkRemoteStatus();
-
+            loadModelMappings();
         } else {
-
             console.error('[RemoteController] Failed to disable remote:', res?.error);
-
         }
-
     } catch (err) {
-
         console.error('[RemoteController] Failed to disable remote:', err);
-
     }
-
 }
 
 function updateRemoteStatusUI(status: any) {
-
     const isZH = state.currentLanguage === 'zh';
-
     const badge = document.getElementById('remoteStatusBadge');
-
     const statusText = document.getElementById('remoteStatusText');
-
     const btnConnect = document.getElementById('btnRemoteConnect');
-
-    
-
     const btnRemoteDisconnect = document.getElementById('btnRemoteDisconnect');
-
     const btnRemoteEnable = document.getElementById('btnRemoteEnable');
-
     const btnRemoteDisable = document.getElementById('btnRemoteDisable');
-
-    
-
+    const btnManageApiKeys = document.getElementById('btnManageApiKeys');
     const proxyToggle = document.getElementById('proxyToggle') as HTMLInputElement;
 
-    
-
     const isConnected = status?.connected === true;
-
     const hasSaved = status?.hasSavedCredentials === true || !!status?.host;
-
     const isEnabled = status?.remoteEnabled === true;
 
-    
-
     state.isRemoteMode = isConnected && isEnabled;
-
     state.remoteHost = status?.host || status?.savedHost || '';
-
     state.remotePort = status?.port || status?.savedPort || '';
-
     state.remotePath = status?.path || status?.savedPath || '';
-
     state.remoteUserKey = status?.userKey || status?.savedKey || '';
-
     state.remoteToken = status?.token || '';
 
-    
-
     if (isConnected && isEnabled) {
-
-        // Active remote mode
-
+        // Connected & enabled (green badge)
         if (badge) {
-
             badge.classList.remove('hidden');
-
             badge.className = "flex items-center gap-1.5 text-[12px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-100 dark:border-emerald-900/30 whitespace-nowrap flex-shrink-0";
-
             badge.setAttribute('title', isZH ? `远程主机: ${state.remoteHost}:${state.remotePort}${state.remotePath}\n用户Key: ${state.remoteUserKey}` : `Remote Host: ${state.remoteHost}:${state.remotePort}${state.remotePath}\nUser Key: ${state.remoteUserKey}`);
-
         }
-
         if (statusText) {
-
             statusText.textContent = isZH ? `远端: ${state.remoteHost}:${state.remotePort}${state.remotePath}` : `Remote: ${state.remoteHost}:${state.remotePort}${state.remotePath}`;
-
         }
-
         if (btnConnect) btnConnect.classList.add('hidden');
-
-        
-
-        const btnCopy = document.getElementById('btnManageApiKeys');
-
-        if (btnCopy) btnCopy.classList.remove('hidden');
-
-        
-
+        if (btnManageApiKeys) btnManageApiKeys.classList.remove('hidden');
         if (btnRemoteDisable) btnRemoteDisable.classList.remove('hidden');
-
         if (btnRemoteEnable) btnRemoteEnable.classList.add('hidden');
-
         if (btnRemoteDisconnect) btnRemoteDisconnect.classList.remove('hidden');
 
     } else if (hasSaved && !isEnabled) {
-
         // Disabled remote mode (local mode active)
-
         if (badge) {
-
             badge.classList.remove('hidden');
-
             badge.className = "flex items-center gap-1.5 text-[12px] font-medium text-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400 px-2.5 py-0.5 rounded-full border border-amber-100 dark:border-amber-900/30 whitespace-nowrap flex-shrink-0";
-
             badge.setAttribute('title', isZH ? `已保存配置:\n主机: ${state.remoteHost}:${state.remotePort}${state.remotePath}\n用户Key: ${state.remoteUserKey}` : `Saved Config:\nHost: ${state.remoteHost}:${state.remotePort}${state.remotePath}\nUser Key: ${state.remoteUserKey}`);
-
         }
-
         if (statusText) {
-
             statusText.textContent = isZH ? `远程已停用` : `Remote Disabled`;
-
         }
-
         if (btnConnect) btnConnect.classList.add('hidden');
-
-        
-
+        if (btnManageApiKeys) btnManageApiKeys.classList.add('hidden');
         if (btnRemoteDisable) btnRemoteDisable.classList.add('hidden');
-
         if (btnRemoteEnable) btnRemoteEnable.classList.remove('hidden');
-
         if (btnRemoteDisconnect) btnRemoteDisconnect.classList.remove('hidden');
 
-        
-
-        const btnCopy = document.getElementById('btnManageApiKeys');
-
-        if (btnCopy) btnCopy.classList.add('hidden');
-
     } else {
-
         // Not logged in / disconnected completely
-
         if (badge) badge.classList.add('hidden');
-
+        if (btnManageApiKeys) btnManageApiKeys.classList.add('hidden');
         if (btnConnect) btnConnect.classList.remove('hidden');
-
-        
-
-        const btnCopy = document.getElementById('btnManageApiKeys');
-
-        if (btnCopy) btnCopy.classList.add('hidden');
-
+        if (btnRemoteDisable) btnRemoteDisable.classList.add('hidden');
+        if (btnRemoteEnable) btnRemoteEnable.classList.add('hidden');
+        if (btnRemoteDisconnect) btnRemoteDisconnect.classList.add('hidden');
     }
 
     
@@ -463,11 +376,27 @@ function updateRemoteStatusUI(status: any) {
         startStatsSync();
 
     } else {
-
         stopStatsSync();
-
     }
 
+    const currentMode = (isConnected && isEnabled) ? 'server' : 'local';
+    if ((window as any).__lastAppMode !== currentMode) {
+        (window as any).__lastAppMode = currentMode;
+        try {
+            if (typeof (window as any).refreshRelayUsers === 'function') {
+                (window as any).refreshRelayUsers();
+            }
+            if (typeof (window as any).refreshRelayPackages === 'function') {
+                (window as any).refreshRelayPackages();
+            }
+            if (typeof (window as any).refreshSettingsUI === 'function') {
+                (window as any).refreshSettingsUI();
+            }
+            ipcRenderer.send('get-accounts');
+        } catch (e) {
+            console.warn('[RemoteController] Failed to trigger view refresh on mode switch:', e);
+        }
+    }
 }
 
 function startStatsSync() {

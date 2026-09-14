@@ -455,3 +455,5 @@ export async function handleAddUser() {
         alert(dict.relayAddUserFailed || '添加用户失败');
     }
 }
+
+(window as any).refreshRelayUsers = refreshRelayUsers;

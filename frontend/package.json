@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:binding": "node scripts/test-agent-config-binding.mjs"
   },
   "dependencies": {
     "pinia": "^2.1.0",

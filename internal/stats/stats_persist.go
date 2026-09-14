@@ -68,22 +68,15 @@ func (t *Tracker) SaveToDisk() {
 
 	// Deep-copy all mutable slices while holding the read lock so that
 	// json.Marshal (which uses reflection) never races with concurrent writes.
-	statsCopy := GlobalStats{
-		TotalRequests:                 t.stats.TotalRequests,
-		TotalInputTokens:              t.stats.TotalInputTokens,
-		TotalOutputTokens:             t.stats.TotalOutputTokens,
-		TotalCachedTokens:             t.stats.TotalCachedTokens,
-		TotalCacheEligibleInputTokens: t.stats.TotalCacheEligibleInputTokens,
-		TotalCost:                     t.stats.TotalCost,
-		TotalRetries:                  t.stats.TotalRetries,
-		TotalErrors:                   t.stats.TotalErrors,
-		Models:                        make(map[string]*ModelStats, len(t.stats.Models)),
-		Pools:                         copyPools(t.stats.Pools),
-	}
+	// 使用值拷贝完整复制所有标量字段与迁移标志(RelayTrendsBackfillDone / BackfillForcedDone /
+	// NvidiaUsageBackfillDone / TabExcludedFromEligible 等), 杜绝手写列举遗漏标志位导致重启重复回填。
+	statsCopy := t.stats
+	statsCopy.Models = make(map[string]*ModelStats, len(t.stats.Models))
 	for k, v := range t.stats.Models {
 		ms := *v // value copy, not pointer
 		statsCopy.Models[k] = &ms
 	}
+	statsCopy.Pools = copyPools(t.stats.Pools)
 
 	trendsCopy := make([]*HourlyTrend, len(t.trends))
 	for i, tr := range t.trends {

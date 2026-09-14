@@ -46,6 +46,7 @@ export interface ConfigSection {
   itemKeyField?: string;
   fields: ConfigField[];
   itemTemplate?: { [key: string]: any };
+  isModelList?: boolean;
 }
 
 export interface AgentSchema {

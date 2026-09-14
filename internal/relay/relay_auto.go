@@ -53,9 +53,14 @@ func ResolveCandidateModels(entry settings.ModelMappingEntry, benchmarkModels []
 	return result
 }
 
-// isAutoModel 检查入站模型名是否命中 auto 竞速模型。
-// 返回对应映射项指针、解析后的参赛模型列表与是否命中的布尔值。
+// isAutoModel 检查入站模型名是否命中 auto 竞速模型(兜底无 Session 场景)。
 func (h *APICompatHandler) isAutoModel(model string) (*settings.ModelMappingEntry, []string, bool) {
+	return h.isAutoModelForSession(model, nil)
+}
+
+// isAutoModelForSession 检查入站模型名是否命中 auto 竞速模型，优先尊重当前登录中继用户的个性化私有配置。
+// 返回对应映射项指针、解析后的参赛模型列表与是否命中的布尔值。
+func (h *APICompatHandler) isAutoModelForSession(model string, session *RelaySession) (*settings.ModelMappingEntry, []string, bool) {
 	modelTrimmed := strings.TrimSpace(model)
 	if modelTrimmed == "" {
 		return nil, nil, false
@@ -69,7 +74,38 @@ func (h *APICompatHandler) isAutoModel(model string) (*settings.ModelMappingEntr
 		return h.settingsMgr.GetBenchmarkConfig().Models
 	}
 
-	// 1. 优先在模型映射中匹配
+	// 1. 若入站请求包含有效中继用户 Session，且该用户配置了专属私有 AutoConfig
+	if strings.EqualFold(modelTrimmed, "auto") && session != nil && session.UserID != "" && h.authMgr != nil && h.authMgr.userMgr != nil {
+		user := h.authMgr.userMgr.GetUserByID(session.UserID)
+		if user != nil && user.AutoConfig != nil {
+			// 若用户显式关闭了专属 auto 竞速，返回未启用
+			if !user.AutoConfig.Enabled {
+				entry := settings.ModelMappingEntry{
+					ClientModel: "auto",
+					TargetModel: "auto",
+					Expose:      false,
+				}
+				return &entry, nil, true
+			}
+
+			useBench := user.AutoConfig.UseBenchmarkPool
+			entry := settings.ModelMappingEntry{
+				ClientModel:      "auto",
+				TargetModel:      "auto",
+				Expose:           true,
+				CandidateModels:  user.AutoConfig.CandidateModels,
+				UseBenchmarkPool: &useBench,
+			}
+			var benchmarkModels []string
+			if useBench {
+				benchmarkModels = getBenchmarkModelsSafe()
+			}
+			candidates := ResolveCandidateModels(entry, benchmarkModels)
+			return &entry, candidates, true
+		}
+	}
+
+	// 2. 查找全局模型映射配置
 	mappings := h.getModelMapping()
 	for _, entry := range mappings {
 		if strings.EqualFold(strings.TrimSpace(entry.ClientModel), modelTrimmed) {
@@ -86,7 +122,7 @@ func (h *APICompatHandler) isAutoModel(model string) (*settings.ModelMappingEntr
 		}
 	}
 
-	// 2. 若映射中未显式配置但入站 model 本身就是 "auto", 兜底视为 auto 模型(候选池为空)
+	// 3. 若映射中未显式配置但入站 model 本身就是 "auto", 兜底视为 auto 模型(候选池为空)
 	if strings.EqualFold(modelTrimmed, "auto") {
 		entry := settings.ModelMappingEntry{
 			ClientModel: "auto",
@@ -145,8 +181,14 @@ func (c *autoRaceCoordinator) claimVictory(idx int, model string, code int, head
 		c.logFn("🏆 [Auto竞速胜出] 模型 %q (分支 %d) 率先响应 (HTTP %d, 首包 %d 字节), 胜出并接管流式输出", model, idx, code, len(firstChunk))
 	}
 
-	// 写出 HTTP 响应头
+	// 写出 HTTP 响应头 (严格清洗 Hop-by-hop 和 Content-Length 等可能导致断流或长度冲突的头部)
 	for k, vv := range headers {
+		if strings.EqualFold(k, "Content-Length") ||
+			strings.EqualFold(k, "Transfer-Encoding") ||
+			strings.EqualFold(k, "Connection") ||
+			strings.EqualFold(k, "Trailer") {
+			continue
+		}
 		for _, v := range vv {
 			c.realW.Header().Add(k, v)
 		}
@@ -368,7 +410,7 @@ func (h *APICompatHandler) handleAutoRace(
 	if len(candidates) == 1 {
 		targetModel := candidates[0]
 		h.log("ℹ️ [Auto竞速] 模型 %q 仅配置 1 个候选模型 %q, 直接单路转发", inModel, targetModel)
-		newBody := patchRoutedBodyModel(bodyBytes, targetModel)
+		newBody := patchRoutedBodyModelAndStream(bodyBytes, targetModel, isStreaming)
 		r.Body = io.NopCloser(strings.NewReader(newBody))
 		r.ContentLength = int64(len(newBody))
 		h.executeForwardModel(w, r, userSession, targetModel, []byte(newBody), isStreaming, isChat, isResponses, isMessages)
@@ -395,7 +437,7 @@ func (h *APICompatHandler) handleAutoRace(
 			defer cancel()
 
 			branchReq := r.Clone(branchCtx)
-			patchedBody := patchRoutedBodyModel(bodyBytes, candModel)
+			patchedBody := patchRoutedBodyModelAndStream(bodyBytes, candModel, isStreaming)
 			branchReq.Body = io.NopCloser(strings.NewReader(patchedBody))
 			branchReq.ContentLength = int64(len(patchedBody))
 

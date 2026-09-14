@@ -5,6 +5,7 @@ package proxy
 //
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -29,6 +30,7 @@ type RemoteConfig struct {
 	Token     string `json:"token"`
 	Connected bool   `json:"connected"`
 	IsLocal   bool   `json:"isLocal"`
+	IsAdmin   bool   `json:"isAdmin"`
 }
 
 // remoteCACertPool holds the trusted CA certificate pool for the remote relay server.
@@ -75,6 +77,58 @@ var noProxyClient = &http.Client{
 		ExpectContinueTimeout: 1 * time.Second,
 		TLSClientConfig:       getRemoteTLSConfig(""),
 	},
+}
+
+// directClient 纯直连客户端（完全绕过系统与本地代理，用于代理层抛出 502/网关错误时的自动降级兜底）
+var directClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 nil, // 强制直连
+		DialContext:           (&net.Dialer{Timeout: 8 * time.Second}).DialContext,
+		DisableKeepAlives:     true,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig:       getRemoteTLSConfig(""),
+	},
+}
+
+// doRemoteHTTP 执行对远程管理端点的请求。优先尝试自适应代理通道；若遇到 502/503/504 等代理层错误或拨号失败，自动降级纯直连重试一次。
+func doRemoteHTTP(req *http.Request) (*http.Response, error) {
+	var bodyBytes []byte
+	if req.Body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		req.Body.Close()
+		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	}
+
+	resp, err := noProxyClient.Do(req)
+	// 首次尝试成功且未返回 502/503/504 等代理层错误，直接返回
+	if err == nil && resp.StatusCode != http.StatusBadGateway && resp.StatusCode != http.StatusServiceUnavailable && resp.StatusCode != http.StatusGatewayTimeout {
+		return resp, nil
+	}
+
+	// 发生网络故障或 502 网关错误时，尝试走 directClient 纯直连重试
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	retryReq := req.Clone(req.Context())
+	if len(bodyBytes) > 0 {
+		retryReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	}
+	directResp, directErr := directClient.Do(retryReq)
+	if directErr == nil {
+		return directResp, nil
+	}
+
+	// 若纯直连也失败，优先返回有响应的 directResp 或原错误
+	if err != nil {
+		return nil, err
+	}
+	return directResp, directErr
 }
 
 type RemoteRelay struct {
@@ -301,7 +355,7 @@ func (rr *RemoteRelay) Login(host, port, path, key, password string) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := noProxyClient.Do(req)
+	resp, err := doRemoteHTTP(req)
 	if err != nil {
 		return fmt.Errorf("login request failed: %w", err)
 	}
@@ -317,7 +371,8 @@ func (rr *RemoteRelay) Login(host, port, path, key, password string) error {
 	}
 
 	var result struct {
-		Token string `json:"token"`
+		Token   string `json:"token"`
+		IsAdmin bool   `json:"isAdmin"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return fmt.Errorf("failed to parse login response: %w", err)
@@ -333,6 +388,7 @@ func (rr *RemoteRelay) Login(host, port, path, key, password string) error {
 		Path:      path,
 		UserKey:   key,
 		Token:     result.Token,
+		IsAdmin:   result.IsAdmin,
 		Connected: true,
 		IsLocal:   netutil.IsLocalAddress(host),
 	}
@@ -377,7 +433,7 @@ func (rr *RemoteRelay) Disconnect() {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, logoutURL, nil)
 		if err == nil {
 			req.Header.Set("Authorization", "Bearer "+token)
-			_, _ = noProxyClient.Do(req)
+			_, _ = doRemoteHTTP(req)
 		}
 	}
 
@@ -398,6 +454,13 @@ func (rr *RemoteRelay) GetConfig() RemoteConfig {
 	rr.RLock()
 	defer rr.RUnlock()
 	return rr.config
+}
+
+// SetConfigForTest 供测试或内部直接注入配置
+func (rr *RemoteRelay) SetConfigForTest(cfg RemoteConfig) {
+	rr.Lock()
+	defer rr.Unlock()
+	rr.config = cfg
 }
 
 // dialRelayRaw establishes a raw TCP (and optionally TLS) connection to the remote relay server,

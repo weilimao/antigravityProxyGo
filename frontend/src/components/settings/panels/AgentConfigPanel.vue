@@ -152,6 +152,8 @@ import {
   fetchAgentModelCatalog,
   fetchAgentCatalogFull,
   saveAgentCatalogFull,
+  fetchAgentAuthFull,
+  saveAgentAuthFull,
   formToJSON,
   jsonToForm,
 } from '../../../ui/agentConfigController';
@@ -193,8 +195,9 @@ onMounted(() => {
     }
     syncFormFromJSON();
     refreshAvailableModels();
-    // 若为 Codex，异步拉取 catalog JSON 合并到 jsonText 供可视化「模型列表」section 编辑
+    // 若为 Codex，异步拉取 auth.json 与 catalog JSON 合并到 jsonText 供可视化编辑与回显
     if (selectedAgentId.value === 'codex') {
+      mergeAuthIntoJson();
       mergeCatalogIntoJson();
     }
   });
@@ -308,6 +311,23 @@ function onAiProviderGenerated(content: string) {
   }
 }
 
+// mergeAuthIntoJson: 拉取 ~/.codex/auth.json 文件，把其中的 OPENAI_API_KEY 合并进当前 jsonText
+// 供前端可视化「中继与网关认证 (Auth)」section 编辑与回显。保存时再由 extractAuthFromJson 拆出并单独写回。
+function mergeAuthIntoJson() {
+  if (!selectedAgentId.value) return;
+  fetchAgentAuthFull(selectedAgentId.value).then((authJson) => {
+    try {
+      const auth = JSON.parse(authJson);
+      const existing = JSON.parse(jsonText.value);
+      existing.auth = {
+        OPENAI_API_KEY: auth.OPENAI_API_KEY || '',
+      };
+      jsonText.value = JSON.stringify(existing, null, 2);
+      syncFormFromJSON();
+    } catch { /* auth JSON 解析失败时忽略 */ }
+  });
+}
+
 // mergeCatalogIntoJson: 拉取独立 catalog JSON 文件，把其中的 models 数组转为以 slug 做 key 的 object，
 // 合并进当前 jsonText（仅用于前端可视化编辑，不写回 config.toml）。
 // 保存时由 extractCatalogFromJson 反向拆出并单独写回 catalog 文件。
@@ -339,6 +359,38 @@ function mergeCatalogIntoJson() {
   });
 }
 
+const defaultCatalogModelFields = {
+  additional_speed_tiers: [],
+  availability_nux: null,
+  base_instructions: "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals.",
+  context_window: 128000,
+  default_reasoning_level: "high",
+  default_reasoning_summary: "none",
+  effective_context_window_percent: 95,
+  experimental_supported_tools: [],
+  input_modalities: ["text"],
+  max_context_window: 128000,
+  priority: 1000,
+  service_tiers: [],
+  shell_type: "shell_command",
+  support_verbosity: false,
+  supported_in_api: true,
+  supported_reasoning_levels: [
+    { effort: "none", description: "Disable Thinking" },
+    { effort: "low", description: "Low Thinking Effort" },
+    { effort: "medium", description: "Medium Thinking Effort" },
+    { effort: "high", description: "High Thinking Effort" },
+    { effort: "max", description: "Max Thinking Effort" }
+  ],
+  supports_image_detail_original: false,
+  supports_parallel_tool_calls: false,
+  supports_reasoning_summaries: true,
+  supports_search_tool: false,
+  truncation_policy: { limit: 10000, mode: "bytes" },
+  upgrade: null,
+  visibility: "list",
+};
+
 // extractCatalogFromJson: 从 jsonText 中抽取 models object 并转回数组，
 // 返回 { configJson: 去掉 models 的 JSON 字符串, catalogJson: 含 models 数组的 JSON 字符串 }。
 // 若没有 models 字段，catalogJson 保持原始空数组结构返回 ''（调用方据此决定是否写 catalog）。
@@ -351,8 +403,17 @@ function extractCatalogFromJson(): { configJson: string; catalogJson: string | n
       for (const slug of Object.keys(parsed.models)) {
         const entry = parsed.models[slug];
         if (entry && typeof entry === 'object') {
-          const item: any = { ...entry };
+          const item: any = { ...defaultCatalogModelFields, ...entry };
           if (!item.slug) item.slug = slug;
+          if (!item.display_name) item.display_name = item.slug;
+          if (item.description === undefined) item.description = item.display_name || item.slug;
+          if (!Array.isArray(item.experimental_supported_tools)) item.experimental_supported_tools = [];
+          if (!Array.isArray(item.additional_speed_tiers)) item.additional_speed_tiers = [];
+          if (!Array.isArray(item.service_tiers)) item.service_tiers = [];
+          if (!Array.isArray(item.input_modalities)) item.input_modalities = ['text'];
+          if (!Array.isArray(item.supported_reasoning_levels) || item.supported_reasoning_levels.length === 0) {
+            item.supported_reasoning_levels = defaultCatalogModelFields.supported_reasoning_levels;
+          }
           modelsArr.push(item);
         }
       }
@@ -367,6 +428,23 @@ function extractCatalogFromJson(): { configJson: string; catalogJson: string | n
   }
 }
 
+// extractAuthFromJson: 从 jsonText 中抽取 auth object 并生成 auth.json 字符串，
+// 返回 { configJson: 去掉 auth 的 JSON 字符串, authJson: 包含 OPENAI_API_KEY 的 JSON 字符串 }。
+function extractAuthFromJson(currentJson: string): { configJson: string; authJson: string | null } {
+  try {
+    const parsed = JSON.parse(currentJson);
+    let authJson: string | null = null;
+    if (parsed && typeof parsed.auth === 'object') {
+      const apiKey = parsed.auth.OPENAI_API_KEY || '';
+      authJson = JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2);
+      delete parsed.auth;
+    }
+    return { configJson: JSON.stringify(parsed, null, 2), authJson };
+  } catch {
+    return { configJson: currentJson, authJson: null };
+  }
+}
+
 function onParseError(error: string | null) {
   hasParseError.value = error !== null;
 }
@@ -376,9 +454,11 @@ async function onSave() {
   saveStatus.value = 'saving';
   saveError.value = '';
 
-  // 若为 Codex，先拆分 models 节点：catalog 部分单独写，剩余写 config.toml
+  // 若为 Codex，拆分 models 与 auth 节点：catalog 与 auth 部分单独写，剩余写 config.toml
   if (selectedAgentId.value === 'codex') {
-    const { configJson, catalogJson } = extractCatalogFromJson();
+    const { configJson: withoutCatalogJson, catalogJson } = extractCatalogFromJson();
+    const { configJson: finalConfigJson, authJson } = extractAuthFromJson(withoutCatalogJson);
+
     // 1) 写 catalog 文件（有内容才写）
     if (catalogJson) {
       const catResult = await saveAgentCatalogFull(selectedAgentId.value, catalogJson);
@@ -389,8 +469,18 @@ async function onSave() {
         return;
       }
     }
-    // 2) 写主配置文件
-    const result = await saveConfig(selectedAgentId.value, configJson);
+    // 2) 写 auth.json 文件（有内容才写）
+    if (authJson) {
+      const authResult = await saveAgentAuthFull(selectedAgentId.value, authJson);
+      if (!authResult.success) {
+        saveStatus.value = 'error';
+        saveError.value = 'Auth: ' + (authResult.error || '保存失败');
+        showToast('Auth 保存失败: ' + saveError.value, 'error');
+        return;
+      }
+    }
+    // 3) 写主配置文件 config.toml
+    const result = await saveConfig(selectedAgentId.value, finalConfigJson);
     if (result.success) {
       saveStatus.value = 'success';
       showToast('配置保存成功', 'success');

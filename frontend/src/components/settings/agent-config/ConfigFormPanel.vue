@@ -33,7 +33,22 @@
           </button>
         </div>
         <div class="flex items-center gap-2">
+          <!-- 模型列表类型：使用公共组件 ModelSearchSelect -->
+          <ModelSearchSelect
+            v-if="isModelSection(section)"
+            :model-value="addingSectionState[section.title].name"
+            :options="props.availableModels || []"
+            placeholder="搜索或选择模型（支持输入自定义模型名）..."
+            :allow-custom="true"
+            :refresh-on-open="true"
+            @update:model-value="(val) => onSectionModelSelect(section, val)"
+            @submit="confirmAddSection(section)"
+            @refresh="emit('refresh-models')"
+            class="flex-1 min-w-0"
+          />
+          <!-- 普通 Section：保持文本输入框 -->
           <input
+            v-else
             type="text"
             v-model="addingSectionState[section.title].name"
             @keydown.enter.prevent="confirmAddSection(section)"
@@ -567,9 +582,26 @@ function onRepeatableFieldUpdate(field: ConfigField, name: string, value: any) {
   emit('update:formData', { ...localFormData.value });
 }
 
-// ===== Repeatable Section (Provider / MCP) 内联新增逻辑 =====
+// ===== Repeatable Section (Provider / MCP / ModelCatalog) 内联新增逻辑 =====
+function isModelSection(section: ConfigSection): boolean {
+  return !!section.isModelList || section.itemKeyField === 'slug' || section.title.includes('模型列表');
+}
+
+function onSectionModelSelect(section: ConfigSection, val: string) {
+  if (!addingSectionState.value[section.title]) return;
+  addingSectionState.value[section.title].name = val;
+  addingSectionState.value[section.title].error = '';
+}
+
 function openAddSection(section: ConfigSection) {
-  const defaultName = section.itemKeyField === 'name' ? 'antigravityproxy' : `${section.itemKeyField || 'item'}_${Date.now().toString(36)}`;
+  let defaultName = '';
+  if (isModelSection(section)) {
+    defaultName = '';
+  } else if (section.itemKeyField === 'name') {
+    defaultName = 'antigravityproxy';
+  } else {
+    defaultName = `${section.itemKeyField || 'item'}_${Date.now().toString(36)}`;
+  }
   addingSectionState.value[section.title] = {
     open: true,
     name: defaultName,
@@ -589,7 +621,7 @@ function confirmAddSection(section: ConfigSection) {
   if (!st) return;
   const name = st.name.trim();
   if (!name) {
-    st.error = '请输入名称';
+    st.error = isModelSection(section) ? '请选择或输入模型名称' : '请输入名称';
     return;
   }
   const existing = repeatableItems(section);
@@ -598,13 +630,26 @@ function confirmAddSection(section: ConfigSection) {
     return;
   }
 
+  const prefix = getSectionPrefix(section);
   if (section.itemTemplate) {
-    const prefix = getSectionPrefix(section);
     for (const [tmplKey, tmplVal] of Object.entries(section.itemTemplate)) {
       const resolvedKey = `${prefix}.${name}.${tmplKey}`;
       localFormData.value[resolvedKey] = tmplVal;
     }
   }
+  // 若定义了 itemKeyField（如 slug 或 name），自动回填该字段
+  if (section.itemKeyField) {
+    const keyFieldKey = `${prefix}.${name}.${section.itemKeyField}`;
+    if (!localFormData.value[keyFieldKey]) {
+      localFormData.value[keyFieldKey] = name;
+    }
+  }
+  // 若是模型条目且 display_name 字段为空，则默认回填模型名称
+  const displayNameKey = `${prefix}.${name}.display_name`;
+  if (localFormData.value[displayNameKey] === '') {
+    localFormData.value[displayNameKey] = name;
+  }
+
   localFormData.value = { ...localFormData.value };
   emit('update:formData', { ...localFormData.value });
 

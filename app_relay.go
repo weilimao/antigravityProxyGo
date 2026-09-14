@@ -96,6 +96,7 @@ func (a *App) ensureRelayInitialized() {
 
 	caCertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
 	a.relayAPIMgr = relay.NewAPIHandler(a.relayAuthMgr, a.relayStatsMgr, a.relayPackageMgr, a.AddLog, caCertPath, a.settingsMgr)
+	a.relayAPIMgr.SetGlobalStatsTracker(a.statsTracker)
 
 	a.relayCompatAPIMgr = relay.NewAPICompatHandler(
 		a.relayAuthMgr,
@@ -240,6 +241,13 @@ func (a *App) connectRemote(host, port, path, key, password string) error {
 		a.AddLog(fmt.Sprintf("⚠️ 下载远端 CA 证书失败: %v，将跳过远端证书的合并与系统导入", err))
 	}
 
+	// 切换至服务器模式：拉取目标服务实例数据并接管配置（独立沙箱隔离保护本地数据）
+	if errSync := a.switchToServerMode(); errSync != nil {
+		a.AddLog(fmt.Sprintf("⚠️ [服务器模式] 数据同步失败: %v", errSync))
+	} else {
+		a.AddLog("✅ 已成功切换至服务器模式")
+	}
+
 	wailsRuntime.EventsEmit(a.ctx, "stats-updated", a.getStatsPayload(false))
 	return nil
 }
@@ -251,7 +259,10 @@ func (a *App) disconnectRemote() {
 		a.proxyEngine.SetRemoteRelay(nil)
 		a.proxyEngine.ResetRemoteClient()
 
-		// 重新加载本地证书到内存中，使代理引擎能够继续正常解密签名
+		// 1. 优先切回本地模式：全面恢复本地原本全部数据、配置与各 Manager 路径
+		a.switchToLocalMode()
+
+		// 2. 从已彻底恢复的本地真实数据目录中重新加载本地证书到内存中，使代理引擎继续正常解密签名
 		activeDir := a.settingsMgr.GetActiveDataDirectory()
 		if errReload := a.proxyEngine.ReloadCertificates(activeDir); errReload != nil {
 			a.AddLog(fmt.Sprintf("⚠️ 重新加载本地 CA 证书失败: %v", errReload))
@@ -266,20 +277,38 @@ func (a *App) disconnectRemote() {
 
 // getRemoteStatusPayload returns the current remote config and status dictionary
 func (a *App) getRemoteStatusPayload() map[string]interface{} {
-	hasSaved := a.settingsMgr.GetRemoteHost() != "" && a.settingsMgr.GetRemoteKey() != ""
 	connected := false
 	var remoteConfig proxy.RemoteConfig
 	if a.remoteRelay != nil {
 		remoteConfig = a.remoteRelay.GetConfig()
 		connected = remoteConfig.Connected
 	}
+
+	savedHost := a.settingsMgr.GetRemoteHost()
+	savedPort := a.settingsMgr.GetRemotePort()
+	savedPath := a.settingsMgr.GetRemotePath()
+	savedKey := a.settingsMgr.GetRemoteKey()
+	if savedHost == "" && remoteConfig.Host != "" {
+		savedHost = remoteConfig.Host
+	}
+	if savedPort == "" && remoteConfig.Port != "" {
+		savedPort = remoteConfig.Port
+	}
+	if savedPath == "" && remoteConfig.Path != "" {
+		savedPath = remoteConfig.Path
+	}
+	if savedKey == "" && remoteConfig.UserKey != "" {
+		savedKey = remoteConfig.UserKey
+	}
+	hasSaved := savedHost != "" && savedKey != ""
+
 	return map[string]interface{}{
 		"connected":           connected,
 		"hasSavedCredentials": hasSaved,
-		"savedHost":           a.settingsMgr.GetRemoteHost(),
-		"savedPort":           a.settingsMgr.GetRemotePort(),
-		"savedPath":           a.settingsMgr.GetRemotePath(),
-		"savedKey":            a.settingsMgr.GetRemoteKey(),
+		"savedHost":           savedHost,
+		"savedPort":           savedPort,
+		"savedPath":           savedPath,
+		"savedKey":            savedKey,
 		"remoteEnabled":       a.settingsMgr.GetRemoteEnabled(),
 		"host":                remoteConfig.Host,
 		"port":                remoteConfig.Port,

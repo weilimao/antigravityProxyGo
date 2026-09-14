@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -433,35 +432,8 @@ func (pe *ProxyEngine) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !shouldDecrypt {
-		// 远程模式优先级最高：所有无需解密的请求通过远程代理中继
-		if pe.remoteRelay != nil && pe.remoteRelay.IsConnected() {
-			conf := pe.remoteRelay.GetConfig()
-			relayHost := conf.Host
-			if strings.Contains(relayHost, "://") {
-				if u, err := url.Parse(relayHost); err == nil {
-					relayHost = u.Hostname()
-				}
-			}
-			isRemoteRelaySelf := (host == relayHost)
-
-			isLocalRelayLoop := false
-			if relayUserID != "" {
-				isLocalRelayLoop = true
-			}
-
-			if !isLocalRelayLoop && !isRemoteRelaySelf {
-				remoteConn, errDial := pe.remoteRelay.DialThroughRemote(hostAndPort)
-				if errDial != nil {
-					pe.logFn(fmt.Sprintf("❌ Remote relay failed for %s: %v", hostAndPort, errDial))
-					_, _ = clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-					_ = clientConn.Close()
-					return
-				}
-				_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-				pe.setupBidirectionalTunnel(clientConn, remoteConn)
-				return
-			}
-		}
+		// 非解密请求（如 IDE 遥测、非模型长连接）一律通过本地 Passthrough Tunnel 直接出站
+		// 避免将无关的 HTTPS 隧道推向无头模型中继服务器造成端口阻塞或 502 错误
 
 		// Passthrough Tunnel (直接本地中转)
 		// 使用 SSRF 安全检查返回的 IP 地址进行连接（防止 DNS Rebinding）

@@ -95,7 +95,10 @@ func triggerLocalProxyDetection() {
 		}
 	}
 	cachedLocalProxyMu.Lock()
-	cachedLocalProxy = proxyURL
+	// 避免瞬时抖动将已识别到的本地有效代理冲掉
+	if proxyURL != nil || cachedLocalProxy == nil {
+		cachedLocalProxy = proxyURL
+	}
 	cachedLocalProxyMu.Unlock()
 }
 
@@ -197,7 +200,7 @@ func detectLocalVPNProxy() string {
 }
 
 func isPortOpen(addr string) bool {
-	conn, err := net.DialTimeout("tcp", addr, 30*time.Millisecond)
+	conn, err := net.DialTimeout("tcp", addr, 150*time.Millisecond)
 	if err == nil {
 		conn.Close()
 		return true
@@ -206,7 +209,7 @@ func isPortOpen(addr string) bool {
 }
 
 func probePortProtocol(addr string) string {
-	conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)
+	conn, err := net.DialTimeout("tcp", addr, 150*time.Millisecond)
 	if err != nil {
 		return "http"
 	}
@@ -214,7 +217,7 @@ func probePortProtocol(addr string) string {
 
 	_, _ = conn.Write([]byte{0x05, 0x01, 0x00})
 	
-	_ = conn.SetReadDeadline(time.Now().Add(50*time.Millisecond))
+	_ = conn.SetReadDeadline(time.Now().Add(150*time.Millisecond))
 	buf := make([]byte, 2)
 	n, err := conn.Read(buf)
 	if err == nil && n == 2 && buf[0] == 0x05 && buf[1] == 0x00 {

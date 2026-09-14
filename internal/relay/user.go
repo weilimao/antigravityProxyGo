@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,15 +58,36 @@ type UserAPIKey struct {
 	AllowedModels []string `json:"allowedModels,omitempty"`
 }
 
+// UserAutoConfig 定义中继用户私有的 Auto 并发竞速模型配置
+type UserAutoConfig struct {
+	// Enabled 标识该用户是否启用了私有 Auto 竞速配置。若为 false 则该配置处于关闭状态
+	Enabled bool `json:"enabled"`
+	// CandidateModels 是该用户专属的自定义候选模型清单
+	CandidateModels []string `json:"candidateModels"`
+	// UseBenchmarkPool 标识是否将控制台测速池融入竞速候选
+	UseBenchmarkPool bool `json:"useBenchmarkPool"`
+}
+
 type RelayUser struct {
-	ID           string       `json:"id"`
-	Key          string       `json:"key"`
-	PasswordHash string       `json:"passwordHash"`
-	Enabled      bool         `json:"enabled"`
-	CreatedAt    time.Time    `json:"createdAt"`
-	Remark       string       `json:"remark,omitempty"`
-	Quotas       UserQuotas   `json:"quotas"`
-	APIKeys      []UserAPIKey `json:"apiKeys"`
+	ID           string          `json:"id"`
+	Key          string          `json:"key"`
+	PasswordHash string          `json:"passwordHash"`
+	Enabled      bool            `json:"enabled"`
+	CreatedAt    time.Time       `json:"createdAt"`
+	Remark       string          `json:"remark,omitempty"`
+	Role         string          `json:"role,omitempty"`
+	IsAdmin      bool            `json:"isAdmin,omitempty"`
+	Quotas       UserQuotas      `json:"quotas"`
+	APIKeys      []UserAPIKey    `json:"apiKeys"`
+	AutoConfig   *UserAutoConfig `json:"autoConfig,omitempty"`
+}
+
+// IsAdminUser 判断用户是否具备中继管理员权限
+func (u *RelayUser) IsAdminUser() bool {
+	if u == nil {
+		return false
+	}
+	return u.IsAdmin || strings.EqualFold(u.Role, "admin")
 }
 
 type UserManager struct {
@@ -109,6 +131,39 @@ func (m *UserManager) AddUser(key, password, remark string) (*RelayUser, error) 
 	m.users = append(m.users, user)
 	m.saveToDiskLocked()
 	return user, nil
+}
+
+// EnsureAdminUser 确保管理员账号存在并具备 admin 权限
+func (m *UserManager) EnsureAdminUser(key, password, remark string) (*RelayUser, error) {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.Key == key {
+			u.IsAdmin = true
+			u.Role = "admin"
+			u.Enabled = true
+			if password != "" {
+				u.PasswordHash = hashPassword(password)
+			}
+			m.saveToDiskLocked()
+			return u, nil
+		}
+	}
+
+	adminUser := &RelayUser{
+		ID:           generateID(),
+		Key:          key,
+		PasswordHash: hashPassword(password),
+		Enabled:      true,
+		CreatedAt:    time.Now(),
+		Remark:       remark,
+		Role:         "admin",
+		IsAdmin:      true,
+	}
+	m.users = append(m.users, adminUser)
+	m.saveToDiskLocked()
+	return adminUser, nil
 }
 
 func (m *UserManager) RemoveUser(id string) error {
@@ -466,6 +521,39 @@ func (m *UserManager) UpdatePath(newDir string) {
 	m.Unlock()
 
 	m.LoadFromDisk()
+}
+
+// UpdateUserAutoConfig 更新指定用户的私有 Auto 竞速模型配置并实时落盘
+func (m *UserManager) UpdateUserAutoConfig(id string, cfg UserAutoConfig) error {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.ID == id {
+			cfgCopy := cfg
+			u.AutoConfig = &cfgCopy
+			m.saveToDiskLocked()
+			return nil
+		}
+	}
+	return fmt.Errorf("user %q not found", id)
+}
+
+// GetUserAutoConfig 获取指定用户的私有 Auto 竞速配置指针(若无则返回 nil)
+func (m *UserManager) GetUserAutoConfig(id string) *UserAutoConfig {
+	m.RLock()
+	defer m.RUnlock()
+
+	for _, u := range m.users {
+		if u.ID == id {
+			if u.AutoConfig == nil {
+				return nil
+			}
+			cp := *u.AutoConfig
+			return &cp
+		}
+	}
+	return nil
 }
 
 func generateID() string {

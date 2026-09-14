@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"antigravity-proxy/internal/db"
+	"antigravity-proxy/internal/settings"
 )
 
 // remote_api.go: 从 remote.go 按职责拆分而出,REST API 方法集合。
@@ -37,7 +38,7 @@ func (rr *RemoteRelay) FetchRemoteKeys() (interface{}, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+config.Token)
 
-	resp, err := noProxyClient.Do(req)
+	resp, err := doRemoteHTTP(req)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +80,7 @@ func (rr *RemoteRelay) CreateRemoteKey(name string) (interface{}, error) {
 	req.Header.Set("Authorization", "Bearer "+config.Token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := noProxyClient.Do(req)
+	resp, err := doRemoteHTTP(req)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +118,7 @@ func (rr *RemoteRelay) DeleteRemoteKey(id string) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+config.Token)
 
-	resp, err := noProxyClient.Do(req)
+	resp, err := doRemoteHTTP(req)
 	if err != nil {
 		return err
 	}
@@ -162,7 +163,7 @@ func (rr *RemoteRelay) UpdateRemoteKeyQuota(id string, limitGemini, limitClaude 
 	req.Header.Set("Authorization", "Bearer "+config.Token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := noProxyClient.Do(req)
+	resp, err := doRemoteHTTP(req)
 	if err != nil {
 		return err
 	}
@@ -197,7 +198,7 @@ func (rr *RemoteRelay) FetchRemoteKeyModels() ([]string, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+config.Token)
 
-	resp, err := noProxyClient.Do(req)
+	resp, err := doRemoteHTTP(req)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +234,7 @@ func (rr *RemoteRelay) FetchRemoteStats() (map[string]interface{}, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := noProxyClient.Do(req)
+	resp, err := doRemoteHTTP(req)
 	if err != nil {
 		return nil, fmt.Errorf("stats request failed: %w", err)
 	}
@@ -286,7 +287,7 @@ func (rr *RemoteRelay) FetchRemoteTrends() ([]*db.HourlyTrendSummary, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := noProxyClient.Do(req)
+	resp, err := doRemoteHTTP(req)
 	if err != nil {
 		return nil, fmt.Errorf("trends request failed: %w", err)
 	}
@@ -317,7 +318,7 @@ func (rr *RemoteRelay) TestConnection(host, port, path string) error {
 		host = "127.0.0.1"
 	}
 	healthURL := buildURLWithConfig(host, port, path, "/api/health")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
@@ -325,7 +326,7 @@ func (rr *RemoteRelay) TestConnection(host, port, path string) error {
 		return fmt.Errorf("failed to create health check request: %w", err)
 	}
 
-	resp, err := noProxyClient.Do(req)
+	resp, err := doRemoteHTTP(req)
 	if err != nil {
 		return fmt.Errorf("health check failed: %w", err)
 	}
@@ -368,7 +369,7 @@ func (rr *RemoteRelay) DownloadCACert(savePath string) error {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := noProxyClient.Do(req)
+	resp, err := doRemoteHTTP(req)
 	if err != nil {
 		return fmt.Errorf("failed to download CA cert: %w", err)
 	}
@@ -429,7 +430,7 @@ func (rr *RemoteRelay) FetchAndSaveRemoteLogDetail(reqID string, userKey string)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := noProxyClient.Do(req)
+	resp, err := doRemoteHTTP(req)
 	if err != nil {
 		return fmt.Errorf("log detail request failed: %w", err)
 	}
@@ -462,6 +463,181 @@ func (rr *RemoteRelay) FetchAndSaveRemoteLogDetail(reqID string, userKey string)
 				rr.logFn(fmt.Sprintf("⚠️ [RemoteRelay] Failed to insert remote log (reqID=%s): %v", reqID, err))
 			}
 		}
+	}
+
+	return nil
+}
+
+// FetchRemoteModelMappings 从远端服务器获取模型映射表
+func (rr *RemoteRelay) FetchRemoteModelMappings() ([]settings.ModelMappingEntry, error) {
+	rr.RLock()
+	config := rr.config
+	rr.RUnlock()
+
+	if !config.Connected {
+		return nil, fmt.Errorf("not connected to remote relay")
+	}
+
+	url := rr.buildURL("/api/models/mapping")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+config.Token)
+
+	resp, err := doRemoteHTTP(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result struct {
+		Success  bool                        `json:"success"`
+		Mappings []settings.ModelMappingEntry `json:"mappings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result.Mappings, nil
+}
+
+// SaveRemoteModelMappings 推送模型映射表并保存至远端服务器
+func (rr *RemoteRelay) SaveRemoteModelMappings(mappings []settings.ModelMappingEntry) error {
+	rr.RLock()
+	config := rr.config
+	rr.RUnlock()
+
+	if !config.Connected {
+		return fmt.Errorf("not connected to remote relay")
+	}
+
+	url := rr.buildURL("/api/models/mapping")
+	payload := map[string]interface{}{
+		"mappings": mappings,
+	}
+	body, _ := json.Marshal(payload)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+config.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := doRemoteHTTP(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	return nil
+}
+
+// RemoteUserAutoConfig 对应远端服务端的用户专属 Auto 配置
+type RemoteUserAutoConfig struct {
+	Enabled          bool     `json:"enabled"`
+	CandidateModels  []string `json:"candidateModels"`
+	UseBenchmarkPool bool     `json:"useBenchmarkPool"`
+}
+
+// FetchRemoteUserAutoConfig 从远端服务器获取当前登录账号专属的 Auto 竞速配置
+func (rr *RemoteRelay) FetchRemoteUserAutoConfig() (*RemoteUserAutoConfig, bool, error) {
+	rr.RLock()
+	config := rr.config
+	rr.RUnlock()
+
+	if !config.Connected {
+		return nil, false, fmt.Errorf("not connected to remote relay")
+	}
+
+	url := rr.buildURL("/api/models/auto-config")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+config.Token)
+
+	resp, err := doRemoteHTTP(req)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, false, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result struct {
+		Success bool                  `json:"success"`
+		IsUser  bool                  `json:"isUser"`
+		Config  *RemoteUserAutoConfig `json:"config"`
+		UserKey string                `json:"userKey"`
+		Error   string                `json:"error,omitempty"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, false, err
+	}
+	if !result.Success {
+		return nil, false, fmt.Errorf("fetch remote auto config failed: %s", result.Error)
+	}
+	return result.Config, result.IsUser, nil
+}
+
+// SaveRemoteUserAutoConfig 将 Auto 竞速配置同步保存至当前登录账号的远端存储中
+func (rr *RemoteRelay) SaveRemoteUserAutoConfig(cfg RemoteUserAutoConfig) error {
+	rr.RLock()
+	config := rr.config
+	rr.RUnlock()
+
+	if !config.Connected {
+		return fmt.Errorf("not connected to remote relay")
+	}
+
+	url := rr.buildURL("/api/models/auto-config")
+	payload := map[string]interface{}{
+		"config": cfg,
+	}
+	body, _ := json.Marshal(payload)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+config.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := doRemoteHTTP(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned %d: %s", resp.StatusCode, string(b))
 	}
 
 	return nil

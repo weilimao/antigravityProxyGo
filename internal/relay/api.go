@@ -10,16 +10,37 @@ import (
 
 	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/settings"
+	internalstats "antigravity-proxy/internal/stats"
 )
 
 type APIHandler struct {
-	authMgr      *AuthManager
-	statsMgr     *StatsTracker
-	packageMgr   *PackageManager
-	logFn        func(string)
-	caCertPath   string // 服务器 CA 证书路径，供远程客户端下载
-	loginLimiter *RateLimiter
-	settingsMgr  settings.ManagerInterface
+	authMgr            *AuthManager
+	statsMgr           *StatsTracker
+	packageMgr         *PackageManager
+	logFn              func(string)
+	caCertPath         string // 服务器 CA 证书路径，供远程客户端下载
+	caCertProvider     func() ([]byte, error)
+	loginLimiter       *RateLimiter
+	settingsMgr        settings.ManagerInterface
+	dataDir            string
+	onSyncReload       func(string)
+	globalStatsTracker *internalstats.Tracker
+}
+
+func (h *APIHandler) SetCACertProvider(fn func() ([]byte, error)) {
+	h.caCertProvider = fn
+}
+
+func (h *APIHandler) SetGlobalStatsTracker(t *internalstats.Tracker) {
+	h.globalStatsTracker = t
+}
+
+func (h *APIHandler) SetDataDir(dir string) {
+	h.dataDir = dir
+}
+
+func (h *APIHandler) SetOnSyncReload(fn func(string)) {
+	h.onSyncReload = fn
 }
 
 func compareQuotas(q1, q2 UserQuotas) bool {
@@ -90,6 +111,18 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGetAPIKeyModels(w, r)
 	case strings.HasPrefix(path, "/api/keys/") && r.Method == http.MethodDelete:
 		h.handleDeleteAPIKey(w, r)
+	case path == "/api/models/mapping" && r.Method == http.MethodGet:
+		h.handleGetModelMapping(w, r)
+	case path == "/api/models/mapping" && r.Method == http.MethodPost:
+		h.handleSetModelMapping(w, r)
+	case path == "/api/models/auto-config" && r.Method == http.MethodGet:
+		h.handleGetUserAutoConfig(w, r)
+	case path == "/api/models/auto-config" && r.Method == http.MethodPost:
+		h.handleSetUserAutoConfig(w, r)
+	case path == "/api/sync/full" && r.Method == http.MethodGet:
+		h.handleSyncFull(w, r)
+	case path == "/api/sync/push" && r.Method == http.MethodPost:
+		h.handleSyncPush(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error": "not found",
@@ -140,10 +173,11 @@ func (h *APIHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.log("Login succeeded for key=%s userId=%s", req.Key, session.UserID)
+	h.log("Login succeeded for key=%s userId=%s isAdmin=%v", req.Key, session.UserID, session.IsAdmin)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":   true,
 		"token":     session.Token,
+		"isAdmin":   session.IsAdmin,
 		"expiresAt": session.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
 	})
 }
@@ -352,9 +386,9 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats := h.statsMgr.GetUserStats(session.UserID)
-	if stats == nil {
-		stats = &RelayUserStats{
+	uStats := h.statsMgr.GetUserStats(session.UserID)
+	if uStats == nil {
+		uStats = &RelayUserStats{
 			UserID:  session.UserID,
 			UserKey: session.UserKey,
 			Models:  make(map[string]*RelayModelStats),
@@ -362,7 +396,36 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Make a shallow copy to inject quotas without mutating memory stats
-	statsCopy := *stats
+	statsCopy := *uStats
+
+	// 若当前调用者具备管理员权限且单用户中继统计无独立消费时，
+	// 优先从服务器全局 stats.Tracker 注入整机运行大盘统计，确保管理端面板展示真实大盘
+	if session.IsAdmin && h.globalStatsTracker != nil && statsCopy.TotalRequests == 0 {
+		globalPayload := h.globalStatsTracker.GetPayload(nil)
+		if gStats, ok := globalPayload["stats"].(internalstats.GlobalStats); ok {
+			statsCopy.TotalRequests = gStats.TotalRequests
+			statsCopy.TotalInputTokens = gStats.TotalInputTokens
+			statsCopy.TotalOutputTokens = gStats.TotalOutputTokens
+			statsCopy.TotalCachedTokens = gStats.TotalCachedTokens
+			statsCopy.TotalCacheEligibleInputTokens = gStats.TotalCacheEligibleInputTokens
+			statsCopy.TotalCost = gStats.TotalCost
+			if statsCopy.Models == nil {
+				statsCopy.Models = make(map[string]*RelayModelStats)
+			}
+			for mName, mStat := range gStats.Models {
+				if mStat != nil {
+					statsCopy.Models[mName] = &RelayModelStats{
+						Model:        mName,
+						RequestCount: mStat.Reqs,
+						InputTokens:  mStat.InTokens,
+						OutputTokens: mStat.OutTokens,
+						CachedTokens: mStat.CachedTokens,
+						TotalCost:    mStat.Cost,
+					}
+				}
+			}
+		}
+	}
 
 	user := h.authMgr.userMgr.GetUserByID(session.UserID)
 	if user != nil {
@@ -459,14 +522,21 @@ func (h *APIHandler) handleCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.caCertPath == "" {
-		writeJSON(w, http.StatusNotFound, map[string]interface{}{"error": "cert path not configured"})
-		return
+	var data []byte
+	var err error
+	if h.caCertPath != "" {
+		data, err = os.ReadFile(h.caCertPath)
+	}
+	if (err != nil || len(data) == 0) && h.caCertProvider != nil {
+		data, err = h.caCertProvider()
 	}
 
-	data, err := os.ReadFile(h.caCertPath)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "failed to read cert file: " + err.Error()})
+	if err != nil || len(data) == 0 {
+		errMsg := "cert file not available"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "failed to read cert file: " + errMsg})
 		return
 	}
 

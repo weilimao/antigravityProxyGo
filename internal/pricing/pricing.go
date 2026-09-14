@@ -65,6 +65,12 @@ func (m *Manager) UpdatePath(newPath string) {
 	m.Init(newPath)
 }
 
+func (m *Manager) Reload() {
+	m.Lock()
+	defer m.Unlock()
+	m.loadPricing()
+}
+
 func (m *Manager) EnsureInitialized() {
 	m.Lock()
 	defer m.Unlock()

@@ -84,13 +84,13 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 	}
 	if a.remoteRelay != nil && a.remoteRelay.GetConfig().Connected {
 		cfg := a.remoteRelay.GetConfig()
-		// No remote log syncing to local database anymore. All metrics are pre-aggregated and queried on-demand.
+
+		// 完全使用远端数据构建纯净的 GlobalStats，严禁回退使用本地单机历史数据
+		statsObj := stats.GlobalStats{
+			Models: make(map[string]*stats.ModelStats),
+		}
 
 		if remoteStats, err := a.remoteRelay.FetchRemoteStats(); err == nil && remoteStats != nil {
-			// 完全使用远端数据构建一套纯净的 GlobalStats
-			statsObj := stats.GlobalStats{
-				Models: make(map[string]*stats.ModelStats),
-			}
 			if tr, _ := remoteStats["totalRequests"].(float64); tr > 0 {
 				statsObj.TotalRequests = int(tr)
 			}
@@ -136,12 +136,12 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 					}
 				}
 			}
+		}
 
-			// 恢复历史数据：从 SQLite 聚合出旧的 local trends（因为远端服务器升级前可能没有记录旧的历史）
-			localTrends := db.QueryHourlyTrends(cfg.UserKey, "remote")
-
-			trendMap := make(map[string]*stats.HourlyTrend)
-			for _, dt := range localTrends {
+		// 远端综合趋势：严格只展示远端中继服务产生的真实趋势数据，绝不读取或混入本地单机历史波浪线
+		trendMap := make(map[string]*stats.HourlyTrend)
+		if remoteTrends, err := a.remoteRelay.FetchRemoteTrends(); err == nil && remoteTrends != nil {
+			for _, dt := range remoteTrends {
 				trendMap[dt.Time] = &stats.HourlyTrend{
 					Time:       dt.Time,
 					Input:      dt.Input,
@@ -154,76 +154,58 @@ func (a *App) getStatsPayload(simplified bool) map[string]interface{} {
 					CachedCost: dt.CachedCost,
 				}
 			}
+		}
 
-			// Fetch hourly aggregated trends directly from the remote relay server
-			if remoteTrends, err := a.remoteRelay.FetchRemoteTrends(); err == nil {
-				for _, dt := range remoteTrends {
-					// 远端数据优先级更高，覆盖本地（因为远端可能包含了其他设备共享的中继数据）
-					trendMap[dt.Time] = &stats.HourlyTrend{
-						Time:       dt.Time,
-						Input:      dt.Input,
-						Output:     dt.Output,
-						Cached:     dt.Cached,
-						Requests:   dt.Requests,
-						Cost:       dt.Cost,
-						InputCost:  dt.InputCost,
-						OutputCost: dt.OutputCost,
-						CachedCost: dt.CachedCost,
-					}
-				}
-			}
+		var trends []*stats.HourlyTrend
+		var keys []string
+		for k := range trendMap {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			trends = append(trends, trendMap[k])
+		}
+		if trends == nil {
+			trends = []*stats.HourlyTrend{}
+		}
 
-			var trends []*stats.HourlyTrend
-			var keys []string
-			for k := range trendMap {
-				keys = append(keys, k)
+		// 远程请求日志：只展示当前远程连接所产生的请求记录
+		dbRequests := db.QueryRecentRequests(cfg.UserKey, "remote", stats.MaxRequestLogs)
+		var requests []*stats.RequestLog
+		for _, dr := range dbRequests {
+			formattedTime := dr.Timestamp
+			if t, err := time.Parse(time.RFC3339, dr.Timestamp); err == nil {
+				formattedTime = t.Local().Format("01/02 15:04:05")
 			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				trends = append(trends, trendMap[k])
-			}
+			requests = append(requests, &stats.RequestLog{
+				ID:              dr.ReqID,
+				Timestamp:       formattedTime,
+				Model:           dr.ModelName,
+				InTokens:        dr.InTokens,
+				OutTokens:       dr.OutTokens,
+				CachedTokens:    dr.CachedTokens,
+				Cost:            dr.Cost,
+				Account:         dr.UserID,
+				DurationMs:      dr.DurationMs,
+				StatusCode:      dr.StatusCode,
+				Method:          dr.Method,
+				Host:            dr.Host,
+				Path:            dr.Path,
+				SessionID:       dr.SessionID,
+				Family:          dr.Family,
+				ReasoningEffort: dr.ReasoningEffort,
+			})
+		}
+		if requests == nil {
+			requests = []*stats.RequestLog{}
+		}
 
-			if trends == nil {
-				trends = []*stats.HourlyTrend{}
-			}
-
-			dbRequests := db.QueryRecentRequests(cfg.UserKey, "remote", stats.MaxRequestLogs)
-			var requests []*stats.RequestLog
-			for _, dr := range dbRequests {
-				formattedTime := dr.Timestamp
-				if t, err := time.Parse(time.RFC3339, dr.Timestamp); err == nil {
-					formattedTime = t.Local().Format("01/02 15:04:05")
-				}
-				requests = append(requests, &stats.RequestLog{
-					ID:              dr.ReqID,
-					Timestamp:       formattedTime,
-					Model:           dr.ModelName,
-					InTokens:        dr.InTokens,
-					OutTokens:       dr.OutTokens,
-					CachedTokens:    dr.CachedTokens,
-					Cost:            dr.Cost,
-					Account:         dr.UserID,
-					DurationMs:      dr.DurationMs,
-					StatusCode:      dr.StatusCode,
-					Method:          dr.Method,
-					Host:            dr.Host,
-					Path:            dr.Path,
-					SessionID:       dr.SessionID,
-					Family:          dr.Family,
-					ReasoningEffort: dr.ReasoningEffort,
-				})
-			}
-			if requests == nil {
-				requests = []*stats.RequestLog{}
-			}
-
-			return map[string]interface{}{
-				"stats":        statsObj,
-				"trends":       trends,
-				"nvidiaTrends": a.statsTracker.GetNvidiaTrends(),
-				"requests":     requests,
-				"usage":        usagePayload,
-			}
+		return map[string]interface{}{
+			"stats":        statsObj,
+			"trends":       trends,
+			"nvidiaTrends": []*stats.HourlyTrend{},
+			"requests":     requests,
+			"usage":        usagePayload,
 		}
 	}
 

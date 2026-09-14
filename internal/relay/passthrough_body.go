@@ -141,8 +141,11 @@ func buildPassthroughUpstreamReq(bodyBytes []byte, upstreamModel string, isStrea
 	var chatReq OpenAIChatRequest
 	if err := json.Unmarshal(bodyBytes, &chatReq); err == nil && len(chatReq.Messages) > 0 {
 		chatReq.Model = upstreamModel
+		chatReq.Stream = isStreaming
 		if isStreaming {
 			ensureIncludeUsage(&chatReq)
+		} else {
+			chatReq.StreamOptions = nil
 		}
 		normalizeOpenAIChatRoles(&chatReq)
 		return &chatReq, nil
@@ -152,8 +155,11 @@ func buildPassthroughUpstreamReq(bodyBytes []byte, upstreamModel string, isStrea
 	if err != nil {
 		return nil, fmt.Errorf("unrecognized openai/responses request body: %w", err)
 	}
+	u.Stream = isStreaming
 	if isStreaming {
 		ensureIncludeUsage(u)
+	} else {
+		u.StreamOptions = nil
 	}
 	normalizeOpenAIChatRoles(u)
 	return u, nil

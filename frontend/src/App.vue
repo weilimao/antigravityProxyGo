@@ -93,15 +93,15 @@
                 <div id="remoteStatusBadge" class="hidden flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full border whitespace-nowrap flex-shrink-0">
                     <span class="material-symbols-outlined text-[15px]">cloud</span>
                     <span id="remoteStatusText">远程连接中</span>
-                    <button id="btnManageApiKeys" class="hidden ml-2 text-primary dark:text-primary-fixed-dim hover:text-primary/80 text-[11px] font-bold border border-primary/20 rounded px-1.5 py-0.5 flex items-center gap-0.5 bg-primary/5 transition-all" title="管理持久化 API Keys" data-i18n-title="manageKeysTitle">
+                    <button id="btnManageApiKeys" class="hidden ml-2 text-primary dark:text-primary-fixed-dim hover:text-primary/80 text-[11px] font-bold border border-primary/20 rounded px-1.5 py-0.5 flex items-center gap-0.5 bg-primary/5 transition-all cursor-pointer" title="管理持久化 API Keys" data-i18n-title="manageKeysTitle">
                         <span class="material-symbols-outlined text-[12px] pointer-events-none">key</span>
                         <span data-i18n="manageKeys">管理 Key</span>
                     </button>
-                    <button id="btnRemoteEnable" class="hidden ml-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 text-[11px] font-bold" data-i18n="remoteEnable">启用</button>
-                    <button id="btnRemoteDisable" class="hidden ml-1 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-[11px] font-bold" data-i18n="remoteDisable">停用</button>
-                    <button id="btnRemoteDisconnect" class="ml-1 text-red-400 hover:text-red-600 text-[11px] font-bold" data-i18n="remoteDisconnect">退出</button>
+                    <button id="btnRemoteEnable" class="hidden ml-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 text-[11px] font-bold cursor-pointer" data-i18n="remoteEnable">启用</button>
+                    <button id="btnRemoteDisable" class="hidden ml-1 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-[11px] font-bold cursor-pointer" data-i18n="remoteDisable">停用</button>
+                    <button id="btnRemoteDisconnect" class="ml-1 text-red-400 hover:text-red-600 text-[11px] font-bold cursor-pointer" data-i18n="remoteDisconnect">退出</button>
                 </div>
-                <button id="btnRemoteConnect" class="flex items-center gap-1 text-[12px] font-medium text-outline hover:text-primary dark:hover:text-primary-fixed-dim transition-colors px-2 py-1 rounded-md hover:bg-primary/5 whitespace-nowrap flex-shrink-0">
+                <button id="btnRemoteConnect" class="flex items-center gap-1 text-[12px] font-medium text-outline hover:text-primary dark:hover:text-primary-fixed-dim transition-colors px-2 py-1 rounded-md hover:bg-primary/5 whitespace-nowrap flex-shrink-0 cursor-pointer">
                     <span class="material-symbols-outlined text-[16px]">link</span>
                     <span data-i18n="remoteConnect">远程连接</span>
                 </button>

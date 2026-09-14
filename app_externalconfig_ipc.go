@@ -166,6 +166,27 @@ func (a *App) handleExternalConfigInvokeIPC(channel string, args []interface{}) 
 		a.AddLog(fmt.Sprintf("✅ [Agent配置] %s 模型 catalog 已保存", agentID))
 		return marshalResponse(map[string]interface{}{"success": true})
 
+	case "externalconfig:get-auth":
+		agentID := getStringArg(0)
+		jsonStr, err := a.externalConfigMgr.ReadAuthFull(agentID)
+		if err != nil {
+			return marshalResponse(map[string]interface{}{"success": false, "jsonStr": "{}", "error": err.Error()})
+		}
+		return marshalResponse(map[string]interface{}{"success": true, "jsonStr": jsonStr})
+
+	case "externalconfig:save-auth":
+		agentID := getStringArg(0)
+		jsonStr := getStringArg(1)
+		if agentID == "" {
+			return marshalResponse(map[string]interface{}{"success": false, "error": "agentId is required"})
+		}
+		if err := a.externalConfigMgr.WriteAuthFull(agentID, jsonStr); err != nil {
+			a.AddLog(fmt.Sprintf("❌ [Agent配置] 保存 %s 认证文件失败: %v", agentID, err))
+			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+		}
+		a.AddLog(fmt.Sprintf("✅ [Agent配置] %s 认证文件已保存", agentID))
+		return marshalResponse(map[string]interface{}{"success": true})
+
 	case "externalconfig:ai-generate-provider":
 		// OpenCode provider AI 一键生成: 入参 (model, systemPrompt, userInput, models?),
 		// 调本地中继 /v1/chat/completions 让 AI 输出 provider.{name} JSON 片段。

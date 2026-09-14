@@ -312,6 +312,11 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			FirstByteMs:    firstByteMs,
 		})
 
+		if inTokens > 0 || outTokens > 0 {
+			h.statsTracker.TrackRequest(currentModel, inTokens, outTokens, cachedTokens)
+			h.statsTracker.TrackRequestForPool(currentModel, inTokens, outTokens, cachedTokens, "direct")
+		}
+
 		// Record usage locally so the client UI can reflect the remote quota consumption
 		h.usageTracker.RecordUsage(stats.UsageSample{
 			ModelName:    currentModel,

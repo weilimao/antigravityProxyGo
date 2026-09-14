@@ -204,3 +204,5 @@ export function renderRelayPackages() {
     
     (window as any)._relayOpenModal('relayUserQuotaModal');
 };
+
+(window as any).refreshRelayPackages = refreshRelayPackages;

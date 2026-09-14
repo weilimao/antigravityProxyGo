@@ -164,13 +164,7 @@ func TestBackfillRelayTrendsFromDB_Idempotent(t *testing.T) {
 
 	pricingMgr := pricing.NewManager()
 	statsTracker := stats.NewTracker(pricingMgr)
-
-	// 初始状态
-	payload := statsTracker.GetPayload(nil)
-	trends := payload["trends"].([]*stats.HourlyTrend)
-	if len(trends) != 0 {
-		t.Fatalf("expected initial trends to be 0, got %d", len(trends))
-	}
+	statsTracker.Init(tempDir)
 
 	// 首次回填
 	statsTracker.Lock()
@@ -195,7 +189,7 @@ func TestBackfillRelayTrendsFromDB_Idempotent(t *testing.T) {
 		t.Fatalf("expected %d tokens, got %d", expectedTokens, totalTokens1)
 	}
 
-	// 二次回填 (幂等性测试: 不应重复累加)
+	// 内存中二次回填调用 (实例级幂等性测试: 内存标志守卫，不应重复累加)
 	statsTracker.Lock()
 	statsTracker.BackfillRelayTrendsFromDBLocked()
 	statsTracker.Unlock()
@@ -215,4 +209,27 @@ func TestBackfillRelayTrendsFromDB_Idempotent(t *testing.T) {
 	if totalTokens2 != expectedTokens {
 		t.Fatalf("idempotency check failed: expected tokens to remain %d, got %d", expectedTokens, totalTokens2)
 	}
+
+	// 3. 落盘与跨进程重启测试 (跨进程重启幂等性: 验证 SaveToDisk 正确持久化 RelayTrendsBackfillDone，重启后不重复累加)
+	statsTracker.SaveToDisk()
+
+	statsTrackerRestarted := stats.NewTracker(pricingMgr)
+	statsTrackerRestarted.Init(tempDir)
+
+	payloadAfterRestart := statsTrackerRestarted.GetPayload(nil)
+	trendsAfterRestart := payloadAfterRestart["trends"].([]*stats.HourlyTrend)
+	totalReqsRestart := 0
+	totalTokensRestart := 0
+	for _, tr := range trendsAfterRestart {
+		totalReqsRestart += tr.Requests
+		totalTokensRestart += tr.Input + tr.Output
+	}
+
+	if totalReqsRestart != 2 {
+		t.Fatalf("restart idempotency check failed: expected requests to remain 2, got %d", totalReqsRestart)
+	}
+	if totalTokensRestart != expectedTokens {
+		t.Fatalf("restart idempotency check failed: expected tokens to remain %d, got %d", expectedTokens, totalTokensRestart)
+	}
 }
+

@@ -13,6 +13,7 @@ func (a *App) emitAccountsRes() {
 	if a == nil || a.ctx == nil {
 		return
 	}
+	defer func() { _ = recover() }()
 	wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
 		"accounts":                  a.accountMgr.GetAccounts(),
 		"poolMode":                  a.accountMgr.GetPoolMode(),

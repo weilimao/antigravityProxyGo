@@ -233,3 +233,51 @@ func TestLoadFromDisk_FallbackWithoutDB(t *testing.T) {
 		t.Fatalf("无 DB 时应兜底沿用文件 requests: %+v", tr.requests)
 	}
 }
+
+// TestSaveToDisk_PreservesMigrationFlags 锁定: 所有一次性迁移与回填标志在 SaveToDisk
+// 后落盘进 stats.json，并在后续 NewTracker + LoadFromDisk 重新加载后完整保持为 true，
+// 杜绝手写列举遗漏标志位导致重启重复回填。
+func TestSaveToDisk_PreservesMigrationFlags(t *testing.T) {
+	dir := t.TempDir()
+	db.GlobalDB = nil
+
+	pricingMgr := pricing.NewManager()
+	tr1 := NewTracker(pricingMgr)
+	tr1.Init(dir)
+
+	tr1.Lock()
+	tr1.stats.RelayTrendsBackfillDone = true
+	tr1.stats.BackfillForcedDone = true
+	tr1.stats.NvidiaUsageBackfillDone = true
+	tr1.stats.TabExcludedFromEligible = true
+	tr1.stats.TotalRequests = 100
+	tr1.stats.TotalInputTokens = 5000
+	tr1.Unlock()
+
+	tr1.SaveToDisk()
+
+	// 重新构造 tracker 模拟应用重启
+	tr2 := NewTracker(pricingMgr)
+	tr2.Init(dir)
+
+	tr2.RLock()
+	defer tr2.RUnlock()
+
+	if !tr2.stats.RelayTrendsBackfillDone {
+		t.Fatalf("expected RelayTrendsBackfillDone to be true after reload from disk, got false")
+	}
+	if !tr2.stats.BackfillForcedDone {
+		t.Fatalf("expected BackfillForcedDone to be true after reload from disk, got false")
+	}
+	if !tr2.stats.NvidiaUsageBackfillDone {
+		t.Fatalf("expected NvidiaUsageBackfillDone to be true after reload from disk, got false")
+	}
+	if !tr2.stats.TabExcludedFromEligible {
+		t.Fatalf("expected TabExcludedFromEligible to be true after reload from disk, got false")
+	}
+	if tr2.stats.TotalRequests != 100 || tr2.stats.TotalInputTokens != 5000 {
+		t.Fatalf("expected TotalRequests=100, TotalInputTokens=5000, got reqs=%d, in=%d",
+			tr2.stats.TotalRequests, tr2.stats.TotalInputTokens)
+	}
+}
+

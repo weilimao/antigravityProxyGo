@@ -142,3 +142,11 @@ func (m *PackageManager) LoadFromDisk() {
 		}
 	}
 }
+
+// UpdatePath 切换套餐文件所在目录并重新加载
+func (m *PackageManager) UpdatePath(newDir string) {
+	m.Lock()
+	m.persistPath = filepath.Join(newDir, "relay_packages.json")
+	m.Unlock()
+	m.LoadFromDisk()
+}
