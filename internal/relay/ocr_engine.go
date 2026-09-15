@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"antigravity-proxy/internal/settings"
 	"golang.org/x/sync/singleflight"
@@ -95,6 +96,19 @@ func (s *OCRService) getOcrModel() string {
 	return m
 }
 
+// getOcrModels 返回当前生效的候选 OCR 模型列表。
+// 若未配置或为空列表，则回退为包含单个 getOcrModel() 的切片。
+func (s *OCRService) getOcrModels() []string {
+	if s == nil || s.settingsMgr == nil {
+		return []string{defaultOcrModel}
+	}
+	models := s.settingsMgr.GetOcrModels()
+	if len(models) == 0 {
+		return []string{s.getOcrModel()}
+	}
+	return models
+}
+
 // logf 是 OCRService 的日志助手:统一的 [OCR] 前缀,供 L2 协议适配层
 // (Anthropic / Gemini / OpenAI 降级)发出逐图 OCR 进度/成功/失败日志。
 // logFn 为 nil 时静默(单测未注入),与原 h.log 的 nil 守卫语义一致。
@@ -137,31 +151,8 @@ func (s *OCRService) resolveOcrTarget(ocrModel string) (isGoogle bool, provider,
 	return false, provider, groupID, targetModel
 }
 
-// OcrImage 调用本地 Gemini(默认 gemini-2.5-flash,前端可配)对一张 base64 图做 OCR,
-// 返回识别出的纯文本。失败返回 "" + error。
-//
-// 抽出供各号池协议适配层(L2)复用,避免每个号池各写一份:
-//   - Anthropic 入站降级(DowngradeAnthropicImagesToText,NVIDIA 池)
-//   - Gemini 入站自愈(DowngradeGeminiImagesToText,dispatchToGemini 内,目标模型非 gemini 时图转文)
-//   - 第三方号池(Passthrough / Route,DowngradeOpenAIChatImagesToText)
-//
-// 缓存策略(cache + singleflight):
-//   - 键 = ownerKey|ocrModel|sha256(b64)[:16],按会话、OCR 模型二维隔离,**不含提问文本**;
-//   - 命中即返回历史 OCR 文本,跳过 gemini 调用与 ~3s 延迟;
-//   - miss 时 singleflight 合并同图并发为 1 次真上游调用,防缓存击穿;
-//   - OCR 失败也缓存(短 TTL),熔断窗口内不再重打挂的 OCR 服务;
-//   - 切换 ocrModel 后键变化,自动重新 OCR 新模型(配置改了立刻生效)。
-//   - 提问文本(promptCtx)不参与缓存键:同图同会话跨提问复用,省配额;OCR 的"靶向分析"
-//     由 ocrImageUncached 真打 gemini 时用 promptCtx 组 ocrPrompt 承担,与缓存键解耦。
-// nil cache 降级为零缓存(纯走上游),保持旧行为兼容。
-//
-// 返回的 cachedHit 标识本次结果是否来自缓存命中(true=命中即返,未触达上游;
-// false=cache miss 真打了一次 gemini 上游,或 nil 缓存的纯走上游场景)。
-// 供调用方在日志里透出"本轮这张图是命中还是重新 OCR"。
-//
-// P1 契约:签名与原 APICompatHandler.ocrImageViaLocalGemini 逐字一致,仅 receiver 改为
-// *OCRService,userSession 入参不变(会话级隔离键经 ocrOwnerKey 从 *RelaySession 提取),
-// 保证测试调用点仅需 h.ocrImageViaLocalGemini → h.ocr.OcrImage 的最小替换。
+// OcrImage 对一张 base64 图做 OCR,返回识别出的纯文本。失败返回 "" + error。
+// 支持多模型候选并发竞速模式:首包成功识别者胜出并立即取消其余候选。
 func (s *OCRService) OcrImage(userSession *RelaySession, b64Data string, mimeType string, userPromptText ...string) (text string, err error, cachedHit bool) {
 	if s == nil || userSession == nil {
 		return "", fmt.Errorf("OcrImage: nil service or session"), false
@@ -172,34 +163,57 @@ func (s *OCRService) OcrImage(userSession *RelaySession, b64Data string, mimeTyp
 	if mimeType == "" {
 		mimeType = "image/jpeg"
 	}
-	ocrModel := s.getOcrModel()
+
+	ocrModels := s.getOcrModels()
+	var cacheModelKey string
+	if len(ocrModels) > 1 {
+		cacheModelKey = "race:" + strings.Join(ocrModels, ",")
+	} else if len(ocrModels) == 1 {
+		cacheModelKey = ocrModels[0]
+	} else {
+		cacheModelKey = defaultOcrModel
+		ocrModels = []string{defaultOcrModel}
+	}
 
 	promptCtx := ""
 	if len(userPromptText) > 0 {
 		promptCtx = strings.TrimSpace(userPromptText[0])
 	}
 
-	// 缓存键首维:会话级隔离键(sessionKey 非空时优先,粒度比 UserKey 更细,按会话隔离;
-	// 空则回退 UserKey,保持单测/未传场景的旧行为兼容)。
+	// 缓存键首维:会话级隔离键
 	ownerKey := ocrOwnerKey(userSession)
 
-	// 命中缓存直接返回,跳过 gemini 调用与 ~3s 延迟(含失败条目短 TTL 熔断)。
-	// 缓存键按 image-only(三维):不含 promptCtx,同图同会话跨提问命中,省配额。
+	// 命中缓存直接返回
 	if s.cache != nil {
-		key := ocrCacheKey(ownerKey, ocrModel, b64Data)
+		key := ocrCacheKey(ownerKey, cacheModelKey, b64Data)
 		if e, ok := s.cache.get(key); ok {
 			s.counters.hits.Add(1)
 			return e.text, e.err, true
 		}
+		// 若为多候选竞速，检查是否有任一候选模型的单模型缓存命中
+		if len(ocrModels) > 1 {
+			for _, m := range ocrModels {
+				singleKey := ocrCacheKey(ownerKey, m, b64Data)
+				if e, ok := s.cache.get(singleKey); ok && e.ok && strings.TrimSpace(e.text) != "" {
+					s.counters.hits.Add(1)
+					s.cache.set(key, e.text, nil, true)
+					return e.text, nil, true
+				}
+			}
+		}
 		s.counters.misses.Add(1)
 	}
 
-	// singleflight:同步相邻并发对同图(同模型)的请求,首调用真打上游,其余阻塞等待结果共享。
-	// callKey 与缓存键同(image-only):同图并发合并为 1 次 OCR,首调用者的 promptCtx 驱动本次上游 prompt。
-	callKey := ocrCacheKey(ownerKey, ocrModel, b64Data)
+	// singleflight:合并同图并发为 1 次真上游调用
+	callKey := ocrCacheKey(ownerKey, cacheModelKey, b64Data)
 	v, callErr, _ := s.inflight.Do(callKey, func() (interface{}, error) {
-		// promptCtx 仍透传给上游调用,保留靶向 OCR 分析方向(缓存键不消费,上游 call 消费)。
-		text, err := s.ocrImageUncached(userSession, b64Data, mimeType, ocrModel, promptCtx)
+		var text string
+		var err error
+		if len(ocrModels) > 1 {
+			text, err = s.ocrImageRace(context.Background(), userSession, b64Data, mimeType, ocrModels, promptCtx)
+		} else {
+			text, err = s.ocrImageUncached(userSession, b64Data, mimeType, ocrModels[0], promptCtx)
+		}
 		ok := err == nil && strings.TrimSpace(text) != ""
 		if s.cache != nil {
 			cachedText := text
@@ -218,11 +232,6 @@ func (s *OCRService) OcrImage(userSession *RelaySession, b64Data string, mimeTyp
 }
 
 // OcrImageCacheOnlyLookup 仅查 OCR 缓存,命中返回历史 OCR 文本(true),未命中返回("",false)。
-// 绝不触达 singleflight / gemini 上游,供"最近 N 条消息窗口"之外的图片块复用:
-//   - 命中(图在窗口内 OCR 过且仍驻留 LRU / SQLite)→ 复用历史文本,不烧 antigravity 配额;
-//   - 未命中 → 调用方写 imageNotExtractablePlaceholder 占位文本,绝不重新 OCR。
-// 与 OcrImage 共享 ownerKey(会话级)+ ocrModel + 图指纹三维键,**不含 promptCtx**:
-// 窗外图复用历史 OCR 文本时同样按图片身份命中,与当前提问解耦。
 func (s *OCRService) OcrImageCacheOnlyLookup(userSession *RelaySession, b64Data string) (string, bool) {
 	if s == nil || userSession == nil || s.cache == nil {
 		return "", false
@@ -230,21 +239,110 @@ func (s *OCRService) OcrImageCacheOnlyLookup(userSession *RelaySession, b64Data 
 	if strings.TrimSpace(b64Data) == "" {
 		return "", false
 	}
-	ocrModel := s.getOcrModel()
-	key := ocrCacheKey(ocrOwnerKey(userSession), ocrModel, b64Data)
+	ocrModels := s.getOcrModels()
+	ownerKey := ocrOwnerKey(userSession)
+
+	var cacheModelKey string
+	if len(ocrModels) > 1 {
+		cacheModelKey = "race:" + strings.Join(ocrModels, ",")
+	} else if len(ocrModels) == 1 {
+		cacheModelKey = ocrModels[0]
+	} else {
+		cacheModelKey = defaultOcrModel
+	}
+
+	key := ocrCacheKey(ownerKey, cacheModelKey, b64Data)
 	if e, ok := s.cache.get(key); ok && e.ok && strings.TrimSpace(e.text) != "" {
-		// 仅复用成功条目;失败短 TTL 条目不在此复用(让调用方走占位,语义更清晰)。
 		s.counters.hits.Add(1)
 		return e.text, true
+	}
+
+	// 多模型竞速下，若复合 key 未命中，检查任一候选模型的缓存
+	if len(ocrModels) > 1 {
+		for _, m := range ocrModels {
+			singleKey := ocrCacheKey(ownerKey, m, b64Data)
+			if e, ok := s.cache.get(singleKey); ok && e.ok && strings.TrimSpace(e.text) != "" {
+				s.counters.hits.Add(1)
+				s.cache.set(key, e.text, nil, true)
+				return e.text, true
+			}
+		}
 	}
 	return "", false
 }
 
-// ocrImageUncached 是 OcrImage 的纯上游调用实现,无缓存、无 singleflight,
-// 纯粹把 base64 发给 18443 的指定 Gemini 模型跑 OCR。
-// 抽出来便于 (a) 缓存层 miss 后复用 (b) 单测直接打 mock 校验上游请求形态。
-// ocrModel 由调用方传入(取自 s.getOcrModel()),用于动态拼写 18443 URL,默认 gemini-2.5-flash。
+type ocrRaceResult struct {
+	model string
+	text  string
+	err   error
+}
+
+// ocrImageRace 对传入的多个候选模型并发发起 OCR 请求，首个成功识别的模型胜出，
+// 并立即调用 cancel() 终止其余候选请求；若所有候选均失败，则返回最后一次失败的错误。
+func (s *OCRService) ocrImageRace(parent context.Context, userSession *RelaySession, b64Data string, mimeType string, ocrModels []string, promptCtx string) (string, error) {
+	if len(ocrModels) == 0 {
+		return "", fmt.Errorf("ocr race: no models specified")
+	}
+	if len(ocrModels) == 1 {
+		return s.ocrImageUncachedWithContext(parent, userSession, b64Data, mimeType, ocrModels[0], promptCtx)
+	}
+
+	base := parent
+	if base == nil {
+		base = context.Background()
+	}
+	raceCtx, cancel := context.WithCancel(base)
+	defer cancel()
+
+	resultCh := make(chan ocrRaceResult, len(ocrModels))
+	var wg sync.WaitGroup
+
+	s.logf("开始 OCR 并发竞速,候选模型列表: %v", ocrModels)
+
+	for _, model := range ocrModels {
+		wg.Add(1)
+		go func(m string) {
+			defer wg.Done()
+			text, err := s.ocrImageUncachedWithContext(raceCtx, userSession, b64Data, mimeType, m, promptCtx)
+			select {
+			case resultCh <- ocrRaceResult{model: m, text: text, err: err}:
+			case <-raceCtx.Done():
+			}
+		}(model)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	var lastErr error
+	var failCount int
+
+	for res := range resultCh {
+		if res.err == nil && strings.TrimSpace(res.text) != "" {
+			s.logf("OCR 竞速优胜者: 模型 %s 胜出 (识别文本长度: %d), 立即取消其余模型", res.model, len(res.text))
+			cancel() // 首包胜出，立即取消其他进行中的请求
+			return res.text, nil
+		}
+		failCount++
+		lastErr = res.err
+		s.logf("OCR 候选模型 %s 失败: %v (%d/%d)", res.model, res.err, failCount, len(ocrModels))
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("all %d ocr candidates returned empty text", len(ocrModels))
+	}
+	return "", fmt.Errorf("all %d ocr candidates failed in race, last error: %w", len(ocrModels), lastErr)
+}
+
+// ocrImageUncached 是 OcrImage 的纯上游调用实现(使用 Background context)。
 func (s *OCRService) ocrImageUncached(userSession *RelaySession, b64Data string, mimeType string, ocrModel string, userPromptText ...string) (string, error) {
+	return s.ocrImageUncachedWithContext(context.Background(), userSession, b64Data, mimeType, ocrModel, userPromptText...)
+}
+
+// ocrImageUncachedWithContext 是支持外部 context 取消的纯上游调用实现。
+func (s *OCRService) ocrImageUncachedWithContext(ctx context.Context, userSession *RelaySession, b64Data string, mimeType string, ocrModel string, userPromptText ...string) (string, error) {
 	if s == nil || s.client == nil {
 		return "", fmt.Errorf("ocrImageUncached: nil service or client")
 	}
@@ -257,23 +355,14 @@ func (s *OCRService) ocrImageUncached(userSession *RelaySession, b64Data string,
 		promptCtx = strings.TrimSpace(userPromptText[0])
 	}
 
-	// 单图 OCR prompt 由 ocr_prompt.go 的 buildSingleOcrPrompt 构造,与批量 prompt 共享
-	// 保真条款单一信息源(转写铁律 / 不确定标注 / 空间坐标三常量),避免单图与批量口径漂移。
 	ocrPrompt := buildSingleOcrPrompt(promptCtx)
 
-	// 按 OCR 模型前缀分流执行号池:
-	//   - Google 族(google/antigravity/gcp/project/gemini-cli/空):走本地 18443 Gemini 原生端点(旧行为,零回归);
-	//   - 非 Google 族(nvidia / other / deepseek 等):改打本地 18444 /route 入口,按前缀路由到对应号池多模态模型。
 	isGoogle, _, _, upstreamModel := s.resolveOcrTarget(ocrModel)
 
-	// 非 Google 族:跨号池出站路径(Gemini→OpenAI 转译 + 18444 /route)。
 	if !isGoogle {
-		return s.ocrImageUncachedViaRoute(userSession, ocrPrompt, mimeType, b64Data, ocrModel, upstreamModel)
+		return s.ocrImageUncachedViaRouteWithContext(ctx, userSession, ocrPrompt, mimeType, b64Data, ocrModel, upstreamModel)
 	}
 
-	// 以下为 Google 族旧路径:构建 Gemini 原生 generateContent 请求体。
-	// 上游模型名取 resolveOcrTarget 解析出的 targetModel(如 google/gemini-2.5-flash → gemini-2.5-flash);
-	// 未命中路由时 upstreamModel 回退为原始 ocrModel,与旧行为一致。
 	ocrReq := GeminiRequest{
 		Contents: []GeminiContent{
 			{
@@ -290,14 +379,8 @@ func (s *OCRService) ocrImageUncached(userSession *RelaySession, b64Data string,
 		return "", fmt.Errorf("marshal ocr request: %w", errMarshal)
 	}
 
-	// 瞬时失败重试:把「建请求 → Do → 解析响应」整段作为一次 attempt 闭包,交给 ocrCallWithRetry
-	// 最多 ocrMaxAttempts 次。传输层 EOF / 上游 429/5xx → 重试;4xx 非 429 / 编解码 / 空候选 → 不重试。
-	// 每次重试用同一 retryCtx(NewRequestWithContext 绑定),ctx 总超时上界 ocrRetryTotalTimeout(30s)。
-	// RelaySession 当前不携带入站 ctx,此处传 nil,ocrCallWithRetry 内部退化为 context.Background() + 总超时。
-	// 缓存/singleflight 契约零变动:重试在 OcrImage 的 singleflight call 函数体内,成功交上层写 success 长 TTL,
-	// 全部耗尽交上层写 failure 短 TTL 30s 熔断。
-	result := ocrCallWithRetry(nil, "ocr", s.logf, func(ctx context.Context) ocrAttemptResult {
-		return s.ocrGeminiAttempt(ctx, userSession, upstreamModel, ocrReqBytes)
+	result := ocrCallWithRetry(ctx, "ocr", s.logf, func(attemptCtx context.Context) ocrAttemptResult {
+		return s.ocrGeminiAttempt(attemptCtx, userSession, upstreamModel, ocrReqBytes)
 	})
 	return result.text, result.err
 }
@@ -354,18 +437,13 @@ func (s *OCRService) ocrGeminiAttempt(ctx context.Context, userSession *RelaySes
 }
 
 // ocrImageUncachedViaRoute 处理非 Google 族前缀模型(如 nvidia/xxx、other/openai/xxx)
-// 的跨号池 OCR 出站:把 Gemini 请求体转译为 OpenAI Chat 格式(图转 image_url data URL),
-// 打到本地 18444 中继的 /route/v1/chat/completions 入口,由 handleRoutedForward 按
-// ClientModel 前缀路由到对应号池的多模态模型执行 OCR。
-//
-// 关键设计:
-//   - model 字段保留原始带前缀 ClientModel(如 "nvidia/gpt-4o"),使 /route 路由能精确命中映射;
-//   - 携带 X-Antigravity-OCR-Self: 1 守卫头,下游各池降级入口识别后跳过 image→文本降级,
-//     避免本 OCR 请求在 nvidia/other 池内再次触发 OCR 形成自递归;
-//   - 响应按 OpenAI Chat 结构解析 choices[0].message.content(拼接若有多个 string 段)。
-//
-// upstreamModel 为 resolveOcrTarget 解析出的 TargetModel(仅用于日志,不写入请求——路由靠前缀)。
+// 的跨号池 OCR 出站。
 func (s *OCRService) ocrImageUncachedViaRoute(userSession *RelaySession, ocrPrompt, mimeType, b64Data, ocrModel, upstreamModel string) (string, error) {
+	return s.ocrImageUncachedViaRouteWithContext(context.Background(), userSession, ocrPrompt, mimeType, b64Data, ocrModel, upstreamModel)
+}
+
+// ocrImageUncachedViaRouteWithContext 是支持外部 context 取消的跨号池 OCR 出站实现。
+func (s *OCRService) ocrImageUncachedViaRouteWithContext(ctx context.Context, userSession *RelaySession, ocrPrompt, mimeType, b64Data, ocrModel, upstreamModel string) (string, error) {
 	if s == nil || s.client == nil {
 		return "", fmt.Errorf("ocrImageUncachedViaRoute: nil service or client")
 	}
@@ -373,8 +451,6 @@ func (s *OCRService) ocrImageUncachedViaRoute(userSession *RelaySession, ocrProm
 		return "", fmt.Errorf("ocrImageUncachedViaRoute: nil session")
 	}
 
-	// Gemini → OpenAI Chat 转译:单条 user 消息,text 段 + image_url data URL 段。
-	// 入站图本身是 base64,直接转 data URL,无需 URL 二次下载。
 	reqModel := strings.TrimSpace(ocrModel)
 	if reqModel == "" {
 		reqModel = defaultOcrModel
@@ -400,11 +476,8 @@ func (s *OCRService) ocrImageUncachedViaRoute(userSession *RelaySession, ocrProm
 
 	s.logf("跨号池 OCR(经 /route):model %s → upstream %s | 图 %s | 字节 %d", reqModel, upstreamModel, mimeType, len(b64Data))
 
-	// 瞬时失败重试:与 Google 族路径同款 ocrCallWithRetry,最多 ocrMaxAttempts 次,
-	// 传输层 EOF / 上游 429/5xx → 重试。每次重试重建 http.Request 并重设所有头(含
-	// X-Antigravity-OCR-Self 自递归守卫头),守卫语义在重试下不破。总超时上界 30s。
-	result := ocrCallWithRetry(nil, "ocr route", s.logf, func(ctx context.Context) ocrAttemptResult {
-		return s.ocrRouteAttempt(ctx, userSession, ocrReqBytes)
+	result := ocrCallWithRetry(ctx, "ocr route", s.logf, func(attemptCtx context.Context) ocrAttemptResult {
+		return s.ocrRouteAttempt(attemptCtx, userSession, ocrReqBytes)
 	})
 	return result.text, result.err
 }

@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"antigravity-proxy/internal/settings"
 	"net/http"
 	"strings"
 )
@@ -84,9 +83,6 @@ type exposedModel struct {
 //   Google 族(google/gcp/antigravity/gemini-cli/空)的裸名条目不受此开关影响,始终收录。
 func (h *APICompatHandler) buildExposedModelMap(includePrefixed bool) []exposedModel {
 	mappings := h.getModelMapping()
-	if len(mappings) == 0 {
-		mappings = settings.GetDefaultModelMappings()
-	}
 	out := make([]exposedModel, 0, len(mappings))
 	for _, entry := range mappings {
 		if !entry.Expose {

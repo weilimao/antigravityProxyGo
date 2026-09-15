@@ -113,21 +113,73 @@ func (m *Manager) SetNvidiaDedicatedProxyPassword(val string) error {
 
 // ============ OCR 模型(含 trim 兜底,泛型 + trim 回调) ============
 
-// GetOcrModel 读取入站 image 自愈降级使用的本地 Gemini OCR 模型名。
-// 空值(旧配置或未设置)走 DefaultOcrModel,保持与历史行为一致。
+// GetOcrModel 读取入站 image 自愈降级使用的本地 OCR 模型名。未设置返回空字符串。
 func (m *Manager) GetOcrModel() string {
 	return getSetting(m, func(c *Config) string {
-		if strings.TrimSpace(c.OcrModel) == "" {
-			return DefaultOcrModel
-		}
-		return c.OcrModel
+		return strings.TrimSpace(c.OcrModel)
 	})
 }
 
-// SetOcrModel 持久化 OCR 模型名。前端下拉切换后经 IPC 调用此方法落盘。
-// 空字符串写入会被 GetOcrModel 兜底为默认值,不阻断主请求;trim 在写锁内完成。
+// SetOcrModel 持久化 OCR 模型名。
 func (m *Manager) SetOcrModel(val string) error {
-	return setSetting(m, func(c *Config, v string) { c.OcrModel = strings.TrimSpace(v) }, val)
+	return setSetting(m, func(c *Config, v string) {
+		t := strings.TrimSpace(v)
+		c.OcrModel = t
+		if t != "" {
+			c.OcrModels = []string{t}
+		} else {
+			c.OcrModels = []string{}
+		}
+	}, val)
+}
+
+// GetOcrModels 读取入站 image 自愈降级并发竞速候选模型池。未设置返回空切片。
+func (m *Manager) GetOcrModels() []string {
+	return getSetting(m, func(c *Config) []string {
+		var result []string
+		seen := make(map[string]struct{})
+		for _, raw := range c.OcrModels {
+			trimmed := strings.TrimSpace(raw)
+			if trimmed != "" {
+				if _, ok := seen[trimmed]; !ok {
+					seen[trimmed] = struct{}{}
+					result = append(result, trimmed)
+				}
+			}
+		}
+		if len(result) > 0 {
+			return result
+		}
+		single := strings.TrimSpace(c.OcrModel)
+		if single != "" {
+			return []string{single}
+		}
+		return []string{}
+	})
+}
+
+// SetOcrModels 持久化 OCR 竞速候选模型列表。
+// 同时同步更新首选单模型 c.OcrModel，保持对旧读取逻辑的平滑向后兼容。
+func (m *Manager) SetOcrModels(val []string) error {
+	return setSetting(m, func(c *Config, v []string) {
+		var cleaned []string
+		seen := make(map[string]struct{})
+		for _, raw := range v {
+			t := strings.TrimSpace(raw)
+			if t != "" {
+				if _, ok := seen[t]; !ok {
+					seen[t] = struct{}{}
+					cleaned = append(cleaned, t)
+				}
+			}
+		}
+		c.OcrModels = cleaned
+		if len(cleaned) > 0 {
+			c.OcrModel = cleaned[0]
+		} else {
+			c.OcrModel = ""
+		}
+	}, val)
 }
 
 // ============ 会话压缩 / NVIDIA 号池就地压缩结构体读写 ============

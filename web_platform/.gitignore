@@ -1,0 +1,19 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Database & runtime
+data/*.db
+data/*.db-journal
+*.log
+
+# Node & frontend
+web/node_modules/
+web/dist/
+web/.vscode/
+.checkpoints/
+.gemini/

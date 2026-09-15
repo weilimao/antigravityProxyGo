@@ -64,19 +64,25 @@ func TestSettings_RelayModelMappingRetention(t *testing.T) {
 	mgr := NewManager()
 	mgr.Init(tempDir)
 
-	// 1. Initially, we should have all default model mappings
+	// 1. 系统初始化时模型映射严格为空
 	initialMappings := mgr.GetRelayModelMapping()
-	if len(initialMappings) == 0 {
-		t.Fatalf("Expected default model mappings to be loaded, got 0")
+	if len(initialMappings) != 0 {
+		t.Fatalf("Expected initial model mappings to be empty (0), got %d", len(initialMappings))
 	}
 
-	// Record original count of mappings
-	origCount := len(initialMappings)
-	targetToDelete := initialMappings[0].ClientModel
+	// 2. 由平台配置写入自定义模型映射
+	configuredMappings := []ModelMappingEntry{
+		{ClientModel: "custom-model-a", TargetModel: "target-a", Expose: true},
+		{ClientModel: "custom-model-b", TargetModel: "target-b", Expose: true},
+	}
+	if err := mgr.SetRelayModelMapping(configuredMappings); err != nil {
+		t.Fatalf("Failed to set model mappings: %v", err)
+	}
 
-	// 2. Delete the first mapping
+	// 3. 删除第一个模型
+	targetToDelete := "custom-model-a"
 	var newMappings []ModelMappingEntry
-	for _, entry := range initialMappings {
+	for _, entry := range configuredMappings {
 		if entry.ClientModel != targetToDelete {
 			newMappings = append(newMappings, entry)
 		}
@@ -85,13 +91,13 @@ func TestSettings_RelayModelMappingRetention(t *testing.T) {
 		t.Fatalf("Failed to set model mappings: %v", err)
 	}
 
-	// 3. Re-initialize a new manager to simulate app restart
+	// 4. 重启 Manager 验证落盘持久化
 	newMgr := NewManager()
 	newMgr.Init(tempDir)
 
 	reloadedMappings := newMgr.GetRelayModelMapping()
-	if len(reloadedMappings) != origCount-1 {
-		t.Errorf("Expected reloaded mappings count to be %d, got %d", origCount-1, len(reloadedMappings))
+	if len(reloadedMappings) != 1 {
+		t.Errorf("Expected reloaded mappings count to be 1, got %d", len(reloadedMappings))
 	}
 
 	foundDeleted := false
@@ -516,23 +522,10 @@ func TestSettings_AutoModelMapping_DualPool(t *testing.T) {
 	mgr := NewManager()
 	mgr.Init(tempDir)
 
-	// 1. 默认 auto 映射存在且候选池严格为空
+	// 1. 系统初始化时模型映射严格为空
 	defaults := mgr.GetRelayModelMapping()
-	var autoEntry *ModelMappingEntry
-	for _, m := range defaults {
-		if m.ClientModel == "auto" {
-			autoEntry = &m
-			break
-		}
-	}
-	if autoEntry == nil {
-		t.Fatal("默认模型映射列表必须包含预置 auto 模型")
-	}
-	if len(autoEntry.CandidateModels) != 0 {
-		t.Fatalf("默认 auto 模型的 CandidateModels 必须严格为空, 实际为: %v", autoEntry.CandidateModels)
-	}
-	if autoEntry.IsUseBenchmarkPool() {
-		t.Fatal("默认 auto 模型的 UseBenchmarkPool 必须为 false")
+	if len(defaults) != 0 {
+		t.Fatalf("系统初始化时模型映射必须严格为空, 实际为 %d 项", len(defaults))
 	}
 
 	// 2. 配置自定义池 + 启用测速池并保存

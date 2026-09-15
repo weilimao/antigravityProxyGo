@@ -494,6 +494,7 @@ func (a *App) domReady(ctx context.Context) {
 		"settings:get-account-grid-columns":             a.settingsMgr.GetAccountGridColumns(),
 		"settings:get-session-optimization":             a.settingsMgr.GetSessionOptimization(),
 		"settings:get-ocr-model":                        a.settingsMgr.GetOcrModel(),
+		"settings:get-ocr-models":                       a.settingsMgr.GetOcrModels(),
 		"settings:get-nvidia-worker-proxy": map[string]interface{}{
 			"nvidiaWorkerProxyUrl":     a.settingsMgr.GetNvidiaWorkerProxyURL(),
 			"nvidiaWorkerProxyEnabled": a.settingsMgr.IsNvidiaWorkerProxyEnabled(),

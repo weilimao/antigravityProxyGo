@@ -83,6 +83,7 @@ type settingsAdapterWithOcr struct {
 }
 
 func (s *settingsAdapterWithOcr) GetOcrModel() string { return "" }
+func (s *settingsAdapterWithOcr) GetOcrModels() []string { return []string{} }
 
 // firstUserContentStringFromOpenAI 取降级后 body 里第一条 user content 的字符串值。
 func firstUserContentStringFromOpenAI(t *testing.T, body []byte) string {

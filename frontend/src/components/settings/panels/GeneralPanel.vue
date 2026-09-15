@@ -275,18 +275,24 @@
 			当上游模型不支持多模态（如 NVIDIA 中继）时，代理会自动把入站的图片内容块 OCR 降级为纯文本后再送上游。此处选择用于执行 OCR 的本地 Gemini 系模型。
 		</p>
 		<div class="flex flex-col gap-1.5 border-t border-outline-variant/20 pt-4 mt-2">
-			<label class="text-[12px] font-bold text-outline" data-i18n="ocrModelLabel">OCR 图片分析模型</label>
+			<div class="flex items-center justify-between">
+				<label class="text-[12px] font-bold text-outline" data-i18n="ocrModelLabel">OCR 图片分析模型（并发竞速）</label>
+				<span v-if="ocrModels.length > 1" class="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-mono">
+					已开启 {{ ocrModels.length }} 模型竞速
+				</span>
+			</div>
 			<ModelSearchSelect
-				:model-value="ocrModel"
+				:multiple="true"
+				:model-ids="ocrModels"
 				:options="ocrModelOptions"
 				:allow-custom="true"
 				:refresh-on-open="true"
-				placeholder="搜索或输入用于 OCR 识别的模型..."
-				@update:model-value="setOcrModel"
+				placeholder="搜索或输入多个候选模型进行并发竞速识别..."
+				@update:model-ids="setOcrModels"
 				@refresh="refreshOcrModelOptions"
 				class="w-full"
 			/>
-			<span class="text-[11px] text-outline leading-relaxed" data-i18n="ocrModelDesc">入站图片自动 OCR 降级时调用的本地模型,默认 gemini-2.5-flash,可从中继模型映射列表任选 Gemini 系模型。</span>
+			<span class="text-[11px] text-outline leading-relaxed" data-i18n="ocrModelDesc">入站图片自动 OCR 降级时调用的号池模型,支持多选候选模型开启并发竞速(首包成功识别者胜出并立即取消其余请求,兼顾极致低延迟与高可用)。</span>
 		</div>
 	</div>
 
@@ -370,10 +376,12 @@ import { onMounted } from 'vue';
 import ModelSearchSelect from '../agent-config/ModelSearchSelect.vue';
 import {
 	ocrModel,
+	ocrModels,
 	ocrModelOptions,
 	initOcrSettings,
 	refreshOcrModelOptions,
 	setOcrModel,
+	setOcrModels,
 } from '../../../ui/ocrSettings';
 
 // GeneralPanel: 继承系统参数配置面板，保留所有 DOM id 供 controller 兼容操作；

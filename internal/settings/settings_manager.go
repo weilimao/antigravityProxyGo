@@ -65,7 +65,7 @@ func (m *Manager) Init(defaultPath string) {
 		CompressionStrategy:           "summarize",
 		SummaryModel:                  "gemini-2.5-flash-lite",
 		KeepRecentTurns:               5,
-		OcrModel:                      DefaultOcrModel,
+		OcrModel:                      "",
 		NvidiaCompressEnabled:         true,
 		NvidiaCompressThresholdTokens: 80000,
 		NvidiaCompressKeepToolResults: 4,
@@ -130,7 +130,7 @@ func (m *Manager) loadConfig() {
 			CompressionStrategy:           "summarize",
 			SummaryModel:                  "gemini-2.5-flash-lite",
 			KeepRecentTurns:               5,
-			OcrModel:                      DefaultOcrModel,
+			OcrModel:                      "",
 			NvidiaCompressEnabled:         true,
 			NvidiaCompressThresholdTokens: 80000,
 			NvidiaCompressKeepToolResults: 4,
@@ -211,9 +211,14 @@ func (m *Manager) loadConfig() {
 		parsed.DebuggerLogPath = "logs/debugger"
 	}
 
-	// 旧配置文件无 ocrModel 字段 → 兜底默认,避免升级后 OCR 链路回首版硬编码语义漂移。
-	if strings.TrimSpace(parsed.OcrModel) == "" {
-		parsed.OcrModel = DefaultOcrModel
+	// OCR 模型由平台配置驱动：若有配置单模型则同步到候选列表，未配置保持为空。
+	parsed.OcrModel = strings.TrimSpace(parsed.OcrModel)
+	if len(parsed.OcrModels) == 0 {
+		if parsed.OcrModel != "" {
+			parsed.OcrModels = []string{parsed.OcrModel}
+		} else {
+			parsed.OcrModels = []string{}
+		}
 	}
 
 	if parsed.CustomThinkingMinBudget <= 0 {
@@ -562,7 +567,7 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			AccountLayout:         "grid",
 			AccountGridColumns:    4,
 			RequestTimeout:        300,
-			OcrModel:              DefaultOcrModel,
+			OcrModel:              "",
 			EnableThinkingMode:    true,
 		}
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")

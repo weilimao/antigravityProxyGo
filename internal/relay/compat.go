@@ -219,7 +219,7 @@ func (h *APICompatHandler) getModelMapping() []settings.ModelMappingEntry {
 	if h.settingsMgr != nil {
 		return h.settingsMgr.GetRelayModelMapping()
 	}
-	return settings.GetDefaultModelMappings()
+	return []settings.ModelMappingEntry{}
 }
 
 func (h *APICompatHandler) log(format string, args ...interface{}) {

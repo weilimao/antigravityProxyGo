@@ -546,10 +546,20 @@ var _ = bytes.NewReader
 // 其余方法走嵌入接口(不被调用不会走进去,无 nil deref 风险),与 preferredSettings 同款范式。
 type stubOcrSettings struct {
 	settings.ManagerInterface
-	ocrModel string
+	ocrModel  string
+	ocrModels []string
 }
 
 func (m *stubOcrSettings) GetOcrModel() string { return m.ocrModel }
+func (m *stubOcrSettings) GetOcrModels() []string {
+	if len(m.ocrModels) > 0 {
+		return m.ocrModels
+	}
+	if m.ocrModel != "" {
+		return []string{m.ocrModel}
+	}
+	return nil
+}
 
 // ===== 4. 缓存与模型可配置化契约 =====
 

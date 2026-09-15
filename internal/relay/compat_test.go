@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"antigravity-proxy/internal/settings"
 )
 
 // TestModelMapping 验证模型名称映射是否正确
@@ -106,7 +108,13 @@ func TestTranslateAnthropicToGemini(t *testing.T) {
 
 // TestHandleModelsEndpoint 验证 models 模型拉取端点的输出格式自适应
 func TestHandleModelsEndpoint(t *testing.T) {
-	handler := NewAPICompatHandler(nil, nil, nil, nil, nil, nil, nil)
+	tempDir := t.TempDir()
+	settingsMgr := settings.NewManager()
+	settingsMgr.Init(tempDir)
+	_ = settingsMgr.SetRelayModelMapping([]settings.ModelMappingEntry{
+		{ClientModel: "test-model-openai", TargetModel: "target-1", Expose: true},
+	})
+	handler := NewAPICompatHandler(nil, nil, nil, nil, nil, settingsMgr, nil)
 
 	// 1. 模拟 OpenAI 客户端拉取模型列表（不带 anthropic-version 头）
 	reqOpenAI := httptest.NewRequest(http.MethodGet, "/v1/models", nil)

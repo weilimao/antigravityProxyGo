@@ -67,6 +67,20 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		a.AddLog(fmt.Sprintf("⚙️ OCR 图片分析模型已更新: %s", getStringArg(0)))
 		return true
 
+	case "settings:get-ocr-models":
+		wailsRuntime.EventsEmit(a.ctx, "settings:ocr-models-res", a.settingsMgr.GetOcrModels())
+		return true
+
+	case "settings:set-ocr-models":
+		var models []string
+		if len(args) > 0 {
+			b, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(b, &models)
+		}
+		_ = a.settingsMgr.SetOcrModels(models)
+		a.AddLog(fmt.Sprintf("⚙️ OCR 候选竞速模型已更新: %v", models))
+		return true
+
 	case "settings:set-fallback-proxy-ports":
 		_ = a.settingsMgr.SetFallbackProxyPorts(getStringArg(0))
 		a.AddLog(fmt.Sprintf("⚙️ 自定义 Fallback 扫描端口已更新: %s", getStringArg(0)))

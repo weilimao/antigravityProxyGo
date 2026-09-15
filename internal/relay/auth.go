@@ -95,8 +95,9 @@ func (a *AuthManager) ValidateToken(token string) (*RelaySession, error) {
 			}, nil
 		}
 
-		// 识别官方/标准 Key 前缀并自动映射至启用用户或默认本地会话
-		if strings.HasPrefix(token, "sk-ant-") || strings.HasPrefix(token, "nvapi-") || strings.HasPrefix(token, "sk-") {
+		// 识别外部第三方标准 Key 前缀并自动映射至启用用户或默认本地会话 (保持单机本地开发与官方客户端兼容)
+		// 包含 Anthropic 官方 Key (sk-ant-api 开头) 或 OpenAI (sk-)、NVIDIA (nvapi-)
+		if strings.HasPrefix(token, "sk-ant-api") || strings.HasPrefix(token, "nvapi-") || (strings.HasPrefix(token, "sk-") && !strings.HasPrefix(token, "sk-ant-")) {
 			users := a.userMgr.GetUsers()
 			for _, u := range users {
 				if u.Enabled {
@@ -114,6 +115,11 @@ func (a *AuthManager) ValidateToken(token string) (*RelaySession, error) {
 				APIKeyID:  APIKeyIDDefaultBypass,
 				ExpiresAt: time.Now().Add(5 * time.Minute),
 			}, nil
+		}
+
+		// 若为平台普通 API Key 前缀 (sk-ant-) 但未在数据库中登记，严禁走 bypass 兜底，防止越权调用
+		if strings.HasPrefix(token, "sk-ant-") {
+			return nil, fmt.Errorf("invalid or unregistered api key")
 		}
 
 		return nil, fmt.Errorf("invalid token")

@@ -1,0 +1,143 @@
+<template>
+  <div class="max-w-6xl mx-auto px-4 py-8">
+    <div class="text-center mb-10">
+      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold mb-3">
+        <span class="material-symbols-outlined text-14px">workspace_premium</span>
+        <span>商业化订阅中心</span>
+      </div>
+      <h2 class="text-3xl font-extrabold text-white tracking-tight">精选会员套餐方案</h2>
+      <p class="text-sm text-slate-400 mt-2 max-w-xl mx-auto">
+        按需选择专属大模型算力包，畅享 Claude 3.7、Gemini 2.5、DeepSeek 及 Auto 首字极速并发竞速能力。
+      </p>
+    </div>
+
+    <!-- 错误信息提示 -->
+    <div v-if="errorMsg" class="max-w-md mx-auto mb-6 p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-center gap-2">
+      <span class="material-symbols-outlined text-16px">error</span>
+      <span>{{ errorMsg }}</span>
+    </div>
+
+    <!-- 加载中 -->
+    <div v-if="loading" class="text-center py-16 text-slate-400 text-sm flex flex-col items-center gap-2">
+      <span class="material-symbols-outlined animate-spin text-24px text-indigo-400">progress_activity</span>
+      <span>正在加载订阅方案...</span>
+    </div>
+
+    <!-- 套餐网格卡片 -->
+    <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div
+        v-for="plan in plans"
+        :key="plan.id"
+        class="glass-card p-6 flex flex-col justify-between relative overflow-hidden transition-all hover:-translate-y-1 hover:border-indigo-500/40 hover:shadow-lg hover:shadow-indigo-500/10"
+      >
+        <div>
+          <!-- 头部名称与描述 -->
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-lg font-bold text-white">{{ plan.name }}</h3>
+            <span class="badge badge-indigo">
+              {{ plan.durationDays === 0 ? '永久有效' : `${plan.durationDays} 天周期` }}
+            </span>
+          </div>
+          <p class="text-xs text-slate-400 mb-6 min-h-36px">{{ plan.description || '解锁高可用模型调用权限与专属算力配额' }}</p>
+
+          <!-- 价格栏 -->
+          <div class="flex items-baseline gap-1 mb-6 pb-6 border-b border-slate-800">
+            <span class="text-xs text-slate-400">¥</span>
+            <span class="text-4xl font-extrabold text-white tracking-tight">{{ (plan.priceCents / 100).toFixed(2) }}</span>
+            <span class="text-xs text-slate-400 ml-1">/ {{ plan.durationDays === 0 ? '永久' : `${plan.durationDays}天` }}</span>
+          </div>
+
+          <!-- 核心权益亮点 -->
+          <div class="flex flex-col gap-3 mb-6">
+            <div class="flex items-center gap-2 text-xs text-slate-300">
+              <span class="material-symbols-outlined text-emerald-400 text-16px">speed</span>
+              <span>速率限制: <strong class="text-white">{{ plan.rateLimit || 30 }}</strong> 次/分钟 (RPM)</span>
+            </div>
+
+            <!-- 包含模型清单展示 -->
+            <div>
+              <div class="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+                <span class="material-symbols-outlined text-indigo-400 text-16px">hub</span>
+                <span>包含并授权的模型清单:</span>
+              </div>
+              <div class="flex flex-wrap gap-1.5 max-h-120px overflow-y-auto pr-1">
+                <span
+                  v-for="model in (plan.allowedModels || [])"
+                  :key="model"
+                  class="badge badge-cyan text-10px font-mono"
+                >
+                  {{ model }}
+                </span>
+                <span v-if="!plan.allowedModels || plan.allowedModels.length === 0" class="text-11px text-slate-500">
+                  全部公共模型开放
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 购买跳转按钮 -->
+        <button
+          type="button"
+          :disabled="subscribingPlanId === plan.id"
+          class="btn-primary w-full py-2.5 mt-4 text-xs cursor-pointer"
+          @click="handleSubscribe(plan)"
+        >
+          <span class="material-symbols-outlined text-16px" v-if="subscribingPlanId !== plan.id">shopping_bag</span>
+          <span>{{ subscribingPlanId === plan.id ? '正在连接极客工坊收银台...' : '立即订阅并前往收银台' }}</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import { planApi, checkoutApi, getToken } from '../api/client'
+import { useRouter } from 'vue-router'
+
+const router = useRouter()
+const plans = ref<any[]>([])
+const loading = ref(true)
+const subscribingPlanId = ref<number | null>(null)
+const errorMsg = ref('')
+
+async function fetchPlans() {
+  loading.value = true
+  errorMsg.value = ''
+  try {
+    plans.value = await planApi.listActive()
+  } catch (err: any) {
+    errorMsg.value = err.message || '获取套餐列表失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleSubscribe(plan: any) {
+  if (!getToken()) {
+    router.push('/login?redirect=/pricing')
+    return
+  }
+
+  errorMsg.value = ''
+  subscribingPlanId.value = plan.id
+  try {
+    const res = await checkoutApi.createOrder(plan.id)
+    if (res.payUrl) {
+      // 对标 ProxySubForClash：平滑重定向跳转进入极客工坊收银台
+      window.location.href = res.payUrl
+    } else {
+      errorMsg.value = '收银台生成失败，未返回有效支付地址'
+    }
+  } catch (err: any) {
+    errorMsg.value = err.message || '发起订单失败'
+  } finally {
+    subscribingPlanId.value = null
+  }
+}
+
+onMounted(() => {
+  fetchPlans()
+})
+</script>

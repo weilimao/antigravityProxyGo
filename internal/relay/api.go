@@ -119,6 +119,18 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGetUserAutoConfig(w, r)
 	case path == "/api/models/auto-config" && r.Method == http.MethodPost:
 		h.handleSetUserAutoConfig(w, r)
+	case path == "/api/admin/users/sync" && r.Method == http.MethodPost:
+		h.handleAdminUserSync(w, r)
+	case path == "/api/admin/keys/create" && r.Method == http.MethodPost:
+		h.handleAdminKeyCreate(w, r)
+	case (path == "/api/admin/keys/delete" && (r.Method == http.MethodDelete || r.Method == http.MethodPost)):
+		h.handleAdminKeyDelete(w, r)
+	case path == "/api/admin/models/available" && r.Method == http.MethodGet:
+		h.handleAdminAvailableModels(w, r)
+	case path == "/api/admin/settings/ocr" && r.Method == http.MethodGet:
+		h.handleAdminOcrGet(w, r)
+	case path == "/api/admin/settings/ocr" && r.Method == http.MethodPost:
+		h.handleAdminOcrSet(w, r)
 	case path == "/api/sync/full" && r.Method == http.MethodGet:
 		h.handleSyncFull(w, r)
 	case path == "/api/sync/push" && r.Method == http.MethodPost:
@@ -332,9 +344,6 @@ func (h *APIHandler) handleGetAPIKeyModels(w http.ResponseWriter, r *http.Reques
 	var mapping []settings.ModelMappingEntry
 	if h.settingsMgr != nil {
 		mapping = h.settingsMgr.GetRelayModelMapping()
-	}
-	if len(mapping) == 0 {
-		mapping = settings.GetDefaultModelMappings()
 	}
 	seen := make(map[string]bool)
 	var models []string

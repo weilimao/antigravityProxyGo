@@ -170,11 +170,14 @@ type Config struct {
 	CompressionStrategy     string `json:"compressionStrategy"`
 	SummaryModel            string `json:"summaryModel"`
 	KeepRecentTurns         int    `json:"keepRecentTurns"`
-	// OcrModel 是入站 image 自愈降级时调用的本地 Gemini OCR 模型名。
+	// OcrModel 是入站 image 自愈降级时调用的本地 Gemini OCR 模型名（单模型兼容字段）。
 	// 默认 gemini-2.5-flash。前端下拉默认显示中继模型映射列表 + 兜底,可改任意 Gemini 系模型。
 	// 影响:NVIDIA/Gemini 入站 image 降级链路(URL)与 descHeader 文案。
 	// 空字符串走默认(见 GetOcrModel),不阻断主请求。
 	OcrModel string `json:"ocrModel"`
+	// OcrModels 是入站 image 自愈降级时并发竞速调用的 OCR 候选模型池。
+	// 若配置多个模型，将开启并发抢跑模式，首个成功识别文本的模型胜出并秒级 Cancel 其余候选请求。
+	OcrModels []string `json:"ocrModels,omitempty"`
 	// NVIDIA 号池 ResourceExhausted 时的服务端就地压缩参数（公共 chatcompress 引擎）。
 	NvidiaCompressEnabled         bool   `json:"nvidiaCompressEnabled"`
 	NvidiaCompressThresholdTokens int    `json:"nvidiaCompressThresholdTokens"`
@@ -257,76 +260,12 @@ type Config struct {
 	BenchmarkTimeoutMs       int      `json:"benchmarkTimeoutMs,omitempty"`
 }
 
-// DefaultOcrModel 是入站 image 自愈降级时调用的本地 Gemini OCR 模型默认值。
-// 与 relay.defaultOcrModel 同值,供 GetOcrModel 空值兜底与 EnsureConfigExists 默认注入。
-const DefaultOcrModel = "gemini-2.5-flash"
+// DefaultOcrModel 默认为空，由管理控制台平台配置驱动。
+const DefaultOcrModel = ""
 
+// GetDefaultModelMappings 返回默认模型映射列表。初始化严格为空，完全由平台控制台配置驱动。
 func GetDefaultModelMappings() []ModelMappingEntry {
-	return []ModelMappingEntry{
-		{ClientModel: "auto", TargetModel: "auto", Expose: true, TargetProvider: "google"},
-		{ClientModel: "gemini-3-flash-agent", TargetModel: "gemini-3-flash-agent", Expose: true},
-		{ClientModel: "gemini-2.5-flash-thinking", TargetModel: "gemini-2.5-flash-thinking", Expose: true},
-		{ClientModel: "gemini-2.5-pro", TargetModel: "gemini-2.5-pro", Expose: true},
-		{ClientModel: "gemini-2.0-flash-thinking-exp-01-21", TargetModel: "gemini-2.0-flash-thinking-exp-01-21", Expose: true},
-		{ClientModel: "gemini-2.0-flash-lite-preview-02-05", TargetModel: "gemini-2.0-flash-lite-preview-02-05", Expose: true},
-		{ClientModel: "gemini-2.0-pro-exp-02-05", TargetModel: "gemini-2.0-pro-exp-02-05", Expose: true},
-		{ClientModel: "gemini-2.0-flash-thinking-exp", TargetModel: "gemini-2.0-flash-thinking-exp", Expose: true},
-		{ClientModel: "gemini-2.0-flash-exp", TargetModel: "gemini-2.0-flash-exp", Expose: true},
-		{ClientModel: "gemini-1.5-pro-latest", TargetModel: "gemini-1.5-pro", Expose: true},
-		{ClientModel: "gemini-1.5-flash-latest", TargetModel: "gemini-1.5-flash", Expose: true},
-		{ClientModel: "gemini-1.5-pro-exp-0827", TargetModel: "gemini-1.5-pro-exp-0827", Expose: true},
-
-		{ClientModel: "gemini-2.0-flash-thinking-exp-1219", TargetModel: "gemini-2.0-flash-thinking-exp-1219", Expose: true},
-		{ClientModel: "gemini-exp-1206", TargetModel: "gemini-exp-1206", Expose: true},
-		{ClientModel: "gemini-exp-1121", TargetModel: "gemini-exp-1121", Expose: true},
-		{ClientModel: "gemini-exp-1114", TargetModel: "gemini-exp-1114", Expose: true},
-		{ClientModel: "gemini-1.5-pro-exp-0801", TargetModel: "gemini-1.5-pro-exp-0801", Expose: true},
-		{ClientModel: "gemini-1.5-pro-002", TargetModel: "gemini-1.5-pro-002", Expose: true},
-		{ClientModel: "gemini-1.5-pro-001", TargetModel: "gemini-1.5-pro-001", Expose: true},
-		{ClientModel: "gemini-1.5-flash-002", TargetModel: "gemini-1.5-flash-002", Expose: true},
-		{ClientModel: "gemini-1.5-flash-001", TargetModel: "gemini-1.5-flash-001", Expose: true},
-		{ClientModel: "gemini-1.5-flash-8b", TargetModel: "gemini-1.5-flash-8b", Expose: true},
-		{ClientModel: "text-embedding-004", TargetModel: "text-embedding-004", Expose: true},
-		{ClientModel: "text-embedding-003", TargetModel: "text-embedding-003", Expose: true},
-
-		{ClientModel: "gemini-1.5-flash-exp-0827", TargetModel: "gemini-1.5-flash-exp-0827", Expose: true},
-		{ClientModel: "gemini-1.5-flash-8b-exp-0827", TargetModel: "gemini-1.5-flash-8b-exp-0827", Expose: true},
-		{ClientModel: "learnlm-1.5-pro-experimental", TargetModel: "learnlm-1.5-pro-experimental", Expose: true},
-		{ClientModel: "gemini-1.0-pro", TargetModel: "gemini-1.0-pro", Expose: true},
-		{ClientModel: "aqa", TargetModel: "aqa", Expose: true},
-		{ClientModel: "gemini-3.5-flash-low", TargetModel: "gemini-3.5-flash-low", Expose: true},
-		{ClientModel: "gemini-pro-agent", TargetModel: "gemini-pro-agent", Expose: true},
-		{ClientModel: "claude-sonnet-4-6", TargetModel: "claude-sonnet-4-6", Expose: true},
-		{ClientModel: "claude-opus-4-6-thinking", TargetModel: "claude-opus-4-6-thinking", Expose: true},
-		{ClientModel: "gemini-3-flash", TargetModel: "gemini-3-flash", Expose: true},
-		{ClientModel: "tab_flash_lite_preview", TargetModel: "tab_flash_lite_preview", Expose: true},
-		{ClientModel: "gemini-3.5-flash-extra-low", TargetModel: "gemini-3.5-flash-extra-low", Expose: true},
-		{ClientModel: "tab_jump_flash_lite_preview", TargetModel: "tab_jump_flash_lite_preview", Expose: true},
-		{ClientModel: "gemini-3.1-flash-lite", TargetModel: "gemini-3.1-flash-lite", Expose: true},
-		{ClientModel: "gemini-3.1-pro-low", TargetModel: "gemini-3.1-pro-low", Expose: true},
-		{ClientModel: "gemini-2.5-flash", TargetModel: "gemini-2.5-flash", Expose: true},
-		{ClientModel: "gemini-2.5-flash-lite", TargetModel: "gemini-2.5-flash-lite", Expose: true},
-		{ClientModel: "gemini-3.5-flash", TargetModel: "gemini-3.5-flash", Expose: true},
-		{ClientModel: "gemini-3.1-pro-preview", TargetModel: "gemini-3.1-pro-preview", Expose: true},
-		{ClientModel: "gemini-3-flash-preview", TargetModel: "gemini-3-flash-preview", Expose: true},
-		{ClientModel: "gpt-cos-120b-medium", TargetModel: "gpt-cos-120b-medium", Expose: true},
-		{ClientModel: "gemini-1.5-pro", TargetModel: "gemini-1.5-pro", Expose: true},
-		{ClientModel: "gemini-1.5-flash", TargetModel: "gemini-1.5-flash", Expose: true},
-		{ClientModel: "gemini-2.0-flash", TargetModel: "gemini-2.0-flash", Expose: true},
-		{ClientModel: "gemini-2.0-pro-exp-02-05", TargetModel: "gemini-2.0-pro-exp-02-05", Expose: true},
-
-		{ClientModel: "claude-3-5-sonnet", TargetModel: "gemini-1.5-pro", Expose: false},
-		{ClientModel: "claude-3-opus", TargetModel: "gemini-1.5-pro", Expose: false},
-		{ClientModel: "claude-3-haiku", TargetModel: "gemini-1.5-flash", Expose: false},
-		{ClientModel: "claude-3-5-haiku", TargetModel: "gemini-1.5-flash", Expose: false},
-		{ClientModel: "gpt-4o", TargetModel: "gemini-1.5-pro", Expose: false},
-		{ClientModel: "gpt-4-turbo", TargetModel: "gemini-1.5-pro", Expose: false},
-		{ClientModel: "gpt-4", TargetModel: "gemini-1.5-pro", Expose: false},
-		{ClientModel: "gpt-3.5", TargetModel: "gemini-1.5-flash", Expose: false},
-		{ClientModel: "o1-mini", TargetModel: "gemini-1.5-flash", Expose: false},
-		{ClientModel: "o1-pro", TargetModel: "gemini-2.0-flash", Expose: false},
-		{ClientModel: "o1-preview", TargetModel: "gemini-2.0-flash", Expose: false},
-	}
+	return []ModelMappingEntry{}
 }
 
 type SessionOptimizationConfig struct {
@@ -442,6 +381,9 @@ type ManagerInterface interface {
 	// GetOcrModel/SetOcrModel: 入站 image 自愈降级使用的本地 Gemini OCR 模型,前端可配置。
 	GetOcrModel() string
 	SetOcrModel(val string) error
+	// GetOcrModels/SetOcrModels: 入站 image 自愈降级并发竞速候选模型池。
+	GetOcrModels() []string
+	SetOcrModels(val []string) error
 	GetEnableDebuggerMode() bool
 	SetEnableDebuggerMode(enable bool) error
 	GetDebuggerLogPath() string

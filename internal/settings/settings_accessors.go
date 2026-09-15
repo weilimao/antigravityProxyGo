@@ -197,12 +197,12 @@ func (m *Manager) SetRelayDomainWhitelist(val []string) error {
 
 // ============ 模型映射(复杂逻辑,set 回调内计算 deleted) ============
 
-// GetRelayModelMapping 空且无删除记录时返回默认映射,与原实现一致。
+// GetRelayModelMapping 读取中继模型映射。若未配置返回空切片，由平台配置驱动。
 func (m *Manager) GetRelayModelMapping() []ModelMappingEntry {
 	m.RLock()
 	defer m.RUnlock()
-	if len(m.config.RelayModelMapping) == 0 && len(m.config.DeletedModelMappings) == 0 {
-		return GetDefaultModelMappings()
+	if len(m.config.RelayModelMapping) == 0 {
+		return []ModelMappingEntry{}
 	}
 	return m.config.RelayModelMapping
 }
@@ -217,22 +217,15 @@ func (m *Manager) GetRelayModelMappingSafe() []ModelMappingEntry {
 	return m.GetRelayModelMapping()
 }
 
-// SetRelayModelMapping 在写锁内计算被删除的默认映射,再落盘,逻辑与原实现一致。
+// SetRelayModelMapping 持久化中继模型映射，由管理控制台平台显式配置驱动。
 func (m *Manager) SetRelayModelMapping(val []ModelMappingEntry) error {
 	return setSetting(m, func(c *Config, v []ModelMappingEntry) {
-		defaults := GetDefaultModelMappings()
-		existingInVal := make(map[string]bool)
-		for _, entry := range v {
-			existingInVal[entry.ClientModel] = true
+		c.DeletedModelMappings = []string{}
+		if v == nil {
+			c.RelayModelMapping = []ModelMappingEntry{}
+		} else {
+			c.RelayModelMapping = v
 		}
-		var deleted []string
-		for _, def := range defaults {
-			if !existingInVal[def.ClientModel] {
-				deleted = append(deleted, def.ClientModel)
-			}
-		}
-		c.DeletedModelMappings = deleted
-		c.RelayModelMapping = v
 	}, val)
 }
 

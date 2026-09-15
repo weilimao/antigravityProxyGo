@@ -269,6 +269,17 @@ func (m *UserManager) GetUserByID(id string) *RelayUser {
 	return nil
 }
 
+func (m *UserManager) GetUserByKey(key string) *RelayUser {
+	m.RLock()
+	defer m.RUnlock()
+	for _, u := range m.users {
+		if u.Key == key {
+			return u
+		}
+	}
+	return nil
+}
+
 func (m *UserManager) ValidateCredentials(key, password string) (*RelayUser, error) {
 	m.RLock()
 	defer m.RUnlock()
@@ -315,6 +326,87 @@ func (m *UserManager) DeleteAPIKey(userID string, keyID string) error {
 		if u.ID == userID {
 			for i, k := range u.APIKeys {
 				if k.ID == keyID {
+					u.APIKeys = append(u.APIKeys[:i], u.APIKeys[i+1:]...)
+					m.saveToDiskLocked()
+					return nil
+				}
+			}
+			return fmt.Errorf("api key not found")
+		}
+	}
+	return fmt.Errorf("user not found")
+}
+
+// SyncOrAddUser 供 Web 平台同步用户：若用户已存在则启用，若不存在则创建
+func (m *UserManager) SyncOrAddUser(key, password, remark string) (*RelayUser, error) {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.Key == key {
+			u.Enabled = true
+			if password != "" {
+				u.PasswordHash = hashPassword(password)
+			}
+			if remark != "" {
+				u.Remark = remark
+			}
+			m.saveToDiskLocked()
+			return u, nil
+		}
+	}
+
+	user := &RelayUser{
+		ID:           generateID(),
+		Key:          key,
+		PasswordHash: hashPassword(password),
+		Enabled:      true,
+		CreatedAt:    time.Now(),
+		Remark:       remark,
+		Role:         "user",
+	}
+	m.users = append(m.users, user)
+	m.saveToDiskLocked()
+	return user, nil
+}
+
+// CreateAPIKeyWithOptions 为用户创建 API Key，支持指定密钥串、授权模型白名单与额度
+func (m *UserManager) CreateAPIKeyWithOptions(userIdentifier, name, customKey string, allowedModels []string, limitGemini, limitClaude int64) (*UserAPIKey, error) {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.ID == userIdentifier || u.Key == userIdentifier {
+			keyStr := strings.TrimSpace(customKey)
+			if keyStr == "" {
+				keyStr = "sk-ant-" + generateID()
+			}
+			newKey := UserAPIKey{
+				ID:                generateID(),
+				Name:              name,
+				Key:               keyStr,
+				CreatedAt:         time.Now(),
+				AllowedModels:     allowedModels,
+				LimitGeminiTokens: limitGemini,
+				LimitClaudeTokens: limitClaude,
+			}
+			u.APIKeys = append(u.APIKeys, newKey)
+			m.saveToDiskLocked()
+			return &newKey, nil
+		}
+	}
+	return nil, fmt.Errorf("user not found")
+}
+
+// DeleteAPIKeyByKey 根据 key 密钥内容或 ID 物理删除对应 API Key
+func (m *UserManager) DeleteAPIKeyByKey(userIdentifier string, keyOrID string) error {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.ID == userIdentifier || u.Key == userIdentifier {
+			for i, k := range u.APIKeys {
+				if k.ID == keyOrID || k.Key == keyOrID {
 					u.APIKeys = append(u.APIKeys[:i], u.APIKeys[i+1:]...)
 					m.saveToDiskLocked()
 					return nil

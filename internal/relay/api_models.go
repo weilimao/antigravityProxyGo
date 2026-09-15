@@ -12,15 +12,10 @@ import (
 func (h *APIHandler) handleGetModelMapping(w http.ResponseWriter, r *http.Request) {
 	token := extractBearerToken(r)
 	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing token"})
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "unauthorized: missing token"})
 		return
 	}
-	session, err := h.authMgr.ValidateToken(token)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": err.Error()})
-		return
-	}
-	if !session.IsAdmin {
+	if !h.checkAdminAuth(r) {
 		writeJSON(w, http.StatusForbidden, map[string]interface{}{"error": "permission denied: admin only"})
 		return
 	}
@@ -44,15 +39,10 @@ func (h *APIHandler) handleGetModelMapping(w http.ResponseWriter, r *http.Reques
 func (h *APIHandler) handleSetModelMapping(w http.ResponseWriter, r *http.Request) {
 	token := extractBearerToken(r)
 	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "missing token"})
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": "unauthorized: missing token"})
 		return
 	}
-	session, err := h.authMgr.ValidateToken(token)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"error": err.Error()})
-		return
-	}
-	if !session.IsAdmin {
+	if !h.checkAdminAuth(r) {
 		writeJSON(w, http.StatusForbidden, map[string]interface{}{"error": "permission denied: admin only"})
 		return
 	}

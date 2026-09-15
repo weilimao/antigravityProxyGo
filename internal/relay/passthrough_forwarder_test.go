@@ -34,6 +34,14 @@ func (s *stubPassThroughSettings) GetRelayModelMapping() []settings.ModelMapping
 	return nil
 }
 
+func (s *stubPassThroughSettings) GetOcrModel() string {
+	return ""
+}
+
+func (s *stubPassThroughSettings) GetOcrModels() []string {
+	return []string{}
+}
+
 // stubPassThroughSettingsModelMapping 提供 RelayModelMapping(含 TargetProvider/TargetGroupID),
 // 供需把入站 model 路由到 Other 号池某分组(如 other/aliyun/*)的测试使用。
 type stubPassThroughSettingsModelMapping struct {
@@ -43,6 +51,14 @@ type stubPassThroughSettingsModelMapping struct {
 
 func (s *stubPassThroughSettingsModelMapping) GetRelayModelMapping() []settings.ModelMappingEntry {
 	return s.mappings
+}
+
+func (s *stubPassThroughSettingsModelMapping) GetOcrModel() string {
+	return ""
+}
+
+func (s *stubPassThroughSettingsModelMapping) GetOcrModels() []string {
+	return []string{}
 }
 
 // newPassThroughHandler 构造一个装配了 accountMgr + 自定义 routes 的 handler,

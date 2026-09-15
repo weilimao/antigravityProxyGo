@@ -18,10 +18,10 @@ import (
 // 供 DowngradeAnthropicImagesToText 把 image 块原地改写为 text 块时使用。
 // 同时被 DowngradeGeminiImagesToText 复用(Gemini 入站自愈链路文案与 Anthropic 链路一致)。
 //
-// ocrModel 参数化:文案里展示真实使用的 OCR 模型,前端改模型后文案随之变化。
 func nvidiaImageOcrDescHeader(ocrModel, ocrText string) string {
-	if strings.TrimSpace(ocrModel) == "" {
-		ocrModel = "gemini-2.5-flash"
+	ocrModel = strings.TrimSpace(ocrModel)
+	if ocrModel == "" {
+		return "\n\n[本地中继服务已协助分析了用户发送的截图，内容提取如下：]\n" + ocrText + "\n[图片分析内容结束]\n"
 	}
 	return ocrDescHeaderRaw(ocrModel, ocrText)
 }
@@ -29,6 +29,10 @@ func nvidiaImageOcrDescHeader(ocrModel, ocrText string) string {
 // ocrDescHeaderRaw 是 nvidiaImageOcrDescHeader 的无默认值兜底版,
 // 供 Gemini 链路同样以 ocrModel 参数化生成文案,语义完全一致。
 func ocrDescHeaderRaw(ocrModel, ocrText string) string {
+	ocrModel = strings.TrimSpace(ocrModel)
+	if ocrModel == "" {
+		return "\n\n[本地中继服务已协助分析了用户发送的截图，内容提取如下：]\n" + ocrText + "\n[图片分析内容结束]\n"
+	}
 	return "\n\n[本地中继服务已自动调用 " + ocrModel + " 协助分析了用户发送的截图，内容提取如下：]\n" + ocrText + "\n[图片分析内容结束]\n"
 }
 
