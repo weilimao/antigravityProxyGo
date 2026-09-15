@@ -800,10 +800,12 @@ export function initDashboardEvents() {
 
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
-            console.log('[Dashboard] Window visible, syncing state and logs from backend...');
             ipcRenderer.send('get-state');
         }
     });
+
+    // 监听器注册完毕后立即主动拉取一次最新状态与统计数据，杜绝首屏时序丢失
+    ipcRenderer.send('get-state');
 }
 
 export function renderModelsTable(stats: any) {

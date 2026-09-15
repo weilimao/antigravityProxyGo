@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/settings"
 	internalstats "antigravity-proxy/internal/stats"
@@ -22,9 +23,12 @@ type APIHandler struct {
 	caCertProvider     func() ([]byte, error)
 	loginLimiter       *RateLimiter
 	settingsMgr        settings.ManagerInterface
+	accountMgr         *account.Manager
 	dataDir            string
 	onSyncReload       func(string)
 	globalStatsTracker *internalstats.Tracker
+	platformRouter     http.Handler
+	benchmarkScheduler BenchmarkScheduler
 }
 
 func (h *APIHandler) SetCACertProvider(fn func() ([]byte, error)) {
@@ -41,6 +45,14 @@ func (h *APIHandler) SetDataDir(dir string) {
 
 func (h *APIHandler) SetOnSyncReload(fn func(string)) {
 	h.onSyncReload = fn
+}
+
+func (h *APIHandler) SetPlatformRouter(router http.Handler) {
+	h.platformRouter = router
+}
+
+func (h *APIHandler) SetBenchmarkScheduler(b BenchmarkScheduler) {
+	h.benchmarkScheduler = b
 }
 
 func compareQuotas(q1, q2 UserQuotas) bool {
@@ -69,8 +81,11 @@ func compareQuotas(q1, q2 UserQuotas) bool {
 		rl1 == rl2
 }
 
-func NewAPIHandler(authMgr *AuthManager, statsMgr *StatsTracker, packageMgr *PackageManager, logFn func(string), caCertPath string, settingsMgr settings.ManagerInterface) *APIHandler {
-	return &APIHandler{
+func NewAPIHandler(authMgr *AuthManager, statsMgr *StatsTracker, packageMgr *PackageManager, logFn func(string), caCertPath string, settingsMgr settings.ManagerInterface, accountMgr *account.Manager) *APIHandler {
+	if logFn == nil {
+		logFn = func(string) {}
+	}
+	h := &APIHandler{
 		authMgr:      authMgr,
 		statsMgr:     statsMgr,
 		packageMgr:   packageMgr,
@@ -78,7 +93,9 @@ func NewAPIHandler(authMgr *AuthManager, statsMgr *StatsTracker, packageMgr *Pac
 		caCertPath:   caCertPath,
 		loginLimiter: NewRateLimiter(),
 		settingsMgr:  settingsMgr,
+		accountMgr:   accountMgr,
 	}
+	return h
 }
 
 func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -123,18 +140,40 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleAdminUserSync(w, r)
 	case path == "/api/admin/keys/create" && r.Method == http.MethodPost:
 		h.handleAdminKeyCreate(w, r)
-	case (path == "/api/admin/keys/delete" && (r.Method == http.MethodDelete || r.Method == http.MethodPost)):
+	case path == "/api/admin/keys/delete" && (r.Method == http.MethodDelete || r.Method == http.MethodPost):
 		h.handleAdminKeyDelete(w, r)
 	case path == "/api/admin/models/available" && r.Method == http.MethodGet:
 		h.handleAdminAvailableModels(w, r)
+	case path == "/api/admin/models/other-groups" && r.Method == http.MethodGet:
+		h.handleAdminOtherGroups(w, r)
+	case path == "/api/admin/models/fetch-channel" && (r.Method == http.MethodPost || r.Method == http.MethodGet):
+		h.handleAdminFetchChannelModels(w, r)
+	case path == "/api/admin/models/fetch-other" && r.Method == http.MethodPost:
+		h.handleAdminFetchOtherGroupModels(w, r)
 	case path == "/api/admin/settings/ocr" && r.Method == http.MethodGet:
 		h.handleAdminOcrGet(w, r)
 	case path == "/api/admin/settings/ocr" && r.Method == http.MethodPost:
 		h.handleAdminOcrSet(w, r)
+	case path == "/api/admin/benchmark" && r.Method == http.MethodGet:
+		h.handleAdminBenchmarkGet(w, r)
+	case path == "/api/admin/benchmark/config" && r.Method == http.MethodPost:
+		h.handleAdminBenchmarkSetConfig(w, r)
+	case path == "/api/admin/benchmark/run" && r.Method == http.MethodPost:
+		h.handleAdminBenchmarkRun(w, r)
+	case path == "/api/admin/benchmark/run-model" && r.Method == http.MethodPost:
+		h.handleAdminBenchmarkRunModel(w, r)
+	case path == "/api/admin/benchmark/models" && r.Method == http.MethodGet:
+		h.handleAdminBenchmarkModels(w, r)
 	case path == "/api/sync/full" && r.Method == http.MethodGet:
 		h.handleSyncFull(w, r)
 	case path == "/api/sync/push" && r.Method == http.MethodPost:
 		h.handleSyncPush(w, r)
+	case strings.HasPrefix(path, "/api/v1/"):
+		if h.platformRouter != nil {
+			h.platformRouter.ServeHTTP(w, r)
+			return
+		}
+		fallthrough
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]interface{}{
 			"error": "not found",

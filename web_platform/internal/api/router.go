@@ -34,6 +34,7 @@ func SetupRouter() *gin.Engine {
 	adminMappingH := admin.NewAdminMappingHandler()
 	adminOcrH := admin.NewAdminOcrHandler()
 	adminAutoH := admin.NewAdminAutoHandler()
+	adminBenchmarkH := admin.NewAdminBenchmarkHandler()
 
 	// 1. 公开端点
 	v1 := r.Group("/api/v1")
@@ -93,6 +94,9 @@ func SetupRouter() *gin.Engine {
 		adminGroup.POST("/models/mappings/pull", adminMappingH.PullMappings)
 		adminGroup.GET("/models/mapping-clients", adminMappingH.GetMappingClientModels)
 		adminGroup.GET("/models/available", adminMappingH.GetAvailableModels)
+		adminGroup.GET("/models/other-groups", adminMappingH.GetOtherGroups)
+		adminGroup.POST("/models/fetch-channel", adminMappingH.FetchChannelModels)
+		adminGroup.POST("/models/fetch-other", adminMappingH.FetchOtherModels)
 
 		// OCR 图像自愈降级模型配置
 		adminGroup.GET("/settings/ocr", adminOcrH.GetOcrModel)
@@ -103,6 +107,13 @@ func SetupRouter() *gin.Engine {
 		adminGroup.GET("/models/auto-config", adminAutoH.GetAutoConfig)
 		adminGroup.POST("/models/auto-config", adminAutoH.SetAutoConfig)
 		adminGroup.POST("/models/auto-config/pull", adminAutoH.PullAutoConfig)
+
+		// 竞速测试 (Benchmark)
+		adminGroup.GET("/benchmark", adminBenchmarkH.GetBenchmark)
+		adminGroup.POST("/benchmark/config", adminBenchmarkH.SetBenchmarkConfig)
+		adminGroup.POST("/benchmark/run", adminBenchmarkH.RunBenchmark)
+		adminGroup.POST("/benchmark/run-model", adminBenchmarkH.RunBenchmarkModel)
+		adminGroup.GET("/benchmark/models", adminBenchmarkH.GetBenchmarkModels)
 	}
 
 	return r

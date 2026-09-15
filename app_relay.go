@@ -9,6 +9,8 @@ import (
 
 	"antigravity-proxy/internal/cert"
 	"antigravity-proxy/internal/patch"
+	platformapi "antigravity-proxy/internal/platform/api"
+	platformdb "antigravity-proxy/internal/platform/db"
 	"antigravity-proxy/internal/proxy"
 	"antigravity-proxy/internal/relay"
 
@@ -73,6 +75,7 @@ func (a *App) stopRelayServer() {
 	if a.relayStatsMgr != nil {
 		a.relayStatsMgr.Close()
 	}
+	platformdb.CloseDB()
 }
 
 // ensureRelayInitialized initializes relay components if not already done.
@@ -82,6 +85,26 @@ func (a *App) ensureRelayInitialized() {
 	}
 
 	activeDir := a.settingsMgr.GetActiveDataDirectory()
+
+	// Initialize platform database (dual-mode: SQLite / Remote MySQL)
+	// We use the same host as RemoteHost if PlatformMySQLMode is true, 
+	// with the specific port and credentials for the platform MySQL instance.
+	go func() {
+		err := platformdb.InitDB(platformdb.Config{
+			DataDir:        activeDir,
+			RemoteEnabled:  a.settingsMgr.GetPlatformMySQLMode(),
+			RemoteHost:     a.settingsMgr.GetRemoteHost(),
+			RemotePort:     "39306",
+			RemoteUser:     "root",
+			RemotePassword: "ProxySub2026SecDbPass99",
+			RemoteDBName:   "antigravity_platform",
+		})
+		if err != nil {
+			a.AddLog(fmt.Sprintf("❌ Failed to initialize platform database: %v", err))
+		} else {
+			a.AddLog("✅ Platform database initialized successfully")
+		}
+	}()
 
 	a.relayUserMgr = relay.NewUserManager()
 	a.relayUserMgr.Init(activeDir)
@@ -95,8 +118,11 @@ func (a *App) ensureRelayInitialized() {
 	a.relayStatsMgr.Init(activeDir)
 
 	caCertPath := filepath.Join(activeDir, "certs", "certs", "ca.pem")
-	a.relayAPIMgr = relay.NewAPIHandler(a.relayAuthMgr, a.relayStatsMgr, a.relayPackageMgr, a.AddLog, caCertPath, a.settingsMgr)
+	a.relayAPIMgr = relay.NewAPIHandler(a.relayAuthMgr, a.relayStatsMgr, a.relayPackageMgr, a.AddLog, caCertPath, a.settingsMgr, a.accountMgr)
 	a.relayAPIMgr.SetGlobalStatsTracker(a.statsTracker)
+	
+	// Inject platform API Gin router
+	a.relayAPIMgr.SetPlatformRouter(platformapi.SetupRouter())
 
 	a.relayCompatAPIMgr = relay.NewAPICompatHandler(
 		a.relayAuthMgr,

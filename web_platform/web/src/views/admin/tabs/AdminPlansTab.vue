@@ -171,32 +171,6 @@
               </div>
             </div>
 
-            <!-- 候选模型快速添加池 -->
-            <div>
-              <span class="text-11px text-slate-400 block mb-1.5">快速勾选候选模型:</span>
-              <div v-if="availableModels.length > 0" class="flex flex-wrap gap-1.5">
-                <button
-                  v-for="cand in availableModels"
-                  :key="cand"
-                  type="button"
-                  class="px-2 py-0.5 rounded text-11px font-mono transition-all cursor-pointer border flex items-center gap-1"
-                  :class="form.allowedModels.includes(cand)
-                    ? (cand === 'auto' ? 'bg-amber-600 text-white border-amber-500' : 'bg-indigo-600 text-white border-indigo-500')
-                    : (cand === 'auto' ? 'bg-amber-950/40 text-amber-300 border-amber-700/50 hover:bg-amber-900/50' : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white')"
-                  @click="toggleModel(cand)"
-                >
-                  <span v-if="cand === 'auto'" class="material-symbols-outlined text-12px text-amber-400">bolt</span>
-                  <span>{{ cand }}</span>
-                  <span v-if="cand === 'auto' && autoCandidateModels.length > 0" class="text-[10px] opacity-75 font-sans">
-                    ({{ autoCandidateModels.length }})
-                  </span>
-                </button>
-              </div>
-              <div v-else class="text-[11px] text-slate-500 italic flex items-center gap-1 py-1">
-                <span class="material-symbols-outlined text-14px">info</span>
-                <span>平台暂未配置可用模型映射，请先在上方「模型映射配置」Tab 中添加入站模型。</span>
-              </div>
-            </div>
           </div>
 
           <div class="flex items-center justify-end gap-3 pt-2">
@@ -310,15 +284,6 @@ function openEditModal(plan: any) {
   form.status = plan.status
   form.allowedModels = [...(plan.allowedModels || [])]
   showModal.value = true
-}
-
-function toggleModel(modelName: string) {
-  const idx = form.allowedModels.indexOf(modelName)
-  if (idx >= 0) {
-    form.allowedModels.splice(idx, 1)
-  } else {
-    form.allowedModels.push(modelName)
-  }
 }
 
 async function savePlan() {

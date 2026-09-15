@@ -12,7 +12,7 @@ import (
 	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/settings"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/glebarez/go-sqlite"
 )
 
 // MockRoundTripper 用于 Mock http.Client 的请求响应

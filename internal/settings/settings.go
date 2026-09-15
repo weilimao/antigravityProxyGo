@@ -138,6 +138,7 @@ type Config struct {
 	RemoteKey            string              `json:"remoteKey"`
 	RemotePassword       string              `json:"remotePassword"`
 	RemoteEnabled        bool                `json:"remoteEnabled"`
+	PlatformMySQLMode    bool                `json:"platformMySQLMode"`
 	RelaySSRFBlock       bool                `json:"relaySSRFBlock"`
 	RelayPortBlock       bool                `json:"relayPortBlock"`
 	RelayDomainFilter    bool                `json:"relayDomainFilter"`
@@ -321,6 +322,8 @@ type ManagerInterface interface {
 	SetRemotePassword(pwd string) error
 	GetRemoteEnabled() bool
 	SetRemoteEnabled(enabled bool) error
+	GetPlatformMySQLMode() bool
+	SetPlatformMySQLMode(val bool) error
 	GetRelaySSRFBlock() bool
 	SetRelaySSRFBlock(val bool) error
 	GetRelayPortBlock() bool

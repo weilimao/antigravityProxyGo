@@ -91,3 +91,45 @@ func (h *AdminMappingHandler) GetMappingClientModels(c *gin.Context) {
 	response.Success(c, models)
 }
 
+func (h *AdminMappingHandler) GetOtherGroups(c *gin.Context) {
+	res, err := h.syncService.GetGatewayOtherGroups()
+	if err != nil {
+		response.Fail(c, 500, "获取其他组失败: "+err.Error())
+		return
+	}
+	// res 已经是 map[string]interface{}
+	c.JSON(200, res)
+}
+
+func (h *AdminMappingHandler) FetchChannelModels(c *gin.Context) {
+	var req struct {
+		Channel string `json:"channel"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, 400, "参数格式错误: "+err.Error())
+		return
+	}
+	res, err := h.syncService.FetchGatewayChannelModels(req.Channel)
+	if err != nil {
+		response.Fail(c, 500, "获取模型快照失败: "+err.Error())
+		return
+	}
+	c.JSON(200, res)
+}
+
+func (h *AdminMappingHandler) FetchOtherModels(c *gin.Context) {
+	var req struct {
+		GroupId string `json:"groupId"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, 400, "参数格式错误: "+err.Error())
+		return
+	}
+	res, err := h.syncService.FetchGatewayOtherGroupModels(req.GroupId)
+	if err != nil {
+		response.Fail(c, 500, "获取其他组模型快照失败: "+err.Error())
+		return
+	}
+	c.JSON(200, res)
+}
+

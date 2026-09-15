@@ -11,6 +11,7 @@ import (
 	"antigravity-web-platform/internal/model"
 
 	"github.com/glebarez/sqlite"
+	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -21,6 +22,8 @@ func InitDB(cfg *config.Config) (*gorm.DB, error) {
 	var dialector gorm.Dialector
 
 	switch cfg.Database.Type {
+	case "mysql":
+		dialector = mysql.Open(cfg.Database.DSN)
 	case "sqlite":
 		dir := filepath.Dir(cfg.Database.DSN)
 		if dir != "." && dir != "" {

@@ -1,5 +1,5 @@
 <template>
-  <div class="max-w-3xl flex flex-col gap-6">
+  <div class="w-full flex flex-col gap-6">
     <div class="glass-card p-6">
       <div class="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
         <div class="flex items-center gap-3">
@@ -51,7 +51,7 @@
               <span>默认候选参赛模型池 (Candidate Models，已选 {{ autoConfig.candidateModels.length }} 个)</span>
             </label>
             <span class="text-[11px] text-slate-500">
-              数据源: Go Relay 服务端网关 (共 {{ availableModels.length }} 个可用模型)
+              当前竞速候选: {{ autoConfig.candidateModels.length }} 个模型 (支持手动输入添加)
             </span>
           </div>
 
@@ -112,17 +112,20 @@
         </div>
       </div>
     </div>
+
+    <!-- 测速卡片 -->
+    <BenchmarkCard />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { autoApi, mappingApi } from '../../../api/client'
+import BenchmarkCard from './BenchmarkCard.vue'
 import ModelSearchSelect from '../../../components/common/ModelSearchSelect.vue'
 
 const saving = ref(false)
 const pulling = ref(false)
-const availableModels = ref<string[]>([])
 
 const autoConfig = reactive({
   enabled: true,
@@ -130,17 +133,11 @@ const autoConfig = reactive({
   useBenchmarkPool: true,
 })
 
-const quickModels = computed(() => {
-  return availableModels.value.filter(m => m !== 'auto').slice(0, 12)
-})
+const availableModels = ref<string[]>([])
 
-async function fetchAvailableModels() {
-  try {
-    availableModels.value = await mappingApi.getAvailableModels()
-  } catch (err) {
-    console.error('获取服务端模型列表失败:', err)
-  }
-}
+const quickModels = computed(() => {
+  return autoConfig.candidateModels.filter(m => m !== 'auto').slice(0, 12)
+})
 
 async function fetchConfig() {
   try {
@@ -152,6 +149,17 @@ async function fetchConfig() {
     }
   } catch (err) {
     console.error('加载 Auto 配置失败:', err)
+  }
+}
+
+async function fetchAvailableModels() {
+  try {
+    const res = await mappingApi.getAvailableModels()
+    if (res && Array.isArray(res)) {
+      availableModels.value = res
+    }
+  } catch (err) {
+    console.error('加载可用模型列表失败:', err)
   }
 }
 
@@ -173,8 +181,7 @@ async function pullFromGateway() {
       autoConfig.candidateModels = Array.isArray(res.candidateModels) ? res.candidateModels : []
       autoConfig.useBenchmarkPool = res.useBenchmarkPool ?? true
     }
-    await fetchAvailableModels()
-    alert(`已成功从 Go Relay 服务端同步 ${availableModels.value.length} 个可用模型与 Auto 竞速规则！`)
+    alert(`已成功从 Go Relay 服务端同步 Auto 竞速规则！(候选模型: ${autoConfig.candidateModels.length} 个)`)
   } catch (err: any) {
     alert(err.message || '从服务端网关拉取失败')
   } finally {
@@ -195,6 +202,22 @@ async function saveConfig() {
 }
 
 onMounted(async () => {
-  await Promise.all([fetchConfig(), fetchAvailableModels()])
+  await Promise.all([
+    fetchConfig(),
+    fetchAvailableModels()
+  ])
+  // 本地无候选模型时，自动从网关拉取服务端真实配置
+  if (autoConfig.candidateModels.length === 0) {
+    try {
+      const res = await autoApi.pullGlobalConfig()
+      if (res) {
+        autoConfig.enabled = res.enabled ?? true
+        autoConfig.candidateModels = Array.isArray(res.candidateModels) ? res.candidateModels : []
+        autoConfig.useBenchmarkPool = res.useBenchmarkPool ?? true
+      }
+    } catch (err) {
+      console.warn('自动从网关拉取 Auto 配置失败，可手动点击"从服务端同步":', err)
+    }
+  }
 })
 </script>

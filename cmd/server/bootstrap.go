@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/benchmark"
 	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/proxy"
@@ -48,8 +49,9 @@ type ServerInstance struct {
 	RelayAuthMgr      *relay.AuthManager
 	RelayStatsMgr     *relay.StatsTracker
 	RelayAPIMgr       *relay.APIHandler
-	RelayCompatAPIMgr *relay.APICompatHandler
-	RelayServer       *relay.RelayServer
+	RelayCompatAPIMgr  *relay.APICompatHandler
+	RelayServer        *relay.RelayServer
+	BenchmarkScheduler *benchmark.Scheduler
 	logFn             func(string)
 
 	ctx       context.Context
@@ -227,7 +229,7 @@ func NewServerInstance(cfg ServerConfig, logFn func(string)) (*ServerInstance, e
 		inst.logFn(fmt.Sprintf("⚠️ 检查/生成服务端 CA 证书提示: %v", err))
 	}
 
-	inst.RelayAPIMgr = relay.NewAPIHandler(inst.RelayAuthMgr, inst.RelayStatsMgr, inst.RelayPackageMgr, inst.logFn, caCertPath, inst.SettingsMgr)
+	inst.RelayAPIMgr = relay.NewAPIHandler(inst.RelayAuthMgr, inst.RelayStatsMgr, inst.RelayPackageMgr, inst.logFn, caCertPath, inst.SettingsMgr, inst.AccountMgr)
 	inst.RelayAPIMgr.SetCACertProvider(ensureServerCACert)
 	inst.RelayAPIMgr.SetDataDir(cfg.DataDir)
 	inst.RelayAPIMgr.SetGlobalStatsTracker(inst.StatsTracker)
@@ -251,6 +253,9 @@ func NewServerInstance(cfg ServerConfig, logFn func(string)) (*ServerInstance, e
 	)
 	inst.RelayCompatAPIMgr.SetGlobalStatsTracker(inst.StatsTracker)
 	inst.RelayCompatAPIMgr.WireOcrRouteResolver()
+
+	inst.BenchmarkScheduler = benchmark.NewScheduler(inst.SettingsMgr, inst.RelayCompatAPIMgr, inst.logFn, nil)
+	inst.RelayAPIMgr.SetBenchmarkScheduler(inst.BenchmarkScheduler)
 
 	inst.RelayServer = relay.NewRelayServer(
 		inst.ProxyEngine,
@@ -289,6 +294,10 @@ func (s *ServerInstance) Start() error {
 			}
 		}
 	}()
+
+	if s.BenchmarkScheduler != nil {
+		s.BenchmarkScheduler.Start()
+	}
 
 	// 启动 Relay Server
 	port := s.Config.Port
@@ -335,6 +344,9 @@ func (s *ServerInstance) Shutdown(ctx context.Context) error {
 		}
 		if s.RelayStatsMgr != nil {
 			s.RelayStatsMgr.Close()
+		}
+		if s.BenchmarkScheduler != nil {
+			s.BenchmarkScheduler.Stop()
 		}
 		db.CloseDB()
 		close(done)

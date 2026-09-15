@@ -1,18 +1,11 @@
 package main
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"sort"
 	"strings"
-	"time"
 
-	"antigravity-proxy/internal/account"
-	"antigravity-proxy/internal/netutil"
+	"antigravity-proxy/internal/modelfetch"
 	"antigravity-proxy/internal/proxy"
 	"antigravity-proxy/internal/settings"
 )
@@ -271,7 +264,7 @@ func (a *App) handleRelayConfigIPC(channel string, args []interface{}) (string, 
 				channel = strings.TrimSpace(s)
 			}
 		}
-		models, err := a.fetchChannelAvailableModels(channel)
+		models, err := modelfetch.FetchChannelAvailableModels(a.accountMgr, channel)
 		if err != nil {
 			return marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 		}
@@ -348,134 +341,3 @@ func isGoogleChannel(ch string) bool {
 	return c == "google" || c == "antigravity" || c == "gcp" || c == "project" || c == "gemini-cli" || c == ""
 }
 
-func (a *App) fetchChannelAvailableModels(channel string) ([]string, error) {
-	ch := strings.ToLower(strings.TrimSpace(channel))
-	if ch == "" {
-		ch = "google"
-	}
-
-	// 查找账号池中属于该 Channel/Provider 的账号 (使用 GetRawAccountsByProvider 获取未掩码的真实 Token)
-	var activeAcc *account.Account
-	if a.accountMgr != nil {
-		rawAccounts := a.accountMgr.GetRawAccountsByProvider("all")
-		for _, acc := range rawAccounts {
-			if acc != nil && acc.Enabled {
-				accProv := strings.ToLower(strings.TrimSpace(acc.Provider))
-				if isGoogleChannel(ch) {
-					// 只要账号属于 Google 族 (antigravity, project, google, gcp, gemini-cli 或空) 且 token 不为空
-					if (accProv == "" || isGoogleChannel(accProv)) && accProv != "2fa" && acc.GetAccessToken() != "" {
-						activeAcc = acc
-						break
-					}
-				} else {
-					if accProv == ch {
-						activeAcc = acc
-						break
-					}
-				}
-			}
-		}
-
-		// 兜底：若寻找指定 Google 族标签未命中，回退查寻任意未冷却、具备 AccessToken 的 Antigravity/Google 账号
-		if activeAcc == nil && isGoogleChannel(ch) {
-			for _, acc := range rawAccounts {
-				if acc != nil && acc.Enabled && acc.GetAccessToken() != "" && acc.Provider != "nvidia" && acc.Provider != "2fa" {
-					activeAcc = acc
-					break
-				}
-			}
-		}
-	}
-
-	if activeAcc == nil {
-		return nil, fmt.Errorf("号池 [%s] 下暂无已启用的有效账号，请先在【账号池】中添加该号池账号", channel)
-	}
-
-	// 1. 如果是 OpenAI 兼容第三方号池 (NVIDIA, DeepSeek, Qwen, Anthropic, Moonshot, Other 自定义组等)
-	// Other 号池的 Anthropic 格式组也统一打上游 /v1/models;上游不支持时返回错误,前端手填兜底(无预置清单)。
-	if ch == "nvidia" || ch == "deepseek" || ch == "qwen" || ch == "anthropic" || ch == "moonshot" || ch == "other" || ch == "grok" || activeAcc.Provider == "nvidia" || activeAcc.Provider == "grok" {
-		baseURL := activeAcc.BaseURL
-		apiKey := activeAcc.GetAccessToken()
-		if baseURL == "" && ch == "nvidia" {
-			baseURL = account.DefaultNvidiaBaseURL
-		}
-		if baseURL == "" {
-			return nil, fmt.Errorf("账号 %s 未配置 BaseURL，无法打上游获取模型", activeAcc.Email)
-		}
-
-		models, err := fetchRemoteNvidiaModels(baseURL, apiKey)
-		if err != nil {
-			return nil, fmt.Errorf("打上游 [%s] 获取模型失败: %w", baseURL, err)
-		}
-		if len(models) == 0 {
-			return nil, fmt.Errorf("上游 [%s] 返回的模型列表为空", baseURL)
-		}
-		return models, nil
-	}
-
-	// 2. 对于 Google / Antigravity / GCP 号池，真正发起 v1internal:fetchAvailableModels 请求
-	models, err := fetchGeminiInternalModels(activeAcc)
-	if err != nil {
-		return nil, fmt.Errorf("打 Google 上游 v1internal:fetchAvailableModels 失败 (账号 %s): %w", activeAcc.Email, err)
-	}
-	if len(models) == 0 {
-		return nil, fmt.Errorf("Google 上游返回的模型列表为空")
-	}
-	return models, nil
-}
-
-func fetchGeminiInternalModels(acc *account.Account) ([]string, error) {
-	token := acc.GetAccessToken()
-	if token == "" {
-		return nil, fmt.Errorf("账号 AccessToken 为空")
-	}
-
-	projectID := acc.ProjectID
-	if projectID == "" {
-		projectID = "favorable-synapse-ttvcb"
-	}
-
-	reqBody, _ := json.Marshal(map[string]string{
-		"project": projectID,
-	})
-
-	targetURL := "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-	req, err := http.NewRequestWithContext(context.Background(), "POST", targetURL, bytes.NewBuffer(reqBody))
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/ide/2.1.1 windows/amd64")
-
-	// 复用项目 netutil 系统代理链(IE 注册表 / 自定义 SOCKS5 / 本地 VPN 端口探测三级回退)。
-	// 原裸 http.Client{Timeout} 在 Transport=nil 时只读 HTTPS_PROXY 环境变量，不走 Windows
-	// IE 系统代理与本地 VPN 端口探测，导致防火墙环境 console “Google 获取模型必报 context deadline”。
-	// Timeout 由 15s 提到 30s：代理握手 + Google 内部接口延迟抖动，15s 偏紧。
-	client := &http.Client{Timeout: 30 * time.Second, Transport: netutil.NewTransport()}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("网络连接失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
-	}
-
-	var parsed struct {
-		Models map[string]interface{} `json:"models"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, fmt.Errorf("解析上游响应 JSON 失败: %w", err)
-	}
-
-	var list []string
-	for k := range parsed.Models {
-		list = append(list, k)
-	}
-	sort.Strings(list)
-	return list, nil
-}

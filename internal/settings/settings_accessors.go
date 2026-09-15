@@ -155,7 +155,15 @@ func (m *Manager) SetRemoteEnabled(enabled bool) error {
 	return setSetting(m, func(c *Config, v bool) { c.RemoteEnabled = v }, enabled)
 }
 
-// ============ 安全/过滤(bool 纯字段 + 切片,泛型收口) ============
+func (m *Manager) GetPlatformMySQLMode() bool {
+	return getSetting(m, func(c *Config) bool { return c.PlatformMySQLMode })
+}
+
+func (m *Manager) SetPlatformMySQLMode(mode bool) error {
+	return setSetting(m, func(c *Config, v bool) { c.PlatformMySQLMode = v }, mode)
+}
+
+// ============ 中继/过滤器(读写,纯字段/简单回调) ============
 
 func (m *Manager) GetRelaySSRFBlock() bool {
 	return getSetting(m, func(c *Config) bool { return c.RelaySSRFBlock })

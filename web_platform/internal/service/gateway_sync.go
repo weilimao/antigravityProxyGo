@@ -470,3 +470,216 @@ func (s *GatewaySyncService) SyncOcrModelToGateway(ocrModel string, ocrModels []
 	return nil
 }
 
+// GetGatewayOtherGroups 获取网关的 Other 分组列表
+func (s *GatewaySyncService) GetGatewayOtherGroups() (map[string]interface{}, error) {
+	cfg := config.GlobalConfig
+	url := fmt.Sprintf("%s/api/admin/models/other-groups", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Gateway.AdminKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// FetchGatewayChannelModels 触发网关获取某个号池最新模型快照
+func (s *GatewaySyncService) FetchGatewayChannelModels(channel string) (map[string]interface{}, error) {
+	cfg := config.GlobalConfig
+	url := fmt.Sprintf("%s/api/admin/models/fetch-channel", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
+	body := map[string]string{"channel": channel}
+	reqBytes, _ := json.Marshal(body)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.Gateway.AdminKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// FetchGatewayOtherGroupModels 触发网关获取 Other 号池某个组的最新模型快照
+func (s *GatewaySyncService) FetchGatewayOtherGroupModels(groupId string) (map[string]interface{}, error) {
+	cfg := config.GlobalConfig
+	url := fmt.Sprintf("%s/api/admin/models/fetch-other", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
+	body := map[string]string{"groupId": groupId}
+	reqBytes, _ := json.Marshal(body)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.Gateway.AdminKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// --- Benchmark API ---
+
+func GetGatewayBenchmark() (map[string]interface{}, error) {
+	cfg := config.GlobalConfig
+	if cfg == nil || cfg.Gateway.GatewayURL == "" {
+		return nil, fmt.Errorf("gateway url not configured")
+	}
+	url := fmt.Sprintf("%s/api/admin/benchmark", cfg.Gateway.GatewayURL)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Gateway.AdminKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func SaveGatewayBenchmarkConfig(reqBody interface{}) (map[string]interface{}, error) {
+	cfg := config.GlobalConfig
+	if cfg == nil || cfg.Gateway.GatewayURL == "" {
+		return nil, fmt.Errorf("gateway url not configured")
+	}
+	url := fmt.Sprintf("%s/api/admin/benchmark/config", cfg.Gateway.GatewayURL)
+	b, _ := json.Marshal(reqBody)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.Gateway.AdminKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func RunGatewayBenchmark() (map[string]interface{}, error) {
+	cfg := config.GlobalConfig
+	if cfg == nil || cfg.Gateway.GatewayURL == "" {
+		return nil, fmt.Errorf("gateway url not configured")
+	}
+	url := fmt.Sprintf("%s/api/admin/benchmark/run", cfg.Gateway.GatewayURL)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Gateway.AdminKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func RunGatewayBenchmarkModel(model string) (map[string]interface{}, error) {
+	cfg := config.GlobalConfig
+	if cfg == nil || cfg.Gateway.GatewayURL == "" {
+		return nil, fmt.Errorf("gateway url not configured")
+	}
+	url := fmt.Sprintf("%s/api/admin/benchmark/run-model", cfg.Gateway.GatewayURL)
+	b, _ := json.Marshal(map[string]string{"model": model})
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.Gateway.AdminKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func GetGatewayBenchmarkModels() (map[string]interface{}, error) {
+	cfg := config.GlobalConfig
+	if cfg == nil || cfg.Gateway.GatewayURL == "" {
+		return nil, fmt.Errorf("gateway url not configured")
+	}
+	url := fmt.Sprintf("%s/api/admin/benchmark/models", cfg.Gateway.GatewayURL)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Gateway.AdminKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}

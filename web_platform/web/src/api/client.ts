@@ -141,13 +141,24 @@ export const autoApi = {
   pullGlobalConfig: () => request<any>('/admin/models/auto-config/pull', { method: 'POST' }),
 }
 
+export const benchmarkApi = {
+  get: () => request<any>('/admin/benchmark'),
+  saveConfig: (body: any) => request<any>('/admin/benchmark/config', { method: 'POST', body: JSON.stringify(body) }),
+  run: () => request<any>('/admin/benchmark/run', { method: 'POST' }),
+  runModel: (model: string) => request<any>('/admin/benchmark/run-model', { method: 'POST', body: JSON.stringify({ model }) }),
+  getModels: () => request<any>('/admin/benchmark/models'),
+}
+
 // 模型映射与 OCR
 export const mappingApi = {
   getMappings: () => request<any[]>('/admin/models/mappings'),
+  getOtherGroups: () => request<{ success: boolean; groups: any[] }>('/admin/models/other-groups'),
   pullMappings: () => request<any>('/admin/models/mappings/pull', { method: 'POST' }),
   getMappingClientModels: () => request<string[]>('/admin/models/mapping-clients'),
   setMappings: (mappings: any[]) => request<any>('/admin/models/mappings', { method: 'POST', body: JSON.stringify({ mappings }) }),
   getAvailableModels: () => request<string[]>('/admin/models/available'),
+  fetchChannelModels: (channel: string) => request<any>('/admin/models/fetch-channel', { method: 'POST', body: JSON.stringify({ channel }) }),
+  fetchOtherGroupModels: (groupId: string) => request<any>('/admin/models/fetch-other', { method: 'POST', body: JSON.stringify({ groupId }) }),
   getOcrModel: () => request<{ ocrModel: string; ocrModels?: string[] }>('/admin/settings/ocr'),
   pullOcrModel: () => request<{ ocrModel: string; ocrModels?: string[] }>('/admin/settings/ocr/pull', { method: 'POST' }),
   setOcrModel: (data: { ocrModel?: string; ocrModels: string[] } | string) => {

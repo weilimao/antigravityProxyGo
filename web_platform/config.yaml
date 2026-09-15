@@ -1,0 +1,23 @@
+server:
+  host: "0.0.0.0"
+  port: "8100"
+  jwt_secret: "antigravity-web-production-jwt-key-random"
+  token_expire_hours: 72
+
+database:
+  type: "mysql" # 已启用 2g 服务器 MySQL 8.4
+  dsn: "root:ProxySub2026SecDbPass99@tcp(192.255.160.69:39306)/antigravity_platform?charset=utf8mb4&parseTime=True&loc=Local"
+
+payment:
+  relay_url: "http://127.0.0.1:8000/api/v1/relay/create"
+  relay_secret: "geektools_relay_secret_key_888"
+  relay_checkout_base: "http://127.0.0.1:8000"
+  notify_url: "http://your-domain.com/api/v1/pay/notify/relay"
+  return_url: "http://127.0.0.1:6688/#/dashboard"
+  site_url: "http://your-domain.com"
+
+gateway:
+  gateway_url: "http://127.0.0.1:18444"
+  admin_key: "admin"
+  admin_password: "admin_password"
+  sync_enabled: false

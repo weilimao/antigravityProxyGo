@@ -8,6 +8,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/modelfetch"
 )
 
 // handleAccountIPCOther 处理 Other 号池(自定义多上游组)相关的 IPC invoke 分支。
@@ -292,44 +293,18 @@ func (a *App) handleAccountIPCOther(channel string, args []interface{}) (string,
 		}
 		_ = directFormats // formats 当前不参与分支(统一打上游),保留入参兼容前端。
 
-		// 优先用直接透传的 baseURL/apiKey(未入库预拉场景);否则查号池该组首个可用账号。
-		baseURL := directBaseURL
-		apiKey := directAPIKey
-		if baseURL == "" {
-			probeAcc := a.accountMgr.GetEnabledOtherAccounts(groupID)
-			if len(probeAcc) > 0 {
-				baseURL = probeAcc[0].BaseURL
-				if apiKey == "" {
-					apiKey = probeAcc[0].GetAccessToken()
-				}
-			}
-		} else if apiKey == "" {
-			// 编辑态:前端 Key 框留空(留空表示保持不变),但这里需要真实 Key 才能探测上游。
-			// 故按组查号池首个可用账号回退其 Key,避免 401 Token not provided。
-			probeAcc := a.accountMgr.GetEnabledOtherAccounts(groupID)
-			if len(probeAcc) > 0 {
-				apiKey = probeAcc[0].GetAccessToken()
-			}
-		}
-
-		if baseURL == "" {
-			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": fmt.Sprintf("组 [%s] 下暂无已启用账号或未提供 baseURL", groupID)})
-			return data, true, nil
-		}
-
-		// 统一打上游 /v1/models;上游不支持模型列表端点时返回错误,前端手填兜底。
-		models, ferr := fetchRemoteNvidiaModels(baseURL, apiKey)
+		models, ferr := modelfetch.FetchOtherGroupModels(a.accountMgr, groupID, directBaseURL, directAPIKey)
 		if ferr != nil {
-			a.AddLog(fmt.Sprintf("⚠️ [Other] 拉取模型列表失败 (group=%s baseURL=%s): %v(可改为手动填写模型名)", groupID, baseURL, ferr))
+			a.AddLog(fmt.Sprintf("⚠️ [Other] 拉取模型列表失败 (group=%s baseURL=%s): %v(可改为手动填写模型名)", groupID, directBaseURL, ferr))
 			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": ferr.Error(), "allowManualInput": true})
 			return data, true, nil
 		}
 		if len(models) == 0 {
-			a.AddLog(fmt.Sprintf("⚠️ [Other] 上游 [%s] 返回的模型列表为空 (group=%s),可手动填写模型名", baseURL, groupID))
+			a.AddLog(fmt.Sprintf("⚠️ [Other] 上游返回的模型列表为空 (group=%s),可手动填写模型名", groupID))
 			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "上游返回的模型列表为空,请手动填写模型名", "allowManualInput": true})
 			return data, true, nil
 		}
-		a.AddLog(fmt.Sprintf("✅ [Other] 成功获取到 %d 个模型 (group=%s baseURL=%s)", len(models), groupID, baseURL))
+		a.AddLog(fmt.Sprintf("✅ [Other] 成功获取到 %d 个模型 (group=%s)", len(models), groupID))
 		data, _ := marshalResponse(map[string]interface{}{"success": true, "models": models})
 		return data, true, nil
 	}
