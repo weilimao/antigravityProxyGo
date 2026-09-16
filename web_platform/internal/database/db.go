@@ -3,6 +3,7 @@ package database
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -36,12 +37,57 @@ func InitDB(cfg *config.Config) (*gorm.DB, error) {
 		dialector = sqlite.Open("data/antigravity_web.db")
 	}
 
-	db, err := gorm.Open(dialector, &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect database: %w", err)
+	var db *gorm.DB
+	var err error
+
+	dbLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             2 * time.Second, // 跨洋公网高延迟下，耗时超过 2 秒才视为慢 SQL 警告
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  true,
+		},
+	)
+
+	maxRetries := 3
+	if cfg.Database.Type == "sqlite" {
+		maxRetries = 1
 	}
+
+	log.Printf("[DB] 正在连接 %s 数据库...", cfg.Database.Type)
+	for i := 1; i <= maxRetries; i++ {
+		db, err = gorm.Open(dialector, &gorm.Config{
+			Logger: dbLogger,
+		})
+		if err == nil {
+			break
+		}
+		log.Printf("[DB] 连接尝试 (%d/%d) 失败: %v，正在重试...", i, maxRetries, err)
+		if i < maxRetries {
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect database (after retries): %w", err)
+	}
+
+	// 配置底层连接池，避免跨公网长连接被路由器/代理静默切断产生死连接
+	if sqlDB, dbErr := db.DB(); dbErr == nil {
+		if cfg.Database.Type == "mysql" {
+			// 允许适量空闲连接复用，大幅减少重复握手延迟；空闲超过1分钟自动释放，防止长连接死掉
+			sqlDB.SetMaxIdleConns(10)
+			sqlDB.SetMaxOpenConns(30)
+			sqlDB.SetConnMaxIdleTime(1 * time.Minute)
+			sqlDB.SetConnMaxLifetime(10 * time.Minute)
+		} else {
+			sqlDB.SetMaxIdleConns(5)
+			sqlDB.SetMaxOpenConns(20)
+		}
+	}
+
+	log.Printf("[DB] 数据库已连通，正在同步表结构与初始配置...")
 
 	// 自动迁移
 	err = db.AutoMigrate(
@@ -60,12 +106,13 @@ func InitDB(cfg *config.Config) (*gorm.DB, error) {
 
 	// 初始化种子数据
 	seedData(db)
+	log.Printf("[DB] 数据库初始化完成，数据表与配置就绪。")
 
 	return db, nil
 }
 
 func seedData(db *gorm.DB) {
-	// 1. 初始化管理员
+	// 1. 初始化管理员（默认密码 admin123，若已存在则原样保留，绝对不修改用户密码）
 	var adminCount int64
 	db.Model(&model.User{}).Where("role = ?", "admin").Count(&adminCount)
 	if adminCount == 0 {
@@ -153,7 +200,7 @@ func seedData(db *gorm.DB) {
 
 	// 3. 初始化全局设置 (默认不预置任何模型，由管理员在平台显式配置)
 	initSetting(db, "ocr_model", "", "全局 OCR 入站图片自愈降级模型")
-	initSetting(db, "model_mappings", "[]", "中继模型映射与号池路由规则")
+	initSetting(db, "model_mappings", "[]", "模型路由映射与后端集群调度规则")
 
 	defaultAuto := model.AutoRacingConfig{
 		Enabled:          false,

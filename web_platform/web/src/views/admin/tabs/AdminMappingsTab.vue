@@ -3,8 +3,8 @@
     <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
       <div>
         <h3 class="text-base font-bold text-white flex items-center gap-2">
-          <span>中继模型映射与多号池路由配置</span>
-          <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-500/15 text-indigo-400 border border-indigo-500/30">对标桌面端核心</span>
+          <span>模型路由映射与后端分发配置</span>
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-500/15 text-indigo-400 border border-indigo-500/30">集群调度核心</span>
         </h3>
         <p class="text-xs text-slate-400 mt-1">
           配置入站客户端请求模型名（ClientModel）到上游真实模型名（TargetModel）的转译映射、号池分流与原生多模态控制
@@ -195,7 +195,12 @@
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-800/50">
-            <tr v-if="pagedMappings.length === 0">
+            <tr v-if="fetching">
+              <td colspan="6" class="text-center py-16">
+                <LoadingSpinner text="正在同步并加载模型映射规则..." />
+              </td>
+            </tr>
+            <tr v-else-if="pagedMappings.length === 0">
               <td colspan="6" class="text-center py-12 text-slate-500 text-[12px]">
                 <div class="flex flex-col items-center justify-center gap-2">
                   <span class="material-symbols-outlined text-[32px] opacity-20">data_array</span>
@@ -230,6 +235,7 @@ import { onMounted } from 'vue';
 import { useModelMapping } from '../../../composables/useModelMapping';
 import AutoModelConfigCard from './AutoModelConfigCard.vue';
 import ModelMappingRow from './ModelMappingRow.vue';
+import LoadingSpinner from '../../../components/common/LoadingSpinner.vue';
 
 const {
   allMappings,

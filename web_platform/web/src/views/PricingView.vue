@@ -7,7 +7,7 @@
       </div>
       <h2 class="text-3xl font-extrabold text-white tracking-tight">精选会员套餐方案</h2>
       <p class="text-sm text-slate-400 mt-2 max-w-xl mx-auto">
-        按需选择专属大模型算力包，畅享 Claude 3.7、Gemini 2.5、DeepSeek 及 Auto 首字极速并发竞速能力。
+        按需选择专属大模型算力包，畅享高性能并发与首字极速响应能力。
       </p>
     </div>
 
@@ -18,10 +18,7 @@
     </div>
 
     <!-- 加载中 -->
-    <div v-if="loading" class="text-center py-16 text-slate-400 text-sm flex flex-col items-center gap-2">
-      <span class="material-symbols-outlined animate-spin text-24px text-indigo-400">progress_activity</span>
-      <span>正在加载订阅方案...</span>
-    </div>
+    <LoadingSpinner v-if="loading" text="正在加载精选会员套餐方案..." />
 
     <!-- 套餐网格卡片 -->
     <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -119,15 +116,14 @@
           </div>
         </div>
 
-        <!-- 购买跳转按钮 -->
+        <!-- 购买确认按钮 -->
         <button
           type="button"
-          :disabled="subscribingPlanId === plan.id"
-          class="btn-primary w-full py-2.5 mt-4 text-xs cursor-pointer"
+          class="btn-primary w-full py-2.5 mt-4 text-xs cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/30 hover:shadow-indigo-500/40"
           @click="handleSubscribe(plan)"
         >
-          <span class="material-symbols-outlined text-16px" v-if="subscribingPlanId !== plan.id">shopping_bag</span>
-          <span>{{ subscribingPlanId === plan.id ? '正在连接极客工坊收银台...' : '立即订阅并前往收银台' }}</span>
+          <span class="material-symbols-outlined text-16px">shopping_cart_checkout</span>
+          <span>立即选购并确认订单 →</span>
         </button>
       </div>
     </div>
@@ -136,13 +132,13 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { planApi, checkoutApi, getToken } from '../api/client'
+import { planApi, getToken } from '../api/client'
 import { useRouter } from 'vue-router'
+import LoadingSpinner from '../components/common/LoadingSpinner.vue'
 
 const router = useRouter()
 const plans = ref<any[]>([])
 const loading = ref(true)
-const subscribingPlanId = ref<number | null>(null)
 const errorMsg = ref('')
 
 function formatTokenLimit(val?: number): string {
@@ -166,27 +162,13 @@ async function fetchPlans() {
   }
 }
 
-async function handleSubscribe(plan: any) {
+function handleSubscribe(plan: any) {
   if (!getToken()) {
-    router.push('/login?redirect=/pricing')
+    router.push(`/login?redirect=${encodeURIComponent(`/checkout/confirm?plan_id=${plan.id}`)}`)
     return
   }
-
-  errorMsg.value = ''
-  subscribingPlanId.value = plan.id
-  try {
-    const res = await checkoutApi.createOrder(plan.id)
-    if (res.payUrl) {
-      // 对标 ProxySubForClash：平滑重定向跳转进入极客工坊收银台
-      window.location.href = res.payUrl
-    } else {
-      errorMsg.value = '收银台生成失败，未返回有效支付地址'
-    }
-  } catch (err: any) {
-    errorMsg.value = err.message || '发起订单失败'
-  } finally {
-    subscribingPlanId.value = null
-  }
+  // 对标 ProxySubForClash：进入订单确认页核对后再前往支付
+  router.push(`/checkout/confirm?plan_id=${plan.id}`)
 }
 
 onMounted(() => {

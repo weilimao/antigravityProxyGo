@@ -114,13 +114,13 @@ func TestSystemAPI_Endpoints(t *testing.T) {
 	}
 
 	// 4. 管理员配置更新流程
-	adminUser, _, err := authSvc.Register("admin_user", "admin@example.com", "admin123456")
+	adminUser, _, err := authSvc.Register("admin_user", "admin@example.com", "TestAdminPass@2026")
 	if err != nil {
 		t.Fatalf("register admin failed: %v", err)
 	}
 	// 提升为 admin 并通过 Login 重新签发含 admin 权限的 token
 	database.DB.Model(&model.User{}).Where("id = ?", adminUser.ID).Update("role", "admin")
-	_, adminToken, err := authSvc.Login("admin_user", "admin123456")
+	_, adminToken, err := authSvc.Login("admin_user", "TestAdminPass@2026")
 	if err != nil {
 		t.Fatalf("admin login failed: %v", err)
 	}

@@ -103,10 +103,12 @@
           <button
             type="button"
             :disabled="saving"
-            class="btn-primary"
+            class="btn-primary flex items-center gap-1.5 disabled:opacity-60"
             @click="saveConfig"
           >
-            <span class="material-symbols-outlined text-16px">{{ saving ? 'sync' : 'save' }}</span>
+            <span class="material-symbols-outlined text-16px" :class="{ 'animate-spin': saving }">
+              {{ saving ? 'progress_activity' : 'save' }}
+            </span>
             <span>{{ saving ? '保存并同步中...' : '保存全局 Auto 规则' }}</span>
           </button>
         </div>

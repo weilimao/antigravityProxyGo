@@ -13,7 +13,14 @@
 
     <!-- 套餐表格 -->
     <div class="glass-card overflow-hidden">
-      <div class="overflow-x-auto">
+      <div v-if="loading" class="p-6">
+        <LoadingSpinner text="正在加载套餐方案列表..." />
+      </div>
+      <div v-else-if="plans.length === 0" class="p-12 text-center text-slate-400 text-xs">
+        <span class="material-symbols-outlined text-32px text-slate-500 mb-2 block">layers_clear</span>
+        暂无套餐方案，点击右上角【新增套餐】创建
+      </div>
+      <div v-else class="overflow-x-auto">
         <table class="table-dark">
           <thead>
             <tr>
@@ -86,8 +93,14 @@
                 <button type="button" class="btn-secondary text-xs mr-2 cursor-pointer" @click="openEditModal(plan)">
                   编辑
                 </button>
-                <button type="button" class="btn-danger cursor-pointer" @click="handleDeletePlan(plan.id)">
-                  删除
+                <button
+                  type="button"
+                  :disabled="deletingId === plan.id"
+                  class="btn-danger cursor-pointer inline-flex items-center gap-1 disabled:opacity-50"
+                  @click="handleDeletePlan(plan.id)"
+                >
+                  <span v-if="deletingId === plan.id" class="material-symbols-outlined text-12px animate-spin">progress_activity</span>
+                  <span>{{ deletingId === plan.id ? '删除中...' : '删除' }}</span>
                 </button>
               </td>
             </tr>
@@ -216,8 +229,11 @@
           </div>
 
           <div class="flex items-center justify-end gap-3 pt-2">
-            <button type="button" class="btn-secondary text-xs" @click="showModal = false">取消</button>
-            <button type="submit" class="btn-primary text-xs">保存套餐</button>
+            <button type="button" class="btn-secondary text-xs" :disabled="saving" @click="showModal = false">取消</button>
+            <button type="submit" :disabled="saving" class="btn-primary text-xs flex items-center gap-1.5 shadow-md shadow-indigo-600/30 disabled:opacity-60">
+              <span v-if="saving" class="material-symbols-outlined text-14px animate-spin">progress_activity</span>
+              <span>{{ saving ? '保存中...' : '保存套餐' }}</span>
+            </button>
           </div>
         </form>
       </div>
@@ -229,8 +245,12 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { planApi, mappingApi, autoApi } from '../../../api/client'
 import ModelSearchSelect from '../../../components/common/ModelSearchSelect.vue'
+import LoadingSpinner from '../../../components/common/LoadingSpinner.vue'
 
 const plans = ref<any[]>([])
+const loading = ref(false)
+const saving = ref(false)
+const deletingId = ref<number | null>(null)
 const availableModels = ref<string[]>([])
 const autoConfig = ref<any>(null)
 const showModal = ref(false)
@@ -266,10 +286,13 @@ const autoCandidateModels = computed(() => {
 })
 
 async function fetchPlans() {
+  loading.value = true
   try {
     plans.value = await planApi.adminList()
   } catch (err) {
     console.error(err)
+  } finally {
+    loading.value = false
   }
 }
 
@@ -352,6 +375,7 @@ async function savePlan() {
     priceCents: Math.round(formPriceYuan.value * 100),
   }
 
+  saving.value = true
   try {
     if (isEditing.value && editingId.value) {
       await planApi.adminUpdate(editingId.value, payload)
@@ -359,19 +383,24 @@ async function savePlan() {
       await planApi.adminCreate(payload)
     }
     showModal.value = false
-    fetchPlans()
+    await fetchPlans()
   } catch (err: any) {
     alert(err.message || '保存失败')
+  } finally {
+    saving.value = false
   }
 }
 
 async function handleDeletePlan(id: number) {
   if (!confirm('确定要删除此套餐吗？')) return
+  deletingId.value = id
   try {
     await planApi.adminDelete(id)
-    fetchPlans()
+    await fetchPlans()
   } catch (err: any) {
     alert(err.message || '删除失败')
+  } finally {
+    deletingId.value = null
   }
 }
 

@@ -23,9 +23,17 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr :6688 ^| findstr LISTENING 2^
     set /a KILLED+=1
 )
 
-REM 3. Close titled windows if any
+REM 3. Terminate SSH Tunnel process on port 39306 if any
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :39306 ^| findstr LISTENING 2^>nul') do (
+    echo [*] Stopping SSH Database Tunnel on port 39306 [PID: %%a]...
+    taskkill /f /t /pid %%a >nul 2>&1
+    set /a KILLED+=1
+)
+
+REM 4. Close titled windows if any
 taskkill /f /fi "WINDOWTITLE eq Antigravity-Web-Backend*" >nul 2>&1
 taskkill /f /fi "WINDOWTITLE eq Antigravity-Web-Frontend*" >nul 2>&1
+taskkill /f /fi "WINDOWTITLE eq Antigravity-Web-Tunnel*" >nul 2>&1
 
 echo.
 if !KILLED! gtr 0 (

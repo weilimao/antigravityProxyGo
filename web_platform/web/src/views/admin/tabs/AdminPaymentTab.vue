@@ -8,9 +8,9 @@
             <span class="material-symbols-outlined text-24px">payments</span>
           </span>
           <div class="min-w-0">
-            <h3 class="text-base font-bold text-white">支付网关与切单中继跳转配置 (Payment & Relay Pipeline)</h3>
+            <h3 class="text-base font-bold text-white">支付网关与收银切单配置 (Payment & Checkout Pipeline)</h3>
             <p class="text-xs text-slate-400 truncate sm:whitespace-normal">
-              参考 ProxySubForClash：配置前台商业化套餐订阅支付跳转通道，支持极客工坊合规收银中继切单、彩虹易支付直连及开发沙箱
+              配置前台商业化套餐订阅支付跳转通道，支持极客工坊收银切单网关、彩虹易支付直连及开发沙箱
             </p>
           </div>
         </div>
@@ -45,7 +45,7 @@
             <span class="text-slate-400 text-11px">控制前台用户在精选套餐结算时唤起哪种收银跳转方式</span>
           </div>
           <select v-model="form.payProvider" class="input-dark text-xs py-1.5 px-3 rounded-lg font-semibold bg-slate-800 border-slate-700 text-white cursor-pointer">
-            <option value="epay">⚡ 易支付直连 / 中继切单 (epay)</option>
+            <option value="epay">⚡ 易支付直连 / 收银切单 (epay)</option>
             <option value="fake">🧪 本地开发模拟沙箱 (fake)</option>
           </select>
         </div>
@@ -55,11 +55,11 @@
           <template v-if="form.payProvider === 'epay'">
             <span v-if="form.relayUrl" class="badge badge-emerald flex items-center gap-1.5 py-1 px-2.5 text-xs font-semibold">
               <span class="material-symbols-outlined text-14px">hub</span>
-              <span>跨站切单中继模式已就绪 (优先切单)</span>
+              <span>跨站收银切单模式已就绪 (优先切单)</span>
             </span>
             <span v-else class="badge badge-amber flex items-center gap-1.5 py-1 px-2.5 text-xs font-semibold">
               <span class="material-symbols-outlined text-14px">open_in_new</span>
-              <span>易支付直连模式 (中继地址留空时直连)</span>
+              <span>易支付直连模式 (切单地址留空时直连)</span>
             </span>
           </template>
           <template v-else>
@@ -68,6 +68,117 @@
               <span>开发测试沙箱已激活 (即时履约)</span>
             </span>
           </template>
+        </div>
+      </div>
+
+      <!-- 环境填报指南与快速预设提示卡 -->
+      <div class="mb-6 rounded-xl border border-slate-700/80 bg-slate-900/80 overflow-hidden shadow-lg">
+        <div class="p-3.5 bg-slate-800/60 flex items-center justify-between cursor-pointer select-none hover:bg-slate-800/90 transition-colors" @click="showGuide = !showGuide">
+          <div class="flex items-center gap-2">
+            <span class="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center border border-indigo-500/30 shrink-0">
+              <span class="material-symbols-outlined text-15px">help</span>
+            </span>
+            <span class="font-bold text-white text-xs">本地调试 vs 线上生产 填报指南与网络连通原理说明</span>
+            <span class="text-10px px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shrink-0">配置指引</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-11px text-slate-400">{{ showGuide ? '收起说明' : '展开查看' }}</span>
+            <span class="material-symbols-outlined text-16px text-slate-400 transition-transform duration-200" :class="{ 'rotate-180': showGuide }">expand_more</span>
+          </div>
+        </div>
+
+        <div v-show="showGuide" class="p-4 border-t border-slate-800 space-y-4 text-xs">
+          <!-- 核心原理说明 -->
+          <div class="p-3 rounded-lg bg-indigo-950/20 border border-indigo-500/30 text-slate-300 leading-relaxed text-11px">
+            <div class="flex items-center gap-1.5 font-bold text-indigo-300 mb-1">
+              <span class="material-symbols-outlined text-16px">info</span>
+              <span>核心连通逻辑：为什么切单通知 URL (Notify URL) 不能直接填 127.0.0.1？</span>
+            </div>
+            <p>
+              「切单异步通知 URL」是 <strong class="text-white">B 站服务器（极客工坊）</strong>在收到易支付付款成功后，从它的服务器在后台向 <strong class="text-white">A 站（本系统）</strong>发起 HTTP POST 请求以通知发货与顺延套餐的接口。
+              若 B 站在公网云端（如 <code class="text-indigo-300 bg-slate-900 px-1 py-0.5 rounded">crosslinkdev.online</code>），云端服务器<strong>无法直接连接您本地电脑内网的 127.0.0.1 或 localhost</strong>。
+            </p>
+          </div>
+
+          <!-- 双环境对比表格 -->
+          <div class="overflow-x-auto rounded-lg border border-slate-800">
+            <table class="w-full text-left border-collapse text-11px font-sans">
+              <thead>
+                <tr class="border-b border-slate-800 bg-slate-800/50 text-slate-300">
+                  <th class="py-2 px-3 font-semibold">配置字段</th>
+                  <th class="py-2 px-3 font-semibold text-amber-300">💻 本地调试推荐填法</th>
+                  <th class="py-2 px-3 font-semibold text-emerald-300">🚀 线上生产标准填法</th>
+                  <th class="py-2 px-3 font-semibold">通信方向与说明</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800/60 text-slate-300 font-mono text-10px">
+                <tr>
+                  <td class="py-2.5 px-3 font-sans font-medium text-slate-200">主支付通道模式</td>
+                  <td class="py-2.5 px-3 text-amber-300 font-sans">优先选「🧪 本地开发模拟沙箱」</td>
+                  <td class="py-2.5 px-3 text-emerald-300 font-sans">选「⚡ 易支付直连 / 收银切单」</td>
+                  <td class="py-2.5 px-3 font-sans text-slate-400">本地沙箱免调外部网关秒级履约，免配任何公网网络</td>
+                </tr>
+                <tr>
+                  <td class="py-2.5 px-3 font-sans font-medium text-slate-200">本站基础 URL (Site URL)</td>
+                  <td class="py-2.5 px-3 text-amber-200">http://127.0.0.1:8100<br><span class="text-9px text-slate-400 font-sans">(真实切单填穿透域名如 https://xxx.cpolar.top)</span></td>
+                  <td class="py-2.5 px-3 text-emerald-200">https://api.yourdomain.com</td>
+                  <td class="py-2.5 px-3 font-sans text-slate-400">A 站服务基准地址，用于动态拼接默认通知/跳转链接</td>
+                </tr>
+                <tr>
+                  <td class="py-2.5 px-3 font-sans font-medium text-slate-200">跳转 URL (Return URL)</td>
+                  <td class="py-2.5 px-3 text-amber-200">http://localhost:6688/#/dashboard</td>
+                  <td class="py-2.5 px-3 text-emerald-200">https://api.yourdomain.com/#/dashboard</td>
+                  <td class="py-2.5 px-3 font-sans text-slate-400">支付后浏览器回跳（浏览器运行在本地，因此可直接访问）</td>
+                </tr>
+                <tr>
+                  <td class="py-2.5 px-3 font-sans font-medium text-slate-200">切单下单接口 (Checkout API)</td>
+                  <td class="py-2.5 px-3 text-amber-200">https://crosslinkdev.online/api/v1/relay/create</td>
+                  <td class="py-2.5 px-3 text-emerald-200">https://crosslinkdev.online/api/v1/relay/create</td>
+                  <td class="py-2.5 px-3 font-sans text-slate-400">A 站后端向 B 站发起，本地后端可以直接发起外网请求</td>
+                </tr>
+                <tr>
+                  <td class="py-2.5 px-3 font-sans font-medium text-slate-200">收银台基准 (Checkout Base)</td>
+                  <td class="py-2.5 px-3 text-amber-200">http://crosslinkdev.online:8080<br><span class="text-9px text-slate-400 font-sans">(快捷预设「本地 8080」)</span></td>
+                  <td class="py-2.5 px-3 text-emerald-200">https://crosslinkdev.online<br><span class="text-9px text-slate-400 font-sans">(快捷预设「线上生产」)</span></td>
+                  <td class="py-2.5 px-3 font-sans text-slate-400">控制收银台前端页面基准地址</td>
+                </tr>
+                <tr>
+                  <td class="py-2.5 px-3 font-sans font-medium text-slate-200">跨站通信密钥 (Relay Secret)</td>
+                  <td class="py-2.5 px-3 text-amber-200">与 B 站配置完全一致</td>
+                  <td class="py-2.5 px-3 text-emerald-200">生产环境高强度共享密钥</td>
+                  <td class="py-2.5 px-3 font-sans text-slate-400">两站共享，用于 HMAC-SHA256 签名与防伪验签</td>
+                </tr>
+                <tr>
+                  <td class="py-2.5 px-3 font-sans font-medium text-amber-300">切单异步通知 (Notify URL)</td>
+                  <td class="py-2.5 px-3 text-amber-200">
+                    <div>1. 沙箱模式下免填</div>
+                    <div>2. 真实切单填：<span class="underline">https://穿透域名/api/v1/pay/notify/relay</span></div>
+                    <div>3. 全本地填：http://127.0.0.1:8100/api/v1/pay/notify/relay</div>
+                  </td>
+                  <td class="py-2.5 px-3 text-emerald-200">
+                    <div>https://api.yourdomain.com/api/v1/pay/notify/relay</div>
+                    <div class="text-9px text-slate-400 font-sans">(填好 Site URL 后点击右侧 🔄 一键恢复生成)</div>
+                  </td>
+                  <td class="py-2.5 px-3 font-sans text-slate-400">
+                    <strong class="text-amber-300">B站POST调用：</strong>必须公网可达，否则付款后 A 站无法自动顺延套餐
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 快捷模版填充操作 -->
+          <div class="flex items-center justify-between pt-2 border-t border-slate-800 flex-wrap gap-2">
+            <span class="text-10px text-slate-400">💡 快速填充示例模版（点击后自动将规范配置代入输入框，您只需修改自己的域名）：</span>
+            <div class="flex items-center gap-2">
+              <button type="button" class="btn-secondary text-xs px-2.5 py-1 text-amber-300 border-amber-500/30 hover:bg-amber-500/10 cursor-pointer" @click="applyTemplate('local_tunnel')">
+                💻 填入本地穿透联调示例
+              </button>
+              <button type="button" class="btn-secondary text-xs px-2.5 py-1 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/10 cursor-pointer" @click="applyTemplate('production')">
+                🚀 填入线上生产规范模版
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -89,17 +200,33 @@
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
             <div>
-              <label class="block text-slate-300 font-semibold mb-1">本站对外基础 URL (Site URL)</label>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-slate-300 font-semibold">本站对外基础 URL (Site URL)</label>
+                <span class="text-10px text-slate-400">系统基准地址</span>
+              </div>
               <div class="flex gap-1.5">
                 <input v-model="form.siteUrl" type="text" placeholder="http://127.0.0.1:8100" class="input-dark w-full text-xs font-mono" />
                 <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="copyText(form.siteUrl, '本站地址')" title="复制本站地址">
                   <span class="material-symbols-outlined text-14px">content_copy</span>
                 </button>
               </div>
-              <p class="text-11px text-slate-500 mt-1">系统计算默认回调与通知 URL 时的域名基准（如线上可填 https://api.yourdomain.com）。</p>
+              <p class="text-11px text-slate-400 mt-1">系统计算默认回调与通知 URL 时的基准域名（末尾不带斜杠）。</p>
+              <div class="mt-1.5 p-2 rounded bg-slate-800/60 border border-slate-700/50 space-y-1 text-10px">
+                <div class="text-amber-300/90 flex items-start gap-1">
+                  <span class="shrink-0 font-bold">💻 本地调试:</span>
+                  <span>纯本地填 <code class="bg-slate-900 px-1 py-0.2 rounded text-slate-200">http://127.0.0.1:8100</code>；若切单用公网B站，需填内网穿透域名如 <code class="bg-slate-900 px-1 py-0.2 rounded text-slate-200">https://xxx.cpolar.top</code></span>
+                </div>
+                <div class="text-emerald-300/90 flex items-start gap-1">
+                  <span class="shrink-0 font-bold">🚀 线上生产:</span>
+                  <span>填已解析带 SSL 的 A 站公网域名，如 <code class="bg-slate-900 px-1 py-0.2 rounded text-slate-200">https://api.yourdomain.com</code></span>
+                </div>
+              </div>
             </div>
             <div>
-              <label class="block text-slate-300 font-semibold mb-1">支付成功跳转 URL (Return URL)</label>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-slate-300 font-semibold">支付成功跳转 URL (Return URL)</label>
+                <span class="text-10px text-slate-400">浏览器回跳页</span>
+              </div>
               <div class="flex gap-1.5">
                 <input v-model="form.payReturnUrl" type="text" :placeholder="defaultPayReturnUrl" class="input-dark w-full text-xs font-mono" />
                 <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="form.payReturnUrl = defaultPayReturnUrl" title="恢复默认">
@@ -109,7 +236,17 @@
                   <span class="material-symbols-outlined text-14px">content_copy</span>
                 </button>
               </div>
-              <p class="text-11px text-slate-500 mt-1">用户在收银台付款完成后，浏览器自动跳回的页面（默认 {site_url}/#/dashboard）。</p>
+              <p class="text-11px text-slate-400 mt-1">用户在收银台付款完成后，浏览器由 B 站自动跳回的页面。</p>
+              <div class="mt-1.5 p-2 rounded bg-slate-800/60 border border-slate-700/50 space-y-1 text-10px">
+                <div class="text-amber-300/90 flex items-start gap-1">
+                  <span class="shrink-0 font-bold">💻 本地调试:</span>
+                  <span>浏览器本地访问前端，填 <code class="bg-slate-900 px-1 py-0.2 rounded text-slate-200">http://localhost:6688/#/dashboard</code></span>
+                </div>
+                <div class="text-emerald-300/90 flex items-start gap-1">
+                  <span class="shrink-0 font-bold">🚀 线上生产:</span>
+                  <span>填生产前端控制台，如 <code class="bg-slate-900 px-1 py-0.2 rounded text-slate-200">https://api.yourdomain.com/#/dashboard</code></span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -119,42 +256,58 @@
           <div class="h-px bg-slate-800 flex-1"></div>
           <div class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800/80 border border-slate-700/60 text-11px text-slate-400 font-mono shrink-0">
             <span class="material-symbols-outlined text-14px text-indigo-400">arrow_downward</span>
-            <span>① 跨站中继切单下单 (POST relay_url) ── [HMAC-SHA256 签名]</span>
+            <span>① 跨站收银切单下单 (POST relay_url) ── [HMAC-SHA256 签名]</span>
           </div>
           <div class="h-px bg-slate-800 flex-1"></div>
         </div>
 
-        <!-- 节点 2: B 站合规收银中继 (极客工坊) -->
+        <!-- 节点 2: B 站托管收银服务 (极客工坊) -->
         <div class="p-4 rounded-xl bg-slate-900/40 border transition-all" :class="form.relayUrl ? 'border-emerald-500/40 bg-emerald-950/10' : 'border-slate-800 opacity-80'">
           <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-800/80 gap-3">
             <div class="flex items-center gap-2 min-w-0">
               <span class="px-2 py-0.5 rounded text-10px font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">节点 2</span>
               <span class="font-bold text-white text-xs flex items-center gap-1 shrink-0">
                 <span class="material-symbols-outlined text-16px text-emerald-400">handyman</span>
-                <span>B 站合规收银中继 (极客工坊)</span>
+                <span>B 站托管收银服务 (极客工坊)</span>
               </span>
               <span class="text-11px text-slate-400 truncate hidden md:inline">合规在线效率工具箱伪装壳，提供独立高保真收银台与双向安全验签</span>
             </div>
-            <span v-if="form.relayUrl" class="badge badge-emerald text-10px shrink-0 whitespace-nowrap">切单中继已启用</span>
+            <span v-if="form.relayUrl" class="badge badge-emerald text-10px shrink-0 whitespace-nowrap">收银切单已启用</span>
             <span v-else class="badge text-slate-400 bg-slate-800 text-10px shrink-0 whitespace-nowrap">留空则直连易支付</span>
           </div>
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
             <div>
-              <label class="block text-slate-300 font-semibold mb-1">中继下单接口 URL (Relay API)</label>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-slate-300 font-semibold">切单下单接口 URL (Checkout API)</label>
+                <span class="text-10px text-slate-400">B 站接收订单接口</span>
+              </div>
               <div class="flex gap-1.5">
-                <input v-model="form.relayUrl" type="text" placeholder="http://127.0.0.1:8000/api/v1/relay/create" class="input-dark w-full text-xs font-mono" />
-                <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="copyText(form.relayUrl, '中继下单地址')">
+                <input v-model="form.relayUrl" type="text" placeholder="https://crosslinkdev.online/api/v1/relay/create" class="input-dark w-full text-xs font-mono" />
+                <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="copyText(form.relayUrl, '切单下单地址')">
                   <span class="material-symbols-outlined text-14px">content_copy</span>
                 </button>
               </div>
-              <p class="text-11px text-slate-500 mt-1">B 站服务接收 A 站订单的后端接口。填入地址即开启切单中继。</p>
+              <p class="text-11px text-slate-400 mt-1">B 站服务接收 A 站订单的后端接口。填入地址即开启收银切单模式，留空则直连易支付。</p>
+              <div class="mt-1.5 p-2 rounded bg-slate-800/60 border border-slate-700/50 space-y-1 text-10px">
+                <div class="text-amber-300/90 flex items-start gap-1">
+                  <span class="shrink-0 font-bold">💻 本地调试:</span>
+                  <span>可连线上测试 B 站 <code class="bg-slate-900 px-1 py-0.2 rounded text-slate-200">https://crosslinkdev.online/api/v1/relay/create</code> 或本地 B 站 <code class="bg-slate-900 px-1 py-0.2 rounded text-slate-200">http://127.0.0.1:8000/api/v1/relay/create</code></span>
+                </div>
+                <div class="text-emerald-300/90 flex items-start gap-1">
+                  <span class="shrink-0 font-bold">🚀 线上生产:</span>
+                  <span>填生产极客工坊切单接口，如 <code class="bg-slate-900 px-1 py-0.2 rounded text-slate-200">https://crosslinkdev.online/api/v1/relay/create</code></span>
+                </div>
+              </div>
             </div>
 
             <div>
-              <label class="block text-slate-300 font-semibold mb-1">中继收银台基准 URL (Relay Checkout Base)</label>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-slate-300 font-semibold">独立收银台基准 URL (Checkout Base)</label>
+                <span class="text-10px text-slate-400">收银前端基准</span>
+              </div>
               <div class="flex gap-1.5">
-                <input v-model="form.relayCheckoutBase" type="text" placeholder="http://crosslinkdev.online:8080" class="input-dark w-full text-xs font-mono" />
+                <input v-model="form.relayCheckoutBase" type="text" placeholder="https://crosslinkdev.online" class="input-dark w-full text-xs font-mono" />
                 <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="copyText(form.relayCheckoutBase, '收银台基准地址')">
                   <span class="material-symbols-outlined text-14px">content_copy</span>
                 </button>
@@ -168,27 +321,62 @@
                   🚀 线上生产
                 </button>
               </div>
-              <p class="text-11px text-slate-500 mt-1">控制用户下单后跳往 B 站哪个协议、域名及端口的收银台。</p>
+              <p class="text-11px text-slate-400 mt-1">控制用户下单后跳往 B 站哪个协议、域名及端口的收银台页面。</p>
             </div>
 
             <div>
-              <label class="block text-slate-300 font-semibold mb-1">跨站通信密钥 (Relay Secret)</label>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-slate-300 font-semibold">跨站通信密钥 (Relay Secret)</label>
+                <span class="text-10px text-slate-400">HMAC 防伪签</span>
+              </div>
               <input v-model="form.relaySecret" type="text" placeholder="两站共享的通信鉴权密钥 (RELAY_SECRET)" class="input-dark w-full text-xs font-mono" />
-              <p class="text-11px text-slate-500 mt-1">用于生成与验证 HMAC-SHA256 数字防伪签名，防止伪造支付回调。</p>
+              <p class="text-11px text-slate-400 mt-1">用于两站通信时生成与验证 HMAC-SHA256 数字防伪签名，必须与 B 站配置完全一致。</p>
             </div>
 
             <div>
-              <label class="block text-slate-300 font-semibold mb-1">中继异步通知 URL (Relay Notify URL)</label>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-slate-300 font-semibold flex items-center gap-1">
+                  <span>切单异步通知 URL (Notify URL)</span>
+                  <span class="text-amber-400 text-10px font-normal font-mono">(B站POST回调)</span>
+                </label>
+                <span class="text-10px text-slate-400">自动发货接口</span>
+              </div>
               <div class="flex gap-1.5">
                 <input v-model="form.relayNotifyUrl" type="text" :placeholder="defaultRelayNotifyUrl" class="input-dark w-full text-xs font-mono" />
-                <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="form.relayNotifyUrl = defaultRelayNotifyUrl" title="恢复默认">
+                <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="form.relayNotifyUrl = defaultRelayNotifyUrl" title="恢复默认 (基于Site URL拼接)">
                   <span class="material-symbols-outlined text-14px">restart_alt</span>
                 </button>
-                <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="copyText(form.relayNotifyUrl || defaultRelayNotifyUrl, '中继通知地址')">
+                <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="copyText(form.relayNotifyUrl || defaultRelayNotifyUrl, '切单通知地址')">
                   <span class="material-symbols-outlined text-14px">content_copy</span>
                 </button>
               </div>
-              <p class="text-11px text-slate-500 mt-1">B 站收到易支付付款后通知 A 站的接口（默认 {site_url}/api/v1/pay/notify/relay）。</p>
+              <p class="text-11px text-slate-400 mt-1">B 站服务器收到易支付付款成功后，将在后台主动向 A 站发起的 POST 回调接口（默认 {site_url}/api/v1/pay/notify/relay）。</p>
+              
+              <!-- 本地调试 vs 线上生产 重点说明 -->
+              <div class="mt-2 space-y-1.5 text-10px">
+                <div class="p-2.5 rounded-lg bg-amber-950/20 border border-amber-500/30 text-amber-200/90 leading-relaxed">
+                  <div class="flex items-center gap-1 font-bold text-amber-400 mb-1">
+                    <span class="material-symbols-outlined text-14px">computer</span>
+                    <span>💻 本地调试应该怎么填？</span>
+                  </div>
+                  <div class="space-y-1 text-slate-300">
+                    <p>• <strong class="text-amber-300">推荐方案 (免外网)：</strong>若只需本地测试套餐订阅业务逻辑，建议直接在页面上方主通道模式选择 <span class="text-cyan-300 font-semibold">🧪 本地开发模拟沙箱 (fake)</span>，无需任何真实支付和网络回调即可秒级完成履约。</p>
+                    <p>• <strong class="text-amber-300">真实切单联调：</strong>若使用线上公网 B 站（crosslinkdev.online），公网服务器<strong>无法直接访问本地 127.0.0.1</strong>！必须使用内网穿透工具（如 cpolar / ngrok / frp）将本地 8100 端口映射出公网域名，填写如：<code class="bg-slate-900 px-1 py-0.5 rounded text-amber-300">https://xxx.cpolar.top/api/v1/pay/notify/relay</code>。</p>
+                    <p>• <strong class="text-amber-300">全本地联调：</strong>若 A 站和 B 站都在本机同一内网下运行，可填：<code class="bg-slate-900 px-1 py-0.5 rounded text-amber-300">http://127.0.0.1:8100/api/v1/pay/notify/relay</code>。</p>
+                  </div>
+                </div>
+
+                <div class="p-2.5 rounded-lg bg-emerald-950/20 border border-emerald-500/30 text-emerald-200/90 leading-relaxed">
+                  <div class="flex items-center gap-1 font-bold text-emerald-400 mb-1">
+                    <span class="material-symbols-outlined text-14px">cloud_done</span>
+                    <span>🚀 线上生产环境应该怎么填？</span>
+                  </div>
+                  <div class="space-y-1 text-slate-300">
+                    <p>• 填写 A 站正式上线、外网可访问的公网域名接口，如：<code class="bg-slate-900 px-1 py-0.5 rounded text-emerald-300">https://api.yourdomain.com/api/v1/pay/notify/relay</code>。</p>
+                    <p>• <strong class="text-emerald-300">一键快捷生成：</strong>在上方【节点 1】中填好您的正式公网 Site URL（如 https://api.yourdomain.com）后，直接点击输入框右侧的 <span class="inline-flex items-center align-middle text-indigo-300"><span class="material-symbols-outlined text-12px">restart_alt</span> 恢复默认</span> 按钮，系统就会自动完成规范拼接！</p>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -232,7 +420,7 @@
                 </div>
                 <div>
                   <label class="block text-slate-300 font-semibold mb-1">商户通信密钥 (Key)</label>
-                  <input v-model="form.epayKey" type="password" placeholder="易支付商户通信密钥 Key" class="input-dark w-full text-xs font-mono" />
+                  <input v-model="form.epayKey" type="text" placeholder="易支付商户通信密钥 Key" class="input-dark w-full text-xs font-mono" />
                   <p class="text-11px text-slate-500 mt-1">易支付商户通信密钥，用于 MD5 签名与验签。</p>
                 </div>
                 <div>
@@ -243,17 +431,33 @@
               </div>
 
               <div v-if="!form.relayUrl">
-                <label class="block text-slate-300 font-semibold mb-1">直连异步通知 URL (Direct Notify URL)</label>
+                <div class="flex items-center justify-between mb-1">
+                  <label class="text-slate-300 font-semibold flex items-center gap-1">
+                    <span>直连异步通知 URL (Direct Notify URL)</span>
+                    <span class="text-amber-400 text-10px font-normal font-mono">(易支付POST回调)</span>
+                  </label>
+                  <span class="text-10px text-slate-400">直连发货接口</span>
+                </div>
                 <div class="flex gap-1.5">
                   <input v-model="form.epayNotifyUrl" type="text" :placeholder="defaultEpayNotifyUrl" class="input-dark w-full text-xs font-mono" />
-                  <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="form.epayNotifyUrl = defaultEpayNotifyUrl" title="恢复默认">
+                  <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="form.epayNotifyUrl = defaultEpayNotifyUrl" title="恢复默认 (基于Site URL拼接)">
                     <span class="material-symbols-outlined text-14px">restart_alt</span>
                   </button>
                   <button type="button" class="btn-secondary px-2.5 text-xs shrink-0" @click="copyText(form.epayNotifyUrl || defaultEpayNotifyUrl, '直连通知地址')">
                     <span class="material-symbols-outlined text-14px">content_copy</span>
                   </button>
                 </div>
-                <p class="text-11px text-slate-500 mt-1">直连易支付时生效，易支付将直接回调该地址（默认 {site_url}/api/v1/pay/notify/epay）。</p>
+                <p class="text-11px text-slate-400 mt-1">直连易支付模式下生效，易支付平台在用户付款后直接回调该地址（默认 {site_url}/api/v1/pay/notify/epay）。</p>
+                <div class="mt-1.5 p-2 rounded bg-slate-800/60 border border-slate-700/50 space-y-1 text-10px">
+                  <div class="text-amber-300/90 flex items-start gap-1">
+                    <span class="shrink-0 font-bold">💻 本地调试:</span>
+                    <span>易支付在公网无法访问本地 127.0.0.1，须填内网穿透公网域名（如 <code class="bg-slate-900 px-1 py-0.2 rounded text-slate-200">https://xxx.cpolar.top/api/v1/pay/notify/epay</code>）或直接选用上方沙箱模式</span>
+                  </div>
+                  <div class="text-emerald-300/90 flex items-start gap-1">
+                    <span class="shrink-0 font-bold">🚀 线上生产:</span>
+                    <span>填真实公网域名接口，如 <code class="bg-slate-900 px-1 py-0.2 rounded text-slate-200">https://api.yourdomain.com/api/v1/pay/notify/epay</code>（点击右侧 🔄 恢复默认即可自动生成）</span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -271,7 +475,7 @@
                     <span class="material-symbols-outlined text-14px">content_copy</span>
                   </button>
                 </div>
-                <p class="text-10px text-slate-500 mt-1">切单中继模式下务必填 B 站授权域名，避免易支付风控拦截非授权来源。</p>
+                <p class="text-10px text-slate-500 mt-1">收银切单模式下务必填 B 站授权域名，避免易支付风控拦截非授权来源。</p>
               </div>
               <div class="pt-2 border-t border-slate-700/60">
                 <span class="text-slate-400 block mb-1">通知与跳转设置:</span>
@@ -316,6 +520,7 @@ const loading = ref(false)
 const saving = ref(false)
 const feedbackMsg = ref('')
 const feedbackSuccess = ref(true)
+const showGuide = ref(true)
 
 const form = reactive<PaymentConfig>({
   payProvider: 'epay',
@@ -331,6 +536,30 @@ const form = reactive<PaymentConfig>({
   epayType: 'alipay',
   epayNotifyUrl: '',
 })
+
+function applyTemplate(type: 'local_tunnel' | 'production') {
+  if (type === 'local_tunnel') {
+    form.payProvider = 'epay'
+    form.siteUrl = 'https://demo-antigravity.cpolar.top'
+    form.payReturnUrl = 'http://localhost:6688/#/dashboard'
+    form.relayUrl = 'https://crosslinkdev.online/api/v1/relay/create'
+    form.relayCheckoutBase = 'https://crosslinkdev.online'
+    form.relaySecret = 'relay_shared_secret_between_a_and_b_station'
+    form.relayNotifyUrl = 'https://demo-antigravity.cpolar.top/api/v1/pay/notify/relay'
+    feedbackSuccess.value = true
+    feedbackMsg.value = '已代入本地内网穿透联调示例，请将域名替换为您自己的穿透域名并保存！'
+  } else if (type === 'production') {
+    form.payProvider = 'epay'
+    form.siteUrl = 'https://api.yourdomain.com'
+    form.payReturnUrl = 'https://api.yourdomain.com/#/dashboard'
+    form.relayUrl = 'https://crosslinkdev.online/api/v1/relay/create'
+    form.relayCheckoutBase = 'https://crosslinkdev.online'
+    form.relaySecret = 'relay_shared_secret_between_a_and_b_station'
+    form.relayNotifyUrl = 'https://api.yourdomain.com/api/v1/pay/notify/relay'
+    feedbackSuccess.value = true
+    feedbackMsg.value = '已代入线上生产标准规范模板，请将域名和 Relay Secret 修改为您正式值并保存！'
+  }
+}
 
 const cleanSiteUrl = computed(() => {
   return (form.siteUrl || window.location.origin).replace(/\/+$/, '')

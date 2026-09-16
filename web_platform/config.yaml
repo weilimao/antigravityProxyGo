@@ -5,8 +5,15 @@ server:
   token_expire_hours: 72
 
 database:
-  type: "mysql" # 已启用 2g 服务器 MySQL 8.4
-  dsn: "root:ProxySub2026SecDbPass99@tcp(192.255.160.69:39306)/antigravity_platform?charset=utf8mb4&parseTime=True&loc=Local"
+  type: "mysql" # 已启用 2g 服务器 MySQL 8.4 (如本地调试推荐切为 sqlite)
+  dsn: "root:ProxySub2026SecDbPass99@tcp(192.255.160.69:39306)/antigravity_platform?charset=utf8mb4&parseTime=True&loc=Local&timeout=5s&readTimeout=10s&writeTimeout=10s"
+
+redis:
+  enabled: true
+  host: "192.255.160.69"
+  port: "6379"
+  password: "ProxySub2026SecRedisAuth99"
+  db: 1 # 使用空闲的 DB 1 隔离存储会话与Token
 
 payment:
   relay_url: "http://127.0.0.1:8000/api/v1/relay/create"

@@ -21,7 +21,14 @@
 
     <!-- 用户表格 -->
     <div class="glass-card overflow-hidden">
-      <div class="overflow-x-auto">
+      <div v-if="loading" class="p-6">
+        <LoadingSpinner text="正在加载注册用户列表..." />
+      </div>
+      <div v-else-if="users.length === 0" class="p-12 text-center text-slate-400 text-xs">
+        <span class="material-symbols-outlined text-32px text-slate-500 mb-2 block">group_off</span>
+        暂无匹配的用户记录
+      </div>
+      <div v-else class="overflow-x-auto">
         <table class="table-dark">
           <thead>
             <tr>
@@ -69,11 +76,13 @@
                 </button>
                 <button
                   type="button"
+                  :disabled="togglingId === u.id"
                   :class="u.status === 'active' ? 'btn-danger' : 'btn-primary'"
-                  class="text-xs py-1 px-2.5 cursor-pointer"
+                  class="text-xs py-1 px-2.5 cursor-pointer inline-flex items-center gap-1 disabled:opacity-50"
                   @click="toggleUser(u.id)"
                 >
-                  {{ u.status === 'active' ? '封禁' : '解封' }}
+                  <span v-if="togglingId === u.id" class="material-symbols-outlined text-12px animate-spin">progress_activity</span>
+                  <span>{{ togglingId === u.id ? '处理中...' : (u.status === 'active' ? '封禁' : '解封') }}</span>
                 </button>
               </td>
             </tr>
@@ -101,8 +110,11 @@
           </div>
 
           <div class="flex items-center justify-end gap-3 mt-4">
-            <button type="button" class="btn-secondary text-xs" @click="showAssignModal = false">取消</button>
-            <button type="button" class="btn-primary text-xs" @click="confirmAssign">确认指派</button>
+            <button type="button" class="btn-secondary text-xs" :disabled="assigning" @click="showAssignModal = false">取消</button>
+            <button type="button" :disabled="assigning" class="btn-primary text-xs flex items-center gap-1.5 disabled:opacity-60" @click="confirmAssign">
+              <span v-if="assigning" class="material-symbols-outlined text-14px animate-spin">progress_activity</span>
+              <span>{{ assigning ? '指派中...' : '确认指派' }}</span>
+            </button>
           </div>
         </div>
       </div>
@@ -113,20 +125,27 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { adminApi, planApi } from '../../../api/client'
+import LoadingSpinner from '../../../components/common/LoadingSpinner.vue'
 
 const users = ref<any[]>([])
 const allPlans = ref<any[]>([])
+const loading = ref(false)
+const assigning = ref(false)
+const togglingId = ref<number | null>(null)
 const search = ref('')
 const showAssignModal = ref(false)
 const selectedUser = ref<any>(null)
 const selectedPlanId = ref<number | null>(null)
 
 async function fetchUsers() {
+  loading.value = true
   try {
     const res = await adminApi.listUsers(1, 50, search.value)
     users.value = res.list || []
   } catch (err) {
     console.error(err)
+  } finally {
+    loading.value = false
   }
 }
 
@@ -148,22 +167,28 @@ function openAssignModal(u: any) {
 
 async function confirmAssign() {
   if (!selectedUser.value || !selectedPlanId.value) return
+  assigning.value = true
   try {
     await adminApi.assignPlan(selectedUser.value.id, selectedPlanId.value)
     alert('套餐指派成功！')
     showAssignModal.value = false
-    fetchUsers()
+    await fetchUsers()
   } catch (err: any) {
     alert(err.message || '指派失败')
+  } finally {
+    assigning.value = false
   }
 }
 
 async function toggleUser(id: number) {
+  togglingId.value = id
   try {
     await adminApi.toggleUserStatus(id)
-    fetchUsers()
+    await fetchUsers()
   } catch (err: any) {
     alert(err.message || '操作失败')
+  } finally {
+    togglingId.value = null
   }
 }
 

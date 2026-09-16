@@ -106,6 +106,7 @@ export async function request<T = any>(endpoint: string, options: RequestInit = 
 export const authApi = {
   login: (body: any) => request<any>('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
   register: (body: any) => request<any>('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
+  logout: () => request<any>('/auth/logout', { method: 'POST' }),
   getMe: () => request<any>('/auth/me'),
   changePassword: (body: any) => request<any>('/auth/password', { method: 'POST', body: JSON.stringify(body) }),
 }
@@ -113,6 +114,7 @@ export const authApi = {
 // 套餐服务
 export const planApi = {
   listActive: () => request<any[]>('/plans'),
+  getDetail: (id: number) => request<any>(`/plans/${id}`),
   adminList: () => request<any[]>('/admin/plans'),
   adminCreate: (body: any) => request<any>('/admin/plans', { method: 'POST', body: JSON.stringify(body) }),
   adminUpdate: (id: number, body: any) => request<any>(`/admin/plans/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
@@ -123,6 +125,19 @@ export const planApi = {
 export const checkoutApi = {
   createOrder: (planId: number) => request<any>('/checkout/create', { method: 'POST', body: JSON.stringify({ planId }) }),
   getOrderStatus: (orderNo: string) => request<any>(`/checkout/orders/${orderNo}`),
+}
+
+// 用户订单管理 (对标 ProxySubForClash)
+export const orderApi = {
+  listMyOrders: (page = 1, pageSize = 20, status = '') => {
+    const params = new URLSearchParams()
+    params.set('page', String(page))
+    params.set('pageSize', String(pageSize))
+    if (status) params.set('status', status)
+    return request<{ list: any[]; total: number; page: number; pageSize: number }>(`/user/orders?${params.toString()}`)
+  },
+  getPayUrl: (orderNo: string) => request<{ orderNo: string; payUrl: string }>(`/user/orders/${orderNo}/pay-url`),
+  cancelOrder: (orderNo: string) => request<any>(`/user/orders/${orderNo}/cancel`, { method: 'POST' }),
 }
 
 // API Key 凭证
@@ -178,7 +193,7 @@ export const adminApi = {
   fulfillOrder: (orderNo: string) => request<any>(`/admin/orders/${orderNo}/fulfill`, { method: 'POST' }),
 }
 
-// 支付跳转与收银中继配置
+// 支付跳转与收银切单配置
 export interface PaymentConfig {
   payProvider: string
   siteUrl: string

@@ -185,12 +185,12 @@
 
       <!-- Footer -->
       <div class="px-6 py-4 border-t border-slate-800 bg-slate-900 flex justify-end gap-3">
-        <button class="btn-secondary" @click="$emit('close')">取消</button>
-        <button class="btn-primary flex items-center gap-1.5" @click="handleSave" :disabled="saving">
+        <button class="btn-secondary" :disabled="saving" @click="$emit('close')">取消</button>
+        <button class="btn-primary flex items-center gap-1.5 disabled:opacity-60 shadow-md shadow-indigo-600/30" @click="handleSave" :disabled="saving">
           <span class="material-symbols-outlined text-[16px]" :class="saving ? 'animate-spin' : ''">
-            {{ saving ? 'sync' : 'save' }}
+            {{ saving ? 'progress_activity' : 'save' }}
           </span>
-          保存并应用
+          <span>{{ saving ? '保存并应用中...' : '保存并应用' }}</span>
         </button>
       </div>
     </div>

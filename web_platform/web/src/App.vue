@@ -36,6 +36,16 @@
           </router-link>
 
           <router-link
+            v-if="isLoggedIn"
+            to="/orders"
+            class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5"
+            :class="$route.path.startsWith('/orders') ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-400 hover:text-white'"
+          >
+            <span class="material-symbols-outlined text-16px">receipt_long</span>
+            <span>我的订单</span>
+          </router-link>
+
+          <router-link
             v-if="isAdmin"
             to="/admin"
             class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5"
@@ -79,8 +89,8 @@
     <!-- 页脚 -->
     <footer v-if="!isAuthPage" class="border-t border-slate-800/80 py-6 text-center text-xs text-slate-500">
       <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-        <span>{{ siteName }} · 下一代高吞吐大模型中继商业化运营系统</span>
-        <span class="font-mono text-11px text-slate-600">Pure Go + Modern Vue 3 · 极客工坊切单协议标准</span>
+        <span>{{ siteName }} · 下一代高吞吐企业级大模型服务平台</span>
+        <span class="font-mono text-11px text-slate-600">Pure Go + Modern Vue 3 · 企业级高可用算力保障</span>
       </div>
     </footer>
   </div>
@@ -89,7 +99,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { authState, clearToken, refreshCurrentUser, systemApi } from './api/client'
+import { authState, clearToken, refreshCurrentUser, systemApi, authApi } from './api/client'
 
 const router = useRouter()
 const route = useRoute()
@@ -101,7 +111,12 @@ const username = computed(() => authState.user?.username || '')
 const role = computed(() => authState.user?.role || '')
 const isAdmin = computed(() => role.value === 'admin')
 
-function handleLogout() {
+async function handleLogout() {
+  try {
+    await authApi.logout()
+  } catch (e) {
+    // 登出容错
+  }
   clearToken()
   router.push('/login')
 }

@@ -35,9 +35,18 @@ type GoRelayGatewayConfig struct {
 	SyncEnabled   bool   `yaml:"sync_enabled"`    // 是否开启自动向网关热同步配置
 }
 
+type RedisConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Host     string `yaml:"host"`
+	Port     string `yaml:"port"`
+	Password string `yaml:"password"`
+	DB       int    `yaml:"db"`
+}
+
 type Config struct {
 	Server   ServerConfig         `yaml:"server"`
 	Database DatabaseConfig       `yaml:"database"`
+	Redis    RedisConfig          `yaml:"redis"`
 	Payment  RelayPaymentConfig   `yaml:"payment"`
 	Gateway  GoRelayGatewayConfig `yaml:"gateway"`
 }
@@ -62,6 +71,13 @@ func LoadConfig(path string) (*Config, error) {
 			Database: DatabaseConfig{
 				Type: "sqlite",
 				DSN:  filepath.Join("data", "antigravity_web.db"),
+			},
+			Redis: RedisConfig{
+				Enabled:  false,
+				Host:     "127.0.0.1",
+				Port:     "6379",
+				Password: "",
+				DB:       1,
 			},
 			Payment: RelayPaymentConfig{
 				RelayURL:          "http://127.0.0.1:8000/api/v1/relay/create",

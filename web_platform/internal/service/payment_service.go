@@ -103,12 +103,12 @@ func (s *PaymentService) CreateRelayOrder(userID uint, planID uint) (*model.Orde
 		client := &http.Client{Timeout: 15 * time.Second}
 		resp, err := client.Post(relayURL, "application/json", bytes.NewReader(reqBytes))
 		if err != nil {
-			return &order, "", fmt.Errorf("无法连接极客工坊中继收银服务 (%v)，请检查网络或配置", err)
+			return &order, "", fmt.Errorf("无法连接极客工坊收银结算服务 (%v)，请检查网络或配置", err)
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			return &order, "", fmt.Errorf("极客工坊中继收银服务异常: HTTP %d", resp.StatusCode)
+			return &order, "", fmt.Errorf("极客工坊收银结算服务异常: HTTP %d", resp.StatusCode)
 		}
 
 		var data struct {
@@ -157,7 +157,7 @@ func (s *PaymentService) CreateRelayOrder(userID uint, planID uint) (*model.Orde
 	epayPID := strings.TrimSpace(payCfg.EpayPID)
 	epayKey := strings.TrimSpace(payCfg.EpayKey)
 	if epayURL == "" || epayPID == "" || epayKey == "" {
-		return &order, "", errors.New("易支付通道未配置: 请在后台「支付跳转配置」填写中继 URL 或易支付网关地址/PID/KEY")
+		return &order, "", errors.New("易支付通道未配置: 请在后台「支付跳转配置」填写切单 URL 或易支付网关地址/PID/KEY")
 	}
 
 	epayType := strings.TrimSpace(payCfg.EpayType)

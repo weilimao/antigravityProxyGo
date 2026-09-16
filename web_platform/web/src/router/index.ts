@@ -4,6 +4,8 @@ import LoginView from '../views/LoginView.vue'
 import DashboardView from '../views/DashboardView.vue'
 import PricingView from '../views/PricingView.vue'
 import OrderCallbackView from '../views/OrderCallbackView.vue'
+import OrderConfirmView from '../views/OrderConfirmView.vue'
+import OrdersView from '../views/OrdersView.vue'
 import AdminView from '../views/admin/AdminView.vue'
 
 const routes: RouteRecordRaw[] = [
@@ -28,8 +30,20 @@ const routes: RouteRecordRaw[] = [
     component: PricingView,
   },
   {
+    path: '/checkout/confirm',
+    name: 'OrderConfirm',
+    component: OrderConfirmView,
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/orders',
-    name: 'OrderCallback',
+    name: 'Orders',
+    component: OrdersView,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/orders/callback',
+    name: 'OrderCallbackAlt',
     component: OrderCallbackView,
   },
   {

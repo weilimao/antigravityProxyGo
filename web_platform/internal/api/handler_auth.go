@@ -1,6 +1,8 @@
 package api
 
 import (
+	"strings"
+
 	"antigravity-web-platform/internal/pkg/response"
 	"antigravity-web-platform/internal/service"
 
@@ -76,6 +78,17 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	})
 }
 
+func (h *AuthHandler) Logout(c *gin.Context) {
+	authHeader := c.GetHeader("Authorization")
+	if authHeader != "" {
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+			_ = h.authService.Logout(strings.TrimSpace(parts[1]))
+		}
+	}
+	response.Success(c, gin.H{"message": "已成功登出"})
+}
+
 func (h *AuthHandler) GetMe(c *gin.Context) {
 	userID := c.GetUint("user_id")
 	user, err := h.authService.GetProfile(userID)
@@ -115,3 +128,4 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 
 	response.Success(c, gin.H{"message": "密码修改成功"})
 }
+

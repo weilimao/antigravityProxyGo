@@ -145,7 +145,7 @@ func (s *SettingService) PullOCRModelFromGateway() (string, []string, error) {
 	return "", []string{}, nil
 }
 
-// GetModelMappings 获取全局中继模型映射表
+// GetModelMappings 获取全局模型路由映射表
 func (s *SettingService) GetModelMappings() ([]model.ModelMappingEntry, error) {
 	var setting model.Setting
 	err := database.DB.Where("`key` = ?", "model_mappings").First(&setting).Error
@@ -163,7 +163,7 @@ func (s *SettingService) GetModelMappings() ([]model.ModelMappingEntry, error) {
 	return mappings, nil
 }
 
-// SetModelMappings 持久化保存全局中继模型映射表
+// SetModelMappings 持久化保存全局模型路由映射表
 func (s *SettingService) SetModelMappings(mappings []model.ModelMappingEntry) error {
 	data, err := json.Marshal(mappings)
 	if err != nil {
@@ -173,7 +173,7 @@ func (s *SettingService) SetModelMappings(mappings []model.ModelMappingEntry) er
 	setting := model.Setting{
 		Key:         "model_mappings",
 		Value:       string(data),
-		Description: "中继模型映射与号池路由规则",
+		Description: "模型路由映射与后端集群调度规则",
 		UpdatedAt:   time.Now(),
 	}
 	return database.DB.Save(&setting).Error

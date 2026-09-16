@@ -15,16 +15,16 @@
           <!-- 状态与品牌徽章 -->
           <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/25 text-indigo-400 text-xs font-mono font-medium mb-5 w-fit shadow-sm shadow-indigo-500/10">
             <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>MAX API · Enterprise Model Gateway</span>
+            <span>MAX API · Enterprise Model Cloud</span>
           </div>
 
           <!-- 主标题与导语 -->
           <h1 class="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-tight">
-            高吞吐智能大模型<br />
-            <span class="gradient-text">中继调度与商业化平台</span>
+            高吞吐企业级大模型<br />
+            <span class="gradient-text">算力云与商业化服务平台</span>
           </h1>
           <p class="text-sm sm:text-base text-slate-400 mt-4 max-w-xl leading-relaxed">
-            面向下一代 AI 产品的企业级网关中枢。聚合主流模型厂商接口，提供毫秒级智能容灾切换、Token 级精准额度计量与全自动订阅履约。
+            面向下一代 AI 应用的企业级大模型算力平台。提供超低延迟推理响应、高可用弹性计算集群、Token 级精准额度计量与全自动订阅履约。
           </p>
 
           <!-- 4 大核心能力微卡片矩阵 -->
@@ -34,8 +34,8 @@
                 <span class="material-symbols-outlined text-18px">hub</span>
               </div>
               <div>
-                <h4 class="text-xs font-bold text-slate-200">多模型统一接入</h4>
-                <p class="text-[11px] text-slate-400 mt-0.5">OpenAI / Claude / Gemini / DeepSeek 协议极速透传</p>
+                <h4 class="text-xs font-bold text-slate-200">多模型全矩阵部署</h4>
+                <p class="text-[11px] text-slate-400 mt-0.5">DeepSeek / OpenAI / Claude / Gemini 兼容协议极速响应</p>
               </div>
             </div>
 
@@ -44,8 +44,8 @@
                 <span class="material-symbols-outlined text-18px">bolt</span>
               </div>
               <div>
-                <h4 class="text-xs font-bold text-slate-200">智能故障自愈</h4>
-                <p class="text-[11px] text-slate-400 mt-0.5">节点毫秒级健康巡检与自动热备赛跑切换</p>
+                <h4 class="text-xs font-bold text-slate-200">集群高可用保障</h4>
+                <p class="text-[11px] text-slate-400 mt-0.5">节点毫秒级健康巡检与弹性负载高可用调度</p>
               </div>
             </div>
 
@@ -86,12 +86,12 @@
                 </span>
               </div>
               <div class="p-3.5 font-mono text-xs text-slate-300 space-y-1 bg-black/40 overflow-x-auto">
-                <div class="text-slate-500"># 发起标准兼容请求并由 MAX API 智能中继调度</div>
+                <div class="text-slate-500"># 发起标准兼容推理请求并由 MAX API 高性能算力集群响应</div>
                 <div><span class="text-pink-400">curl</span> https://api.openmax.io/v1/chat/completions \</div>
                 <div class="pl-4 text-slate-400">-H <span class="text-amber-300">"Authorization: Bearer sk-openmax-live"</span> \</div>
                 <div class="pl-4 text-slate-400">-d <span class="text-indigo-300">'{"model": "auto", "messages": [{"role": "user", "content": "Hi!"}]}'</span></div>
                 <div class="text-emerald-400 pt-1">
-                  &lt; HTTP/1.1 200 OK [Latency: 86ms · Auto Routed]
+                  &lt; HTTP/1.1 200 OK [Latency: 86ms · Accelerated]
                 </div>
               </div>
             </div>
@@ -147,8 +147,8 @@
               </button>
             </div>
 
-            <!-- 认证表单 -->
-            <form @submit.prevent="handleSubmit" class="flex flex-col gap-4">
+            <!-- 认证表单（抗浏览器嗅探与干扰设计） -->
+            <div class="flex flex-col gap-4" @keydown.enter="handleSubmit">
               <!-- 用户名输入 -->
               <div class="flex flex-col gap-1.5">
                 <div class="flex items-center justify-between">
@@ -163,6 +163,9 @@
                     v-model="form.username"
                     type="text"
                     required
+                    autocomplete="off"
+                    data-lpignore="true"
+                    data-form-type="other"
                     class="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
                     placeholder="请输入登录用户名"
                   />
@@ -182,13 +185,16 @@
                   <input
                     v-model="form.email"
                     type="email"
+                    autocomplete="off"
+                    data-lpignore="true"
+                    data-form-type="other"
                     class="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
                     placeholder="user@example.com"
                   />
                 </div>
               </div>
 
-              <!-- 密码输入 -->
+              <!-- 密码输入（采用 -webkit-text-security 安全密文伪装，从物理层阻断浏览器弱口令泄露弹窗嗅探） -->
               <div class="flex flex-col gap-1.5">
                 <div class="flex items-center justify-between">
                   <label class="text-xs font-medium text-slate-300">
@@ -202,9 +208,13 @@
                   </span>
                   <input
                     v-model="form.password"
-                    :type="showPassword ? 'text' : 'password'"
+                    type="text"
                     required
                     minlength="6"
+                    autocomplete="off"
+                    data-lpignore="true"
+                    data-form-type="other"
+                    :class="{ 'password-mask': !showPassword }"
                     class="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-10 pr-10 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
                     placeholder="请输入密码（不少于6位）"
                   />
@@ -233,9 +243,13 @@
                   </span>
                   <input
                     v-model="form.confirmPassword"
-                    :type="showConfirmPassword ? 'text' : 'password'"
+                    type="text"
                     required
                     minlength="6"
+                    autocomplete="off"
+                    data-lpignore="true"
+                    data-form-type="other"
+                    :class="{ 'password-mask': !showConfirmPassword }"
                     class="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-10 pr-10 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
                     placeholder="请再次输入密码以防输错"
                   />
@@ -272,8 +286,9 @@
 
               <!-- 提交主按钮 -->
               <button
-                type="submit"
+                type="button"
                 :disabled="loading"
+                @click="handleSubmit"
                 class="w-full py-3 px-4 mt-1 bg-gradient-to-r from-indigo-500 via-indigo-600 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-semibold text-sm rounded-xl shadow-lg shadow-indigo-600/30 hover:shadow-indigo-600/50 hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none"
               >
                 <span v-if="loading" class="material-symbols-outlined text-18px animate-spin">
@@ -284,25 +299,6 @@
                 </span>
                 <span>{{ loading ? '处理中...' : (isLogin ? '立即登录进入控制台' : '创建账号并开启服务') }}</span>
               </button>
-            </form>
-
-            <!-- 演示账号快捷填入卡片 -->
-            <div class="mt-6 pt-4 border-t border-slate-800/80">
-              <div class="flex items-center justify-between bg-slate-950/60 border border-slate-800/80 rounded-xl p-2.5 px-3">
-                <div class="flex items-center gap-2 min-w-0">
-                  <span class="material-symbols-outlined text-indigo-400 text-16px shrink-0">badge</span>
-                  <div class="truncate text-[11px] text-slate-400">
-                    演示账号: <code class="text-indigo-300 font-mono">admin</code> / <code class="text-indigo-300 font-mono">admin123</code>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  class="shrink-0 ml-2 px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 hover:text-indigo-300 border border-indigo-500/30 text-[11px] font-medium transition-colors cursor-pointer"
-                  @click="fillDefaultAdmin"
-                >
-                  一键填入
-                </button>
-              </div>
             </div>
           </div>
 
@@ -340,13 +336,6 @@ const form = reactive({
 
 function switchTab(login: boolean) {
   isLogin.value = login
-  errorMsg.value = ''
-}
-
-function fillDefaultAdmin() {
-  isLogin.value = true
-  form.username = 'admin'
-  form.password = 'admin123'
   errorMsg.value = ''
 }
 
@@ -393,3 +382,9 @@ async function handleSubmit() {
   }
 }
 </script>
+
+<style scoped>
+.password-mask {
+  -webkit-text-security: disc;
+}
+</style>

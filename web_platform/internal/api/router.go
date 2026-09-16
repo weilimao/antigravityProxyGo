@@ -24,6 +24,7 @@ func SetupRouter() *gin.Engine {
 	authH := NewAuthHandler()
 	planH := NewPlanHandler()
 	checkoutH := NewCheckoutHandler()
+	orderH := NewOrderHandler()
 	webhookH := NewWebhookHandler()
 	keyH := NewKeyHandler()
 	autoH := NewAutoHandler()
@@ -47,7 +48,9 @@ func SetupRouter() *gin.Engine {
 	{
 		v1.POST("/auth/register", authH.Register)
 		v1.POST("/auth/login", authH.Login)
+		v1.POST("/auth/logout", authH.Logout)
 		v1.GET("/plans", planH.ListActivePlans)
+		v1.GET("/plans/:id", planH.GetPlanDetail)
 		v1.GET("/system/config", systemH.GetPublicConfig)
 
 		// 极客工坊支付中继异步回调
@@ -69,6 +72,11 @@ func SetupRouter() *gin.Engine {
 		// 订单与收银
 		userGroup.POST("/checkout/create", checkoutH.CreateOrder)
 		userGroup.GET("/checkout/orders/:orderNo", checkoutH.GetOrderStatus)
+
+		// 用户端订单管理 (对标 ProxySubForClash)
+		userGroup.GET("/user/orders", orderH.ListMyOrders)
+		userGroup.GET("/user/orders/:orderNo/pay-url", orderH.GetMyOrderPayURL)
+		userGroup.POST("/user/orders/:orderNo/cancel", orderH.CancelMyOrder)
 
 		// 密钥管理
 		userGroup.GET("/keys", keyH.ListKeys)

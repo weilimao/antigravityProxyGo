@@ -38,7 +38,6 @@ echo [2/4] Configuration file config.yaml is ready.
 REM 4. Check frontend dependencies
 if exist "%ROOT_DIR%web\node_modules\" goto skip_install
 echo [3/4] First-time setup: Installing frontend dependencies...
-echo       This may take a minute, please wait...
 pushd "%ROOT_DIR%web"
 call npm install
 if %errorlevel% neq 0 (
@@ -50,7 +49,7 @@ echo       Frontend dependencies installed successfully.
 :skip_install
 echo [3/4] Frontend dependencies are ready.
 
-REM 5. Check port occupation
+REM 5. Check port occupation and clean up old instances
 set "PORT_BUSY=0"
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8100 ^| findstr LISTENING 2^>nul') do set "PORT_BUSY=1"
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr :6688 ^| findstr LISTENING 2^>nul') do set "PORT_BUSY=1"
@@ -62,12 +61,35 @@ call "%ROOT_DIR%stop.bat" >nul 2>&1
 ping 127.0.0.1 -n 2 >nul
 :skip_cleanup
 
+REM 6. Establish secure SSH Tunnel for remote database if configured
+set "NEED_TUNNEL=0"
+findstr /i "127.0.0.1:39306" "%ROOT_DIR%config.yaml" >nul 2>&1
+if %errorlevel% equ 0 set "NEED_TUNNEL=1"
+
+if "!NEED_TUNNEL!"=="1" (
+    set "TUNNEL_READY=0"
+    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :39306 ^| findstr LISTENING 2^>nul') do set "TUNNEL_READY=1"
+    if "!TUNNEL_READY!"=="0" (
+        echo [*] Establishing secure SSH Database Tunnel to 192.255.160.69:39306 in background...
+        powershell -Command "Start-Process ssh -ArgumentList '-N -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=no -L 39306:127.0.0.1:39306 root@192.255.160.69' -WindowStyle Hidden"
+        ping 127.0.0.1 -n 3 >nul
+        echo       SSH Database Tunnel connected successfully.
+    ) else (
+        echo [*] SSH Database Tunnel on port 39306 is already active.
+    )
+)
+
 echo.
 echo [4/4] Starting backend and frontend services...
+echo       (Note: Syncing remote database schema takes ~30-40s on first load)
 echo.
 
 REM Start Backend Service (Port 8100)
-start "Antigravity-Web-Backend" cmd /k "title Antigravity-Web-Backend [Port 8100] && cd /d "%ROOT_DIR%" && echo [*] Starting Go Backend Server on port 8100... && go run cmd/server/main.go"
+if exist "%ROOT_DIR%web_platform_server.exe" (
+    start "Antigravity-Web-Backend" cmd /k "title Antigravity-Web-Backend [Port 8100] && cd /d "%ROOT_DIR%" && .\web_platform_server.exe"
+) else (
+    start "Antigravity-Web-Backend" cmd /k "title Antigravity-Web-Backend [Port 8100] && cd /d "%ROOT_DIR%" && echo [*] Starting Go Backend Server on port 8100... && go run cmd/server/main.go"
+)
 
 REM Start Frontend Service (Port 6688)
 start "Antigravity-Web-Frontend" cmd /k "title Antigravity-Web-Frontend [Port 6688] && cd /d "%ROOT_DIR%web" && echo [*] Starting Vite Frontend Server on port 6688... && call npm run dev"
@@ -127,7 +149,6 @@ exit /b 0
 :err_go
 echo [ERROR] Go environment not found!
 echo Please install Go 1.22+ and configure PATH.
-echo Download at: https://go.dev/dl/
 echo.
 pause
 exit /b 1
@@ -135,7 +156,6 @@ exit /b 1
 :err_node
 echo [ERROR] Node.js environment not found!
 echo Please install Node.js (v18+ recommended).
-echo Download at: https://nodejs.org/
 echo.
 pause
 exit /b 1

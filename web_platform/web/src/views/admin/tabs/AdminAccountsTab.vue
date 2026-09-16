@@ -154,6 +154,18 @@
           />
         </div>
 
+        <!-- 刷新按钮 -->
+        <button
+          type="button"
+          :disabled="loading"
+          class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900/80 hover:bg-slate-800 border border-slate-800 rounded-xl text-xs font-semibold text-slate-300 hover:text-white transition-all shadow-sm"
+          @click="loadAccounts"
+          title="刷新账号列表"
+        >
+          <span class="material-symbols-outlined text-16px" :class="{ 'animate-spin': loading }">refresh</span>
+          <span>{{ loading ? '刷新中...' : '刷新' }}</span>
+        </button>
+
         <!-- 导出按钮 -->
         <button
           type="button"
@@ -307,10 +319,7 @@
     </div>
 
     <!-- 账号展示主体 -->
-    <div v-if="loading" class="py-16 flex flex-col items-center justify-center text-slate-500">
-      <span class="material-symbols-outlined text-32px animate-spin text-indigo-500 mb-2">progress_activity</span>
-      <span class="text-xs">加载账号池中...</span>
-    </div>
+    <LoadingSpinner v-if="loading" text="正在加载账号池与调度配置..." />
 
     <div v-else-if="filteredAccounts.length === 0" class="py-16 flex flex-col items-center justify-center text-slate-500 border border-dashed border-slate-800 rounded-2xl">
       <span class="material-symbols-outlined text-48px text-slate-600 mb-2">account_circle_off</span>
@@ -323,260 +332,32 @@
       class="grid gap-3.5"
       :class="gridColsClass"
     >
-      <div
+      <AccountCard
         v-for="acc in paginatedAccounts"
         :key="acc.id"
-        class="bg-slate-900/80 border rounded-2xl p-4 flex flex-col justify-between transition-all hover:border-slate-700 shadow-lg relative group"
-        :class="[
-          selectedAccountIds.includes(acc.id) ? 'border-indigo-500/70 bg-indigo-950/20' : 'border-slate-800/80',
-          !acc.enabled ? 'opacity-60' : ''
-        ]"
-      >
-        <!-- 顶部信息行: 复选框 + 邮箱 + 状态 -->
-        <div>
-          <div class="flex items-start justify-between gap-2 mb-2">
-            <div class="flex items-start gap-2 overflow-hidden">
-              <input
-                type="checkbox"
-                :value="acc.id"
-                :checked="selectedAccountIds.includes(acc.id)"
-                class="mt-1 rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0 cursor-pointer"
-                @change="toggleSelectAccount(acc.id)"
-              />
-              <div class="overflow-hidden">
-                <div class="font-bold text-white text-xs truncate" :title="acc.email">
-                  {{ acc.email || acc.id }}
-                </div>
-                <div class="flex items-center gap-1.5 mt-1">
-                  <span class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                    {{ acc.groupName || acc.provider.toUpperCase() }}
-                  </span>
-                  <span v-if="acc.addedAt" class="text-[10px] text-slate-500 truncate">
-                    {{ formatAddedAt(acc.addedAt) }}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <!-- 状态 Badge -->
-            <span
-              v-if="acc.cooldownUntil && acc.cooldownUntil > Date.now()"
-              class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 whitespace-nowrap"
-            >
-              冷静中
-            </span>
-            <span
-              v-else-if="acc.enabled"
-              class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap"
-            >
-              活跃
-            </span>
-            <span
-              v-else
-              class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-500 whitespace-nowrap"
-            >
-              已停用
-            </span>
-          </div>
-
-          <!-- 配额/模型说明栏 -->
-          <div class="bg-slate-800/40 border border-slate-800 rounded-xl p-2.5 mt-2.5 text-[11px] space-y-1">
-            <div class="text-slate-400 flex items-center justify-between">
-              <span>配额与凭据:</span>
-              <span class="font-mono text-slate-300">{{ acc.maskedKey || '免 Key / 内部凭证' }}</span>
-            </div>
-            <div v-if="acc.defaultModel || acc.tier" class="text-slate-400 flex items-center justify-between">
-              <span>关联模型/Tier:</span>
-              <span class="text-indigo-300 font-medium truncate max-w-[150px]">{{ acc.defaultModel || acc.tier }}</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 底部操作与开关行 -->
-        <div class="flex items-center justify-between pt-3 mt-3 border-t border-slate-800/80 text-xs">
-          <!-- Toggle 启停 -->
-          <div
-            class="flex items-center gap-2 cursor-pointer select-none group/toggle"
-            @click="handleToggleAccount(acc)"
-          >
-            <div
-              class="w-9 h-5 rounded-full transition-colors duration-200 relative flex items-center px-0.5"
-              :class="acc.enabled ? 'bg-indigo-600' : 'bg-slate-700'"
-            >
-              <div
-                class="w-4 h-4 bg-white rounded-full shadow-md transform transition-transform duration-200 ease-in-out"
-                :class="acc.enabled ? 'translate-x-4' : 'translate-x-0'"
-              ></div>
-            </div>
-            <span
-              class="text-[11px] font-bold tracking-wide transition-colors"
-              :class="acc.enabled ? 'text-emerald-400' : 'text-slate-500'"
-            >
-              {{ acc.enabled ? '已启用' : '已停用' }}
-            </span>
-          </div>
-
-          <!-- 操作按钮组 -->
-          <div class="flex items-center gap-1">
-            <button
-              type="button"
-              class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-slate-800 transition-colors"
-              title="导出此账号"
-              @click="exportSingleAccount(acc)"
-            >
-              <span class="material-symbols-outlined text-16px">download</span>
-            </button>
-            <button
-              type="button"
-              class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-slate-800 transition-colors"
-              title="编辑账号"
-              @click="openEditModal(acc)"
-            >
-              <span class="material-symbols-outlined text-16px">edit</span>
-            </button>
-            <button
-              type="button"
-              class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
-              title="删除账号"
-              @click="handleDeleteAccount(acc)"
-            >
-              <span class="material-symbols-outlined text-16px">delete</span>
-            </button>
-          </div>
-        </div>
-      </div>
+        :acc="acc"
+        :selected="selectedAccountIds.includes(acc.id)"
+        @toggle-select="toggleSelectAccount"
+        @toggle-status="handleToggleAccount"
+        @export="exportSingleAccount"
+        @edit="openEditModal"
+        @delete="handleDeleteAccount"
+      />
     </div>
 
     <!-- 视图 2: 列表表格模式 (List) -->
-    <div v-else class="overflow-x-auto bg-slate-900/80 border border-slate-800/80 rounded-2xl shadow-xl">
-      <table class="w-full text-left text-xs text-slate-300">
-        <thead class="bg-slate-800/50 text-slate-400 font-semibold border-b border-slate-800">
-          <tr>
-            <th class="p-3 w-10">
-              <input
-                type="checkbox"
-                :checked="allPageSelected"
-                class="rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0 cursor-pointer"
-                @change="toggleSelectAllPage"
-              />
-            </th>
-            <th class="p-3">账号标识 / 邮箱</th>
-            <th class="p-3">通道 / 渠道组</th>
-            <th class="p-3">API Key 凭证</th>
-            <th class="p-3">默认模型 / 端点</th>
-            <th class="p-3">状态</th>
-            <th class="p-3">启停</th>
-            <th class="p-3 text-right">操作</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-800">
-          <tr
-            v-for="acc in paginatedAccounts"
-            :key="acc.id"
-            class="hover:bg-slate-800/40 transition-colors"
-            :class="[
-              selectedAccountIds.includes(acc.id) ? 'bg-indigo-950/20' : '',
-              !acc.enabled ? 'opacity-60' : ''
-            ]"
-          >
-            <td class="p-3">
-              <input
-                type="checkbox"
-                :value="acc.id"
-                :checked="selectedAccountIds.includes(acc.id)"
-                class="rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0 cursor-pointer"
-                @change="toggleSelectAccount(acc.id)"
-              />
-            </td>
-            <td class="p-3 font-bold text-white">
-              {{ acc.email || acc.id }}
-              <div v-if="acc.addedAt" class="text-[10px] text-slate-500 font-normal">
-                {{ formatAddedAt(acc.addedAt) }}
-              </div>
-            </td>
-            <td class="p-3">
-              <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
-                {{ acc.groupName || acc.provider.toUpperCase() }}
-              </span>
-            </td>
-            <td class="p-3 font-mono text-slate-400">
-              {{ acc.maskedKey || '—' }}
-            </td>
-            <td class="p-3">
-              <div class="text-indigo-300 font-medium truncate max-w-[200px]">{{ acc.defaultModel || '默认路由' }}</div>
-              <div class="text-[10px] text-slate-500 font-mono truncate max-w-[200px]">{{ acc.baseUrl || '官方默认端点' }}</div>
-            </td>
-            <td class="p-3">
-              <span
-                v-if="acc.cooldownUntil && acc.cooldownUntil > Date.now()"
-                class="px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20"
-              >
-                冷静中
-              </span>
-              <span
-                v-else-if="acc.enabled"
-                class="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-              >
-                活跃
-              </span>
-              <span
-                v-else
-                class="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-500"
-              >
-                已停用
-              </span>
-            </td>
-            <td class="p-3">
-              <div
-                class="inline-flex items-center gap-2 cursor-pointer select-none"
-                @click="handleToggleAccount(acc)"
-              >
-                <div
-                  class="w-9 h-5 rounded-full transition-colors duration-200 relative flex items-center px-0.5"
-                  :class="acc.enabled ? 'bg-indigo-600' : 'bg-slate-700'"
-                >
-                  <div
-                    class="w-4 h-4 bg-white rounded-full shadow-md transform transition-transform duration-200 ease-in-out"
-                    :class="acc.enabled ? 'translate-x-4' : 'translate-x-0'"
-                  ></div>
-                </div>
-                <span class="text-[11px] font-bold" :class="acc.enabled ? 'text-emerald-400' : 'text-slate-500'">
-                  {{ acc.enabled ? '已启用' : '已停用' }}
-                </span>
-              </div>
-            </td>
-            <td class="p-3 text-right">
-              <div class="flex items-center justify-end gap-1.5">
-                <button
-                  type="button"
-                  class="p-1 rounded text-slate-400 hover:text-indigo-400 transition-colors"
-                  title="导出此账号"
-                  @click="exportSingleAccount(acc)"
-                >
-                  <span class="material-symbols-outlined text-16px">download</span>
-                </button>
-                <button
-                  type="button"
-                  class="p-1 rounded text-slate-400 hover:text-indigo-400 transition-colors"
-                  title="编辑"
-                  @click="openEditModal(acc)"
-                >
-                  <span class="material-symbols-outlined text-16px">edit</span>
-                </button>
-                <button
-                  type="button"
-                  class="p-1 rounded text-slate-400 hover:text-rose-400 transition-colors"
-                  title="删除"
-                  @click="handleDeleteAccount(acc)"
-                >
-                  <span class="material-symbols-outlined text-16px">delete</span>
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <AccountTableView
+      v-else
+      :accounts="paginatedAccounts"
+      :selected-account-ids="selectedAccountIds"
+      :all-page-selected="allPageSelected"
+      @toggle-select-all-page="toggleSelectAllPage"
+      @toggle-select-account="toggleSelectAccount"
+      @toggle-account="handleToggleAccount"
+      @export-account="exportSingleAccount"
+      @edit-account="openEditModal"
+      @delete-account="handleDeleteAccount"
+    />
 
     <!-- 分页控制栏 -->
     <div v-if="filteredAccounts.length > 0" class="flex flex-wrap items-center justify-between pt-3 border-t border-slate-800/80 text-xs text-slate-400">
@@ -630,6 +411,9 @@ import { ref, computed, onMounted } from 'vue'
 import { accountApi, type AccountItem, type PoolConfig } from '../../../api/client'
 import AccountModal from './AccountModal.vue'
 import AccountImportModal from './AccountImportModal.vue'
+import AccountCard from './AccountCard.vue'
+import AccountTableView from './AccountTableView.vue'
+import LoadingSpinner from '../../../components/common/LoadingSpinner.vue'
 
 const channels = [
   { id: 'antigravity', name: 'Antigravity 官方账号', icon: 'extension' },

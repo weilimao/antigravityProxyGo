@@ -6,7 +6,7 @@
       </div>
       <h2 class="text-xl font-bold text-white mb-2">订阅状态确认</h2>
       <p class="text-xs text-slate-400 mb-6">
-        若您已在极客工坊收银台完成扫码支付，中继网关将在秒级内自动为您激活并顺延套餐时长。
+        若您已完成扫码支付，平台系统将在秒级内自动为您激活并顺延套餐时长。
       </p>
 
       <div class="flex items-center justify-center gap-3">
