@@ -110,6 +110,13 @@ func TestRelayModelMapping_WithAccount(t *testing.T) {
 		t.Fatal("expected hasAccountsInPool() to be true after adding account")
 	}
 
+	// 配置有效模型映射（平台控制台驱动）
+	if err := settingsMgr.SetRelayModelMapping([]settings.ModelMappingEntry{
+		{ClientModel: "gpt-4o", TargetModel: "gpt-4o", Expose: true},
+	}); err != nil {
+		t.Fatalf("SetRelayModelMapping failed: %v", err)
+	}
+
 	// 1. relay:get-model-mapping 此时应返回非空配置
 	respStr, handled, err := app.handleRelayConfigIPC("relay:get-model-mapping", nil)
 	if err != nil {

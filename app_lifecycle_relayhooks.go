@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/db"
+	platformdb "antigravity-proxy/internal/platform/db"
+	"antigravity-proxy/internal/platform/model"
 	"antigravity-proxy/internal/relay"
 	"antigravity-proxy/internal/stats"
 )
@@ -52,6 +54,34 @@ func (a *App) relayRecordUsage(allocatedAccount, userID, apiKeyID, modelName str
 			SessionID:    sessionID,
 		}
 		_ = db.InsertRequestLog(dbItem)
+
+		// 若启用平台业务数据库 (如 MySQL 模式), 异步写入轻量标量日志 (严格不存储请求体与响应体, 防止磁盘膨胀)
+		if platformdb.GlobalDB != nil {
+			go func() {
+				_ = platformdb.GlobalDB.Create(&model.RequestLog{
+					ReqID:        reqID,
+					UserID:       userID,
+					Account:      allocatedAccount,
+					ModelName:    modelName,
+					InTokens:     inTokens,
+					OutTokens:    outTokens,
+					CachedTokens: cachedTokens,
+					Cost:         totalCost,
+					InputCost:    inputCost,
+					OutputCost:   outputCost,
+					CachedCost:   cachedCost,
+					DurationMs:   durationMs,
+					FirstByteMs:  firstByteMs,
+					StatusCode:   statusCode,
+					Method:       method,
+					Host:         host,
+					Path:         path,
+					SessionID:    sessionID,
+					Family:       string(relay.DetectAPIKeyFamily(modelName)),
+					CreatedAt:    time.Now(),
+				}).Error
+			}()
+		}
 
 		// 方案 B: 将远程中继请求同步计入主仪表盘全局指标与综合趋势桶 trends
 		if a.statsTracker != nil {

@@ -27,6 +27,8 @@ func SetupRouter() *gin.Engine {
 	webhookH := NewWebhookHandler()
 	keyH := NewKeyHandler()
 	autoH := NewAutoHandler()
+	systemH := NewSystemHandler()
+	logH := NewLogHandler()
 
 	adminPlanH := admin.NewAdminPlanHandler()
 	adminOrderH := admin.NewAdminOrderHandler()
@@ -35,6 +37,10 @@ func SetupRouter() *gin.Engine {
 	adminOcrH := admin.NewAdminOcrHandler()
 	adminAutoH := admin.NewAdminAutoHandler()
 	adminBenchmarkH := admin.NewAdminBenchmarkHandler()
+	adminAccountH := admin.NewAdminAccountHandler()
+	adminPaymentH := admin.NewAdminPaymentHandler()
+	adminSystemH := admin.NewAdminSystemHandler()
+	adminLogH := admin.NewAdminLogHandler()
 
 	// 1. 公开端点
 	v1 := r.Group("/api/v1")
@@ -42,10 +48,15 @@ func SetupRouter() *gin.Engine {
 		v1.POST("/auth/register", authH.Register)
 		v1.POST("/auth/login", authH.Login)
 		v1.GET("/plans", planH.ListActivePlans)
+		v1.GET("/system/config", systemH.GetPublicConfig)
 
 		// 极客工坊支付中继异步回调
 		v1.POST("/pay/notify/relay", webhookH.HandleRelayWebhook)
 		v1.GET("/pay/notify/relay", webhookH.HandleRelayWebhook)
+
+		// 易支付官方直连异步回调
+		v1.POST("/pay/notify/epay", webhookH.HandleEpayWebhook)
+		v1.GET("/pay/notify/epay", webhookH.HandleEpayWebhook)
 	}
 
 	// 2. 普通登录用户端点
@@ -67,6 +78,11 @@ func SetupRouter() *gin.Engine {
 		// 专属 Auto 竞速配置
 		userGroup.GET("/user/auto-config", autoH.GetUserAutoConfig)
 		userGroup.POST("/user/auto-config", autoH.SetUserAutoConfig)
+
+		// 请求命中模型日志 (用户端按账号隔离/筛选)
+		userGroup.GET("/user/logs", logH.ListUserLogs)
+		userGroup.GET("/user/logs/detail", logH.GetUserLogDetail)
+		userGroup.GET("/user/logs/accounts", logH.GetUserLogAccounts)
 	}
 
 	// 3. 管理后台端点
@@ -114,6 +130,30 @@ func SetupRouter() *gin.Engine {
 		adminGroup.POST("/benchmark/run", adminBenchmarkH.RunBenchmark)
 		adminGroup.POST("/benchmark/run-model", adminBenchmarkH.RunBenchmarkModel)
 		adminGroup.GET("/benchmark/models", adminBenchmarkH.GetBenchmarkModels)
+
+		// 账号池管理
+		adminGroup.GET("/accounts", adminAccountH.GetAccounts)
+		adminGroup.POST("/accounts", adminAccountH.AddAccount)
+		adminGroup.PUT("/accounts/:id", adminAccountH.UpdateAccount)
+		adminGroup.DELETE("/accounts/:id", adminAccountH.DeleteAccount)
+		adminGroup.PUT("/accounts/:id/toggle", adminAccountH.ToggleAccount)
+		adminGroup.POST("/accounts/batch-delete", adminAccountH.BatchDeleteAccounts)
+		adminGroup.POST("/accounts/pool-config", adminAccountH.SavePoolConfig)
+		adminGroup.POST("/accounts/import", adminAccountH.ImportAccounts)
+		adminGroup.GET("/accounts/export", adminAccountH.ExportAccounts)
+
+		// 支付跳转配置
+		adminGroup.GET("/settings/payment", adminPaymentH.GetPaymentConfig)
+		adminGroup.POST("/settings/payment", adminPaymentH.SetPaymentConfig)
+
+		// 系统全局与对外 API 配置
+		adminGroup.GET("/settings/system", adminSystemH.GetSystemConfig)
+		adminGroup.POST("/settings/system", adminSystemH.SetSystemConfig)
+
+		// 请求命中日志管理 (全量/按账号筛选)
+		adminGroup.GET("/logs", adminLogH.ListAdminLogs)
+		adminGroup.GET("/logs/detail", adminLogH.GetAdminLogDetail)
+		adminGroup.GET("/logs/accounts", adminLogH.GetLogAccounts)
 	}
 
 	return r

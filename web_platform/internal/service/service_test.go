@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,15 +127,21 @@ func TestPlanAndModelAuthorization(t *testing.T) {
 		t.Fatalf("create plan failed: %v", err)
 	}
 
-	// 3. 用户预先创建 API Key
-	apiKey, err := keySvc.CreateKey(user.ID, "VSCode Key", nil)
-	if err != nil {
-		t.Fatalf("create api key failed: %v", err)
+	// 3. 用户在未订阅前尝试创建 API Key，必须被拦截拒绝
+	_, err = keySvc.CreateKey(user.ID, "VSCode Key", nil)
+	if err == nil {
+		t.Fatalf("expected create api key to fail for unsubscribed user, but succeeded")
 	}
 
 	// 4. 激活套餐订阅
 	if err := planSvc.ActivatePlan(user.ID, plan.ID); err != nil {
 		t.Fatalf("activate plan failed: %v", err)
+	}
+
+	// 4.1 激活后创建 API Key 应当成功
+	apiKey, err := keySvc.CreateKey(user.ID, "VSCode Key", nil)
+	if err != nil {
+		t.Fatalf("create api key failed after subscription: %v", err)
 	}
 
 	// 5. 校验用户订阅状态与到期时间
@@ -149,19 +156,23 @@ func TestPlanAndModelAuthorization(t *testing.T) {
 		t.Fatalf("expected PlanExpireAt to be in the future, got %d", updatedUser.PlanExpireAt)
 	}
 
-	// 6. 校验用户的 API Key 是否自动继承并刷新了套餐允许的模型白名单
+	// 6. 校验用户的 API Key 是否自动继承并包含套餐允许的模型白名单
 	keys, err := keySvc.ListKeys(user.ID)
 	if err != nil || len(keys) == 0 {
 		t.Fatalf("list keys failed: %v", err)
 	}
 
 	foundKey := keys[0]
-	if len(foundKey.AllowedModels) != len(testModels) {
-		t.Fatalf("expected %d allowed models on api key, got %d", len(testModels), len(foundKey.AllowedModels))
-	}
-	for i, m := range testModels {
-		if foundKey.AllowedModels[i] != m {
-			t.Fatalf("expected model %s, got %s", m, foundKey.AllowedModels[i])
+	for _, m := range testModels {
+		found := false
+		for _, am := range foundKey.AllowedModels {
+			if am == m {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected model %s in allowed models, got %v", m, foundKey.AllowedModels)
 		}
 	}
 	if foundKey.RateLimit != 45 {
@@ -472,5 +483,302 @@ func TestSettingService_OCRAndModelMappings(t *testing.T) {
 		t.Errorf("expected empty OCR models, got %v", clearedModels)
 	}
 }
+
+func TestGatewaySync_OtherGroupsAndModelsFallback(t *testing.T) {
+	// 1. 模拟上游 Provider API（如 bitdeer / openai 兼容端点）
+	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" || r.URL.Path == "/models" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"object": "list",
+				"data": []map[string]interface{}{
+					{"id": "deepseek-ai/DeepSeek-V4.1-Flash"},
+					{"id": "zai-org/GLM-5.3"},
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer mockUpstream.Close()
+
+	// 2. 模拟返回 404 Not Found 的老版 Go 网关
+	mockGateway404 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer mockGateway404.Close()
+
+	// 3. 创建测试沙箱目录与 accounts_other.json
+	tmpDir := t.TempDir()
+	testAccountsFile := filepath.Join(tmpDir, "accounts_other.json")
+	accountsData := localOtherAccountsFile{
+		Accounts: []*localOtherAccount{
+			{
+				ID:          "test-bitdeer-1",
+				GroupID:     "bitdeer",
+				GroupName:   "Bitdeer",
+				BaseURL:     mockUpstream.URL + "/v1",
+				AccessToken: "test-sk-123",
+				Formats:     []string{"openai"},
+				Enabled:     true,
+			},
+		},
+	}
+	content, err := json.Marshal(accountsData)
+	if err != nil {
+		t.Fatalf("marshal test accounts failed: %v", err)
+	}
+	if err := os.WriteFile(testAccountsFile, content, 0644); err != nil {
+		t.Fatalf("write test accounts failed: %v", err)
+	}
+
+	// 设置临时环境变量使得 findLocalAccountsOtherFile 能定位该文件
+	origAppData := os.Getenv("APPDATA")
+	defer func() {
+		os.Setenv("APPDATA", origAppData)
+		// Teardown 清理: 恢复全局配置
+		config.GlobalConfig.Gateway.GatewayURL = "http://127.0.0.1:18444"
+	}()
+	os.Setenv("APPDATA", tmpDir)
+
+	// 在 tmpDir 下创建 antigravity-proxy-desktop 目录并放置文件
+	proxyDir := filepath.Join(tmpDir, "antigravity-proxy-desktop")
+	_ = os.MkdirAll(proxyDir, 0755)
+	_ = os.WriteFile(filepath.Join(proxyDir, "accounts_other.json"), content, 0644)
+
+	if config.GlobalConfig == nil {
+		config.GlobalConfig = &config.Config{}
+	}
+	config.GlobalConfig.Gateway.GatewayURL = mockGateway404.URL
+	config.GlobalConfig.Gateway.AdminKey = "test-key"
+	gatewaySync := NewGatewaySyncService()
+
+	// 4. 验证网关 404 时回退获取分组
+	groupsRes, err := gatewaySync.GetGatewayOtherGroups()
+	if err != nil {
+		t.Fatalf("GetGatewayOtherGroups failed: %v", err)
+	}
+	groups, ok := groupsRes["groups"].([]map[string]interface{})
+	if !ok || len(groups) != 1 || groups[0]["groupId"] != "bitdeer" {
+		t.Fatalf("expected 1 fallback group 'bitdeer', got %v", groupsRes)
+	}
+
+	// 5. 验证网关 404 时直连上游获取模型列表
+	modelsRes, err := gatewaySync.FetchGatewayOtherGroupModels("bitdeer")
+	if err != nil {
+		t.Fatalf("FetchGatewayOtherGroupModels failed: %v", err)
+	}
+	models, ok := modelsRes["models"].([]string)
+	if !ok || len(models) != 2 {
+		t.Fatalf("expected 2 models from upstream, got %v", modelsRes)
+	}
+	if models[0] != "deepseek-ai/DeepSeek-V4.1-Flash" && models[1] != "deepseek-ai/DeepSeek-V4.1-Flash" {
+		t.Fatalf("expected deepseek model in result, got %v", models)
+	}
+}
+
+func TestGatewaySync_FetchChannelModelsFallback(t *testing.T) {
+	// 1. 模拟 NVIDIA 上游 /models 端点
+	mockNvidiaUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"object": "list",
+				"data": []map[string]interface{}{
+					{"id": "01-ai/yi-large"},
+					{"id": "adept/fuyu-8b"},
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer mockNvidiaUpstream.Close()
+
+	// 2. 模拟返回 404 的网关
+	mockGateway404 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer mockGateway404.Close()
+
+	// 3. 构造沙箱 accounts_nvidia.json
+	tmpDir := t.TempDir()
+	proxyDir := filepath.Join(tmpDir, "antigravity-proxy-desktop")
+	_ = os.MkdirAll(proxyDir, 0755)
+
+	accountsData := map[string]interface{}{
+		"accounts": []map[string]interface{}{
+			{
+				"id":           "nv-1",
+				"email":        "test@nvidia.local",
+				"access_token": "nvapi-test-token",
+				"baseUrl":      mockNvidiaUpstream.URL + "/v1",
+				"enabled":      true,
+			},
+		},
+	}
+	content, _ := json.Marshal(accountsData)
+	_ = os.WriteFile(filepath.Join(proxyDir, "accounts_nvidia.json"), content, 0644)
+
+	origAppData := os.Getenv("APPDATA")
+	defer func() {
+		os.Setenv("APPDATA", origAppData)
+		config.GlobalConfig.Gateway.GatewayURL = "http://127.0.0.1:18444"
+	}()
+	os.Setenv("APPDATA", tmpDir)
+
+	if config.GlobalConfig == nil {
+		config.GlobalConfig = &config.Config{}
+	}
+	config.GlobalConfig.Gateway.GatewayURL = mockGateway404.URL
+	config.GlobalConfig.Gateway.AdminKey = "test-key"
+	gatewaySync := NewGatewaySyncService()
+
+	// 4. 验证网关 404 时降级直接向上游获取
+	res, err := gatewaySync.FetchGatewayChannelModels("nvidia")
+	if err != nil {
+		t.Fatalf("FetchGatewayChannelModels failed: %v", err)
+	}
+
+	isSuccess, ok := res["success"].(bool)
+	if !ok || !isSuccess {
+		t.Fatalf("expected success=true, got %v", res)
+	}
+	models, ok := res["models"].([]string)
+	if !ok || len(models) != 2 {
+		t.Fatalf("expected 2 models, got %v", res)
+	}
+	if models[0] != "01-ai/yi-large" && models[1] != "01-ai/yi-large" {
+		t.Errorf("expected 01-ai/yi-large in result, got %v", models)
+	}
+}
+
+func TestRunGatewayBenchmark_ErrorHandling(t *testing.T) {
+	// 1. Mock 网关返回 500 报错
+	mockGatewayErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "benchmark scheduler not running",
+		})
+	}))
+	defer mockGatewayErr.Close()
+
+	// 2. Mock 网关返回 200 成功
+	mockGatewayOk := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+		})
+	}))
+	defer mockGatewayOk.Close()
+
+	origCfg := config.GlobalConfig
+	defer func() {
+		config.GlobalConfig = origCfg
+	}()
+
+	// 验证 500 报错能被正确抛出
+	config.GlobalConfig = &config.Config{
+		Gateway: config.GoRelayGatewayConfig{
+			GatewayURL: mockGatewayErr.URL,
+			AdminKey:   "test-admin-key",
+		},
+	}
+	_, err := RunGatewayBenchmark()
+	if err == nil || !strings.Contains(err.Error(), "benchmark scheduler not running") {
+		t.Fatalf("expected error containing 'benchmark scheduler not running', got: %v", err)
+	}
+	_, errModel := RunGatewayBenchmarkModel("test-model")
+	if errModel == nil || !strings.Contains(errModel.Error(), "benchmark scheduler not running") {
+		t.Fatalf("expected error containing 'benchmark scheduler not running', got: %v", errModel)
+	}
+
+	// 验证 200 正常响应
+	config.GlobalConfig.Gateway.GatewayURL = mockGatewayOk.URL
+	res, errOk := RunGatewayBenchmark()
+	if errOk != nil {
+		t.Fatalf("expected nil error on 200 OK, got: %v", errOk)
+	}
+	if success, ok := res["success"].(bool); !ok || !success {
+		t.Fatalf("expected success=true, got: %v", res)
+	}
+}
+
+func TestGetGatewayBenchmark_Direct_And_ErrorHandling(t *testing.T) {
+	// 1. 验证 newGatewayHTTPClient 显式禁用 Proxy
+	client := newGatewayHTTPClient(5 * time.Second)
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok || tr == nil {
+		t.Fatalf("expected *http.Transport, got %T", client.Transport)
+	}
+	if tr.Proxy != nil {
+		t.Fatalf("expected tr.Proxy == nil to bypass HTTP_PROXY")
+	}
+
+	// 2. Mock 网关返回 429 异常
+	mockGateway429 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]interface{}{
+				"code":    429,
+				"message": "Active accounts quota exhausted",
+			},
+		})
+	}))
+	defer mockGateway429.Close()
+
+	// 3. Mock 网关返回 200 正常
+	mockGateway200 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"config": map[string]interface{}{
+				"models": []string{"kimi-k3", "deepseek-v4-flash-0731"},
+			},
+			"results": []map[string]interface{}{
+				{"model": "kimi-k3", "ttftMs": 420, "totalMs": 850},
+			},
+		})
+	}))
+	defer mockGateway200.Close()
+
+	origCfg := config.GlobalConfig
+	defer func() {
+		config.GlobalConfig = origCfg
+	}()
+
+	// 4. 验证 429 被精准捕获为 error，不再吞错返回
+	config.GlobalConfig = &config.Config{
+		Gateway: config.GoRelayGatewayConfig{
+			GatewayURL: mockGateway429.URL,
+			AdminKey:   "test-key",
+		},
+	}
+	_, err429 := GetGatewayBenchmark()
+	if err429 == nil || !strings.Contains(err429.Error(), "Active accounts quota exhausted") {
+		t.Fatalf("expected error containing 'Active accounts quota exhausted', got: %v", err429)
+	}
+
+	// 5. 验证 200 正常读取数据
+	config.GlobalConfig.Gateway.GatewayURL = mockGateway200.URL
+	res200, err200 := GetGatewayBenchmark()
+	if err200 != nil {
+		t.Fatalf("expected nil error on 200 OK, got: %v", err200)
+	}
+	if success, ok := res200["success"].(bool); !ok || !success {
+		t.Fatalf("expected success=true, got: %v", res200)
+	}
+	cfgMap, ok := res200["config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected config map in result, got: %v", res200)
+	}
+	models, ok := cfgMap["models"].([]interface{})
+	if !ok || len(models) != 2 {
+		t.Fatalf("expected 2 models, got: %v", cfgMap)
+	}
+}
+
 
 

@@ -65,7 +65,7 @@ func TestAdminAuth_Enforcement(t *testing.T) {
 	settingsMgr := settings.NewManager()
 	settingsMgr.Init(tempDir)
 
-	handler := NewAPIHandler(authMgr, nil, nil, nil, "", settingsMgr)
+	handler := NewAPIHandler(authMgr, nil, nil, nil, "", settingsMgr, nil)
 
 	// (A) 未携带 Token 访问 POST /api/models/mapping -> 401
 	payload := map[string]interface{}{

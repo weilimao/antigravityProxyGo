@@ -16,7 +16,7 @@ func TestAdminBridge_FullFlow(t *testing.T) {
 	userMgr.Init(tmpDir)
 
 	authMgr := NewAuthManager(userMgr)
-	handler := NewAPIHandler(authMgr, nil, nil, nil, "", nil)
+	handler := NewAPIHandler(authMgr, nil, nil, nil, "", nil, nil)
 
 	// 1. 未授权访问拒绝
 	reqNoAuth := httptest.NewRequest(http.MethodPost, "/api/admin/users/sync", bytes.NewReader([]byte(`{"username":"test_user"}`)))
@@ -138,7 +138,7 @@ func TestAdminBridge_OCRAndMapping(t *testing.T) {
 	settingsMgr := settings.NewManager()
 	settingsMgr.Init(tmpDir)
 
-	handler := NewAPIHandler(authMgr, nil, nil, nil, "", settingsMgr)
+	handler := NewAPIHandler(authMgr, nil, nil, nil, "", settingsMgr, nil)
 
 	// 1. 未授权访问 OCR 接口 -> 403
 	reqNoAuth := httptest.NewRequest(http.MethodGet, "/api/admin/settings/ocr", nil)
@@ -240,6 +240,66 @@ func TestAdminBridge_OCRAndMapping(t *testing.T) {
 	}
 	if len(mapRes.Mappings) != 1 || mapRes.Mappings[0].ClientModel != "claude-3-7-sonnet" {
 		t.Errorf("expected clientModel 'claude-3-7-sonnet', got %+v", mapRes.Mappings)
+	}
+}
+
+func TestAdminUserKeysUsage(t *testing.T) {
+	tmpDir := t.TempDir()
+	userMgr := NewUserManager()
+	userMgr.Init(tmpDir)
+
+	testUser, err := userMgr.SyncOrAddUser("test_usage_user", "password123", "for usage test")
+	if err != nil {
+		t.Fatalf("failed to sync user: %v", err)
+	}
+
+	testKey, err := userMgr.CreateAPIKeyWithOptions(testUser.ID, "测试Key1", "sk-ant-test-usage-key-111", []string{"auto", "claude-3-7-sonnet"}, 0, 0)
+	if err != nil {
+		t.Fatalf("failed to create api key: %v", err)
+	}
+
+	// 记录用量：Gemini 12000, Claude 8000, Nvidia 5000
+	userMgr.RecordAPIKeyUsage(testUser.ID, testKey.ID, false, 12000)
+	userMgr.RecordAPIKeyUsage(testUser.ID, testKey.ID, true, 8000)
+	userMgr.RecordAPIKeyUsageForFamily(testUser.ID, testKey.ID, FamilyNvidia, 5000)
+
+	authMgr := NewAuthManager(userMgr)
+	handler := NewAPIHandler(authMgr, nil, nil, nil, "", nil, nil)
+
+	// 1. 无凭证请求应返回 403
+	reqNoAuth := httptest.NewRequest(http.MethodGet, "/api/admin/users/keys-usage?username=test_usage_user", nil)
+	wNoAuth := httptest.NewRecorder()
+	handler.ServeHTTP(wNoAuth, reqNoAuth)
+	if wNoAuth.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 on no auth, got %d", wNoAuth.Code)
+	}
+
+	// 2. 带 sk-ant-admin 正常请求
+	reqAuth := httptest.NewRequest(http.MethodGet, "/api/admin/users/keys-usage?username=test_usage_user", nil)
+	reqAuth.Header.Set("Authorization", "Bearer sk-ant-admin")
+	wAuth := httptest.NewRecorder()
+	handler.ServeHTTP(wAuth, reqAuth)
+	if wAuth.Code != http.StatusOK {
+		t.Fatalf("expected 200 on keys-usage, got %d: %s", wAuth.Code, wAuth.Body.String())
+	}
+
+	var res struct {
+		Success   bool             `json:"success"`
+		Username  string           `json:"username"`
+		Usages    map[string]int64 `json:"usages"`
+		TotalUsed int64            `json:"totalUsed"`
+	}
+	if err := json.Unmarshal(wAuth.Body.Bytes(), &res); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected success true, got false")
+	}
+	if res.TotalUsed != 25000 {
+		t.Fatalf("expected totalUsed 25000, got %d", res.TotalUsed)
+	}
+	if res.Usages[testKey.Key] != 25000 {
+		t.Fatalf("expected key usage 25000, got %d", res.Usages[testKey.Key])
 	}
 }
 

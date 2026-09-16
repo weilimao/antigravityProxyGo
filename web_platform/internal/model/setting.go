@@ -34,3 +34,10 @@ type AutoRacingConfig struct {
 	CandidateModels  []string `json:"candidateModels"`
 	UseBenchmarkPool bool     `json:"useBenchmarkPool"`
 }
+
+// SystemConfig 系统全局对外配置（对外 API 访问基准地址、站点信息等）
+type SystemConfig struct {
+	APIBaseURL   string `json:"apiBaseUrl"`
+	SiteName     string `json:"siteName,omitempty"`
+	Announcement string `json:"announcement,omitempty"`
+}

@@ -13,6 +13,7 @@ import (
 
 	"antigravity-proxy/internal/db"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 type ModelQuota struct {
@@ -45,6 +46,8 @@ type UserAPIKey struct {
 	Name              string    `json:"name"`
 	Key               string    `json:"key"`
 	CreatedAt         time.Time `json:"createdAt"`
+	LimitTokens       int64     `json:"limitTokens"`       // 统一/全模型总限额（0 表示无总额限制或跟随分桶）
+	UsedTokens        int64     `json:"usedTokens"`        // 累计全部已用 Token 总量
 	LimitGeminiTokens int64     `json:"limitGeminiTokens"`
 	LimitClaudeTokens int64     `json:"limitClaudeTokens"`
 	LimitNvidiaTokens int64     `json:"limitNvidiaTokens"`
@@ -94,6 +97,8 @@ type UserManager struct {
 	sync.RWMutex
 	users       []*RelayUser
 	persistPath string
+	usageStore  UserUsageStore
+	gormDB      *gorm.DB
 }
 
 func NewUserManager() *UserManager {
@@ -105,9 +110,17 @@ func NewUserManager() *UserManager {
 func (m *UserManager) Init(dataDir string) {
 	m.Lock()
 	m.persistPath = filepath.Join(dataDir, "relay_users.json")
+	if m.usageStore == nil {
+		m.usageStore = NewUserUsageStore(m.gormDB, func() {
+			m.SaveToDisk()
+		})
+	}
 	m.Unlock()
 
 	m.LoadFromDisk()
+	if m.gormDB != nil {
+		m.SyncFromDB()
+	}
 }
 
 func (m *UserManager) AddUser(key, password, remark string) (*RelayUser, error) {
@@ -243,6 +256,21 @@ func (m *UserManager) UpdateUserQuota(id string, quotas UserQuotas, resetLimit b
 	return fmt.Errorf("user not found")
 }
 
+// UpdateUserExpireAt 更新指定用户的套餐到期时间戳(Unix秒，0表示永久有效)，实时刷新内存并持久化
+func (m *UserManager) UpdateUserExpireAt(userIdentifier string, expireAt int64) error {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.ID == userIdentifier || u.Key == userIdentifier {
+			u.Quotas.ExpireAt = expireAt
+			m.saveToDiskLocked()
+			return nil
+		}
+	}
+	return fmt.Errorf("user %q not found", userIdentifier)
+}
+
 func (m *UserManager) GetUsers() []*RelayUser {
 	m.RLock()
 	defer m.RUnlock()
@@ -370,10 +398,15 @@ func (m *UserManager) SyncOrAddUser(key, password, remark string) (*RelayUser, e
 	return user, nil
 }
 
-// CreateAPIKeyWithOptions 为用户创建 API Key，支持指定密钥串、授权模型白名单与额度
-func (m *UserManager) CreateAPIKeyWithOptions(userIdentifier, name, customKey string, allowedModels []string, limitGemini, limitClaude int64) (*UserAPIKey, error) {
+// CreateAPIKeyWithOptions 为用户创建 API Key，支持指定密钥串、授权模型白名单与额度（支持可选的统一总限额 limitTokens）
+func (m *UserManager) CreateAPIKeyWithOptions(userIdentifier, name, customKey string, allowedModels []string, limitGemini, limitClaude int64, limitTokens ...int64) (*UserAPIKey, error) {
 	m.Lock()
 	defer m.Unlock()
+
+	var totalLimit int64
+	if len(limitTokens) > 0 && limitTokens[0] > 0 {
+		totalLimit = limitTokens[0]
+	}
 
 	for _, u := range m.users {
 		if u.ID == userIdentifier || u.Key == userIdentifier {
@@ -381,12 +414,35 @@ func (m *UserManager) CreateAPIKeyWithOptions(userIdentifier, name, customKey st
 			if keyStr == "" {
 				keyStr = "sk-ant-" + generateID()
 			}
+
+			// 若指定的 key 已存在，则执行幂等就地更新并返回，避免产生重复 Key 记录
+			for i := range u.APIKeys {
+				if u.APIKeys[i].Key == keyStr {
+					if name != "" {
+						u.APIKeys[i].Name = name
+					}
+					u.APIKeys[i].AllowedModels = allowedModels
+					if totalLimit > 0 {
+						u.APIKeys[i].LimitTokens = totalLimit
+					}
+					if limitGemini > 0 {
+						u.APIKeys[i].LimitGeminiTokens = limitGemini
+					}
+					if limitClaude > 0 {
+						u.APIKeys[i].LimitClaudeTokens = limitClaude
+					}
+					m.saveToDiskLocked()
+					return &u.APIKeys[i], nil
+				}
+			}
+
 			newKey := UserAPIKey{
 				ID:                generateID(),
 				Name:              name,
 				Key:               keyStr,
 				CreatedAt:         time.Now(),
 				AllowedModels:     allowedModels,
+				LimitTokens:       totalLimit,
 				LimitGeminiTokens: limitGemini,
 				LimitClaudeTokens: limitClaude,
 			}
@@ -420,24 +476,39 @@ func (m *UserManager) DeleteAPIKeyByKey(userIdentifier string, keyOrID string) e
 
 func (m *UserManager) ValidateAPIKey(token string) (*RelayUser, *UserAPIKey, error) {
 	m.RLock()
-	defer m.RUnlock()
-
 	for _, u := range m.users {
 		if !u.Enabled {
 			continue
 		}
 		for i, k := range u.APIKeys {
 			if k.Key == token {
-				return u, &u.APIKeys[i], nil
+				userPtr := u
+				keyPtr := &u.APIKeys[i]
+				m.RUnlock()
+				return userPtr, keyPtr, nil
 			}
 		}
 	}
+	m.RUnlock()
+
+	// 若开启了 DB 模式且内存未命中，尝试从数据库定向回表补齐缓存 (防止 Web 平台刚建 Key 时缓存未刷新)
+	if m.gormDB != nil {
+		if u, k, err := m.findAndCacheKeyFromDB(token); err == nil && u != nil && k != nil {
+			return u, k, nil
+		}
+	}
+
 	return nil, nil, fmt.Errorf("invalid api key")
 }
 
-func (m *UserManager) UpdateAPIKeyQuota(userID string, keyID string, limitGemini, limitClaude int64, allowedModels []string) error {
+func (m *UserManager) UpdateAPIKeyQuota(userID string, keyID string, limitGemini, limitClaude int64, allowedModels []string, limitTokens ...int64) error {
 	m.Lock()
 	defer m.Unlock()
+
+	var totalLimit int64
+	if len(limitTokens) > 0 && limitTokens[0] > 0 {
+		totalLimit = limitTokens[0]
+	}
 
 	for _, u := range m.users {
 		if u.ID == userID {
@@ -446,6 +517,9 @@ func (m *UserManager) UpdateAPIKeyQuota(userID string, keyID string, limitGemini
 					u.APIKeys[i].LimitGeminiTokens = limitGemini
 					u.APIKeys[i].LimitClaudeTokens = limitClaude
 					u.APIKeys[i].AllowedModels = allowedModels
+					if totalLimit > 0 {
+						u.APIKeys[i].LimitTokens = totalLimit
+					}
 					m.saveToDiskLocked()
 					return nil
 				}
@@ -499,45 +573,107 @@ func (m *UserManager) IsModelAuthorizedForAPIKey(userID, apiKeyID, model string)
 	return fmt.Errorf("model %q is not authorized for this API key; allowed: %v", model, key.AllowedModels)
 }
 
-func (m *UserManager) RecordAPIKeyUsage(userID string, apiKeyID string, isClaude bool, tokens int64) {
-	m.Lock()
-	defer m.Unlock()
+// CheckAPIKeyQuota 校验某 API Key 在调用指定模型时是否已耗尽额度。
+// 规则：
+// 1. 若为 official_bypass / default_bypass / 空 KeyID 等免鉴权白名单会话，直接放行。
+// 2. 检查账户有效期限(ExpireAt)。
+// 3. 检查 API Key 统一总配额(LimitTokens)：当 LimitTokens > 0 时，若全模型累计用量(Max(UsedTokens, 分桶之和))已达到或超过 LimitTokens，直接拦截。
+// 4. 若未命中总配额限制或 LimitTokens 未设定，兼容检查分模型家族配额(LimitClaudeTokens/LimitGeminiTokens/LimitNvidiaTokens/LimitGrokTokens)。
+func (m *UserManager) CheckAPIKeyQuota(userID, apiKeyID, model string) error {
+	if apiKeyID == "" || apiKeyID == APIKeyIDOfficialBypass || apiKeyID == APIKeyIDDefaultBypass {
+		return nil
+	}
+	m.RLock()
+	defer m.RUnlock()
 
+	var user *RelayUser
 	for _, u := range m.users {
-		if u.ID == userID {
-			for i, k := range u.APIKeys {
-				if k.ID == apiKeyID {
-					if isClaude {
-						u.APIKeys[i].UsedClaudeTokens += tokens
-					} else {
-						u.APIKeys[i].UsedGeminiTokens += tokens
-					}
-					m.saveToDiskLocked()
-					return
-				}
-			}
-			return
+		if u.ID == userID || u.Key == userID {
+			user = u
+			break
 		}
 	}
+	if user == nil {
+		return nil
+	}
+	if user.Quotas.ExpireAt > 0 && time.Now().Unix() > user.Quotas.ExpireAt {
+		return fmt.Errorf("subscription expired: your plan expired at %s, please renew to continue", time.Unix(user.Quotas.ExpireAt, 0).Format("2006-01-02 15:04:05"))
+	}
+
+	var key *UserAPIKey
+	for i := range user.APIKeys {
+		if user.APIKeys[i].ID == apiKeyID || user.APIKeys[i].Key == apiKeyID {
+			key = &user.APIKeys[i]
+			break
+		}
+	}
+	if key == nil {
+		return nil
+	}
+
+	// 计算当前 Key 的全量累计使用量(防止单项计数漂移，取 UsedTokens 与分桶之和的最大值)
+	totalUsed := key.UsedTokens
+	subTotal := key.UsedGeminiTokens + key.UsedClaudeTokens + key.UsedNvidiaTokens + key.UsedGrokTokens
+	if subTotal > totalUsed {
+		totalUsed = subTotal
+	}
+
+	// 1. 统一总配额校验(优先)：商业平台与用户统一限额核心防线
+	if key.LimitTokens > 0 && totalUsed >= key.LimitTokens {
+		return fmt.Errorf("API Key token limit exceeded (used %d / limit %d)", totalUsed, key.LimitTokens)
+	}
+
+	// 2. 分模型家族配额校验(兼容旧版细粒度配置)
+	family := DetectAPIKeyFamily(model)
+	switch family {
+	case FamilyClaude:
+		if key.LimitClaudeTokens > 0 && key.UsedClaudeTokens >= key.LimitClaudeTokens {
+			return fmt.Errorf("API Key Claude token limit exceeded (%d / %d)", key.UsedClaudeTokens, key.LimitClaudeTokens)
+		}
+	case FamilyNvidia:
+		if key.LimitNvidiaTokens > 0 && key.UsedNvidiaTokens >= key.LimitNvidiaTokens {
+			return fmt.Errorf("API Key NVIDIA token limit exceeded (%d / %d)", key.UsedNvidiaTokens, key.LimitNvidiaTokens)
+		}
+	case FamilyGrok:
+		if key.LimitGrokTokens > 0 && key.UsedGrokTokens >= key.LimitGrokTokens {
+			return fmt.Errorf("API Key Grok token limit exceeded (%d / %d)", key.UsedGrokTokens, key.LimitGrokTokens)
+		}
+	default:
+		if key.LimitGeminiTokens > 0 && key.UsedGeminiTokens >= key.LimitGeminiTokens {
+			return fmt.Errorf("API Key Gemini token limit exceeded (%d / %d)", key.UsedGeminiTokens, key.LimitGeminiTokens)
+		}
+	}
+
+	return nil
+}
+
+func (m *UserManager) RecordAPIKeyUsage(userID string, apiKeyID string, isClaude bool, tokens int64) {
+	family := FamilyGemini
+	if isClaude {
+		family = FamilyClaude
+	}
+	m.RecordAPIKeyUsageForFamily(userID, apiKeyID, family, tokens)
 }
 
 // RecordAPIKeyUsageForFamily 是 RecordAPIKeyUsage 的 family-aware 后继: 按 APIKeyFamily
-// 四态(gemini/claude/nvidia/grok)累加到对应 Used* 桶。与方案 A 一致, 保持 RecordAPIKeyUsage
-// 原签名与既有 7 处调用点零回归(NVIDIA/Other 历史落进 Gemini 桶的口径不动); Grok 链路
-// (recordGrokUsage)改调本方法, 把 Grok 用量计入独立 UsedGrokTokens 桶, 使 APIKey 级限额
-// 校验(app_lifecycle.go 的 LimitGrokTokens 分支)能正确命中。
-//
-// family==FamilyGrok → UsedGrokTokens; FamilyClaude → UsedClaudeTokens;
-// FamilyNvidia → UsedNvidiaTokens; 其余/未识别(FamilyGemini) → UsedGeminiTokens 兜底
-// (与 RecordAPIKeyUsage(false,...) 等价, 保持既有"非 claude 即 Gemini"兜底口径)。
+// 四态(gemini/claude/nvidia/grok)累加到对应 Used* 桶。
+// 核心优化: 彻底移除请求级全量 json.MarshalIndent 与同步写盘，转由 UserUsageStore 异步批处理落库或防抖落盘，
+// 保证接口零等待，CPU 极低开销。
 func (m *UserManager) RecordAPIKeyUsageForFamily(userID string, apiKeyID string, family APIKeyFamily, tokens int64) {
-	m.Lock()
-	defer m.Unlock()
+	if tokens <= 0 {
+		return
+	}
 
+	var keyStr string
+	var store UserUsageStore
+
+	m.Lock()
 	for _, u := range m.users {
 		if u.ID == userID {
 			for i, k := range u.APIKeys {
-				if k.ID == apiKeyID {
+				if k.ID == apiKeyID || k.Key == apiKeyID {
+					keyStr = k.Key
+					u.APIKeys[i].UsedTokens += tokens
 					switch family {
 					case FamilyClaude:
 						u.APIKeys[i].UsedClaudeTokens += tokens
@@ -548,12 +684,25 @@ func (m *UserManager) RecordAPIKeyUsageForFamily(userID string, apiKeyID string,
 					default: // FamilyGemini / 未识别
 						u.APIKeys[i].UsedGeminiTokens += tokens
 					}
-					m.saveToDiskLocked()
-					return
+					break
 				}
 			}
-			return
+			break
 		}
+	}
+	store = m.usageStore
+	m.Unlock()
+
+	// 异步解耦落库，零阻塞返回
+	if store != nil {
+		store.RecordUsage(UsageRecord{
+			UserID:    userID,
+			APIKeyID:  apiKeyID,
+			KeyStr:    keyStr,
+			Family:    family,
+			Tokens:    tokens,
+			Timestamp: time.Now(),
+		})
 	}
 }
 

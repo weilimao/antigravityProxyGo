@@ -131,3 +131,97 @@ func TestKeyService_BridgeAndStrictModels(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyService_SyncUsageFromRelay(t *testing.T) {
+	teardown := setupTestEnvironment(t)
+	defer teardown()
+
+	db := database.DB
+
+	mockKeyStr := "sk-ant-mock-usage-sync-test-key"
+	var keysUsageCalled bool
+
+	// 1. Mock 18444 Relay 网关服务
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/admin/users/keys-usage" {
+			keysUsageCalled = true
+			w.WriteHeader(http.StatusOK)
+			resp := map[string]interface{}{
+				"success":  true,
+				"username": "tester_usage_bob",
+				"usages": map[string]int64{
+					mockKeyStr: 88888,
+				},
+				"totalUsed": 88888,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	origCfg := config.GlobalConfig
+	config.GlobalConfig.Gateway = config.GoRelayGatewayConfig{
+		GatewayURL: ts.URL,
+		AdminKey:   "sk-ant-admin",
+	}
+	t.Cleanup(func() {
+		config.GlobalConfig = origCfg
+	})
+
+	// 2. 创建本地测试用户与 API Key
+	user := model.User{
+		Username: "tester_usage_bob",
+		Email:    "usage_bob@example.com",
+		Role:     "user",
+		Status:   "active",
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("create user failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Unscoped().Delete(&model.User{}, user.ID).Error
+	})
+
+	key := model.APIKey{
+		Key:           mockKeyStr,
+		UserID:        user.ID,
+		Name:          "用量同步测试Key",
+		AllowedModels: []string{"auto"},
+		UsedTokens:    0,
+		Status:        "active",
+	}
+	if err := db.Create(&key).Error; err != nil {
+		t.Fatalf("create api key failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Unscoped().Delete(&model.APIKey{}, key.ID).Error
+	})
+
+	// 3. 执行 ListKeys 查询，验证自动触发从 Relay 拉取最新用量并同步本地 DB
+	keySvc := NewKeyService()
+	keys, err := keySvc.ListKeys(user.ID)
+	if err != nil {
+		t.Fatalf("ListKeys failed: %v", err)
+	}
+	if !keysUsageCalled {
+		t.Fatalf("expected keys-usage API on relay to be called")
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key returned, got %d", len(keys))
+	}
+	if keys[0].UsedTokens != 88888 {
+		t.Fatalf("expected key UsedTokens to be updated to 88888, got %d", keys[0].UsedTokens)
+	}
+
+	// 4. 再次验证本地数据库中记录是否已被持久化更新
+	var refreshed model.APIKey
+	if err := db.First(&refreshed, key.ID).Error; err != nil {
+		t.Fatalf("fetch key from db failed: %v", err)
+	}
+	if refreshed.UsedTokens != 88888 {
+		t.Fatalf("expected db UsedTokens 88888, got %d", refreshed.UsedTokens)
+	}
+}

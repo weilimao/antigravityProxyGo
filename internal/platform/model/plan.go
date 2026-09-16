@@ -31,6 +31,7 @@ type Plan struct {
 	DurationDays  int         `gorm:"default:30;not null" json:"durationDays"` // 有效天数，0 表示永久
 	AllowedModels []string    `gorm:"serializer:json" json:"allowedModels"` // 授权调用的模型列表
 	Quotas        PlanQuotas  `gorm:"serializer:json" json:"quotas"`        // 模型配额
+	TokenLimit    int64       `gorm:"default:0;not null" json:"tokenLimit"` // Token 配额限制，0 表示不限制
 	RateLimit     int         `gorm:"default:30;not null" json:"rateLimit"` // RPM 速率
 	SortOrder     int         `gorm:"default:0" json:"sortOrder"`
 	Status        string      `gorm:"size:32;default:'active';not null" json:"status"` // active or inactive

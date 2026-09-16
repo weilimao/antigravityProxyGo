@@ -30,7 +30,9 @@ type Plan struct {
 	PriceCents    int64       `gorm:"not null" json:"priceCents"` // 金额（分），例如 3900 = 39.00 元
 	DurationDays  int         `gorm:"default:30;not null" json:"durationDays"` // 有效天数，0 表示永久
 	AllowedModels []string    `gorm:"serializer:json" json:"allowedModels"` // 授权调用的模型列表
+	AutoModels    []string    `gorm:"serializer:json" json:"autoModels"`    // auto 智能路由实际包含的说明模型列表
 	Quotas        PlanQuotas  `gorm:"serializer:json" json:"quotas"`        // 模型配额
+	TokenLimit    int64       `gorm:"default:0;not null" json:"tokenLimit"` // Token 配额限制，0 表示不限制
 	RateLimit     int         `gorm:"default:30;not null" json:"rateLimit"` // RPM 速率
 	SortOrder     int         `gorm:"default:0" json:"sortOrder"`
 	Status        string      `gorm:"size:32;default:'active';not null" json:"status"` // active or inactive

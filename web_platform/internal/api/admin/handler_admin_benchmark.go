@@ -8,10 +8,13 @@ import (
 )
 
 type AdminBenchmarkHandler struct {
+	settingService *service.SettingService
 }
 
 func NewAdminBenchmarkHandler() *AdminBenchmarkHandler {
-	return &AdminBenchmarkHandler{}
+	return &AdminBenchmarkHandler{
+		settingService: service.NewSettingService(),
+	}
 }
 
 func (h *AdminBenchmarkHandler) GetBenchmark(c *gin.Context) {
@@ -63,10 +66,17 @@ func (h *AdminBenchmarkHandler) RunBenchmarkModel(c *gin.Context) {
 }
 
 func (h *AdminBenchmarkHandler) GetBenchmarkModels(c *gin.Context) {
-	res, err := service.GetGatewayBenchmarkModels()
+	svc := h.settingService
+	if svc == nil {
+		svc = service.NewSettingService()
+	}
+	models, err := svc.GetBenchmarkCandidateModels()
 	if err != nil {
 		response.Fail(c, 500, "获取候选模型失败: "+err.Error())
 		return
 	}
-	response.Success(c, res)
+	response.Success(c, gin.H{
+		"success": true,
+		"models":  models,
+	})
 }

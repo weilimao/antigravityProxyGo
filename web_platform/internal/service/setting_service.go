@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
 
+	"antigravity-web-platform/internal/config"
 	"antigravity-web-platform/internal/database"
 	"antigravity-web-platform/internal/model"
 
@@ -363,3 +365,207 @@ func (s *SettingService) GetAvailableModels() ([]string, error) {
 	sort.Strings(res)
 	return res, nil
 }
+
+// GetPaymentConfig 获取当前生效的支付跳转配置 (优先从数据库 settings，若无则回退 config.yaml)
+func (s *SettingService) GetPaymentConfig() (*model.PaymentConfig, error) {
+	var setting model.Setting
+	err := database.DB.Where("`key` = ?", "payment_config").First(&setting).Error
+	if err == nil && strings.TrimSpace(setting.Value) != "" {
+		var cfg model.PaymentConfig
+		if jsonErr := json.Unmarshal([]byte(setting.Value), &cfg); jsonErr == nil {
+			if cfg.PayProvider == "" {
+				cfg.PayProvider = "epay"
+			}
+			return &cfg, nil
+		}
+	}
+
+	// 默认 Fallback
+	cfg := &model.PaymentConfig{
+		PayProvider:       "epay",
+		SiteURL:           "http://127.0.0.1:8100",
+		PayReturnURL:      "http://127.0.0.1:6688/#/dashboard",
+		RelayURL:          "",
+		RelayCheckoutBase: "",
+		RelaySecret:       "",
+		RelayNotifyURL:    "",
+		EpayURL:           "",
+		EpayPID:           "",
+		EpayKey:           "",
+		EpayType:          "alipay",
+		EpayNotifyURL:     "",
+	}
+
+	if config.GlobalConfig != nil {
+		p := config.GlobalConfig.Payment
+		if p.SiteURL != "" {
+			cfg.SiteURL = p.SiteURL
+		}
+		if p.ReturnURL != "" {
+			cfg.PayReturnURL = p.ReturnURL
+		}
+		if p.RelayURL != "" {
+			cfg.RelayURL = p.RelayURL
+		}
+		if p.RelayCheckoutBase != "" {
+			cfg.RelayCheckoutBase = p.RelayCheckoutBase
+		}
+		if p.RelaySecret != "" {
+			cfg.RelaySecret = p.RelaySecret
+		}
+		if p.NotifyURL != "" {
+			cfg.RelayNotifyURL = p.NotifyURL
+		}
+	}
+
+	if cfg.RelayNotifyURL == "" && cfg.SiteURL != "" {
+		cfg.RelayNotifyURL = strings.TrimRight(cfg.SiteURL, "/") + "/api/v1/pay/notify/relay"
+	}
+	if cfg.EpayNotifyURL == "" && cfg.SiteURL != "" {
+		cfg.EpayNotifyURL = strings.TrimRight(cfg.SiteURL, "/") + "/api/v1/pay/notify/epay"
+	}
+
+	return cfg, nil
+}
+
+// SetPaymentConfig 保存支付跳转配置至数据库 settings 表
+func (s *SettingService) SetPaymentConfig(cfg *model.PaymentConfig) error {
+	if cfg == nil {
+		return errors.New("配置内容不能为空")
+	}
+
+	if cfg.PayProvider == "" {
+		cfg.PayProvider = "epay"
+	}
+	if cfg.EpayType == "" {
+		cfg.EpayType = "alipay"
+	}
+
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("序列化支付配置失败: %w", err)
+	}
+
+	setting := model.Setting{
+		Key:         "payment_config",
+		Value:       string(data),
+		Description: "系统主支付通道与切单跳转收银配置",
+		UpdatedAt:   time.Now(),
+	}
+	return database.DB.Save(&setting).Error
+}
+
+// GetSystemConfig 获取当前系统全局配置（对外 API 服务地址等）
+func (s *SettingService) GetSystemConfig() (*model.SystemConfig, error) {
+	defaultURL := "http://127.0.0.1:18444"
+	if config.GlobalConfig != nil && strings.TrimSpace(config.GlobalConfig.Gateway.GatewayURL) != "" {
+		defaultURL = strings.TrimRight(strings.TrimSpace(config.GlobalConfig.Gateway.GatewayURL), "/")
+	}
+
+	var setting model.Setting
+	err := database.DB.Where("`key` = ?", "system_config").First(&setting).Error
+	if err == nil && strings.TrimSpace(setting.Value) != "" {
+		var cfg model.SystemConfig
+		if jsonErr := json.Unmarshal([]byte(setting.Value), &cfg); jsonErr == nil {
+			if strings.TrimSpace(cfg.APIBaseURL) == "" {
+				cfg.APIBaseURL = defaultURL
+			}
+			return &cfg, nil
+		}
+	}
+
+	return &model.SystemConfig{
+		APIBaseURL:   defaultURL,
+		SiteName:     "MAX API",
+		Announcement: "",
+	}, nil
+}
+
+// SetSystemConfig 保存系统全局配置至数据库 settings 表
+func (s *SettingService) SetSystemConfig(cfg *model.SystemConfig) error {
+	if cfg == nil {
+		return errors.New("配置内容不能为空")
+	}
+
+	cfg.APIBaseURL = strings.TrimRight(strings.TrimSpace(cfg.APIBaseURL), "/")
+	cfg.SiteName = strings.TrimSpace(cfg.SiteName)
+	cfg.Announcement = strings.TrimSpace(cfg.Announcement)
+
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("序列化系统配置失败: %w", err)
+	}
+
+	setting := model.Setting{
+		Key:         "system_config",
+		Value:       string(data),
+		Description: "系统全局对外基础服务与 API 访问配置",
+		UpdatedAt:   time.Now(),
+	}
+	return database.DB.Save(&setting).Error
+}
+
+// GetBenchmarkCandidateModels 汇总测速候选模型列表：双向聚合远端 Go Relay 网关真实模型与本地模型映射池
+func (s *SettingService) GetBenchmarkCandidateModels() ([]string, error) {
+	set := make(map[string]struct{})
+	seenLower := make(map[string]bool)
+	var gwErr error
+
+	// 1. 尝试从远端网关拉取测速候选模型
+	gwRes, err := GetGatewayBenchmarkModels()
+	if err != nil {
+		gwErr = err
+		log.Printf("⚠️ [SettingService] 获取网关测速模型异常，将降级依赖本地模型映射: %v", err)
+	} else if gwRes != nil {
+		if rawModels, ok := gwRes["models"].([]interface{}); ok {
+			for _, item := range rawModels {
+				if mStr, ok := item.(string); ok {
+					mStr = strings.TrimSpace(mStr)
+					low := strings.ToLower(mStr)
+					if mStr != "" && !seenLower[low] && low != "auto" {
+						seenLower[low] = true
+						set[mStr] = struct{}{}
+					}
+				}
+			}
+		} else if rawStrModels, ok := gwRes["models"].([]string); ok {
+			for _, mStr := range rawStrModels {
+				mStr = strings.TrimSpace(mStr)
+				low := strings.ToLower(mStr)
+				if mStr != "" && !seenLower[low] && low != "auto" {
+					seenLower[low] = true
+					set[mStr] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// 2. 汇总本地数据库中配置的模型映射 (优先取对外暴露的真实可用 ClientModel)
+	mappings, mapErr := s.GetModelMappings()
+	if mapErr == nil && len(mappings) > 0 {
+		for _, m := range mappings {
+			if !m.Expose {
+				continue
+			}
+			cm := strings.TrimSpace(m.ClientModel)
+			low := strings.ToLower(cm)
+			if cm != "" && !seenLower[low] && low != "auto" {
+				seenLower[low] = true
+				set[cm] = struct{}{}
+			}
+		}
+	}
+
+	// 3. 容错判定：若网关失败且本地也为空，向上抛出错误
+	if len(set) == 0 && gwErr != nil {
+		return nil, fmt.Errorf("获取候选模型失败: %w", gwErr)
+	}
+
+	res := make([]string, 0, len(set))
+	for m := range set {
+		res = append(res, m)
+	}
+	sort.Strings(res)
+	return res, nil
+}
+

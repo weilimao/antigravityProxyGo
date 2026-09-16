@@ -39,6 +39,11 @@ func (h *APICompatHandler) handleOpenAIChat(w http.ResponseWriter, r *http.Reque
 			writeModelNotAuthorized(w, openReq.Model)
 			return
 		}
+		if err := h.authMgr.userMgr.CheckAPIKeyQuota(userSession.UserID, userSession.APIKeyID, openReq.Model); err != nil {
+			h.log("🚫 [Relay Compat] Token 配额超限拦截: %v (User: %s, KeyID: %s)", err, userSession.UserKey, userSession.APIKeyID)
+			writeQuotaExceeded(w, err.Error())
+			return
+		}
 	}
 
 	// 针对入站请求检查是否为 auto 竞速模型(仅非 /route 链路在此拦截, /route 链路已在前置 handleRoutedForward 统一处理)
@@ -232,6 +237,11 @@ func (h *APICompatHandler) handleAnthropicMessages(w http.ResponseWriter, r *htt
 		if err := h.authMgr.userMgr.IsModelAuthorizedForAPIKey(userSession.UserID, userSession.APIKeyID, anthReq.Model); err != nil {
 			h.log("🚫 [Relay Compat] API Key 模型授权校验未通过: %v (User: %s)", err, userSession.UserKey)
 			writeModelNotAuthorized(w, anthReq.Model)
+			return
+		}
+		if err := h.authMgr.userMgr.CheckAPIKeyQuota(userSession.UserID, userSession.APIKeyID, anthReq.Model); err != nil {
+			h.log("🚫 [Relay Compat] Token 配额超限拦截: %v (User: %s, KeyID: %s)", err, userSession.UserKey, userSession.APIKeyID)
+			writeQuotaExceeded(w, err.Error())
 			return
 		}
 	}

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/db"
+	platformdb "antigravity-proxy/internal/platform/db"
+	"antigravity-proxy/internal/platform/model"
 	"antigravity-proxy/internal/relay"
 	"antigravity-proxy/internal/stats"
 )
@@ -45,6 +47,34 @@ func (s *ServerInstance) relayRecordUsage(allocatedAccount, userID, apiKeyID, mo
 			SessionID:    sessionID,
 		}
 		_ = db.InsertRequestLog(dbItem)
+
+		// 若启用平台业务数据库 (如 MySQL 模式), 异步写入轻量标量日志 (严格不存储请求体与响应体, 防止磁盘膨胀)
+		if platformdb.GlobalDB != nil {
+			go func() {
+				_ = platformdb.GlobalDB.Create(&model.RequestLog{
+					ReqID:        reqID,
+					UserID:       userID,
+					Account:      allocatedAccount,
+					ModelName:    modelName,
+					InTokens:     inTokens,
+					OutTokens:    outTokens,
+					CachedTokens: cachedTokens,
+					Cost:         totalCost,
+					InputCost:    inputCost,
+					OutputCost:   outputCost,
+					CachedCost:   cachedCost,
+					DurationMs:   durationMs,
+					FirstByteMs:  firstByteMs,
+					StatusCode:   statusCode,
+					Method:       method,
+					Host:         host,
+					Path:         path,
+					SessionID:    sessionID,
+					Family:       string(relay.DetectAPIKeyFamily(modelName)),
+					CreatedAt:    time.Now(),
+				}).Error
+			}()
+		}
 
 		if s.StatsTracker != nil {
 			s.StatsTracker.TrackRequestForModel(modelName, inTokens, outTokens, cachedTokens)

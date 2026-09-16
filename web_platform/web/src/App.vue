@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen flex flex-col bg-[#0b0f19] text-slate-100">
     <!-- 全局顶部导航栏 -->
-    <header class="sticky top-0 z-40 bg-[#0f172a]/80 backdrop-blur-md border-b border-slate-800">
+    <header v-if="!isAuthPage" class="sticky top-0 z-40 bg-[#0f172a]/80 backdrop-blur-md border-b border-slate-800">
       <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
         <!-- Brand Logo -->
         <router-link to="/" class="flex items-center gap-2.5 text-white no-underline">
@@ -9,7 +9,7 @@
             <span class="material-symbols-outlined text-22px">rocket_launch</span>
           </div>
           <div>
-            <span class="text-base font-extrabold tracking-tight gradient-text">Antigravity Web</span>
+            <span class="text-base font-extrabold tracking-tight gradient-text">{{ siteName }}</span>
             <span class="text-[10px] block text-slate-400 -mt-1 font-mono">Proxy & Subscriptions</span>
           </div>
         </router-link>
@@ -77,9 +77,9 @@
     </main>
 
     <!-- 页脚 -->
-    <footer class="border-t border-slate-800/80 py-6 text-center text-xs text-slate-500">
+    <footer v-if="!isAuthPage" class="border-t border-slate-800/80 py-6 text-center text-xs text-slate-500">
       <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-        <span>Antigravity SaaS Platform · 下一代高吞吐大模型中继商业化运营系统</span>
+        <span>{{ siteName }} · 下一代高吞吐大模型中继商业化运营系统</span>
         <span class="font-mono text-11px text-slate-600">Pure Go + Modern Vue 3 · 极客工坊切单协议标准</span>
       </div>
     </footer>
@@ -87,13 +87,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { authState, clearToken, refreshCurrentUser } from './api/client'
+import { authState, clearToken, refreshCurrentUser, systemApi } from './api/client'
 
 const router = useRouter()
 const route = useRoute()
 
+const siteName = ref('MAX API')
+const isAuthPage = computed(() => route.path === '/login')
 const isLoggedIn = computed(() => !!authState.token)
 const username = computed(() => authState.user?.username || '')
 const role = computed(() => authState.user?.role || '')
@@ -110,9 +112,19 @@ watch(() => route.path, () => {
   }
 })
 
-onMounted(() => {
+onMounted(async () => {
   if (authState.token) {
     refreshCurrentUser()
+  }
+  try {
+    const cfg = await systemApi.getPublicConfig()
+    if (cfg && cfg.siteName && cfg.siteName !== 'Antigravity Web' && cfg.siteName !== 'open max api') {
+      siteName.value = cfg.siteName
+    } else {
+      siteName.value = 'MAX API'
+    }
+  } catch {
+    // 降级使用默认 MAX API
   }
 })
 </script>

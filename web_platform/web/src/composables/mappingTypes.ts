@@ -9,6 +9,7 @@ export interface ModelMappingEntry {
   injectChatTemplateKwargs?: boolean;
   variantEfforts?: string[];
   candidateModels?: string[];
+  useBenchmarkPool?: boolean;
   _rowKey?: string;
 }
 

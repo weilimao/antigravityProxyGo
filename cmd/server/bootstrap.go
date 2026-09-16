@@ -12,6 +12,7 @@ import (
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/benchmark"
 	"antigravity-proxy/internal/db"
+	platformdb "antigravity-proxy/internal/platform/db"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/proxy"
 	"antigravity-proxy/internal/quota"
@@ -30,42 +31,43 @@ type ServerConfig struct {
 	ProxyPort   string
 }
 
-// ServerInstance 独立中继服务端自举实例
+// ServerInstance 服务端全局运行时容器
 type ServerInstance struct {
-	Config            ServerConfig
-	SettingsMgr       *settings.Manager
-	AccountMgr        *account.Manager
-	SessionRouter     *session.Router
-	PricingMgr        *pricing.Manager
-	StatsTracker      *stats.Tracker
-	UsageTracker      *stats.UsageTracker
-	ErrLogger         *stats.RetryErrorLogger
-	PacketCap         *stats.PacketCapturer
-	AuthMgr           *quota.AuthManager
-	QuotaSvc          *quota.QuotaService
-	ProxyEngine       *proxy.ProxyEngine
-	RelayUserMgr      *relay.UserManager
-	RelayPackageMgr   *relay.PackageManager
-	RelayAuthMgr      *relay.AuthManager
-	RelayStatsMgr     *relay.StatsTracker
-	RelayAPIMgr       *relay.APIHandler
+	Config             ServerConfig
+	SettingsMgr        *settings.Manager
+	PricingMgr         *pricing.Manager
+	StatsTracker       *stats.Tracker
+	UsageTracker       *stats.UsageTracker
+	ErrLogger          *stats.RetryErrorLogger
+	AccountMgr         *account.Manager
+	SessionRouter      *session.Router
+	AuthMgr            *quota.AuthManager
+	QuotaSvc           *quota.QuotaService
+	PacketCap          *stats.PacketCapturer
+	ProxyEngine        *proxy.ProxyEngine
+	RelayUserMgr       *relay.UserManager
+	RelayPackageMgr    *relay.PackageManager
+	RelayAuthMgr       *relay.AuthManager
+	RelayStatsMgr      *relay.StatsTracker
+	RelayAPIMgr        *relay.APIHandler
 	RelayCompatAPIMgr  *relay.APICompatHandler
 	RelayServer        *relay.RelayServer
 	BenchmarkScheduler *benchmark.Scheduler
-	logFn             func(string)
 
+	logFn     func(string)
+	isRunning bool
+	mu        sync.Mutex
 	ctx       context.Context
 	cancel    context.CancelFunc
-	mu        sync.Mutex
-	isRunning bool
 }
 
-// ResolveDefaultDataDir 返回不同操作系统下的推荐默认数据目录
+// ResolveDefaultDataDir 根据操作系统确定服务端默认数据目录
 func ResolveDefaultDataDir() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return "./data"
+		homeDir = "."
 	}
+
 	switch runtime.GOOS {
 	case "windows":
 		return filepath.Join(homeDir, "AppData", "Roaming", "antigravity-proxy-desktop")
@@ -123,6 +125,42 @@ func NewServerInstance(cfg ServerConfig, logFn func(string)) (*ServerInstance, e
 	if err := db.InitDB(cfg.DataDir); err != nil {
 		logFn(fmt.Sprintf("⚠️ [DB] SQLite 初始化失败: %v", err))
 		return nil, fmt.Errorf("db initialization failed: %w", err)
+	}
+
+	// 启动时异步清理超出 150 条的旧请求日志
+	go func() {
+		if err := db.PruneAllUsersRequestLogs(150); err != nil {
+			logFn(fmt.Sprintf("⚠️ [DB] 修剪旧请求日志失败: %v", err))
+		}
+	}()
+
+	// 初始化业务数据库 (支持远程 MySQL 模式与本地 SQLite 双模自动探测)
+	mysqlEnabled := inst.SettingsMgr.GetPlatformMySQLMode() ||
+		inst.SettingsMgr.GetRemoteEnabled() ||
+		os.Getenv("ANTIGRAVITY_MYSQL_ENABLED") == "true" ||
+		os.Getenv("ANTIGRAVITY_MYSQL_DSN") != ""
+
+	remoteHost := inst.SettingsMgr.GetRemoteHost()
+	if remoteHost == "" {
+		remoteHost = os.Getenv("ANTIGRAVITY_MYSQL_HOST")
+	}
+	remotePort := inst.SettingsMgr.GetRemotePort()
+	if remotePort == "" {
+		remotePort = os.Getenv("ANTIGRAVITY_MYSQL_PORT")
+	}
+
+	if errPDB := platformdb.InitDB(platformdb.Config{
+		DataDir:        cfg.DataDir,
+		RemoteEnabled:  mysqlEnabled,
+		RemoteHost:     remoteHost,
+		RemotePort:     remotePort,
+		RemoteUser:     "root",
+		RemotePassword: "ProxySub2026SecDbPass99",
+		RemoteDBName:   "antigravity_platform",
+	}); errPDB != nil {
+		logFn(fmt.Sprintf("ℹ️ [PlatformDB] 初始化提示: %v", errPDB))
+	} else {
+		logFn("✅ [PlatformDB] 平台业务数据库初始化就绪")
 	}
 
 	// 3. 初始化计费与统计管理器
@@ -203,6 +241,9 @@ func NewServerInstance(cfg ServerConfig, logFn func(string)) (*ServerInstance, e
 	// 7. 装配中继服务 Relay 组件
 	inst.RelayUserMgr = relay.NewUserManager()
 	inst.RelayUserMgr.Init(cfg.DataDir)
+	if platformdb.GlobalDB != nil {
+		inst.RelayUserMgr.SetDB(platformdb.GlobalDB)
+	}
 
 	inst.RelayPackageMgr = relay.NewPackageManager()
 	inst.RelayPackageMgr.Init(cfg.DataDir)
@@ -291,6 +332,7 @@ func (s *ServerInstance) Start() error {
 				if s.RelayAuthMgr != nil {
 					s.RelayAuthMgr.CleanExpired()
 				}
+				_ = db.PruneAllUsersRequestLogs(150)
 			}
 		}
 	}()
@@ -348,6 +390,10 @@ func (s *ServerInstance) Shutdown(ctx context.Context) error {
 		if s.BenchmarkScheduler != nil {
 			s.BenchmarkScheduler.Stop()
 		}
+		if s.RelayUserMgr != nil {
+			_ = s.RelayUserMgr.Close()
+		}
+		platformdb.CloseDB()
 		db.CloseDB()
 		close(done)
 	}()

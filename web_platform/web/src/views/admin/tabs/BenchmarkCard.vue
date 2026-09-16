@@ -63,18 +63,18 @@
           <div>
             <div class="text-[10px] text-slate-500">首帧 (TTFT)</div>
             <div class="flex items-center gap-1.5">
-              <span class="text-base font-mono font-bold" :class="res.ttft_ms > 2000 ? 'text-amber-400' : 'text-emerald-400'">{{ res.ttft_ms }}<span class="text-[10px] ml-0.5 opacity-70">ms</span></span>
-              <span v-if="res.prev_ttft_ms > 0" class="text-[10px] font-bold" :class="getTrendColor(res.ttft_ms, res.prev_ttft_ms)">
-                {{ getTrendIcon(res.ttft_ms, res.prev_ttft_ms) }}
+              <span class="text-base font-mono font-bold" :class="getTtft(res) > 2000 ? 'text-amber-400' : 'text-emerald-400'">{{ getTtft(res) }}<span class="text-[10px] ml-0.5 opacity-70">ms</span></span>
+              <span v-if="getPrevTtft(res) > 0" class="text-[10px] font-bold" :class="getTrendColor(getTtft(res), getPrevTtft(res))">
+                {{ getTrendIcon(getTtft(res), getPrevTtft(res)) }}
               </span>
             </div>
           </div>
           <div class="text-right">
             <div class="text-[10px] text-slate-500">总耗时 (Total)</div>
             <div class="flex items-center gap-1.5 justify-end">
-              <span class="text-base font-mono font-bold text-slate-300">{{ res.total_ms }}<span class="text-[10px] ml-0.5 opacity-70">ms</span></span>
-              <span v-if="res.prev_total_ms > 0" class="text-[10px] font-bold" :class="getTrendColor(res.total_ms, res.prev_total_ms)">
-                {{ getTrendIcon(res.total_ms, res.prev_total_ms) }}
+              <span class="text-base font-mono font-bold text-slate-300">{{ getTotal(res) }}<span class="text-[10px] ml-0.5 opacity-70">ms</span></span>
+              <span v-if="getPrevTotal(res) > 0" class="text-[10px] font-bold" :class="getTrendColor(getTotal(res), getPrevTotal(res))">
+                {{ getTrendIcon(getTotal(res), getPrevTotal(res)) }}
               </span>
             </div>
           </div>
@@ -143,11 +143,13 @@ const loadData = async () => {
 const runBenchmark = async () => {
   try {
     const res = await benchmarkApi.run()
-    if (res.success) {
-      alert('已触发模型响应测速')
+    if (res && (res.success || res.status === 'ok')) {
+      alert('已触发模型响应测速，正在后台并发探测各模型延迟...')
       running.value = true
       fastPollCount = 12 // Fast poll 5s * 12 = 1 min
-      loadData()
+      await loadData()
+    } else {
+      alert(res?.error || '触发测速失败: 网关未返回成功状态')
     }
   } catch (error: any) {
     alert(error.message || '触发测速失败')
@@ -157,13 +159,15 @@ const runBenchmark = async () => {
 const runSingleModel = async (model: string) => {
   try {
     const res = await benchmarkApi.runModel(model)
-    if (res.success) {
+    if (res && (res.success || res.status === 'ok')) {
       alert(`已触发 ${model} 测速`)
       if (!pendingModels.value.includes(model)) {
         pendingModels.value.push(model)
       }
       fastPollCount = 12
-      loadData()
+      await loadData()
+    } else {
+      alert(res?.error || `触发 ${model} 测速失败`)
     }
   } catch (error: any) {
     alert(error.message || '触发测速失败')
@@ -180,6 +184,11 @@ const isPending = (model: string) => {
   return pendingModels.value.includes(model)
 }
 
+const getTtft = (r: any) => r?.ttftMs ?? r?.ttft_ms ?? 0
+const getPrevTtft = (r: any) => r?.prevTtftMs ?? r?.prev_ttft_ms ?? 0
+const getTotal = (r: any) => r?.totalMs ?? r?.total_ms ?? 0
+const getPrevTotal = (r: any) => r?.prevTotalMs ?? r?.prev_total_ms ?? 0
+
 const sortedResults = computed(() => {
   if (!results.value) return []
   return [...results.value].sort((a, b) => {
@@ -187,8 +196,8 @@ const sortedResults = computed(() => {
     if (a.status === 'error' && b.status !== 'error') return 1
     if (a.status !== 'error' && b.status === 'error') return -1
     // Sort by TTFT
-    const aTtft = a.ttft_ms || 999999
-    const bTtft = b.ttft_ms || 999999
+    const aTtft = getTtft(a) || 999999
+    const bTtft = getTtft(b) || 999999
     return aTtft - bTtft
   })
 })

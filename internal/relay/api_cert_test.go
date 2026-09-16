@@ -26,7 +26,7 @@ func TestAPIHandler_HandleCert_WithAutoProvider(t *testing.T) {
 	}
 
 	certPath := filepath.Join(tempDir, "certs", "ca.pem")
-	h := NewAPIHandler(authMgr, nil, nil, func(string) {}, certPath, nil)
+	h := NewAPIHandler(authMgr, nil, nil, func(string) {}, certPath, nil, nil)
 
 	// 1. 无 certPath 且无 provider 时，请求 /api/cert 应失败
 	req := httptest.NewRequest(http.MethodGet, "/api/cert", nil)

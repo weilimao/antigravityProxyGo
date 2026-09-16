@@ -231,7 +231,7 @@ func (s *StatsTracker) RecordUsage(sample RelaySample) {
 			s.logCache = make(map[string]*db.RequestLog)
 		}
 		s.logCache[sample.ReqID] = reqLog
-		if len(s.logCache) > 1000 {
+		if len(s.logCache) > 150 {
 			for k := range s.logCache {
 				delete(s.logCache, k)
 				break

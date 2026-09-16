@@ -100,13 +100,23 @@ func (s *PaymentService) CreateRelayOrder(userID uint, planID uint) (*model.Orde
 	base := strings.TrimSpace(cfg.Payment.RelayCheckoutBase)
 	if base != "" {
 		if data.OrderNo != "" {
-			finalPayURL = fmt.Sprintf("%s/#/checkout/%s", strings.TrimRight(base, "/"), data.OrderNo)
+			finalPayURL = fmt.Sprintf("%s/checkout/%s", strings.TrimRight(base, "/"), data.OrderNo)
+		} else if strings.Contains(data.PayURL, "/checkout/") {
+			parts := strings.Split(data.PayURL, "/checkout/")
+			if len(parts) > 1 {
+				finalPayURL = fmt.Sprintf("%s/checkout/%s", strings.TrimRight(base, "/"), parts[1])
+			}
 		} else if strings.Contains(data.PayURL, "/#/checkout/") {
 			parts := strings.Split(data.PayURL, "/#/checkout/")
 			if len(parts) > 1 {
-				finalPayURL = fmt.Sprintf("%s/#/checkout/%s", strings.TrimRight(base, "/"), parts[1])
+				finalPayURL = fmt.Sprintf("%s/checkout/%s", strings.TrimRight(base, "/"), parts[1])
 			}
 		}
+	}
+
+	// 全局去 Hash 清洗兜底：确保无论是 base 重写还是远端原样返回，均使用标准 Direct Path 直达收银台
+	if strings.Contains(finalPayURL, "/#/checkout/") {
+		finalPayURL = strings.Replace(finalPayURL, "/#/checkout/", "/checkout/", 1)
 	}
 
 	order.RelayOrderNo = data.OrderNo

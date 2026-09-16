@@ -346,15 +346,20 @@ export function useModelMapping() {
         fetchStatusMsg.value = `✅ 已获取 ${res.models.length} 个模型${newCount > 0 ? ` · 新增 ${newCount}` : ''}`;
 
         const provider = (tab.targetProvider || tab.id || '').trim();
+        const tabId = tab.id;
         const existingClientSet = new Set<string>();
         for (const m of allMappings.value) {
           const cm = (m.clientModel || '').trim();
           if (cm) existingClientSet.add(cm.toLowerCase());
         }
+        // 按当前 Tab 作用域去重:仅收集本 Tab 已存在的上游模型名,
+        // 避免全局 targetModel 去重误伤跨号池同名模型(不同号池上游可提供同名模型)。
         const existingTargetSet = new Set<string>();
         for (const m of allMappings.value) {
-          const tm = (m.targetModel || '').trim();
-          if (tm) existingTargetSet.add(tm.toLowerCase());
+          if (getMappingTab(m) === tabId) {
+            const tm = (m.targetModel || '').trim();
+            if (tm) existingTargetSet.add(tm.toLowerCase());
+          }
         }
         const newEntries: ModelMappingEntry[] = [];
         for (const modelRaw of res.models) {
@@ -363,10 +368,14 @@ export function useModelMapping() {
           if (existingTargetSet.has(model.toLowerCase())) continue;
           const isGoogle = isGoogleProviderKind(provider);
           if (isGoogle) {
-            newEntries.push(makeMappingEntry(model, model, provider, true));
+            if (!existingClientSet.has(model.toLowerCase())) {
+              newEntries.push(makeMappingEntry(model, model, provider, true));
+              existingClientSet.add(model.toLowerCase());
+            }
             const prefixed = `${provider}/${model}`;
             if (!existingClientSet.has(prefixed.toLowerCase())) {
               newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+              existingClientSet.add(prefixed.toLowerCase());
             }
           } else {
             const prefixed = `${provider}/${model}`;

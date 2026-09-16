@@ -20,12 +20,22 @@ func NewGatewaySyncService() *GatewaySyncService {
 	return &GatewaySyncService{}
 }
 
+// newGatewayHTTPClient 创建用于与中继网关直连的 HTTP 客户端，显式禁用 Proxy 以免受系统环境变量 HTTP_PROXY / HTTPS_PROXY (如本地 18443) 劫持
+func newGatewayHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+		Timeout: timeout,
+	}
+}
+
 // CheckGatewayHealth 探测现网已部署 Go Relay 网关健康状态
 func (s *GatewaySyncService) CheckGatewayHealth() (bool, error) {
 	cfg := config.GlobalConfig
 	url := fmt.Sprintf("%s/api/health", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
 
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := newGatewayHTTPClient(3 * time.Second)
 	resp, err := client.Get(url)
 	if err != nil {
 		return false, err
@@ -59,7 +69,7 @@ func (s *GatewaySyncService) SyncModelMappingsToGateway(mappings []model.ModelMa
 		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newGatewayHTTPClient(20 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("推送模型映射至网关失败: %w", err)
@@ -81,7 +91,7 @@ func (s *GatewaySyncService) FetchGatewayModels() ([]string, error) {
 
 	// 1. 通道一：通过 HTTP 探测现网 Go Relay 网关端点 (/route/v1/models 与 /v1/models)
 	if baseURL != "" {
-		client := &http.Client{Timeout: 3 * time.Second}
+		client := newGatewayHTTPClient(3 * time.Second)
 		token := strings.TrimSpace(cfg.Gateway.AdminKey)
 		if token == "" {
 			token = "sk-ant-admin"
@@ -250,7 +260,7 @@ func (s *GatewaySyncService) GetGatewayAutoConfig() (*model.AutoRacingConfig, er
 
 	if baseURL != "" {
 		url := fmt.Sprintf("%s/api/models/auto-config", baseURL)
-		client := &http.Client{Timeout: 3 * time.Second}
+		client := newGatewayHTTPClient(3 * time.Second)
 		req, err := http.NewRequest(http.MethodGet, url, nil)
 		if err == nil {
 			req.Header.Set("Authorization", "Bearer "+token)
@@ -318,7 +328,7 @@ func (s *GatewaySyncService) SyncAutoConfigToGateway(autoCfg *model.AutoRacingCo
 		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newGatewayHTTPClient(5 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("推送 Auto 竞速配置至网关失败: %w", err)
@@ -346,7 +356,7 @@ func (s *GatewaySyncService) GetGatewayModelMappings() ([]model.ModelMappingEntr
 		token = "sk-ant-admin"
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newGatewayHTTPClient(5 * time.Second)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -388,7 +398,7 @@ func (s *GatewaySyncService) GetGatewayOcrModel() (string, []string, error) {
 		token = "sk-ant-admin"
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newGatewayHTTPClient(5 * time.Second)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return "", nil, err
@@ -453,7 +463,7 @@ func (s *GatewaySyncService) SyncOcrModelToGateway(ocrModel string, ocrModels []
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newGatewayHTTPClient(5 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("推送 OCR 模型至网关失败: %w", err)
@@ -470,82 +480,114 @@ func (s *GatewaySyncService) SyncOcrModelToGateway(ocrModel string, ocrModels []
 	return nil
 }
 
-// GetGatewayOtherGroups 获取网关的 Other 分组列表
+// GetGatewayOtherGroups 获取网关的 Other 分组列表（包含本地配置兜底）
 func (s *GatewaySyncService) GetGatewayOtherGroups() (map[string]interface{}, error) {
 	cfg := config.GlobalConfig
-	url := fmt.Sprintf("%s/api/admin/models/other-groups", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if cfg != nil && strings.TrimSpace(cfg.Gateway.GatewayURL) != "" {
+		url := fmt.Sprintf("%s/api/admin/models/other-groups", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err == nil {
+			if cfg.Gateway.AdminKey != "" {
+				req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
+			}
+			client := newGatewayHTTPClient(5 * time.Second)
+			resp, err := client.Do(req)
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					var res map[string]interface{}
+					if err := json.NewDecoder(resp.Body).Decode(&res); err == nil {
+						if groups, ok := res["groups"].([]interface{}); ok && len(groups) > 0 {
+							return res, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 网关不可用或返回 404 时，回退从本地 accounts_other.json 读取各分组
+	localGroups, err := s.loadLocalOtherGroups()
+	if err == nil && len(localGroups) > 0 {
+		return map[string]interface{}{
+			"success": true,
+			"groups":  localGroups,
+		}, nil
+	}
+
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("网关不可用且本地账号配置读取失败: %w", err)
 	}
-	if cfg.Gateway.AdminKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
-	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var res map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return nil, err
-	}
-	return res, nil
+	return map[string]interface{}{
+		"success": true,
+		"groups":  []interface{}{},
+	}, nil
 }
 
-// FetchGatewayChannelModels 触发网关获取某个号池最新模型快照
+// FetchGatewayChannelModels 触发网关获取某个号池最新模型快照（包含直连上游兜底）
 func (s *GatewaySyncService) FetchGatewayChannelModels(channel string) (map[string]interface{}, error) {
 	cfg := config.GlobalConfig
-	url := fmt.Sprintf("%s/api/admin/models/fetch-channel", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
-	body := map[string]string{"channel": channel}
-	reqBytes, _ := json.Marshal(body)
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqBytes))
-	if err != nil {
-		return nil, err
+	if cfg != nil && strings.TrimSpace(cfg.Gateway.GatewayURL) != "" {
+		url := fmt.Sprintf("%s/api/admin/models/fetch-channel", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
+		body := map[string]string{"channel": channel}
+		reqBytes, _ := json.Marshal(body)
+		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqBytes))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/json")
+			if cfg.Gateway.AdminKey != "" {
+				req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
+			}
+			client := newGatewayHTTPClient(30 * time.Second)
+			resp, err := client.Do(req)
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					var res map[string]interface{}
+					if err := json.NewDecoder(resp.Body).Decode(&res); err == nil {
+						if isSuccess, ok := res["success"].(bool); ok && isSuccess {
+							return res, nil
+						}
+					}
+				}
+			}
+		}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if cfg.Gateway.AdminKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
-	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var res map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return nil, err
-	}
-	return res, nil
+
+	// 网关不可用或未提供该路由时，降级读取本地对应号池账号并直连上游获取
+	return s.fetchUpstreamChannelModels(channel)
 }
 
-// FetchGatewayOtherGroupModels 触发网关获取 Other 号池某个组的最新模型快照
+// FetchGatewayOtherGroupModels 触发网关获取 Other 号池某个组的最新模型快照（包含直连上游兜底）
 func (s *GatewaySyncService) FetchGatewayOtherGroupModels(groupId string) (map[string]interface{}, error) {
 	cfg := config.GlobalConfig
-	url := fmt.Sprintf("%s/api/admin/models/fetch-other", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
-	body := map[string]string{"groupId": groupId}
-	reqBytes, _ := json.Marshal(body)
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqBytes))
-	if err != nil {
-		return nil, err
+	if cfg != nil && strings.TrimSpace(cfg.Gateway.GatewayURL) != "" {
+		url := fmt.Sprintf("%s/api/admin/models/fetch-other", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
+		body := map[string]string{"groupId": groupId}
+		reqBytes, _ := json.Marshal(body)
+		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqBytes))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/json")
+			if cfg.Gateway.AdminKey != "" {
+				req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
+			}
+			client := newGatewayHTTPClient(30 * time.Second)
+			resp, err := client.Do(req)
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					var res map[string]interface{}
+					if err := json.NewDecoder(resp.Body).Decode(&res); err == nil {
+						if isSuccess, ok := res["success"].(bool); ok && isSuccess {
+							return res, nil
+						}
+					}
+				}
+			}
+		}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if cfg.Gateway.AdminKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
-	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var res map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return nil, err
-	}
-	return res, nil
+
+	// 网关不可用或未提供对应模型拉取路由时，回退至由 Web 服务直连上游 BaseURL 获取
+	return s.fetchUpstreamOtherGroupModels(groupId)
 }
 
 // --- Benchmark API ---
@@ -563,7 +605,7 @@ func GetGatewayBenchmark() (map[string]interface{}, error) {
 	if cfg.Gateway.AdminKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := newGatewayHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -572,6 +614,17 @@ func GetGatewayBenchmark() (map[string]interface{}, error) {
 	var res map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		if errMsg, ok := res["error"].(string); ok && errMsg != "" {
+			return nil, fmt.Errorf("网关错误: %s", errMsg)
+		}
+		if errMap, ok := res["error"].(map[string]interface{}); ok {
+			if msg, ok := errMap["message"].(string); ok && msg != "" {
+				return nil, fmt.Errorf("网关错误: %s", msg)
+			}
+		}
+		return nil, fmt.Errorf("网关返回异常状态码: %d", resp.StatusCode)
 	}
 	return res, nil
 }
@@ -591,7 +644,7 @@ func SaveGatewayBenchmarkConfig(reqBody interface{}) (map[string]interface{}, er
 	if cfg.Gateway.AdminKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := newGatewayHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -600,6 +653,12 @@ func SaveGatewayBenchmarkConfig(reqBody interface{}) (map[string]interface{}, er
 	var res map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		if errMsg, ok := res["error"].(string); ok && errMsg != "" {
+			return nil, fmt.Errorf("网关错误: %s", errMsg)
+		}
+		return nil, fmt.Errorf("网关返回异常状态码: %d", resp.StatusCode)
 	}
 	return res, nil
 }
@@ -617,7 +676,7 @@ func RunGatewayBenchmark() (map[string]interface{}, error) {
 	if cfg.Gateway.AdminKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := newGatewayHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -626,6 +685,12 @@ func RunGatewayBenchmark() (map[string]interface{}, error) {
 	var res map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		if errMsg, ok := res["error"].(string); ok && errMsg != "" {
+			return nil, fmt.Errorf("网关错误: %s", errMsg)
+		}
+		return nil, fmt.Errorf("网关返回异常状态码: %d", resp.StatusCode)
 	}
 	return res, nil
 }
@@ -645,7 +710,7 @@ func RunGatewayBenchmarkModel(model string) (map[string]interface{}, error) {
 	if cfg.Gateway.AdminKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := newGatewayHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -654,6 +719,12 @@ func RunGatewayBenchmarkModel(model string) (map[string]interface{}, error) {
 	var res map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		if errMsg, ok := res["error"].(string); ok && errMsg != "" {
+			return nil, fmt.Errorf("网关错误: %s", errMsg)
+		}
+		return nil, fmt.Errorf("网关返回异常状态码: %d", resp.StatusCode)
 	}
 	return res, nil
 }
@@ -671,7 +742,7 @@ func GetGatewayBenchmarkModels() (map[string]interface{}, error) {
 	if cfg.Gateway.AdminKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := newGatewayHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -680,6 +751,17 @@ func GetGatewayBenchmarkModels() (map[string]interface{}, error) {
 	var res map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		if errMsg, ok := res["error"].(string); ok && errMsg != "" {
+			return nil, fmt.Errorf("网关错误: %s", errMsg)
+		}
+		if errMap, ok := res["error"].(map[string]interface{}); ok {
+			if msg, ok := errMap["message"].(string); ok && msg != "" {
+				return nil, fmt.Errorf("网关错误: %s", msg)
+			}
+		}
+		return nil, fmt.Errorf("网关返回异常状态码: %d", resp.StatusCode)
 	}
 	return res, nil
 }

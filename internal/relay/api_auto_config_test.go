@@ -43,7 +43,7 @@ func TestAPIHandler_UserAutoConfig_MultiUserIsolation(t *testing.T) {
 		t.Fatalf("Login B failed: %v", err)
 	}
 
-	apiHandler := NewAPIHandler(authMgr, nil, nil, nil, "", settingsMgr)
+	apiHandler := NewAPIHandler(authMgr, nil, nil, nil, "", settingsMgr, nil)
 
 	t.Cleanup(func() {
 		_ = os.RemoveAll(tempDir)

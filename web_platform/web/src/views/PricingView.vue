@@ -49,9 +49,27 @@
 
           <!-- 核心权益亮点 -->
           <div class="flex flex-col gap-3 mb-6">
+            <!-- 额度限制亮点 -->
+            <div class="flex items-center gap-2 text-xs text-slate-300">
+              <span class="material-symbols-outlined text-amber-400 text-16px">toll</span>
+              <span>额度限制: <strong class="text-white">{{ formatTokenLimit(plan.tokenLimit) }}</strong></span>
+            </div>
+
             <div class="flex items-center gap-2 text-xs text-slate-300">
               <span class="material-symbols-outlined text-emerald-400 text-16px">speed</span>
               <span>速率限制: <strong class="text-white">{{ plan.rateLimit || 30 }}</strong> 次/分钟 (RPM)</span>
+            </div>
+
+            <!-- 视觉分析多模态能力亮点 -->
+            <div class="flex items-center gap-2 text-xs text-cyan-300 font-medium">
+              <span class="material-symbols-outlined text-cyan-400 text-16px">visibility</span>
+              <span>视觉能力: <strong class="text-cyan-200">支持多模态视觉分析 (截屏/图片解析)</strong></span>
+            </div>
+
+            <!-- 当套餐包含 auto 时，在速率限制下方新增独立亮点行 -->
+            <div v-if="(plan.allowedModels || []).includes('auto')" class="flex items-center gap-2 text-xs text-amber-300 font-medium">
+              <span class="material-symbols-outlined text-amber-400 text-16px">bolt</span>
+              <span>核心特性: <strong class="text-amber-200">支持 Auto 智能调度模型</strong></span>
             </div>
 
             <!-- 包含模型清单展示 -->
@@ -64,14 +82,39 @@
                 <span
                   v-for="model in (plan.allowedModels || [])"
                   :key="model"
-                  class="badge badge-cyan text-10px font-mono"
+                  class="badge text-10px font-mono"
+                  :class="model === 'auto' ? 'badge-amber font-bold shadow-sm' : 'badge-cyan'"
                 >
-                  {{ model }}
+                  {{ model === 'auto' ? '⚡ 支持 auto 模型' : model }}
                 </span>
                 <span v-if="!plan.allowedModels || plan.allowedModels.length === 0" class="text-11px text-slate-500">
                   全部公共模型开放
                 </span>
               </div>
+            </div>
+
+            <!-- Auto 模型专属包含模型说明板块 -->
+            <div
+              v-if="(plan.allowedModels || []).includes('auto') && plan.autoModels && plan.autoModels.length > 0"
+              class="p-3 rounded-xl bg-gradient-to-br from-amber-500/15 via-amber-500/10 to-amber-600/5 border border-amber-500/30 shadow-sm"
+            >
+              <div class="text-xs font-bold text-amber-300 flex items-center gap-1.5 mb-2">
+                <span class="material-symbols-outlined text-16px text-amber-400">bolt</span>
+                <span>Auto 智能竞速实际包含模型 ({{ plan.autoModels.length }} 款):</span>
+              </div>
+              <div class="flex flex-wrap gap-1.5 max-h-100px overflow-y-auto pr-0.5">
+                <span
+                  v-for="am in plan.autoModels"
+                  :key="am"
+                  class="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-black/40 text-amber-200 border border-amber-500/30 flex items-center gap-1"
+                >
+                  <span class="material-symbols-outlined text-[10px] text-amber-400">check_circle</span>
+                  <span>{{ am }}</span>
+                </span>
+              </div>
+              <p class="text-[10px] text-amber-200/70 mt-2">
+                * 调用 auto 模型时将根据号池健康度与响应速度在上述模型池中自动择优调度
+              </p>
             </div>
           </div>
         </div>
@@ -101,6 +144,15 @@ const plans = ref<any[]>([])
 const loading = ref(true)
 const subscribingPlanId = ref<number | null>(null)
 const errorMsg = ref('')
+
+function formatTokenLimit(val?: number): string {
+  if (!val || val <= 0) return '不限额度'
+  if (val >= 100000000) return (val / 100000000).toFixed(val % 100000000 === 0 ? 0 : 2) + ' 亿 Tokens'
+  if (val >= 10000) return (val / 10000).toFixed(val % 10000 === 0 ? 0 : 1) + ' 万 Tokens'
+  if (val >= 1000000) return (val / 1000000).toFixed(1) + 'M Tokens'
+  if (val >= 1000) return (val / 1000).toFixed(0) + 'K Tokens'
+  return `${val.toLocaleString()} Tokens`
+}
 
 async function fetchPlans() {
   loading.value = true

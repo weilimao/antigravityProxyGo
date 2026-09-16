@@ -8,7 +8,7 @@
           <span>系统管理控制台 (Admin Workspace)</span>
         </h1>
         <p class="text-xs text-slate-400 mt-1">
-          纳管商业化套餐、模型白名单权限、极客工坊切单流水、中继模型映射及 OCR 图像自愈配置
+          纳管商业化套餐、模型白名单权限、支付跳转与切单配置、中继模型映射及 OCR 图像自愈配置
         </p>
       </div>
       <router-link to="/dashboard" class="btn-secondary text-xs">
@@ -42,6 +42,11 @@
       <AdminOrdersTab />
     </div>
 
+    <!-- Tab 2.5: 支付跳转配置 -->
+    <div v-else-if="activeTab === 'payment'">
+      <AdminPaymentTab />
+    </div>
+
     <!-- Tab 3: 用户管理 -->
     <div v-else-if="activeTab === 'users'">
       <AdminUsersTab />
@@ -61,6 +66,21 @@
     <div v-else-if="activeTab === 'ocr'">
       <AdminOcrTab />
     </div>
+
+    <!-- Tab 7: 账号池管理 (移植桌面端) -->
+    <div v-else-if="activeTab === 'accounts'">
+      <AdminAccountsTab />
+    </div>
+
+    <!-- Tab 8: 系统与 API 服务配置 -->
+    <div v-else-if="activeTab === 'system'">
+      <AdminSystemTab />
+    </div>
+
+    <!-- Tab 9: 请求命中模型日志 (按账号筛选/全量监控) -->
+    <div v-else-if="activeTab === 'logs'">
+      <RequestLogsPanel mode="admin" />
+    </div>
   </div>
 </template>
 
@@ -70,10 +90,14 @@ import { useRouter } from 'vue-router'
 import { authState, refreshCurrentUser } from '../../api/client'
 import AdminPlansTab from './tabs/AdminPlansTab.vue'
 import AdminOrdersTab from './tabs/AdminOrdersTab.vue'
+import AdminPaymentTab from './tabs/AdminPaymentTab.vue'
 import AdminUsersTab from './tabs/AdminUsersTab.vue'
 import AdminMappingsTab from './tabs/AdminMappingsTab.vue'
+import AdminAccountsTab from './tabs/AdminAccountsTab.vue'
 import AdminAutoTab from './tabs/AdminAutoTab.vue'
 import AdminOcrTab from './tabs/AdminOcrTab.vue'
+import AdminSystemTab from './tabs/AdminSystemTab.vue'
+import RequestLogsPanel from '../../components/logs/RequestLogsPanel.vue'
 
 const router = useRouter()
 const activeTab = ref('plans')
@@ -90,7 +114,11 @@ onMounted(async () => {
 const tabs = [
   { id: 'plans', name: '套餐与模型白名单管理', icon: 'layers' },
   { id: 'orders', name: '交易订单与核销', icon: 'receipt_long' },
+  { id: 'payment', name: '支付跳转配置', icon: 'payments' },
+  { id: 'system', name: '系统与 API 配置', icon: 'settings' },
   { id: 'users', name: '用户管理与套餐分配', icon: 'group' },
+  { id: 'logs', name: '请求命中模型日志', icon: 'fact_check' },
+  { id: 'accounts', name: '账号池管理', icon: 'account_tree' },
   { id: 'mappings', name: '中继模型映射配置', icon: 'alt_route' },
   { id: 'auto', name: 'Auto 并发竞速池配置', icon: 'bolt' },
   { id: 'ocr', name: 'OCR 图像自愈降级配置', icon: 'document_scanner' },

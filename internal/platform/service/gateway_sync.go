@@ -21,12 +21,22 @@ func NewGatewaySyncService() *GatewaySyncService {
 	return &GatewaySyncService{}
 }
 
+// newGatewayHTTPClient 创建用于与中继网关直连的 HTTP 客户端，显式禁用 Proxy 以免受系统环境变量 HTTP_PROXY / HTTPS_PROXY (如本地 18443) 劫持
+func newGatewayHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+		Timeout: timeout,
+	}
+}
+
 // CheckGatewayHealth 探测现网已部署 Go Relay 网关健康状态
 func (s *GatewaySyncService) CheckGatewayHealth() (bool, error) {
 	cfg := config.GlobalConfig
 	url := fmt.Sprintf("%s/api/health", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
 
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := newGatewayHTTPClient(3 * time.Second)
 	resp, err := client.Get(url)
 	if err != nil {
 		return false, err
@@ -60,7 +70,7 @@ func (s *GatewaySyncService) SyncModelMappingsToGateway(mappings []model.ModelMa
 		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newGatewayHTTPClient(5 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("推送模型映射至网关失败: %w", err)
@@ -82,7 +92,7 @@ func (s *GatewaySyncService) FetchGatewayModels() ([]string, error) {
 
 	// 1. 通道一：通过 HTTP 探测现网 Go Relay 网关端点 (/route/v1/models 与 /v1/models)
 	if baseURL != "" {
-		client := &http.Client{Timeout: 3 * time.Second}
+		client := newGatewayHTTPClient(3 * time.Second)
 		token := strings.TrimSpace(cfg.Gateway.AdminKey)
 		if token == "" {
 			token = "sk-ant-admin"
@@ -254,7 +264,7 @@ func (s *GatewaySyncService) FetchGatewayChannelModels(channel string) (map[stri
 	}
 
 	url := fmt.Sprintf("%s/api/admin/models/fetch-channel?channel=%s", baseURL, channel)
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newGatewayHTTPClient(30 * time.Second)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -293,7 +303,7 @@ func (s *GatewaySyncService) FetchGatewayOtherGroupModels(groupId string) (map[s
 	}
 
 	url := fmt.Sprintf("%s/api/admin/models/fetch-other", baseURL)
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newGatewayHTTPClient(30 * time.Second)
 	reqBody, _ := json.Marshal(map[string]string{"groupId": groupId})
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(reqBody))
 	if err != nil {
@@ -331,7 +341,7 @@ func (s *GatewaySyncService) GetGatewayAutoConfig() (*model.AutoRacingConfig, er
 
 	if baseURL != "" {
 		url := fmt.Sprintf("%s/api/admin/models/auto-config", baseURL)
-		client := &http.Client{Timeout: 3 * time.Second}
+		client := newGatewayHTTPClient(3 * time.Second)
 		req, err := http.NewRequest(http.MethodGet, url, nil)
 		if err == nil {
 			req.Header.Set("Authorization", "Bearer "+token)
@@ -399,7 +409,7 @@ func (s *GatewaySyncService) SyncAutoConfigToGateway(autoCfg *model.AutoRacingCo
 		req.Header.Set("Authorization", "Bearer "+cfg.Gateway.AdminKey)
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newGatewayHTTPClient(5 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("推送 Auto 竞速配置至网关失败: %w", err)
@@ -427,7 +437,7 @@ func (s *GatewaySyncService) GetGatewayModelMappings() ([]model.ModelMappingEntr
 		token = "sk-ant-admin"
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newGatewayHTTPClient(5 * time.Second)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -469,7 +479,7 @@ func (s *GatewaySyncService) GetGatewayOcrModel() (string, []string, error) {
 		token = "sk-ant-admin"
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newGatewayHTTPClient(5 * time.Second)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return "", nil, err
@@ -534,7 +544,7 @@ func (s *GatewaySyncService) SyncOcrModelToGateway(ocrModel string, ocrModels []
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newGatewayHTTPClient(5 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("推送 OCR 模型至网关失败: %w", err)

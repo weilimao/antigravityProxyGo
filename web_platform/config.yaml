@@ -17,7 +17,7 @@ payment:
   site_url: "http://your-domain.com"
 
 gateway:
-  gateway_url: "http://127.0.0.1:18444"
-  admin_key: "admin"
+  gateway_url: "http://192.255.160.69:18444"
+  admin_key: "sk-ant-admin"
   admin_password: "admin_password"
-  sync_enabled: false
+  sync_enabled: true

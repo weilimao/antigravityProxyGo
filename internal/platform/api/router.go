@@ -27,6 +27,7 @@ func SetupRouter() *gin.Engine {
 	webhookH := NewWebhookHandler()
 	keyH := NewKeyHandler()
 	autoH := NewAutoHandler()
+	logH := NewLogHandler()
 
 	adminPlanH := admin.NewAdminPlanHandler()
 	adminOrderH := admin.NewAdminOrderHandler()
@@ -34,6 +35,7 @@ func SetupRouter() *gin.Engine {
 	adminMappingH := admin.NewAdminMappingHandler()
 	adminOcrH := admin.NewAdminOcrHandler()
 	adminAutoH := admin.NewAdminAutoHandler()
+	adminLogH := admin.NewAdminLogHandler()
 
 	// 1. 公开端点
 	v1 := r.Group("/api/v1")
@@ -66,6 +68,11 @@ func SetupRouter() *gin.Engine {
 		// 专属 Auto 竞速配置
 		userGroup.GET("/user/auto-config", autoH.GetUserAutoConfig)
 		userGroup.POST("/user/auto-config", autoH.SetUserAutoConfig)
+
+		// 请求命中模型日志 (用户端按账号隔离/筛选)
+		userGroup.GET("/user/logs", logH.ListUserLogs)
+		userGroup.GET("/user/logs/detail", logH.GetUserLogDetail)
+		userGroup.GET("/user/logs/accounts", logH.GetUserLogAccounts)
 	}
 
 	// 3. 管理后台端点
@@ -105,6 +112,11 @@ func SetupRouter() *gin.Engine {
 		adminGroup.GET("/models/auto-config", adminAutoH.GetAutoConfig)
 		adminGroup.POST("/models/auto-config", adminAutoH.SetAutoConfig)
 		adminGroup.POST("/models/auto-config/pull", adminAutoH.PullAutoConfig)
+
+		// 请求命中日志管理 (全量/按账号筛选)
+		adminGroup.GET("/logs", adminLogH.ListAdminLogs)
+		adminGroup.GET("/logs/detail", adminLogH.GetAdminLogDetail)
+		adminGroup.GET("/logs/accounts", adminLogH.GetLogAccounts)
 	}
 
 	return r

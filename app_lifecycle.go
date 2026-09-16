@@ -432,6 +432,9 @@ func (a *App) startup(ctx context.Context) {
 	// 全部路由链路; 回环监听 127.0.0.1:0, handler 复用已装配的 relayCompatAPIMgr。
 	// 放在 eventsGate 构造之后, 使 benchmark-updated 事件走节流门派发。
 	a.benchmarkScheduler = benchmark.NewScheduler(a.settingsMgr, a.relayCompatAPIMgr, a.AddLog, a.emitEvent)
+	if a.relayAPIMgr != nil {
+		a.relayAPIMgr.SetBenchmarkScheduler(a.benchmarkScheduler)
+	}
 	a.benchmarkScheduler.Start()
 
 	// 启动网络连通性监听:网络从断→通时触发连接池重置 + 远程中继自动重连,

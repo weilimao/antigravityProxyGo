@@ -40,6 +40,9 @@ func (u *User) CheckPassword(password string) bool {
 }
 
 func (u *User) IsSubscriptionActive() bool {
+	if u.IsAdmin() {
+		return true
+	}
 	if u.PlanID == nil || *u.PlanID == 0 {
 		return false
 	}

@@ -66,6 +66,14 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 		queryStr = "?alt=sse"
 	}
 
+	if h.authMgr != nil && h.authMgr.userMgr != nil {
+		if err := h.authMgr.userMgr.CheckAPIKeyQuota(userSession.UserID, userSession.APIKeyID, "gemini"); err != nil {
+			h.log("🚫 [v1internal] Token 配额超限拦截: %v (User: %s, KeyID: %s)", err, userSession.UserKey, userSession.APIKeyID)
+			writeQuotaExceeded(w, err.Error())
+			return
+		}
+	}
+
 	if h.accountMgr == nil || h.sessionRouter == nil {
 		// 防御性降级：用于兼容未配置账号管理器的单元测试或异常回退
 		targetURL := fmt.Sprintf("http://%s%s%s", localProxyAddr, path, queryStr)

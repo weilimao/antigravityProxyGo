@@ -873,15 +873,20 @@ export function initRelayModelMapping() {
                 //     双条目并存:既保持裸名直连链路零回归,又让 /route/v1/models 能列出带前缀名精准路由。
                 // 「新模型」判定:已有映射里 ClientModel 等于裸名 {model} 或带前缀 {provider}/{model} 的都算已存在,跳过。
                 const provider = (currentTab.targetProvider || currentTab.id || '').trim();
+                const tabId = currentTab.id;
                 const existingClientSet = new Set<string>();
                 for (const m of allMappings) {
                     const cm = (m.clientModel || '').trim();
                     if (cm) existingClientSet.add(cm.toLowerCase());
                 }
+                // 按当前 Tab 作用域去重:仅收集本 Tab 已存在的上游模型名,
+                // 避免全局 targetModel 去重误伤跨号池同名模型(不同号池上游可提供同名模型)。
                 const existingTargetSet = new Set<string>();
                 for (const m of allMappings) {
-                    const tm = (m.targetModel || '').trim();
-                    if (tm) existingTargetSet.add(tm.toLowerCase());
+                    if (getMappingTab(m) === tabId) {
+                        const tm = (m.targetModel || '').trim();
+                        if (tm) existingTargetSet.add(tm.toLowerCase());
+                    }
                 }
                 const newEntries: any[] = [];
                 for (const modelRaw of res.models) {
@@ -891,11 +896,15 @@ export function initRelayModelMapping() {
                     const isGoogle = isGoogleProviderKind(provider);
                     if (isGoogle) {
                         // ① 裸名条目(供 /v1/* 裸名直连)。
-                        newEntries.push(makeMappingEntry(model, model, provider, true));
+                        if (!existingClientSet.has(model.toLowerCase())) {
+                            newEntries.push(makeMappingEntry(model, model, provider, true));
+                            existingClientSet.add(model.toLowerCase());
+                        }
                         // ② 带前缀条目(供 /route 精准路由)。
                         const prefixed = `${provider}/${model}`;
                         if (!existingClientSet.has(prefixed.toLowerCase())) {
                             newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+                            existingClientSet.add(prefixed.toLowerCase());
                         }
                     } else {
                         // 非 Google 族:仅带前缀单条。

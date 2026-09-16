@@ -38,9 +38,10 @@ func (h *APIHandler) handleAdminUserSync(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Remark   string `json:"remark"`
+		Username     string `json:"username"`
+		Password     string `json:"password"`
+		Remark       string `json:"remark"`
+		PlanExpireAt int64  `json:"planExpireAt"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid request body"})
@@ -64,14 +65,57 @@ func (h *APIHandler) handleAdminUserSync(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if req.PlanExpireAt != 0 {
+		_ = h.authMgr.userMgr.UpdateUserExpireAt(user.ID, req.PlanExpireAt)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"user": map[string]interface{}{
-			"id":      user.ID,
-			"key":     user.Key,
-			"enabled": user.Enabled,
-			"role":    user.Role,
+			"id":       user.ID,
+			"key":      user.Key,
+			"enabled":  user.Enabled,
+			"role":     user.Role,
+			"expireAt": req.PlanExpireAt,
 		},
+	})
+}
+
+// handleAdminUserExpire 供 Web 平台即时更新用户的套餐到期时间戳
+func (h *APIHandler) handleAdminUserExpire(w http.ResponseWriter, r *http.Request) {
+	if !h.checkAdminAuth(r) {
+		writeJSON(w, http.StatusForbidden, map[string]interface{}{"error": "permission denied: admin only"})
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		ExpireAt int64  `json:"expireAt"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid request body"})
+		return
+	}
+
+	username := strings.TrimSpace(req.Username)
+	if username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "username is required"})
+		return
+	}
+
+	if h.authMgr == nil || h.authMgr.userMgr == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "user manager unavailable"})
+		return
+	}
+
+	if err := h.authMgr.userMgr.UpdateUserExpireAt(username, req.ExpireAt); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":  true,
+		"expireAt": req.ExpireAt,
 	})
 }
 
@@ -87,8 +131,10 @@ func (h *APIHandler) handleAdminKeyCreate(w http.ResponseWriter, r *http.Request
 		Name              string   `json:"name"`
 		Key               string   `json:"key"`
 		AllowedModels     []string `json:"allowedModels"`
+		LimitTokens       int64    `json:"limitTokens"`
 		LimitGeminiTokens int64    `json:"limitGeminiTokens"`
 		LimitClaudeTokens int64    `json:"limitClaudeTokens"`
+		PlanExpireAt      int64    `json:"planExpireAt"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid request body"})
@@ -143,17 +189,33 @@ func (h *APIHandler) handleAdminKeyCreate(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	limitGemini := req.LimitGeminiTokens
+	limitClaude := req.LimitClaudeTokens
+	if req.LimitTokens > 0 {
+		if limitGemini == 0 {
+			limitGemini = req.LimitTokens
+		}
+		if limitClaude == 0 {
+			limitClaude = req.LimitTokens
+		}
+	}
+
 	newKey, err := h.authMgr.userMgr.CreateAPIKeyWithOptions(
 		user.ID,
 		keyName,
 		req.Key,
 		cleanedModels,
-		req.LimitGeminiTokens,
-		req.LimitClaudeTokens,
+		limitGemini,
+		limitClaude,
+		req.LimitTokens,
 	)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
 		return
+	}
+
+	if req.PlanExpireAt != 0 {
+		_ = h.authMgr.userMgr.UpdateUserExpireAt(user.ID, req.PlanExpireAt)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -492,5 +554,54 @@ func (h *APIHandler) handleAdminFetchOtherGroupModels(w http.ResponseWriter, r *
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"models":  models,
+	})
+}
+
+// handleAdminUserKeysUsage 供 Web 平台按用户名查询该用户在 18444 中继网关累计的各 API Key 实际 Token 消耗
+func (h *APIHandler) handleAdminUserKeysUsage(w http.ResponseWriter, r *http.Request) {
+	if !h.checkAdminAuth(r) {
+		writeJSON(w, http.StatusForbidden, map[string]interface{}{"error": "permission denied: admin only"})
+		return
+	}
+
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if username == "" && r.Body != nil {
+		var req struct {
+			Username string `json:"username"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		username = strings.TrimSpace(req.Username)
+	}
+
+	if username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "username is required"})
+		return
+	}
+
+	if h.authMgr == nil || h.authMgr.userMgr == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "user manager unavailable"})
+		return
+	}
+
+	user := h.authMgr.userMgr.GetUserByKey(username)
+	if user == nil {
+		user = h.authMgr.userMgr.GetUserByID(username)
+	}
+
+	usages := make(map[string]int64)
+	var totalUsed int64
+	if user != nil {
+		for _, k := range user.APIKeys {
+			uTokens := k.UsedGeminiTokens + k.UsedClaudeTokens + k.UsedNvidiaTokens + k.UsedGrokTokens
+			usages[k.Key] = uTokens
+			totalUsed += uTokens
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":   true,
+		"username":  username,
+		"usages":    usages,
+		"totalUsed": totalUsed,
 	})
 }

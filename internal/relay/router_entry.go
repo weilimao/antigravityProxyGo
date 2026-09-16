@@ -128,6 +128,11 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 			writeModelNotAuthorized(w, inModel)
 			return
 		}
+		if err := h.authMgr.userMgr.CheckAPIKeyQuota(userSession.UserID, userSession.APIKeyID, inModel); err != nil {
+			h.log("🚫 [路由转发] Token 配额超限拦截: %v (User: %s, KeyID: %s)", err, userSession.UserKey, userSession.APIKeyID)
+			writeQuotaExceeded(w, err.Error())
+			return
+		}
 	}
 
 	// 变体后缀虚项感知: 若 inModel 形如 "{ClientModel}-{effort}" 且 stripping 出的 baseModel

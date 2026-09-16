@@ -73,6 +73,7 @@ func InsertRequestLog(log *RequestLog) error {
 	LastInsertError = ""
 	id, _ := res.LastInsertId()
 	log.ID = id
+	_ = PruneUserRequestLogs(log.UserID, 150)
 	return nil
 }
 
@@ -322,4 +323,65 @@ func SetQuotaWindowStart(userID string, quotaType string, windowStart string) er
 		VALUES (?, ?, ?)
 	`, userID, quotaType, windowStart)
 	return err
+}
+
+// PruneUserRequestLogs 删除指定用户超过 maxLogs 条限制的最旧请求日志 (FIFO 淘汰),
+// 保证每个用户在 request_logs 中最多保留 maxLogs 条记录, 防止内存与磁盘膨胀。
+func PruneUserRequestLogs(userID string, maxLogs int) error {
+	if GlobalDB == nil || maxLogs <= 0 {
+		return nil
+	}
+	if userID == "" {
+		_, err := GlobalDB.Exec(`
+			DELETE FROM request_logs
+			WHERE (user_id IS NULL OR user_id = '')
+			  AND id <= (
+				SELECT id FROM request_logs
+				WHERE (user_id IS NULL OR user_id = '')
+				ORDER BY id DESC
+				LIMIT 1 OFFSET ?
+			  )
+		`, maxLogs)
+		return err
+	}
+	_, err := GlobalDB.Exec(`
+		DELETE FROM request_logs
+		WHERE user_id = ?
+		  AND id <= (
+			SELECT id FROM request_logs
+			WHERE user_id = ?
+			ORDER BY id DESC
+			LIMIT 1 OFFSET ?
+		  )
+	`, userID, userID, maxLogs)
+	return err
+}
+
+// PruneAllUsersRequestLogs 遍历清理数据库中所有用户超出 maxPerUser 条的旧请求日志。
+func PruneAllUsersRequestLogs(maxPerUser int) error {
+	if GlobalDB == nil || maxPerUser <= 0 {
+		return nil
+	}
+	rows, err := GlobalDB.Query(`SELECT DISTINCT user_id FROM request_logs WHERE user_id IS NOT NULL AND user_id != ''`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var userIDs []string
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err == nil && uid != "" {
+			userIDs = append(userIDs, uid)
+		}
+	}
+	_ = rows.Close()
+
+	for _, uid := range userIDs {
+		_ = PruneUserRequestLogs(uid, maxPerUser)
+	}
+
+	// 额外清理空用户
+	_ = PruneUserRequestLogs("", maxPerUser)
+	return nil
 }

@@ -433,7 +433,7 @@ func TestAPIHandlerRoutes(t *testing.T) {
 	authMgr := NewAuthManager(userMgr)
 	statsMgr := NewStatsTracker(nil)
 	pkgMgr := NewPackageManager()
-	handler := NewAPIHandler(authMgr, statsMgr, pkgMgr, func(s string) {}, "", nil)
+	handler := NewAPIHandler(authMgr, statsMgr, pkgMgr, func(s string) {}, "", nil, nil)
 
 	// Test POST /api/keys/update-quota
 	req, _ := http.NewRequest(http.MethodPost, "/api/keys/update-quota", nil)

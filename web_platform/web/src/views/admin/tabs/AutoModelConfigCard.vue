@@ -81,8 +81,14 @@
             @change="setMode('benchmark')"
           />
           <div class="flex-1 min-w-0">
-            <div class="text-[12px] font-bold text-white flex items-center gap-1">
+            <div class="text-[12px] font-bold text-white flex items-center gap-1.5 flex-wrap">
               <span>竞速模型池 (控制台测速池)</span>
+              <span
+                v-if="benchmarkModels.length > 0"
+                class="px-1.5 py-0.2 rounded text-[10px] bg-indigo-500/20 text-indigo-300 font-mono border border-indigo-500/30"
+              >
+                {{ benchmarkModels.length }} 个模型
+              </span>
             </div>
             <div class="text-[11px] text-slate-400 mt-0.5">
               自动实时同步网关「模型响应测速」配置的模型池，免手动维护。
@@ -109,10 +115,45 @@
           @update:model-ids="val => { candidateList = val; onCandidateModelsChange(); }"
         />
       </div>
-      <div v-else class="flex flex-col gap-2 p-3.5 bg-white/5 rounded-lg border border-slate-800">
-        <div class="text-[11px] text-slate-400 flex items-center gap-1">
-          <span class="material-symbols-outlined text-[13px]">info</span>
-          <span>每次请求将直接发往网关当前生效的全部测速池模型进行首字竞速。</span>
+      <div v-else class="flex flex-col gap-2.5 p-3.5 bg-white/5 rounded-lg border border-slate-800">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5 text-[12px] font-bold text-white">
+            <span class="material-symbols-outlined text-[16px] text-amber-400 animate-pulse">speed</span>
+            <span>控制台测速池回显模型清单：</span>
+          </div>
+          <button
+            type="button"
+            class="text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+            :disabled="loadingBenchmark"
+            @click="fetchBenchmarkModels"
+            title="重新获取网关当前测速模型列表"
+          >
+            <span class="material-symbols-outlined text-[13px]" :class="{ 'animate-spin': loadingBenchmark }">refresh</span>
+            <span>{{ loadingBenchmark ? '拉取中...' : '刷新测速池' }}</span>
+          </button>
+        </div>
+
+        <div v-if="benchmarkModels.length > 0" class="flex flex-wrap gap-1.5 py-1 max-h-36 overflow-y-auto">
+          <span
+            v-for="m in benchmarkModels"
+            :key="m"
+            class="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-500/10 text-amber-300 text-[11px] font-mono border border-amber-500/25 shadow-xs"
+          >
+            <span class="material-symbols-outlined text-[13px] text-amber-400">model_training</span>
+            <span>{{ m }}</span>
+          </span>
+        </div>
+        <div v-else-if="!loadingBenchmark" class="text-[12px] text-slate-400 italic py-1.5">
+          控制台测速池当前暂未配置模型，请前往「Auto 并发竞速配置」Tab 下的「网关模型响应测速」卡片配置测速模型。
+        </div>
+        <div v-else class="text-[12px] text-indigo-400 flex items-center gap-1.5 py-1.5">
+          <span class="material-symbols-outlined text-[14px] animate-spin">autorenew</span>
+          <span>正在拉取网关测速池模型...</span>
+        </div>
+
+        <div class="text-[11px] text-slate-400/90 flex items-center gap-1 pt-1 border-t border-slate-800/80">
+          <span class="material-symbols-outlined text-[13px] text-indigo-400">info</span>
+          <span>每次请求将直接发往上方回显的全部模型进行首字竞速，网关测速池增减模型将自动热生效。</span>
         </div>
       </div>
     </div>
@@ -123,6 +164,7 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import type { ModelMappingEntry } from '../../../composables/mappingTypes';
 import ModelSearchSelect from '../../../components/common/ModelSearchSelect.vue';
+import { benchmarkApi } from '../../../api/client';
 
 const props = defineProps<{
   allMappings: ModelMappingEntry[];
@@ -143,8 +185,30 @@ const isExposed = computed(() => {
 
 const poolMode = ref<'custom' | 'benchmark'>('custom');
 const candidateList = ref<string[]>([]);
+const benchmarkModels = ref<string[]>([]);
+const loadingBenchmark = ref(false);
 
 const options = computed(() => props.availableModelOptions.map(m => ({ value: m, label: m })));
+
+async function fetchBenchmarkModels() {
+  loadingBenchmark.value = true;
+  try {
+    const res = await benchmarkApi.get();
+    if (res && res.success) {
+      if (res.config && Array.isArray(res.config.models) && res.config.models.length > 0) {
+        benchmarkModels.value = res.config.models;
+      } else if (Array.isArray(res.results) && res.results.length > 0) {
+        benchmarkModels.value = Array.from(new Set(res.results.map((r: any) => r.model).filter(Boolean)));
+      } else {
+        benchmarkModels.value = [];
+      }
+    }
+  } catch (err) {
+    console.warn('[AutoModelConfigCard] fetchBenchmarkModels failed:', err);
+  } finally {
+    loadingBenchmark.value = false;
+  }
+}
 
 function syncFromEntry() {
   if (!autoEntry.value) {
@@ -187,15 +251,24 @@ function onToggleExpose(e: Event) {
 function setMode(m: 'custom' | 'benchmark') {
   poolMode.value = m;
   if (m === 'benchmark') {
-    notifyUpdate({ candidateModels: [], useBenchmarkPool: true } as any);
+    notifyUpdate({ candidateModels: [], useBenchmarkPool: true, targetModel: 'benchmark-pool' } as any);
+    fetchBenchmarkModels();
   } else {
-    notifyUpdate({ candidateModels: candidateList.value, useBenchmarkPool: false } as any);
+    notifyUpdate({
+      candidateModels: candidateList.value,
+      useBenchmarkPool: false,
+      targetModel: candidateList.value.length > 0 ? candidateList.value.join(', ') : 'auto',
+    } as any);
   }
 }
 
 function onCandidateModelsChange() {
   if (poolMode.value === 'custom') {
-    notifyUpdate({ candidateModels: candidateList.value, useBenchmarkPool: false } as any);
+    notifyUpdate({
+      candidateModels: candidateList.value,
+      useBenchmarkPool: false,
+      targetModel: candidateList.value.length > 0 ? candidateList.value.join(', ') : 'auto',
+    } as any);
   }
 }
 
@@ -205,6 +278,7 @@ watch(() => props.allMappings, () => {
 
 onMounted(() => {
   syncFromEntry();
+  fetchBenchmarkModels();
 });
 </script>
 

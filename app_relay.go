@@ -103,11 +103,17 @@ func (a *App) ensureRelayInitialized() {
 			a.AddLog(fmt.Sprintf("❌ Failed to initialize platform database: %v", err))
 		} else {
 			a.AddLog("✅ Platform database initialized successfully")
+			if a.relayUserMgr != nil && platformdb.GlobalDB != nil {
+				a.relayUserMgr.SetDB(platformdb.GlobalDB)
+			}
 		}
 	}()
 
 	a.relayUserMgr = relay.NewUserManager()
 	a.relayUserMgr.Init(activeDir)
+	if platformdb.GlobalDB != nil {
+		a.relayUserMgr.SetDB(platformdb.GlobalDB)
+	}
 
 	a.relayPackageMgr = relay.NewPackageManager()
 	a.relayPackageMgr.Init(activeDir)

@@ -171,20 +171,33 @@ code, pre, .font-mono {
 }
 
 /* 输入框风格 */
-.input-dark {
-  background: rgba(11, 15, 25, 0.85);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 8px 12px;
-  color: var(--text-main);
-  font-size: 14px;
-  outline: none;
-  transition: all 0.2s;
+@layer components {
+  .input-dark {
+    background: rgba(11, 15, 25, 0.85);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: var(--text-main);
+    font-size: 14px;
+    outline: none;
+    transition: all 0.2s;
+  }
+
+  .input-dark:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+  }
 }
 
-.input-dark:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+/* 浏览器自动填充暗黑主题深度适配 */
+input:-webkit-autofill,
+input:-webkit-autofill:hover, 
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px #0f172a inset !important;
+  -webkit-text-fill-color: #f8fafc !important;
+  caret-color: #f8fafc !important;
+  transition: background-color 5000s ease-in-out 0s;
 }
 
 /* 标签 Badge */

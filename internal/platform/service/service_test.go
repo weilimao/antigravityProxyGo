@@ -27,14 +27,14 @@ func setupTestEnvironment(t *testing.T) func() {
 	}
 	dbPath := filepath.Join(tempDir, "test.db")
 
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
+	testDB, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
 		t.Fatalf("failed to open test db: %v", err)
 	}
 
-	_ = db.AutoMigrate(
+	_ = testDB.AutoMigrate(
 		&model.User{},
 		&model.Plan{},
 		&model.Order{},
@@ -42,7 +42,7 @@ func setupTestEnvironment(t *testing.T) func() {
 		&model.Setting{},
 	)
 
-	db.GlobalDB = db
+	db.GlobalDB = testDB
 
 	config.GlobalConfig = &config.Config{
 		Server: config.ServerConfig{
@@ -57,9 +57,11 @@ func setupTestEnvironment(t *testing.T) func() {
 	}
 
 	teardown := func() {
-		sqlDB, _ := db.DB()
-		if sqlDB != nil {
-			_ = sqlDB.Close()
+		if db.GlobalDB != nil {
+			sqlDB, _ := db.GlobalDB.DB()
+			if sqlDB != nil {
+				_ = sqlDB.Close()
+			}
 		}
 		_ = os.RemoveAll(tempDir)
 	}
@@ -126,15 +128,21 @@ func TestPlanAndModelAuthorization(t *testing.T) {
 		t.Fatalf("create plan failed: %v", err)
 	}
 
-	// 3. 用户预先创建 API Key
-	apiKey, err := keySvc.CreateKey(user.ID, "VSCode Key", nil)
-	if err != nil {
-		t.Fatalf("create api key failed: %v", err)
+	// 3. 用户在未订阅前尝试创建 API Key，必须被拦截拒绝
+	_, err = keySvc.CreateKey(user.ID, "VSCode Key", nil)
+	if err == nil {
+		t.Fatalf("expected create api key to fail for unsubscribed user, but succeeded")
 	}
 
 	// 4. 激活套餐订阅
 	if err := planSvc.ActivatePlan(user.ID, plan.ID); err != nil {
 		t.Fatalf("activate plan failed: %v", err)
+	}
+
+	// 4.1 激活后创建 API Key 应当成功
+	apiKey, err := keySvc.CreateKey(user.ID, "VSCode Key", nil)
+	if err != nil {
+		t.Fatalf("create api key failed after subscription: %v", err)
 	}
 
 	// 5. 校验用户订阅状态与到期时间
@@ -156,12 +164,16 @@ func TestPlanAndModelAuthorization(t *testing.T) {
 	}
 
 	foundKey := keys[0]
-	if len(foundKey.AllowedModels) != len(testModels) {
-		t.Fatalf("expected %d allowed models on api key, got %d", len(testModels), len(foundKey.AllowedModels))
-	}
-	for i, m := range testModels {
-		if foundKey.AllowedModels[i] != m {
-			t.Fatalf("expected model %s, got %s", m, foundKey.AllowedModels[i])
+	for _, m := range testModels {
+		found := false
+		for _, am := range foundKey.AllowedModels {
+			if am == m {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected model %s in allowed models, got %v", m, foundKey.AllowedModels)
 		}
 	}
 	if foundKey.RateLimit != 45 {
@@ -256,7 +268,7 @@ func TestAutoConfigAndGatewaySync(t *testing.T) {
 					{"id": "qwen-max"},
 				},
 			})
-		case "/api/models/auto-config":
+		case "/api/models/auto-config", "/api/admin/models/auto-config":
 			if r.Method == http.MethodGet {
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"success": true,

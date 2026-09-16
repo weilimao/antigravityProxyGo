@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"log"
+
 	"antigravity-web-platform/internal/model"
 	"antigravity-web-platform/internal/pkg/response"
 	"antigravity-web-platform/internal/service"
@@ -64,8 +66,10 @@ func (h *AdminMappingHandler) SetMappings(c *gin.Context) {
 		return
 	}
 
-	// 异步向现网 Go Relay 网关热下发
-	_ = h.syncService.SyncModelMappingsToGateway(req.Mappings)
+	// 向现网 Go Relay 网关热下发
+	if err := h.syncService.SyncModelMappingsToGateway(req.Mappings); err != nil {
+		log.Printf("⚠️ 同步模型映射至网关失败: %v", err)
+	}
 
 	response.Success(c, gin.H{
 		"message": "模型映射已保存并同步",
@@ -97,8 +101,7 @@ func (h *AdminMappingHandler) GetOtherGroups(c *gin.Context) {
 		response.Fail(c, 500, "获取其他组失败: "+err.Error())
 		return
 	}
-	// res 已经是 map[string]interface{}
-	c.JSON(200, res)
+	response.Success(c, res)
 }
 
 func (h *AdminMappingHandler) FetchChannelModels(c *gin.Context) {
@@ -114,7 +117,7 @@ func (h *AdminMappingHandler) FetchChannelModels(c *gin.Context) {
 		response.Fail(c, 500, "获取模型快照失败: "+err.Error())
 		return
 	}
-	c.JSON(200, res)
+	response.Success(c, res)
 }
 
 func (h *AdminMappingHandler) FetchOtherModels(c *gin.Context) {
@@ -130,6 +133,6 @@ func (h *AdminMappingHandler) FetchOtherModels(c *gin.Context) {
 		response.Fail(c, 500, "获取其他组模型快照失败: "+err.Error())
 		return
 	}
-	c.JSON(200, res)
+	response.Success(c, res)
 }
 

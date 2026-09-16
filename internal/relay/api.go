@@ -138,10 +138,20 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleSetUserAutoConfig(w, r)
 	case path == "/api/admin/users/sync" && r.Method == http.MethodPost:
 		h.handleAdminUserSync(w, r)
+	case path == "/api/admin/users/expire" && r.Method == http.MethodPost:
+		h.handleAdminUserExpire(w, r)
 	case path == "/api/admin/keys/create" && r.Method == http.MethodPost:
 		h.handleAdminKeyCreate(w, r)
 	case path == "/api/admin/keys/delete" && (r.Method == http.MethodDelete || r.Method == http.MethodPost):
 		h.handleAdminKeyDelete(w, r)
+	case path == "/api/admin/users/keys-usage" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+		h.handleAdminUserKeysUsage(w, r)
+	case path == "/api/admin/logs" && r.Method == http.MethodGet:
+		h.handleAdminLogs(w, r)
+	case path == "/api/admin/logs/detail" && r.Method == http.MethodGet:
+		h.handleAdminLogDetail(w, r)
+	case path == "/api/admin/logs/accounts" && r.Method == http.MethodGet:
+		h.handleAdminLogAccounts(w, r)
 	case path == "/api/admin/models/available" && r.Method == http.MethodGet:
 		h.handleAdminAvailableModels(w, r)
 	case path == "/api/admin/models/other-groups" && r.Method == http.MethodGet:
@@ -413,6 +423,18 @@ func writeModelNotAuthorized(w http.ResponseWriter, model string) {
 		"error": map[string]interface{}{
 			"type":    "model_not_authorized",
 			"message": fmt.Sprintf("model %q is not authorized for this API key", model),
+		},
+	})
+}
+
+// writeQuotaExceeded 写 429 配额超限响应, 供各号池 handler 在
+// CheckAPIKeyQuota 校验失败时统一回写(OpenAI/Anthropic/Claude Code 客户端均可规范识别)。
+func writeQuotaExceeded(w http.ResponseWriter, msg string) {
+	writeJSON(w, http.StatusTooManyRequests, map[string]interface{}{
+		"error": map[string]interface{}{
+			"type":    "insufficient_quota",
+			"code":    "insufficient_quota",
+			"message": msg,
 		},
 	})
 }

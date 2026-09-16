@@ -10,10 +10,14 @@ import (
 	"gorm.io/gorm"
 )
 
-type PlanService struct{}
+type PlanService struct {
+	bridge *RelayBridgeService
+}
 
 func NewPlanService() *PlanService {
-	return &PlanService{}
+	return &PlanService{
+		bridge: NewRelayBridgeService(),
+	}
 }
 
 func (s *PlanService) ListActivePlans() ([]model.Plan, error) {
@@ -58,12 +62,50 @@ func (s *PlanService) UpdatePlan(id uint, req *model.Plan) error {
 	existing.PriceCents = req.PriceCents
 	existing.DurationDays = req.DurationDays
 	existing.AllowedModels = req.AllowedModels
+	existing.AutoModels = req.AutoModels
 	existing.Quotas = req.Quotas
+	existing.TokenLimit = req.TokenLimit
 	existing.RateLimit = req.RateLimit
 	existing.SortOrder = req.SortOrder
 	existing.Status = req.Status
 
-	return database.DB.Save(&existing).Error
+	if err := database.DB.Save(&existing).Error; err != nil {
+		return err
+	}
+
+	// 级联同步更新: 绑定了此套餐的所有用户的已建 API Key 的 AllowedModels 与 RateLimit/TokenLimit
+	var users []model.User
+	if err := database.DB.Where("plan_id = ?", id).Find(&users).Error; err == nil && len(users) > 0 {
+		userIDs := make([]uint, 0, len(users))
+		userMap := make(map[uint]string, len(users))
+		for _, u := range users {
+			userIDs = append(userIDs, u.ID)
+			userMap[u.ID] = u.Username
+		}
+
+		var keys []model.APIKey
+		if err := database.DB.Where("user_id IN ?", userIDs).Find(&keys).Error; err == nil {
+			for _, k := range keys {
+				k.AllowedModels = existing.AllowedModels
+				if existing.RateLimit > 0 {
+					k.RateLimit = existing.RateLimit
+				}
+				if existing.TokenLimit > 0 {
+					k.LimitTokens = existing.TokenLimit
+				}
+				_ = database.DB.Save(&k).Error
+
+				// 桥接同步至 18444 Relay 网关 (支持幂等覆盖更新)
+				if s.bridge != nil {
+					if uname, ok := userMap[k.UserID]; ok && uname != "" {
+						_, _ = s.bridge.CreateKeyOnRelay(uname, k.Name, k.Key, existing.AllowedModels, existing.TokenLimit)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *PlanService) DeletePlan(id uint) error {
@@ -112,13 +154,24 @@ func (s *PlanService) ActivatePlanTx(tx *gorm.DB, userID uint, planID uint) erro
 		return err
 	}
 
+	// 桥接同步到期时间至 18444 Relay 网关
+	if s.bridge != nil {
+		_ = s.bridge.SyncUserExpireToRelay(user.Username, newExpire)
+	}
+
 	// 2. 自动更新用户现有所有 API Key 的 AllowedModels 为新套餐的模型白名单
 	var keys []model.APIKey
 	if err := tx.Where("user_id = ?", user.ID).Find(&keys).Error; err == nil {
 		for _, k := range keys {
 			k.AllowedModels = plan.AllowedModels
 			k.RateLimit = plan.RateLimit
+			k.LimitTokens = plan.TokenLimit
 			_ = tx.Save(&k).Error
+
+			// 桥接同步至 18444 Relay 网关
+			if s.bridge != nil {
+				_, _ = s.bridge.CreateKeyOnRelay(user.Username, k.Name, k.Key, plan.AllowedModels, plan.TokenLimit, newExpire)
+			}
 		}
 	}
 

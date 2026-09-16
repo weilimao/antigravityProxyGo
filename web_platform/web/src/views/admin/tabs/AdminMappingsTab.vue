@@ -90,25 +90,11 @@
             <span>获取{{ currentTab?.name || '号池' }}模型</span>
           </button>
 
-          <!-- 获取 Other 号池某个组模型 -->
-          <button
-            v-if="isOtherTab"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all border"
-            :class="fetching
-              ? 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed'
-              : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/20'"
-            @click="promptAndFetchOtherModels"
-            :disabled="fetching"
-          >
-            <span class="material-symbols-outlined text-[16px]" :class="{ 'animate-spin': fetching }">sync</span>
-            <span>获取指定组模型</span>
-          </button>
-
           <span v-if="fetchStatusMsg" class="text-[11px] text-slate-400 font-medium ml-1">
             {{ fetchStatusMsg }}
           </span>
 
-          <div v-if="isOtherTab" class="w-px h-4 bg-slate-700 mx-1"></div>
+          <div v-if="staleCount > 0" class="w-px h-4 bg-slate-700 mx-1"></div>
           
           <button
             v-if="staleCount > 0"
@@ -142,6 +128,56 @@
               <span class="material-symbols-outlined text-[16px]">chevron_right</span>
             </button>
           </div>
+        </div>
+      </div>
+
+      <!-- Other 号池专属：合格渠道最新模型【请求按钮】与视图切换栏 -->
+      <div v-if="isOtherTab" class="px-4 py-2.5 bg-slate-800/40 border-b border-slate-800 flex items-center gap-2 flex-wrap select-none">
+        <div class="flex items-center gap-1.5 text-[12px] font-bold text-purple-400 mr-2 shrink-0">
+          <span class="material-symbols-outlined text-[18px]">cloud_download</span>
+          <span>获取渠道最新模型:</span>
+        </div>
+
+        <!-- 各合格渠道的请求按钮 -->
+        <button
+          v-for="sg in otherSubGroups"
+          :key="sg.groupId"
+          type="button"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          :class="fetchingGroupId === sg.groupId
+            ? 'bg-purple-600 text-white border-purple-400 shadow-purple-500/25 shadow-md'
+            : (selectedOtherSubGroup === sg.groupId
+                ? 'bg-purple-500/20 text-purple-300 border-purple-500/50 hover:bg-purple-500/30'
+                : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:text-white hover:border-purple-500/40 hover:bg-slate-700/80')"
+          :disabled="fetching"
+          @click="fetchOtherGroupModels(sg.groupId, sg.groupName || sg.groupId)"
+          :title="`向 ${sg.groupName || sg.groupId} 上游 API 发送请求，拉取该渠道最新可用模型并自动注入映射`"
+        >
+          <span class="material-symbols-outlined text-[15px]" :class="{ 'animate-spin': fetchingGroupId === sg.groupId }">sync</span>
+          <span>获取 {{ sg.groupName || sg.groupId }}{{ sg.formats && sg.formats.length ? ` (${sg.formats.map((f: any) => f === 'anthropic' ? 'A' : 'O').join('/')})` : '' }}</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/25 text-purple-300 font-mono">({{ sg.count }})</span>
+        </button>
+
+        <span v-if="otherSubGroups.length === 0" class="text-[11px] text-slate-500 italic">
+          Other 号池暂无渠道配置，请先在桌面端账号池添加 Other 账号创建组
+        </span>
+
+        <!-- 右侧：查看全部视图 -->
+        <div class="ml-auto flex items-center gap-2">
+          <span class="text-[11px] text-slate-400 flex items-center gap-1">
+            <span class="material-symbols-outlined text-[14px]">tune</span>
+            <span>视图:</span>
+          </span>
+          <button
+            type="button"
+            class="px-2.5 py-1 rounded-md text-[11px] font-medium transition-all border cursor-pointer"
+            :class="selectedOtherSubGroup === 'all'
+              ? 'bg-purple-600 text-white border-purple-400 shadow-sm'
+              : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white hover:border-slate-600'"
+            @click="selectOtherSubGroup('all')"
+          >
+            全部显示 ({{ totalOtherMappingsCount }})
+          </button>
         </div>
       </div>
 
@@ -226,21 +262,15 @@ const {
   getRowModels,
   isStaleItem,
   isNewItem,
+  otherGroups,
+  otherSubGroups,
+  fetchingGroupId,
+  totalOtherMappingsCount,
+  selectedOtherSubGroup,
+  selectOtherSubGroup,
 } = useModelMapping();
 
 onMounted(() => {
   loadModelMappings();
 });
-
-function promptAndFetchOtherModels() {
-  if (activeTabId.value.startsWith('other/')) {
-    const groupId = activeTabId.value.substring(6);
-    fetchOtherGroupModels(groupId);
-    return;
-  }
-  const groupId = prompt('请输入你要获取的 Other 组的 ID (例如 siliconflow)：');
-  if (groupId) {
-    fetchOtherGroupModels(groupId.trim());
-  }
-}
 </script>

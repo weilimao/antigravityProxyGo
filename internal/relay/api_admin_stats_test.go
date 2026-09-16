@@ -69,7 +69,7 @@ func TestAPIHandler_AdminGlobalStats(t *testing.T) {
 		OutTokens: 50,
 	})
 
-	apiHandler := NewAPIHandler(authMgr, relayStatsMgr, nil, nil, "", settingsMgr)
+	apiHandler := NewAPIHandler(authMgr, relayStatsMgr, nil, nil, "", settingsMgr, nil)
 	apiHandler.SetGlobalStatsTracker(globalTracker)
 
 	// 严密清理测试沙箱

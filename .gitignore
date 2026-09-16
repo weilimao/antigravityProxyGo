@@ -29,3 +29,6 @@ preload.js
 
 # 本地 agent 工作产物
 .zcode/
+
+# 本地编译产物目录
+bin/

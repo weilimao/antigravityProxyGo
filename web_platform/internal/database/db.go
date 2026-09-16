@@ -50,6 +50,7 @@ func InitDB(cfg *config.Config) (*gorm.DB, error) {
 		&model.Order{},
 		&model.APIKey{},
 		&model.Setting{},
+		&model.RequestLog{},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to auto migrate tables: %w", err)
@@ -89,6 +90,7 @@ func seedData(db *gorm.DB) {
 				PriceCents:   3900, // 39.00 元
 				DurationDays: 30,
 				AllowedModels: []string{},
+				AutoModels:    []string{"claude-3-7-sonnet", "gemini-2.5-flash", "deepseek-chat"},
 				RateLimit: 30,
 				SortOrder: 1,
 				Status:    "active",
@@ -118,6 +120,7 @@ func seedData(db *gorm.DB) {
 				PriceCents:   9900, // 99.00 元
 				DurationDays: 30,
 				AllowedModels: []string{},
+				AutoModels:    []string{"claude-3-7-sonnet", "gemini-2.5-flash", "deepseek-chat", "gpt-4o"},
 				RateLimit: 60,
 				SortOrder: 2,
 				Status:    "active",

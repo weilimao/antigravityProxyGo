@@ -157,6 +157,11 @@ func (h *APICompatHandler) handleGrok(w http.ResponseWriter, r *http.Request, us
 			writeModelNotAuthorized(w, inModel)
 			return
 		}
+		if err := h.authMgr.userMgr.CheckAPIKeyQuota(userSession.UserID, userSession.APIKeyID, inModel); err != nil {
+			h.log("🚫 [Grok 中继] Token 配额超限拦截: %v (User: %s, KeyID: %s)", err, userSession.UserKey, userSession.APIKeyID)
+			writeQuotaExceeded(w, err.Error())
+			return
+		}
 	}
 
 	// Grok family 配额预扣额校验(独立于 gemini/claude, 与 handleNvidia 的 nvidiaQuotaCheck 同构):

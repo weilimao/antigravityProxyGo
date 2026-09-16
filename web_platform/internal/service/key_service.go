@@ -24,7 +24,38 @@ func NewKeyService() *KeyService {
 func (s *KeyService) ListKeys(userID uint) ([]model.APIKey, error) {
 	var keys []model.APIKey
 	err := database.DB.Where("user_id = ?", userID).Order("id desc").Find(&keys).Error
-	return keys, err
+	if err != nil {
+		return nil, err
+	}
+
+	// 若连接到 18444 Relay 网关，尝试同步最新使用量并持久化回写
+	if s.bridge != nil && len(keys) > 0 {
+		var user model.User
+		if errUser := database.DB.First(&user, userID).Error; errUser == nil && user.Username != "" {
+			usageMap, errUsage := s.bridge.FetchUserKeysUsage(user.Username)
+			if errUsage != nil {
+				fmt.Printf("⚠️ [ListKeys] FetchUserKeysUsage error for %s: %v\n", user.Username, errUsage)
+			} else {
+				fmt.Printf("✅ [ListKeys] FetchUserKeysUsage success for %s, map: %+v\n", user.Username, usageMap)
+				for i := range keys {
+					if val, ok := usageMap[keys[i].Key]; ok {
+						fmt.Printf("🔍 [ListKeys] Matched key %s, val=%d, current=%d\n", keys[i].Key, val, keys[i].UsedTokens)
+						if val != keys[i].UsedTokens {
+							keys[i].UsedTokens = val
+							errUp := database.DB.Model(&model.APIKey{}).Where("id = ?", keys[i].ID).Update("used_tokens", val).Error
+							fmt.Printf("📝 [ListKeys] Updated DB key %d used_tokens=%d, err=%v\n", keys[i].ID, val, errUp)
+						}
+					} else {
+						fmt.Printf("ℹ️ [ListKeys] Key %s not found in usageMap\n", keys[i].Key)
+					}
+				}
+			}
+		} else {
+			fmt.Printf("⚠️ [ListKeys] Find user %d failed: %v\n", userID, errUser)
+		}
+	}
+
+	return keys, nil
 }
 
 func (s *KeyService) CreateKey(userID uint, name string, customModels []string) (*model.APIKey, error) {
@@ -40,11 +71,17 @@ func (s *KeyService) CreateKey(userID uint, name string, customModels []string) 
 		return nil, errors.New("用户不存在")
 	}
 
+	// 核心商业门禁: 必须具有有效订阅才能创建 API 调用密钥 (管理员支持特权豁免)
+	if !user.IsSubscriptionActive() {
+		return nil, errors.New("无有效套餐订阅，请先订阅套餐后再创建 API 调用密钥")
+	}
+
 	// 1. 提取管理员在管理后台为当前套餐配置的模型白名单
 	var adminConfiguredModels []string
 	if user.Plan != nil && len(user.Plan.AllowedModels) > 0 {
 		adminConfiguredModels = user.Plan.AllowedModels
 	}
+
 
 	// 2. 核心授权准则: 只能使用 auto 和管理员在管理后台配置的模型
 	allowedSet := make(map[string]struct{}, len(adminConfiguredModels)+1)
@@ -84,9 +121,20 @@ func (s *KeyService) CreateKey(userID uint, name string, customModels []string) 
 	_, _ = rand.Read(randBytes)
 	candidateKeyStr := fmt.Sprintf("sk-ant-%s", hex.EncodeToString(randBytes))
 
+	var planTokenLimit int64
+	var planRateLimit int = 30
+	if user.Plan != nil {
+		if user.Plan.RateLimit > 0 {
+			planRateLimit = user.Plan.RateLimit
+		}
+		if user.Plan.TokenLimit > 0 {
+			planTokenLimit = user.Plan.TokenLimit
+		}
+	}
+
 	// 3. 桥接调用 18444 Relay 服务端生成/激活该 API Key
 	if s.bridge != nil {
-		relayKey, errRelay := s.bridge.CreateKeyOnRelay(user.Username, name, candidateKeyStr, finalAllowedModels)
+		relayKey, errRelay := s.bridge.CreateKeyOnRelay(user.Username, name, candidateKeyStr, finalAllowedModels, planTokenLimit)
 		if errRelay == nil && relayKey != nil && relayKey.Key != "" {
 			candidateKeyStr = relayKey.Key
 		}
@@ -97,11 +145,9 @@ func (s *KeyService) CreateKey(userID uint, name string, customModels []string) 
 		UserID:        userID,
 		Name:          name,
 		AllowedModels: finalAllowedModels,
-		RateLimit:     30,
+		RateLimit:     planRateLimit,
+		LimitTokens:   planTokenLimit,
 		Status:        "active",
-	}
-	if user.Plan != nil && user.Plan.RateLimit > 0 {
-		apiKey.RateLimit = user.Plan.RateLimit
 	}
 
 	if err := db.Create(&apiKey).Error; err != nil {

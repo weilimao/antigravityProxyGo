@@ -25,14 +25,14 @@ func setupAPITestEnvironment(t *testing.T) func() {
 	}
 	dbPath := filepath.Join(tempDir, "api_test.db")
 
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
+	testDB, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
 		t.Fatalf("failed to open test db: %v", err)
 	}
 
-	_ = db.AutoMigrate(
+	_ = testDB.AutoMigrate(
 		&model.User{},
 		&model.Plan{},
 		&model.Order{},
@@ -40,7 +40,7 @@ func setupAPITestEnvironment(t *testing.T) func() {
 		&model.Setting{},
 	)
 
-	db.GlobalDB = db
+	db.GlobalDB = testDB
 
 	config.GlobalConfig = &config.Config{
 		Server: config.ServerConfig{
@@ -53,7 +53,7 @@ func setupAPITestEnvironment(t *testing.T) func() {
 	}
 
 	teardown := func() {
-		sqlDB, _ := db.DB()
+		sqlDB, _ := testDB.DB()
 		if sqlDB != nil {
 			_ = sqlDB.Close()
 		}

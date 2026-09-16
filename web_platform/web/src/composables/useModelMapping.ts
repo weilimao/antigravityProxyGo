@@ -33,15 +33,12 @@ function makeMappingEntry(clientModel: string, targetModel: string, provider: st
 }
 
 function getMappingTab(m: ModelMappingEntry): string {
-  if (m.ownedBy) return m.ownedBy;
-  const modelName = (m.clientModel || m.targetModel || '').toLowerCase();
-  if (modelName.startsWith('other/')) {
-    const parts = modelName.split('/');
-    if (parts.length >= 3) {
-      return `other/${parts[1]}`;
-    }
-    return 'other';
+  if (m.ownedBy) {
+    if (m.ownedBy === 'other' || m.ownedBy.startsWith('other/')) return 'other';
+    return m.ownedBy;
   }
+  const modelName = (m.clientModel || m.targetModel || '').toLowerCase();
+  if (modelName.startsWith('other/')) return 'other';
   if (modelName.startsWith('nvidia/') || modelName.endsWith('-nemotron')) return 'nvidia';
   if (modelName.startsWith('grok/')) return 'grok';
   if (modelName.startsWith('deepseek')) return 'deepseek';
@@ -77,9 +74,58 @@ export function useModelMapping() {
     currentTab.value && (currentTab.value.targetProvider === 'other' || currentTab.value.id === 'other')
   );
 
-  const currentTabMappings = computed(() =>
-    allMappings.value.filter(m => getMappingTab(m) === activeTabId.value)
-  );
+  const selectedOtherSubGroup = ref<string>('all');
+  const fetchingGroupId = ref<string>('');
+
+  const otherSubGroups = computed(() => {
+    const map = new Map<string, { groupId: string; groupName: string; formats: string[]; count: number }>();
+    for (const g of otherGroups.value) {
+      const gid = g.groupId.toLowerCase();
+      map.set(gid, {
+        groupId: g.groupId,
+        groupName: g.groupName || g.groupId,
+        formats: g.formats || [],
+        count: 0,
+      });
+    }
+    for (const m of allMappings.value) {
+      if (getMappingTab(m) === 'other') {
+        const cm = (m.clientModel || '').trim();
+        const match = cm.match(/^other\/([^/]+)\//i);
+        const gid = match ? match[1].toLowerCase() : (m.targetGroupId || '').trim().toLowerCase();
+        if (gid) {
+          if (!map.has(gid)) {
+            map.set(gid, { groupId: gid, groupName: gid, formats: ['openai'], count: 0 });
+          }
+          map.get(gid)!.count++;
+        }
+      }
+    }
+    return Array.from(map.values());
+  });
+
+  const totalOtherMappingsCount = computed(() => {
+    return allMappings.value.filter(m => getMappingTab(m) === 'other').length;
+  });
+
+  const currentTabMappings = computed(() => {
+    const tabMappings = allMappings.value.filter(m => getMappingTab(m) === activeTabId.value);
+    if (isOtherTab.value && selectedOtherSubGroup.value && selectedOtherSubGroup.value !== 'all') {
+      const targetGid = selectedOtherSubGroup.value.toLowerCase();
+      return tabMappings.filter(m => {
+        const cm = (m.clientModel || '').trim().toLowerCase();
+        const match = cm.match(/^other\/([^/]+)\//i);
+        const gid = match ? match[1].toLowerCase() : (m.targetGroupId || '').trim().toLowerCase();
+        return gid === targetGid;
+      });
+    }
+    return tabMappings;
+  });
+
+  function selectOtherSubGroup(gid: string) {
+    selectedOtherSubGroup.value = gid;
+    currentPage.value = 1;
+  }
 
   const filteredMappings = computed(() => {
     const q = searchQuery.value.trim().toLowerCase();
@@ -204,22 +250,12 @@ export function useModelMapping() {
       poolTabs.value = [
         { id: 'google', name: 'Gemini (Google)', targetProvider: 'google' },
         { id: 'nvidia', name: 'NVIDIA 号池', targetProvider: 'nvidia' },
+        { id: 'other', name: 'Other 号池', targetProvider: 'other' },
         { id: 'gcp', name: '谷歌云 API', targetProvider: 'gcp' },
         { id: 'grok', name: 'Grok 号池', targetProvider: 'grok' },
       ];
 
       await refreshOtherGroups();
-      if (otherGroups.value.length === 0) {
-        poolTabs.value.splice(2, 0, { id: 'other', name: 'Other 号池', targetProvider: 'other' });
-      } else {
-        otherGroups.value.forEach((g, index) => {
-          poolTabs.value.splice(2 + index, 0, {
-            id: `other/${g.groupId}`,
-            name: `Other 号池 (${g.groupName || g.groupId})`,
-            targetProvider: 'other',
-          });
-        });
-      }
 
       const knownIds = new Set(poolTabs.value.map(t => t.id));
       allMappings.value.forEach(m => {
@@ -245,16 +281,20 @@ export function useModelMapping() {
   async function refreshOtherGroups() {
     try {
       const res = await mappingApi.getOtherGroups();
-      if (res && res.success && Array.isArray(res.groups)) {
-        otherGroups.value = res.groups.map(g => ({
+      const groupList = (res && res.groups && Array.isArray(res.groups)) ? res.groups : (Array.isArray(res) ? res : []);
+      if (groupList.length > 0) {
+        otherGroups.value = groupList.map((g: any) => ({
           groupId: String(g.groupId || g.groupID || g.id || ''),
           groupName: String(g.groupName || g.groupId || ''),
-        })).filter(g => g.groupId);
+          formats: Array.isArray(g.formats) ? g.formats : [],
+          accountCount: Number(g.accountCount) || 0,
+          enabledCount: Number(g.enabledCount) || 0,
+        })).filter((g: any) => g.groupId);
       } else {
         otherGroups.value = [];
       }
     } catch (e) {
-      console.warn('[useModelMapping] Failed to fetch other groups:', e);
+      console.warn('[useModelMapping] Failed to fetch other groups from gateway:', e);
       otherGroups.value = [];
     }
   }
@@ -300,15 +340,20 @@ export function useModelMapping() {
         fetchStatusMsg.value = `✅ 已获取 ${res.models.length} 个模型${newCount > 0 ? ` · 新增 ${newCount}` : ''}`;
 
         const provider = (tab.targetProvider || tab.id || '').trim();
+        const tabId = tab.id;
         const existingClientSet = new Set<string>();
         for (const m of allMappings.value) {
           const cm = (m.clientModel || '').trim();
           if (cm) existingClientSet.add(cm.toLowerCase());
         }
+        // 按当前 Tab 作用域去重:仅收集本 Tab 已存在的上游模型名,
+        // 避免全局 targetModel 去重误伤跨号池同名模型(不同号池上游可提供同名模型)。
         const existingTargetSet = new Set<string>();
         for (const m of allMappings.value) {
-          const tm = (m.targetModel || '').trim();
-          if (tm) existingTargetSet.add(tm.toLowerCase());
+          if (getMappingTab(m) === tabId) {
+            const tm = (m.targetModel || '').trim();
+            if (tm) existingTargetSet.add(tm.toLowerCase());
+          }
         }
         const newEntries: ModelMappingEntry[] = [];
         for (const modelRaw of res.models) {
@@ -317,10 +362,14 @@ export function useModelMapping() {
           if (existingTargetSet.has(model.toLowerCase())) continue;
           const isGoogle = isGoogleProviderKind(provider);
           if (isGoogle) {
-            newEntries.push(makeMappingEntry(model, model, provider, true));
+            if (!existingClientSet.has(model.toLowerCase())) {
+              newEntries.push(makeMappingEntry(model, model, provider, true));
+              existingClientSet.add(model.toLowerCase());
+            }
             const prefixed = `${provider}/${model}`;
             if (!existingClientSet.has(prefixed.toLowerCase())) {
               newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+              existingClientSet.add(prefixed.toLowerCase());
             }
           } else {
             const prefixed = `${provider}/${model}`;
@@ -351,9 +400,12 @@ export function useModelMapping() {
     }
   }
 
-  async function fetchOtherGroupModels(groupId: string) {
+  async function fetchOtherGroupModels(groupId: string, groupName?: string) {
     if (!groupId) return;
     fetching.value = true;
+    fetchingGroupId.value = groupId;
+    const displayName = groupName || groupId;
+    fetchStatusMsg.value = `正在拉取 [${displayName}] 上游模型快照...`;
     
     try {
       const res = await mappingApi.fetchOtherGroupModels(groupId);
@@ -376,7 +428,8 @@ export function useModelMapping() {
           [grpKey]: buildLiveSetLower(res.models),
         };
         const newCount = channelAddedLower.value[grpKey].size;
-        fetchStatusMsg.value = `✅ 已获取 ${res.models.length} 个模型${newCount > 0 ? ` · 新增 ${newCount}` : ''}`;
+        fetchStatusMsg.value = `✅ [${displayName}] 已获取 ${res.models.length} 个最新模型${newCount > 0 ? ` · 新增 ${newCount} 个映射` : ''}`;
+        selectedOtherSubGroup.value = groupId;
 
         const provider = 'other';
         const existingClientSet = new Set<string>();
@@ -413,18 +466,19 @@ export function useModelMapping() {
             ne._rowKey = nextRowKey();
             allMappings.value.push(ne);
           }
-          currentPage.value = totalPages.value;
+          currentPage.value = 1;
         }
       } else if (res && res.allowManualInput) {
-        fetchStatusMsg.value = `⚠️ 上游暂不支持模型列表,请手动填写`;
+        fetchStatusMsg.value = `⚠️ [${displayName}] 上游暂不支持模型列表,请手动填写(前缀 other/${groupId}/)`;
       } else {
-        fetchStatusMsg.value = `❌ 获取失败: ${res?.error || '网络超时'}`;
+        fetchStatusMsg.value = `❌ [${displayName}] 获取失败: ${res?.error || '网络超时或上游未响应'}`;
       }
     } catch (e: any) {
       console.error('[useModelMapping] Fetch other group models error:', e);
-      fetchStatusMsg.value = `❌ 获取出错`;
+      fetchStatusMsg.value = `❌ [${displayName}] 获取出错: ${e?.message || '网络异常'}`;
     } finally {
       fetching.value = false;
+      fetchingGroupId.value = '';
     }
   }
 
@@ -432,6 +486,7 @@ export function useModelMapping() {
     activeTabId.value = tabId;
     searchQuery.value = '';
     currentPage.value = 1;
+    selectedOtherSubGroup.value = 'all';
   }
 
   function addTab() {
@@ -549,14 +604,10 @@ export function useModelMapping() {
 
     try {
       const res = await mappingApi.setMappings(mappingsToSave);
-      if (res && res.code === 200) {
-        fetchStatusMsg.value = '✅ 保存成功';
-      } else {
-        fetchStatusMsg.value = `❌ 保存失败: ${res.message || ''}`;
-      }
-    } catch (err) {
+      fetchStatusMsg.value = `✅ ${res?.message || '模型映射已保存并同步'}`;
+    } catch (err: any) {
       console.error('[useModelMapping] Save error:', err);
-      fetchStatusMsg.value = '❌ 保存出错';
+      fetchStatusMsg.value = `❌ 保存失败: ${err?.message || '保存出错'}`;
     } finally {
       saving.value = false;
     }
@@ -652,5 +703,12 @@ export function useModelMapping() {
     isNewItem,
     ensureOtherEntryGroupId,
     hasFetchedStaleBasis,
+    otherGroups,
+    otherSubGroups,
+    fetchingGroupId,
+    totalOtherMappingsCount,
+    selectedOtherSubGroup,
+    selectOtherSubGroup,
+    refreshOtherGroups,
   };
 }

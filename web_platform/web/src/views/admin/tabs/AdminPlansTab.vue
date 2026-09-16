@@ -21,6 +21,7 @@
               <th>售价 (元)</th>
               <th>有效时长</th>
               <th>包含模型范围 (Allowed Models)</th>
+              <th>Token 限制</th>
               <th>限速 (RPM)</th>
               <th>状态</th>
               <th class="text-right">操作</th>
@@ -45,14 +46,35 @@
                   <span
                     v-for="m in (plan.allowedModels || [])"
                     :key="m"
-                    class="badge badge-cyan text-10px font-mono"
+                    class="badge text-10px font-mono"
+                    :class="m === 'auto' ? 'badge-amber font-bold' : 'badge-cyan'"
                   >
-                    {{ m }}
+                    {{ m === 'auto' ? '⚡ 支持 auto 模型' : m }}
                   </span>
                   <span v-if="!plan.allowedModels || plan.allowedModels.length === 0" class="text-11px text-slate-500">
                     全量公共模型
                   </span>
                 </div>
+                <!-- 展示该套餐配置的 Auto 包含模型说明 -->
+                <div v-if="(plan.allowedModels || []).includes('auto') && plan.autoModels && plan.autoModels.length > 0" class="mt-1.5 pt-1.5 border-t border-slate-800/80">
+                  <div class="text-[10px] text-amber-300/90 font-semibold flex items-center gap-1 mb-1">
+                    <span class="material-symbols-outlined text-[12px] text-amber-400">bolt</span>
+                    <span>Auto 包含模型说明 ({{ plan.autoModels.length }}款):</span>
+                  </div>
+                  <div class="flex flex-wrap gap-1">
+                    <span
+                      v-for="am in plan.autoModels"
+                      :key="am"
+                      class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-500/15 text-amber-200 border border-amber-500/30"
+                    >
+                      {{ am }}
+                    </span>
+                  </div>
+                </div>
+              </td>
+              <td class="font-mono text-xs">
+                <span v-if="!plan.tokenLimit || plan.tokenLimit <= 0" class="badge badge-emerald">不限额度</span>
+                <span v-else class="text-indigo-300 font-semibold">{{ formatTokenDisplay(plan.tokenLimit) }}</span>
               </td>
               <td class="font-mono text-xs">{{ plan.rateLimit }}</td>
               <td>
@@ -94,10 +116,17 @@
             </div>
           </div>
 
-          <div class="grid grid-cols-3 gap-4">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div>
               <label class="block text-slate-300 font-semibold mb-1">有效天数 (0=永久)</label>
               <input v-model.number="form.durationDays" type="number" required class="input-dark w-full" placeholder="30" />
+            </div>
+            <div>
+              <label class="block text-slate-300 font-semibold mb-1">Token 限制 (0=不限)</label>
+              <input v-model.number="form.tokenLimit" type="number" min="0" step="10000" class="input-dark w-full" placeholder="0 表示不限制" />
+              <div class="text-[10px] text-slate-400 mt-0.5 truncate">
+                {{ form.tokenLimit > 0 ? `约 ${formatTokenDisplay(form.tokenLimit)} Tokens` : '无限制' }}
+              </div>
             </div>
             <div>
               <label class="block text-slate-300 font-semibold mb-1">限速 RPM (次/分)</label>
@@ -137,38 +166,51 @@
               @update:model-ids="(val) => form.allowedModels = val"
             />
 
-            <!-- 若已选 auto，实时联动回显当前服务端/系统 Auto 竞速绑定的底层候选模型清单 -->
-            <div v-if="hasAutoSelected" class="mb-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/25 transition-all">
-              <div class="flex items-center justify-between gap-2 mb-2">
-                <span class="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                  <span class="material-symbols-outlined text-16px text-amber-400">bolt</span>
-                  <span>Auto 跨号池首字竞速包含模型 ({{ autoCandidateModels.length }} 个)</span>
-                </span>
-                <button
-                  v-if="autoCandidateModels.length > 0"
-                  type="button"
-                  class="text-[11px] font-semibold px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 cursor-pointer flex items-center gap-1 transition-all"
-                  @click="importAutoCandidates"
-                  title="一键将 Auto 关联的所有候选大模型全部追加到本套餐白名单中"
-                >
-                  <span class="material-symbols-outlined text-13px">playlist_add</span>
-                  <span>一键导入全部候选模型到本套餐</span>
-                </button>
+            <!-- 若已选 auto，配置该套餐专属的 Auto 包含模型说明清单（支持自主多选组件勾选、输入或从系统候选一键填入） -->
+            <div v-if="hasAutoSelected" class="p-3.5 rounded-xl bg-gradient-to-b from-amber-500/10 to-amber-500/5 border border-amber-500/30 flex flex-col gap-2.5 transition-all shadow-sm">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-1.5">
+                  <span class="material-symbols-outlined text-18px text-amber-400">bolt</span>
+                  <label class="text-xs font-bold text-amber-300">
+                    Auto 实际包含模型说明 (已配置 {{ form.autoModels.length }} 款)
+                  </label>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button
+                    v-if="autoCandidateModels.length > 0"
+                    type="button"
+                    class="text-[11px] font-semibold px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 cursor-pointer flex items-center gap-1 transition-all"
+                    @click="importSystemAutoCandidates"
+                    title="将系统全局 Auto 候选模型一键带入本套餐说明"
+                  >
+                    <span class="material-symbols-outlined text-13px">download</span>
+                    <span>一键填入系统候选 ({{ autoCandidateModels.length }}个)</span>
+                  </button>
+                  <button
+                    v-if="form.autoModels.length > 0"
+                    type="button"
+                    class="text-[11px] text-slate-400 hover:text-rose-300 cursor-pointer flex items-center gap-0.5"
+                    @click="form.autoModels = []"
+                    title="清空 Auto 包含模型说明"
+                  >
+                    <span class="material-symbols-outlined text-13px">clear_all</span>
+                    <span>清空</span>
+                  </button>
+                </div>
               </div>
-              <div v-if="autoCandidateModels.length > 0" class="flex flex-wrap gap-1.5">
-                <span
-                  v-for="m in autoCandidateModels"
-                  :key="m"
-                  class="px-2 py-0.5 rounded text-[11px] font-mono bg-black/50 text-amber-200 border border-amber-500/30 flex items-center gap-1"
-                >
-                  <span class="material-symbols-outlined text-11px text-amber-400">check_circle</span>
-                  <span>{{ m }}</span>
-                </span>
-              </div>
-              <div v-else class="text-[11px] text-amber-200/70 italic flex items-center gap-1">
-                <span class="material-symbols-outlined text-13px">info</span>
-                <span>系统暂未配置 Auto 候选模型，可前往上方「Auto竞速」Tab 添加。</span>
-              </div>
+              <p class="text-[11px] text-amber-200/70">
+                可自主搜索勾选或回车添加模型；保存后将在购买页作为此套餐的 Auto 包含模型明确告知用户。
+              </p>
+
+              <!-- Auto 包含模型的多选组件 -->
+              <ModelSearchSelect
+                :multiple="true"
+                :model-ids="form.autoModels"
+                :options="availableModelsForAuto"
+                :allow-custom="true"
+                placeholder="搜索并多选 Auto 包含的具体模型，或键盘输入自定义模型按回车添加..."
+                @update:model-ids="(val) => form.autoModels = val"
+              />
             </div>
 
           </div>
@@ -200,12 +242,24 @@ const form = reactive({
   name: '',
   description: '',
   durationDays: 30,
+  tokenLimit: 0,
   rateLimit: 30,
   status: 'active',
   allowedModels: [] as string[],
+  autoModels: [] as string[],
 })
 
+function formatTokenDisplay(val: number): string {
+  if (!val || val <= 0) return '不限额度'
+  if (val >= 100000000) return (val / 100000000).toFixed(val % 100000000 === 0 ? 0 : 2) + ' 亿'
+  if (val >= 10000) return (val / 10000).toFixed(val % 10000 === 0 ? 0 : 1) + ' 万'
+  if (val >= 1000000) return (val / 1000000).toFixed(1) + 'M'
+  if (val >= 1000) return (val / 1000).toFixed(0) + 'K'
+  return val.toLocaleString()
+}
+
 const hasAutoSelected = computed(() => form.allowedModels.includes('auto'))
+const availableModelsForAuto = computed(() => availableModels.value.filter(m => m !== 'auto'))
 const autoCandidateModels = computed(() => {
   if (!autoConfig.value) return []
   return Array.isArray(autoConfig.value.candidateModels) ? autoConfig.value.candidateModels : []
@@ -252,12 +306,14 @@ async function fetchAutoConfig() {
   }
 }
 
-function importAutoCandidates() {
+function importSystemAutoCandidates() {
+  const currentSet = new Set(form.autoModels)
   for (const m of autoCandidateModels.value) {
-    if (!form.allowedModels.includes(m)) {
-      form.allowedModels.push(m)
+    if (m && m !== 'auto') {
+      currentSet.add(m)
     }
   }
+  form.autoModels = Array.from(currentSet)
 }
 
 function openCreateModal() {
@@ -267,9 +323,11 @@ function openCreateModal() {
   form.description = ''
   formPriceYuan.value = 39
   form.durationDays = 30
+  form.tokenLimit = 0
   form.rateLimit = 30
   form.status = 'active'
   form.allowedModels = []
+  form.autoModels = []
   showModal.value = true
 }
 
@@ -280,9 +338,11 @@ function openEditModal(plan: any) {
   form.description = plan.description
   formPriceYuan.value = plan.priceCents / 100
   form.durationDays = plan.durationDays
+  form.tokenLimit = plan.tokenLimit || 0
   form.rateLimit = plan.rateLimit
   form.status = plan.status
   form.allowedModels = [...(plan.allowedModels || [])]
+  form.autoModels = [...(plan.autoModels || [])]
   showModal.value = true
 }
 
