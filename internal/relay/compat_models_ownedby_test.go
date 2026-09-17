@@ -72,3 +72,70 @@ func TestHandleModels_DynamicOwnedBy(t *testing.T) {
 		t.Errorf("Expose=false model must not appear in list, but it did")
 	}
 }
+
+// TestHandleModels_GatewayAPIKey_StripOwnedBy 验证在商业化网关系统 API Key 调用下，
+// 返回的模型列表 owned_by 自动抹除为空，不暴露内部渠道标记；原生调用保留。
+func TestHandleModels_GatewayAPIKey_StripOwnedBy(t *testing.T) {
+	h := &APICompatHandler{
+		settingsMgr: &stubOwnedBySettings{
+			mappings: []settings.ModelMappingEntry{
+				{ClientModel: "glm-5.3-flash", TargetModel: "z-ai/glm-5.3-flash", Expose: true, OwnedBy: "nvidia"},
+				{ClientModel: "deepseek-v4.1-flash", TargetModel: "deepseek-v4.1-flash", Expose: true, OwnedBy: "workbuddy"},
+			},
+		},
+		logFn: func(string) {},
+	}
+
+	// 1. 携带网关系统 API Key Session 访问
+	reqGateway := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	wGateway := httptest.NewRecorder()
+	session := &RelaySession{UserID: "u1", APIKeyID: "key-123"}
+	h.handleModels(wGateway, reqGateway, session)
+
+	if wGateway.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", wGateway.Code)
+	}
+
+	var respGateway struct {
+		Data []struct {
+			ID      string `json:"id"`
+			OwnedBy string `json:"owned_by"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wGateway.Body.Bytes(), &respGateway); err != nil {
+		t.Fatalf("parse gateway response: %v", err)
+	}
+
+	for _, m := range respGateway.Data {
+		if m.OwnedBy != "" {
+			t.Errorf("网关API Key场景下模型 %s 的 owned_by 期望为空，得到 %q", m.ID, m.OwnedBy)
+		}
+	}
+
+	// 2. 原生单机场景（未携带网关 API Key）访问，保留原有 owned_by
+	reqNative := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	wNative := httptest.NewRecorder()
+	h.handleModels(wNative, reqNative)
+
+	var respNative struct {
+		Data []struct {
+			ID      string `json:"id"`
+			OwnedBy string `json:"owned_by"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wNative.Body.Bytes(), &respNative); err != nil {
+		t.Fatalf("parse native response: %v", err)
+	}
+
+	byID := map[string]string{}
+	for _, m := range respNative.Data {
+		byID[m.ID] = m.OwnedBy
+	}
+	if byID["glm-5.3-flash"] != "nvidia" {
+		t.Errorf("原生调用期望 glm-5.3-flash 保持 nvidia，得到 %q", byID["glm-5.3-flash"])
+	}
+	if byID["deepseek-v4.1-flash"] != "workbuddy" {
+		t.Errorf("原生调用期望 deepseek-v4.1-flash 保持 workbuddy，得到 %q", byID["deepseek-v4.1-flash"])
+	}
+}
+

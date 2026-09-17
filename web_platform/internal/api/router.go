@@ -2,6 +2,9 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"antigravity-web-platform/internal/api/admin"
 	"antigravity-web-platform/internal/api/middleware"
@@ -9,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func SetupRouter() *gin.Engine {
+func SetupRouter(distDir ...string) *gin.Engine {
 	r := gin.Default()
 	r.Use(middleware.Cors())
 
@@ -163,6 +166,42 @@ func SetupRouter() *gin.Engine {
 		adminGroup.GET("/logs", adminLogH.ListAdminLogs)
 		adminGroup.GET("/logs/detail", adminLogH.GetAdminLogDetail)
 		adminGroup.GET("/logs/accounts", adminLogH.GetLogAccounts)
+	}
+
+	// 静态文件与 SPA 路由支持 (仅当 distDir 指定且 index.html 存在时挂载)
+	var staticPath string
+	if len(distDir) > 0 && distDir[0] != "" {
+		staticPath = distDir[0]
+	} else {
+		staticPath = "dist"
+	}
+
+	indexPath := filepath.Join(staticPath, "index.html")
+	if info, err := os.Stat(indexPath); err == nil && !info.IsDir() {
+		// 托管 assets 等静态子目录
+		assetsDir := filepath.Join(staticPath, "assets")
+		if aInfo, aErr := os.Stat(assetsDir); aErr == nil && aInfo.IsDir() {
+			r.Static("/assets", assetsDir)
+		}
+
+		// 根目录静态文件与 SPA 回退处理
+		r.NoRoute(func(c *gin.Context) {
+			path := c.Request.URL.Path
+			if strings.HasPrefix(path, "/api/") {
+				c.JSON(http.StatusNotFound, gin.H{"error": "api route not found"})
+				return
+			}
+			targetFile := filepath.Join(staticPath, filepath.Clean(path))
+			if fInfo, fErr := os.Stat(targetFile); fErr == nil && !fInfo.IsDir() {
+				c.File(targetFile)
+				return
+			}
+			// SPA 前端路由回退 (强行禁用 HTML 缓存，保证发版后客户端立即拉取最新入口与JS/CSS)
+			c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+			c.Header("Pragma", "no-cache")
+			c.Header("Expires", "0")
+			c.File(indexPath)
+		})
 	}
 
 	return r

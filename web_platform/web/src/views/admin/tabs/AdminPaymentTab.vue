@@ -350,7 +350,17 @@
                   <span class="material-symbols-outlined text-14px">content_copy</span>
                 </button>
               </div>
-              <p class="text-11px text-slate-400 mt-1">B 站服务器收到易支付付款成功后，将在后台主动向 A 站发起的 POST 回调接口（默认 {site_url}/api/v1/pay/notify/relay）。</p>
+              <p class="text-11px text-slate-400 mt-1">B 站服务器收到易支付付款成功后，将在后台主动向 A 站发起的 POST 回调接口。</p>
+              <div class="flex items-center gap-2 mt-1.5 flex-wrap">
+                <span class="text-11px text-slate-500">快捷预设:</span>
+                <button type="button" class="text-10px px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 cursor-pointer flex items-center gap-1" @click="form.relayNotifyUrl = 'http://172.18.0.1:8100/api/v1/pay/notify/relay'">
+                  <span class="material-symbols-outlined text-12px">bolt</span>
+                  <span>同机容器直连 (推荐，免走公网且绕过CF拦截)</span>
+                </button>
+                <button type="button" class="text-10px px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 cursor-pointer" @click="form.relayNotifyUrl = defaultRelayNotifyUrl">
+                  🌐 域名公网回调
+                </button>
+              </div>
               
               <!-- 本地调试 vs 线上生产 重点说明 -->
               <div class="mt-2 space-y-1.5 text-10px">
@@ -550,14 +560,14 @@ function applyTemplate(type: 'local_tunnel' | 'production') {
     feedbackMsg.value = '已代入本地内网穿透联调示例，请将域名替换为您自己的穿透域名并保存！'
   } else if (type === 'production') {
     form.payProvider = 'epay'
-    form.siteUrl = 'https://api.yourdomain.com'
-    form.payReturnUrl = 'https://api.yourdomain.com/#/dashboard'
+    form.siteUrl = 'https://maxapi.crosslinkdev.online'
+    form.payReturnUrl = 'https://maxapi.crosslinkdev.online/#/dashboard'
     form.relayUrl = 'https://crosslinkdev.online/api/v1/relay/create'
     form.relayCheckoutBase = 'https://crosslinkdev.online'
     form.relaySecret = 'relay_shared_secret_between_a_and_b_station'
-    form.relayNotifyUrl = 'https://api.yourdomain.com/api/v1/pay/notify/relay'
+    form.relayNotifyUrl = 'http://172.18.0.1:8100/api/v1/pay/notify/relay'
     feedbackSuccess.value = true
-    feedbackMsg.value = '已代入线上生产标准规范模板，请将域名和 Relay Secret 修改为您正式值并保存！'
+    feedbackMsg.value = '已代入线上生产标准规范模板（含同机容器直连通知地址），请核对后点击保存！'
   }
 }
 

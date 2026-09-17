@@ -68,6 +68,15 @@ func (h *APICompatHandler) handleModels(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
+	// 针对商业化网关系统授权发放的 API Key，对外暴露模型列表时抹除底层号池标记 (OwnedBy 设为空)，
+	// 避免外部客户端（如 CC-Switch 等）将内部号池名称（google、nvidia、workbuddy 等）作为分组标题展现。
+	// 原有内部或单机链路（未携带商业化网关 API Key）完整保持原有号池归属不变。
+	if sess != nil && sess.APIKeyID != "" {
+		for i := range exposed {
+			exposed[i].OwnedBy = ""
+		}
+	}
+
 	if isAnthropic {
 		var data []map[string]interface{}
 		for _, m := range exposed {

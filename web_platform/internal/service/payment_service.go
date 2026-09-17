@@ -465,9 +465,9 @@ func (s *PaymentService) HandleRelayWebhook(params map[string]interface{}) error
 		}
 
 		now := time.Now()
-		// 3. 原子状态更新: 仅当 status == 'pending' 时更新为 'paid'
+		// 3. 原子状态更新: 允许 pending 或因网络延迟被误置为 cancelled 的订单在收到真实付款后自动挽回流转为 'paid'
 		res := tx.Model(&model.Order{}).
-			Where("order_no = ? AND status = ?", outTradeNo, "pending").
+			Where("order_no = ? AND status IN ('pending', 'cancelled')", outTradeNo).
 			Updates(map[string]interface{}{
 				"status":  "paid",
 				"paid_at": now,
@@ -476,7 +476,7 @@ func (s *PaymentService) HandleRelayWebhook(params map[string]interface{}) error
 			return res.Error
 		}
 		if res.RowsAffected == 0 {
-			// 说明并发回调已处理或订单已被取消，安全幂等退出
+			// 说明并发回调已处理，安全幂等退出
 			return nil
 		}
 
@@ -536,9 +536,9 @@ func (s *PaymentService) HandleEpayWebhook(params map[string]interface{}) error 
 		}
 
 		now := time.Now()
-		// 3. 原子状态更新: 仅当 status == 'pending' 时更新为 'paid'
+		// 3. 原子状态更新: 允许 pending 或因超时/延迟被取消的订单收到真实付款后自动履约
 		res := tx.Model(&model.Order{}).
-			Where("order_no = ? AND status = ?", outTradeNo, "pending").
+			Where("order_no = ? AND status IN ('pending', 'cancelled')", outTradeNo).
 			Updates(map[string]interface{}{
 				"status":  "paid",
 				"paid_at": now,
@@ -547,7 +547,7 @@ func (s *PaymentService) HandleEpayWebhook(params map[string]interface{}) error 
 			return res.Error
 		}
 		if res.RowsAffected == 0 {
-			// 说明并发回调已处理或订单已被取消，安全幂等退出
+			// 说明并发回调已处理，安全幂等退出
 			return nil
 		}
 

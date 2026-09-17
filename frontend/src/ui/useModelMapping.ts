@@ -591,19 +591,6 @@ export function useModelMapping() {
 
     const mappingsToSave: ModelMappingEntry[] = [];
     for (const m of filtered) {
-      const provider = (m.targetProvider || '').trim();
-      const cm = (m.clientModel || '').trim();
-      const tm = (m.targetModel || '').trim();
-      if (provider === 'other') {
-        if (cm === tm) {
-          const gid = (m.targetGroupId || '').trim();
-          if (gid) {
-            m.clientModel = `other/${gid}/${cm}`;
-          }
-        }
-      } else if (!isGoogleProviderKind(provider) && cm === tm && !cm.toLowerCase().startsWith(`${provider.toLowerCase()}/`)) {
-        m.clientModel = `${provider}/${cm}`;
-      }
       // _rowKey 是前端行渲染专用字段,剔除后再落盘。
       const { _rowKey, ...entryWithoutRowKey } = m;
       mappingsToSave.push(entryWithoutRowKey);

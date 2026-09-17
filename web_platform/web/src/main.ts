@@ -8,3 +8,5 @@ const app = createApp(App)
 app.use(pinia)
 app.use(router)
 app.mount('#app')
+// Version: 1.0.1-b2026091801
+

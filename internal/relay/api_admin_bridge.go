@@ -471,7 +471,14 @@ func (h *APIHandler) handleAdminFetchChannelModels(w http.ResponseWriter, r *htt
 		writeJSON(w, http.StatusForbidden, map[string]interface{}{"error": "permission denied: admin only"})
 		return
 	}
-	channel := r.URL.Query().Get("channel")
+	channel := strings.TrimSpace(r.URL.Query().Get("channel"))
+	if channel == "" && r.Body != nil {
+		var body struct {
+			Channel string `json:"channel"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		channel = strings.TrimSpace(body.Channel)
+	}
 	if channel == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "missing channel parameter"})
 		return
@@ -521,15 +528,16 @@ func (h *APIHandler) handleAdminFetchOtherGroupModels(w http.ResponseWriter, r *
 		return
 	}
 	
-	var req struct {
-		GroupId string `json:"groupId"`
+	groupId := strings.TrimSpace(r.URL.Query().Get("groupId"))
+	if groupId == "" && r.Body != nil {
+		var req struct {
+			GroupId string `json:"groupId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		groupId = strings.TrimSpace(req.GroupId)
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "invalid request body"})
-		return
-	}
-	if req.GroupId == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "missing groupId"})
+	if groupId == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "missing groupId parameter"})
 		return
 	}
 
@@ -538,7 +546,7 @@ func (h *APIHandler) handleAdminFetchOtherGroupModels(w http.ResponseWriter, r *
 		return
 	}
 
-	models, err := modelfetch.FetchOtherGroupModels(h.accountMgr, req.GroupId, "", "")
+	models, err := modelfetch.FetchOtherGroupModels(h.accountMgr, groupId, "", "")
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"success": false, 

@@ -444,3 +444,37 @@ func TestWorkBuddy_OpenCode_EndToEnd_Thinking_And_Log(t *testing.T) {
 		t.Errorf("日志 ReasoningEffort 期望 max, 得到: %s", tracker.GetRecentRequestReasoningEffort())
 	}
 }
+
+func TestWorkBuddy_SanitizeMessages(t *testing.T) {
+	req := &OpenAIChatRequest{
+		Messages: []ChatMessage{
+			{
+				Role:    "system",
+				Content: "x-anthropic-billing-header: cc_version=2.1.220; cc_entrypoint=cli;\nYou are Claude Code, Anthropic's official CLI for Claude.\nYou are an interactive agent.",
+			},
+			{
+				Role:    "user",
+				Content: "Hello, Claude Code is awesome!",
+			},
+		},
+	}
+
+	sanitizeWorkBuddyMessages(req)
+
+	sys := req.Messages[0].Content
+	if strings.Contains(sys, "x-anthropic-billing-header") {
+		t.Errorf("billing header 未被剔除: %s", sys)
+	}
+	if strings.Contains(sys, "You are Claude Code, Anthropic's official CLI for Claude.") {
+		t.Errorf("Claude Code 身份描述未被替换: %s", sys)
+	}
+	if strings.Contains(sys, "Claude Code") {
+		t.Errorf("Claude Code 关键词残留: %s", sys)
+	}
+
+	userMsg := req.Messages[1].Content
+	if strings.Contains(userMsg, "Claude Code") {
+		t.Errorf("用户消息中的 Claude Code 关键词未被安全转换: %s", userMsg)
+	}
+}
+

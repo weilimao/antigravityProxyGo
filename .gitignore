@@ -33,5 +33,12 @@ preload.js
 # 本地 agent 工作产物
 .zcode/
 
-# 本地编译产物目录
+# 本地编译产物目录及可执行文件
 bin/
+antigravity-server
+antigravity-web-platform
+*.tar.gz
+*.zip
+
+# 生产环境配置（包含敏感密码）
+*.prod.yaml

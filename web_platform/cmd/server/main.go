@@ -47,12 +47,14 @@ func main() {
 	var (
 		configPath string
 		portFlag   string
+		distFlag   string
 	)
 
 	flag.StringVar(&configPath, "c", "config.yaml", "Path to configuration file")
 	flag.StringVar(&configPath, "config", "config.yaml", "Path to configuration file")
 	flag.StringVar(&portFlag, "p", "", "Server port override")
 	flag.StringVar(&portFlag, "port", "", "Server port override")
+	flag.StringVar(&distFlag, "dist", "dist", "Path to frontend dist directory")
 	flag.Parse()
 
 	// 1. 加载配置
@@ -85,7 +87,7 @@ func main() {
 
 	// 4. 构建路由
 	log.Println("[3/3] 正在注册 API 路由与启动监听...")
-	router := api.SetupRouter()
+	router := api.SetupRouter(distFlag)
 
 	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
 	srv := &http.Server{

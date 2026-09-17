@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -63,6 +64,31 @@ func ensureWorkBuddySystemPrompt(req *OpenAIChatRequest) {
 		})
 		newMessages = append(newMessages, req.Messages...)
 		req.Messages = newMessages
+	}
+}
+
+var reWorkBuddyBillingHeader = regexp.MustCompile(`(?i)x-anthropic-billing-header:[^\r\n]*[\r\n]*`)
+
+// sanitizeWorkBuddyMessages 清洗触碰 WorkBuddy 安全策略（11128）的客户端特有标识（如 Claude Code CLI、计费头等）。
+func sanitizeWorkBuddyMessages(req *OpenAIChatRequest) {
+	if req == nil {
+		return
+	}
+	for i := range req.Messages {
+		content := req.Messages[i].Content
+		if content == "" {
+			continue
+		}
+		if reWorkBuddyBillingHeader.MatchString(content) {
+			content = reWorkBuddyBillingHeader.ReplaceAllString(content, "")
+		}
+		if strings.Contains(content, "You are Claude Code, Anthropic's official CLI for Claude.") {
+			content = strings.ReplaceAll(content, "You are Claude Code, Anthropic's official CLI for Claude.", "You are an interactive AI assistant helping with coding.")
+		}
+		if strings.Contains(content, "Claude Code") {
+			content = strings.ReplaceAll(content, "Claude Code", "AI Assistant")
+		}
+		req.Messages[i].Content = content
 	}
 }
 
@@ -368,6 +394,9 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 		// 硬性限制二：首条消息强制注入 System Prompt
 		ensureWorkBuddySystemPrompt(upstreamReq)
 
+		// 清洗触碰 WorkBuddy 安全策略（11128）的客户端特有标识（如 Claude Code CLI、计费头等）
+		sanitizeWorkBuddyMessages(upstreamReq)
+
 		// 硬性限制一：向 WorkBuddy 上游强制发送 stream: true
 		upstreamReq.Stream = true
 		if upstreamReq.StreamOptions == nil {
@@ -439,6 +468,16 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 			skippedAccounts[poolAccount.ID] = true
 			h.accountMgr.ReleaseAccount(poolAccount.ID)
 			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			errBytes, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			h.log("❌ [WorkBuddy 中继] 上游返回异常状态码 %d (%s): %s", resp.StatusCode, poolAccount.Email, string(errBytes))
+			h.accountMgr.ReleaseAccount(poolAccount.ID)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(resp.StatusCode)
+			_, _ = w.Write(errBytes)
+			return
 		}
 
 		// 上游 200 成功响应

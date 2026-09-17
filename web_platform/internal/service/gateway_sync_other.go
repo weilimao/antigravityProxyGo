@@ -384,23 +384,9 @@ func (s *GatewaySyncService) fetchUpstreamChannelModels(channel string) (map[str
 	}
 
 	if ch == "workbuddy" {
-		models := []string{
-			"deepseek-v4.1-flash",
-			"deepseek-v4.1-coder",
-			"deepseek-v3",
-			"deepseek-r1",
-			"claude-3-7-sonnet",
-			"claude-3-5-sonnet",
-			"claude-3-5-haiku",
-			"gpt-4o",
-			"gpt-4o-mini",
-			"o3-mini",
-			"gemini-2.5-flash",
-			"gemini-2.5-pro",
-			"qwen2.5-coder-32b",
-			"glm-4-plus",
-			"kimi-k1.5",
-			"minimax-01",
+		models, err := fetchWorkBuddyModelsDirect(targetBaseURL, targetToken)
+		if err != nil {
+			return nil, fmt.Errorf("从 WorkBuddy 官方端点获取模型失败: %w", err)
 		}
 		return map[string]interface{}{
 			"success":  true,
@@ -434,4 +420,61 @@ func (s *GatewaySyncService) fetchUpstreamChannelModels(channel string) (map[str
 		"added":    models,
 	}, nil
 }
+
+// fetchWorkBuddyModelsDirect 直连 WorkBuddy 官方 /v3/config 端点获取可用模型全集
+func fetchWorkBuddyModelsDirect(baseURL, token string) ([]string, error) {
+	u := strings.TrimSpace(baseURL)
+	if u == "" {
+		u = "https://www.codebuddy.ai"
+	}
+	configURL := strings.TrimRight(u, "/") + "/v3/config"
+	req, err := http.NewRequest(http.MethodGet, configURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "WorkBuddy/5.5.2")
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求 WorkBuddy 官方端点失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
+	}
+
+	var parsed struct {
+		Code int `json:"code"`
+		Data struct {
+			Models []struct {
+				ID string `json:"id"`
+			} `json:"models"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("解析 WorkBuddy 模型响应失败: %w", err)
+	}
+
+	seen := make(map[string]bool)
+	var list []string
+	for _, m := range parsed.Data.Models {
+		id := strings.TrimSpace(m.ID)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			list = append(list, id)
+		}
+	}
+	if len(list) == 0 {
+		return nil, fmt.Errorf("WorkBuddy 官方端点返回的模型列表为空")
+	}
+	return list, nil
+}
+
 

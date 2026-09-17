@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -528,10 +529,10 @@ func (s *GatewaySyncService) GetGatewayOtherGroups() (map[string]interface{}, er
 func (s *GatewaySyncService) FetchGatewayChannelModels(channel string) (map[string]interface{}, error) {
 	cfg := config.GlobalConfig
 	if cfg != nil && strings.TrimSpace(cfg.Gateway.GatewayURL) != "" {
-		url := fmt.Sprintf("%s/api/admin/models/fetch-channel", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
+		reqURL := fmt.Sprintf("%s/api/admin/models/fetch-channel?channel=%s", strings.TrimRight(cfg.Gateway.GatewayURL, "/"), url.QueryEscape(channel))
 		body := map[string]string{"channel": channel}
 		reqBytes, _ := json.Marshal(body)
-		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqBytes))
+		req, err := http.NewRequest(http.MethodPost, reqURL, bytes.NewReader(reqBytes))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
 			if cfg.Gateway.AdminKey != "" {
@@ -561,10 +562,10 @@ func (s *GatewaySyncService) FetchGatewayChannelModels(channel string) (map[stri
 func (s *GatewaySyncService) FetchGatewayOtherGroupModels(groupId string) (map[string]interface{}, error) {
 	cfg := config.GlobalConfig
 	if cfg != nil && strings.TrimSpace(cfg.Gateway.GatewayURL) != "" {
-		url := fmt.Sprintf("%s/api/admin/models/fetch-other", strings.TrimRight(cfg.Gateway.GatewayURL, "/"))
+		reqURL := fmt.Sprintf("%s/api/admin/models/fetch-other?groupId=%s", strings.TrimRight(cfg.Gateway.GatewayURL, "/"), url.QueryEscape(groupId))
 		body := map[string]string{"groupId": groupId}
 		reqBytes, _ := json.Marshal(body)
-		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqBytes))
+		req, err := http.NewRequest(http.MethodPost, reqURL, bytes.NewReader(reqBytes))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
 			if cfg.Gateway.AdminKey != "" {
