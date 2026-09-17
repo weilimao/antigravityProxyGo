@@ -1,6 +1,8 @@
 package api
 
 import (
+	"strconv"
+
 	"antigravity-web-platform/internal/pkg/response"
 	"antigravity-web-platform/internal/service"
 
@@ -17,7 +19,31 @@ func NewCheckoutHandler() *CheckoutHandler {
 	}
 }
 
-// CreateOrder 发起套餐订阅切单请求，生成极客工坊收银台链接
+// GetUpgradeQuote 获取升级至指定套餐的折算抵扣明细与应付总额
+func (h *CheckoutHandler) GetUpgradeQuote(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	planIDStr := c.Query("planId")
+	if planIDStr == "" {
+		response.Fail(c, 400, "缺少 planId 参数")
+		return
+	}
+
+	planIDVal, err := strconv.ParseUint(planIDStr, 10, 64)
+	if err != nil || planIDVal == 0 {
+		response.Fail(c, 400, "无效的 planId 参数")
+		return
+	}
+
+	quote, err := h.paymentService.CalculateUpgradeQuote(userID, uint(planIDVal))
+	if err != nil {
+		response.Fail(c, 400, err.Error())
+		return
+	}
+
+	response.Success(c, quote)
+}
+
+// CreateOrder 发起套餐订阅切单请求，生成极客工坊收银台链接（支持折算升级抵扣）
 func (h *CheckoutHandler) CreateOrder(c *gin.Context) {
 	userID := c.GetUint("user_id")
 	var req struct {
@@ -35,10 +61,13 @@ func (h *CheckoutHandler) CreateOrder(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"orderNo":     order.OrderNo,
-		"amountCents": order.AmountCents,
-		"status":      order.Status,
-		"payUrl":      payURL,
+		"orderNo":             order.OrderNo,
+		"amountCents":         order.AmountCents,
+		"originalAmountCents": order.OriginalAmountCents,
+		"discountCents":       order.DiscountCents,
+		"upgradeFromPlanId":   order.UpgradeFromPlanID,
+		"status":              order.Status,
+		"payUrl":              payURL,
 	})
 }
 
@@ -56,12 +85,28 @@ func (h *CheckoutHandler) GetOrderStatus(c *gin.Context) {
 		return
 	}
 
+	var upgradeFromName string
+	if order.UpgradeFromPlan != nil {
+		upgradeFromName = order.UpgradeFromPlan.Name
+	}
+
+	var planName string
+	var durationDays int
+	if order.Plan != nil {
+		planName = order.Plan.Name
+		durationDays = order.Plan.DurationDays
+	}
+
 	response.Success(c, gin.H{
-		"orderNo":      order.OrderNo,
-		"status":       order.Status,
-		"amountCents":  order.AmountCents,
-		"paidAt":       order.PaidAt,
-		"planName":     order.Plan.Name,
-		"durationDays": order.Plan.DurationDays,
+		"orderNo":             order.OrderNo,
+		"status":              order.Status,
+		"amountCents":         order.AmountCents,
+		"originalAmountCents": order.OriginalAmountCents,
+		"discountCents":       order.DiscountCents,
+		"upgradeFromPlanId":   order.UpgradeFromPlanID,
+		"upgradeFromPlanName": upgradeFromName,
+		"paidAt":              order.PaidAt,
+		"planName":            planName,
+		"durationDays":        durationDays,
 	})
 }

@@ -316,10 +316,12 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { authApi, setToken, refreshCurrentUser } from '../api/client'
+import { authApi } from '../api/client'
+import { useUserStore } from '../stores/user'
 
 const router = useRouter()
 const route = useRoute()
+const userStore = useUserStore()
 
 const isLogin = ref(true)
 const loading = ref(false)
@@ -370,8 +372,8 @@ async function handleSubmit() {
     }
 
     if (res.token) {
-      setToken(res.token)
-      await refreshCurrentUser()
+      userStore.setAuthToken(res.token)
+      await userStore.fetchUserProfile(true)
       const redirect = (route.query.redirect as string) || '/dashboard'
       router.push(redirect)
     }

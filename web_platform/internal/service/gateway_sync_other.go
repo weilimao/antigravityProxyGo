@@ -383,11 +383,40 @@ func (s *GatewaySyncService) fetchUpstreamChannelModels(channel string) (map[str
 		return nil, fmt.Errorf("号池 [%s] 下暂无具备有效 AccessToken 的账号，请先在【账号池】中添加账号", channel)
 	}
 
+	if ch == "workbuddy" {
+		models := []string{
+			"deepseek-v4.1-flash",
+			"deepseek-v4.1-coder",
+			"deepseek-v3",
+			"deepseek-r1",
+			"claude-3-7-sonnet",
+			"claude-3-5-sonnet",
+			"claude-3-5-haiku",
+			"gpt-4o",
+			"gpt-4o-mini",
+			"o3-mini",
+			"gemini-2.5-flash",
+			"gemini-2.5-pro",
+			"qwen2.5-coder-32b",
+			"glm-4-plus",
+			"kimi-k1.5",
+			"minimax-01",
+		}
+		return map[string]interface{}{
+			"success":  true,
+			"models":   models,
+			"snapshot": []string{},
+			"added":    models,
+		}, nil
+	}
+
 	if targetBaseURL == "" {
 		if ch == "nvidia" {
 			targetBaseURL = "https://integrate.api.nvidia.com/v1"
 		} else if ch == "grok" {
 			targetBaseURL = "https://api.x.ai/v1"
+		} else if ch == "workbuddy" {
+			targetBaseURL = "https://www.codebuddy.ai"
 		} else {
 			return nil, fmt.Errorf("号池 [%s] 账号未配置 BaseURL，无法请求上游模型列表", channel)
 		}

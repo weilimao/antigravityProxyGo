@@ -41,6 +41,7 @@ function getMappingTab(m: ModelMappingEntry): string {
   if (modelName.startsWith('other/')) return 'other';
   if (modelName.startsWith('nvidia/') || modelName.endsWith('-nemotron')) return 'nvidia';
   if (modelName.startsWith('grok/')) return 'grok';
+  if (modelName.startsWith('workbuddy/')) return 'workbuddy';
   if (modelName.startsWith('deepseek')) return 'deepseek';
   if (modelName.startsWith('qwen')) return 'qwen';
   if (modelName.startsWith('claude')) return 'anthropic';
@@ -51,7 +52,7 @@ export function useModelMapping() {
   const allMappings: Ref<ModelMappingEntry[]> = ref([]);
   const poolTabs: Ref<PoolTabInfo[]> = ref([]);
   const activeTabId = ref('google');
-  const availableChannels = ref<string[]>(['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok']);
+  const availableChannels = ref<string[]>(['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok', 'workbuddy']);
   const channelModelsCache = ref<Record<string, string[]>>({});
   const channelModelsCachePrev = ref<Record<string, string[]>>({});
   const searchQuery = ref('');
@@ -217,6 +218,7 @@ export function useModelMapping() {
         { id: 'other', name: 'Other 号池', targetProvider: 'other' },
         { id: 'gcp', name: '谷歌云 API', targetProvider: 'gcp' },
         { id: 'grok', name: 'Grok 号池', targetProvider: 'grok' },
+        { id: 'workbuddy', name: 'WorkBuddy 号池', targetProvider: 'workbuddy' },
       ];
 
       const knownIds = new Set(poolTabs.value.map(t => t.id));

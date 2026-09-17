@@ -72,6 +72,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			"role":         user.Role,
 			"planId":       user.PlanID,
 			"planExpireAt": user.PlanExpireAt,
+			"extraTokens":  user.ExtraTokens,
 			"isActive":     user.IsSubscriptionActive(),
 			"plan":         user.Plan,
 		},
@@ -105,6 +106,7 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 		"status":       user.Status,
 		"planId":       user.PlanID,
 		"planExpireAt": user.PlanExpireAt,
+		"extraTokens":  user.ExtraTokens,
 		"isActive":     user.IsSubscriptionActive(),
 		"plan":         user.Plan,
 	})

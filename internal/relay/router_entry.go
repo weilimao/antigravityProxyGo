@@ -46,7 +46,7 @@ func (h *APICompatHandler) handleRoutedForward(w http.ResponseWriter, r *http.Re
 	// GET 连通性测试与模型列表: 当客户端将 BaseURL 设为 http://[host]:18444/route，
 	// 发起 GET /route, GET /route/v1 或 GET /route/v1/models 探测时，统一返回 200 OK 与模型列表！
 	if r.Method == http.MethodGet && (path == "/route" || path == "/route/v1" || path == "/route/v1/models" || strings.HasSuffix(path, "/models")) {
-		h.handleModels(w, r)
+		h.handleModels(w, r, userSession)
 		return
 	}
 
@@ -217,6 +217,15 @@ func (h *APICompatHandler) executeForwardModel(
 		r.Body = io.NopCloser(strings.NewReader(newBody))
 		r.ContentLength = int64(len(newBody))
 		h.handleGrok(w, r, userSession)
+		return
+	}
+
+	// 命中 workbuddy 号池(腾讯) → 复用 handleWorkBuddy 链路(自动补齐首条 System Prompt、强制上游流式 + 流/非流式自适应聚合、Bearer JWT 鉴权)。
+	if provider == "workbuddy" {
+		newBody := patchRoutedBodyModel(bodyBytes, upstreamModel)
+		r.Body = io.NopCloser(strings.NewReader(newBody))
+		r.ContentLength = int64(len(newBody))
+		h.handleWorkBuddy(w, r, userSession)
 		return
 	}
 

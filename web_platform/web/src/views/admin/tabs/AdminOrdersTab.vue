@@ -38,8 +38,22 @@
             <tr v-for="order in orders" :key="order.id">
               <td class="font-mono text-xs text-slate-300">{{ order.orderNo }}</td>
               <td class="font-medium text-white">{{ order.user?.username || order.userId }}</td>
-              <td class="text-xs">{{ order.plan?.name || order.planId }}</td>
-              <td class="font-mono font-bold text-emerald-400">¥{{ (order.amountCents / 100).toFixed(2) }}</td>
+              <td class="text-xs">
+                <div class="flex items-center gap-1.5">
+                  <span>{{ order.plan?.name || order.planId }}</span>
+                  <span :class="order.plan?.type === 'addon' ? 'badge badge-amber text-[10px] py-0 px-1' : 'badge badge-indigo text-[10px] py-0 px-1'">
+                    {{ order.plan?.type === 'addon' ? '加油包' : '订阅' }}
+                  </span>
+                </div>
+              </td>
+              <td>
+                <div class="flex flex-col items-start">
+                  <span class="font-mono font-bold text-emerald-400">¥{{ (order.amountCents / 100).toFixed(2) }}</span>
+                  <span v-if="order.discountCents > 0" class="text-[10px] text-purple-400 font-mono" :title="`原价 ¥${(order.originalAmountCents / 100).toFixed(2)}，立减 ¥${(order.discountCents / 100).toFixed(2)}`">
+                    减 ¥{{ (order.discountCents / 100).toFixed(2) }}
+                  </span>
+                </div>
+              </td>
               <td>
                 <span
                   class="badge"

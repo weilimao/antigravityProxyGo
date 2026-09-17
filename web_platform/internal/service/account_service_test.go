@@ -191,3 +191,109 @@ func TestAccountService_ImportExport(t *testing.T) {
 		t.Errorf("期望导出 3 个全部账号，得到 %d", len(allList))
 	}
 }
+
+func TestAccountService_WorkBuddyPoolConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	svc := NewAccountServiceWithDir(tempDir)
+
+	// 1. 读取默认配置
+	data, err := svc.GetAccountsData()
+	if err != nil {
+		t.Fatalf("GetAccountsData 失败: %v", err)
+	}
+	if data.Config.WorkbuddyLBMode != "round-robin" {
+		t.Errorf("期望默认 WorkbuddyLBMode 为 round-robin，实际得到 %s", data.Config.WorkbuddyLBMode)
+	}
+	if data.Config.WorkbuddyMaxConcurrency != 10 {
+		t.Errorf("期望默认 WorkbuddyMaxConcurrency 为 10，实际得到 %d", data.Config.WorkbuddyMaxConcurrency)
+	}
+
+	// 2. 修改并持久化
+	data.Config.WorkbuddyLBMode = "sticky"
+	data.Config.WorkbuddyMaxConcurrency = 30
+	if err := svc.SavePoolConfig(data.Config); err != nil {
+		t.Fatalf("SavePoolConfig 失败: %v", err)
+	}
+
+	// 3. 验证重新加载
+	svc2 := NewAccountServiceWithDir(tempDir)
+	data2, err := svc2.GetAccountsData()
+	if err != nil {
+		t.Fatalf("svc2 GetAccountsData 失败: %v", err)
+	}
+	if data2.Config.WorkbuddyLBMode != "sticky" {
+		t.Errorf("期望 WorkbuddyLBMode 为 sticky，实际得到 %s", data2.Config.WorkbuddyLBMode)
+	}
+	if data2.Config.WorkbuddyMaxConcurrency != 30 {
+		t.Errorf("期望 WorkbuddyMaxConcurrency 为 30，实际得到 %d", data2.Config.WorkbuddyMaxConcurrency)
+	}
+}
+
+func TestAccountService_WorkBuddyAccountCRUD(t *testing.T) {
+	tempDir := t.TempDir()
+	svc := NewAccountServiceWithDir(tempDir)
+
+	// 1. 添加 WorkBuddy 账号
+	acc, err := svc.AddAccount(&model.AddAccountRequest{
+		Provider:    "workbuddy",
+		Email:       "test-wb@workbuddy.ai",
+		AccessToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+	})
+	if err != nil {
+		t.Fatalf("AddAccount workbuddy 失败: %v", err)
+	}
+	if acc.BaseURL != "https://www.codebuddy.ai" {
+		t.Errorf("期望默认 BaseURL 为 https://www.codebuddy.ai，实际为 %s", acc.BaseURL)
+	}
+	if acc.Tier != "Free" {
+		t.Errorf("期望默认 Tier 为 Free，实际为 %s", acc.Tier)
+	}
+
+	// 2. 读取全量账号
+	data, err := svc.GetAccountsData()
+	if err != nil {
+		t.Fatalf("GetAccountsData 失败: %v", err)
+	}
+	if len(data.Accounts) != 1 {
+		t.Fatalf("期望共有 1 个账号，实际为 %d", len(data.Accounts))
+	}
+	if data.Accounts[0].Provider != "workbuddy" {
+		t.Errorf("期望 provider 为 workbuddy，实际为 %s", data.Accounts[0].Provider)
+	}
+
+	// 3. 更新账号
+	updated, err := svc.UpdateAccount(acc.ID, &model.UpdateAccountRequest{
+		Email: "updated-wb@workbuddy.ai",
+		Tier:  "Pro",
+	})
+	if err != nil {
+		t.Fatalf("UpdateAccount 失败: %v", err)
+	}
+	if updated.Email != "updated-wb@workbuddy.ai" || updated.Tier != "Pro" {
+		t.Errorf("更新账号数据不符合期望: %+v", updated)
+	}
+
+	// 4. 启停账号
+	if err := svc.ToggleAccount(acc.ID, false); err != nil {
+		t.Fatalf("ToggleAccount 失败: %v", err)
+	}
+	dataAfterToggle, _ := svc.GetAccountsData()
+	if dataAfterToggle.Accounts[0].Enabled {
+		t.Errorf("期望账号已停用，实际仍为启用")
+	}
+
+	// 5. 导出与批量导入
+	wbList, err := svc.ExportAccounts("workbuddy")
+	if err != nil || len(wbList) != 1 {
+		t.Fatalf("ExportAccounts workbuddy 失败: len=%d, err=%v", len(wbList), err)
+	}
+
+	// 6. 删除账号
+	if err := svc.DeleteAccount(acc.ID); err != nil {
+		t.Fatalf("DeleteAccount 失败: %v", err)
+	}
+	dataAfterDel, _ := svc.GetAccountsData()
+	if len(dataAfterDel.Accounts) != 0 {
+		t.Errorf("期望删除后账号数为 0，实际为 %d", len(dataAfterDel.Accounts))
+	}
+}

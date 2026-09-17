@@ -51,6 +51,8 @@ type PoolConfigDTO struct {
 	GrokMaxConcurrency        int               `json:"grokMaxConcurrency"`
 	GrokCliVersion            string            `json:"grokCliVersion"`
 	GrokQuotaCooldownHours    int               `json:"grokQuotaCooldownHours"`
+	WorkbuddyLBMode           string            `json:"workbuddyLbMode,omitempty"`
+	WorkbuddyMaxConcurrency   int               `json:"workbuddyMaxConcurrency,omitempty"`
 }
 
 // OtherGroupInfo 是 Other 号池下各上游渠道的元信息

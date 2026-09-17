@@ -1,5 +1,5 @@
 <template>
-  <div class="max-w-6xl mx-auto px-4 py-8">
+  <div class="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <!-- 头部引导与操作 -->
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
       <div>
@@ -116,18 +116,35 @@
               <!-- 订阅套餐 -->
               <td>
                 <div>
-                  <span class="font-medium text-white text-xs block">{{ order.planName || (order.plan && order.plan.name) || '会员套餐' }}</span>
+                  <div class="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                    <span
+                      v-if="order.plan && (!order.plan.type || order.plan.type === 'subscription')"
+                      :class="getTierBadgeClass(order.plan.tier)"
+                      class="px-1.5 py-0.2 rounded text-[10px] font-mono font-extrabold uppercase shadow-sm shrink-0"
+                    >
+                      {{ formatTierName(order.plan.tier) }}
+                    </span>
+                    <span class="font-medium text-white text-xs">{{ order.planName || (order.plan && order.plan.name) || '会员套餐' }}</span>
+                    <span :class="order.plan?.type === 'addon' ? 'badge badge-amber text-[10px] py-0 px-1' : 'badge badge-indigo text-[10px] py-0 px-1'">
+                      {{ order.plan?.type === 'addon' ? '加油包' : '订阅方案' }}
+                    </span>
+                  </div>
                   <span class="text-[11px] text-slate-500">
-                    {{ order.durationDays === 0 ? '永久周期' : `${order.durationDays} 天周期` }}
+                    {{ order.plan?.type === 'addon' ? '一次性永久叠加额度' : (order.durationDays === 0 ? '永久周期' : `${order.durationDays} 天周期`) }}
                   </span>
                 </div>
               </td>
 
               <!-- 订单金额 -->
               <td>
-                <span class="font-mono font-bold text-sm text-emerald-400">
-                  ¥{{ (order.amountCents / 100).toFixed(2) }}
-                </span>
+                <div class="flex flex-col items-start">
+                  <span class="font-mono font-bold text-sm text-emerald-400">
+                    ¥{{ (order.amountCents / 100).toFixed(2) }}
+                  </span>
+                  <span v-if="order.discountCents > 0" class="text-[10px] text-purple-300 font-mono" :title="`原价 ¥${(order.originalAmountCents / 100).toFixed(2)}，折算立减 ¥${(order.discountCents / 100).toFixed(2)}`">
+                    立减 -¥{{ (order.discountCents / 100).toFixed(2) }}
+                  </span>
+                </div>
               </td>
 
               <!-- 状态与倒计时 -->
@@ -232,6 +249,10 @@ interface OrderItem {
   planName: string
   durationDays: number
   amountCents: number
+  originalAmountCents?: number
+  discountCents?: number
+  upgradeFromPlanId?: number
+  upgradeFromPlan?: any
   status: string
   payUrl: string
   paidAt?: string
@@ -402,6 +423,22 @@ async function handleCancelOrder(order: OrderItem) {
   } finally {
     cancellingNo.value = null
   }
+}
+
+function formatTierName(tier?: string): string {
+  const t = (tier || 'pro').toLowerCase().trim()
+  if (t === 'max++') return 'MAX++'
+  if (t === 'max+') return 'MAX+'
+  if (t === 'max') return 'MAX'
+  return 'Pro'
+}
+
+function getTierBadgeClass(tier?: string): string {
+  const t = (tier || 'pro').toLowerCase().trim()
+  if (t === 'max++') return 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+  if (t === 'max+') return 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+  if (t === 'max') return 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
+  return 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
 }
 
 onMounted(() => {

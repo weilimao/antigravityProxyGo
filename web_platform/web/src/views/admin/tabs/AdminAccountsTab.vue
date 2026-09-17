@@ -91,6 +91,31 @@
           />
         </div>
 
+        <!-- WorkBuddy 号池控制栏 -->
+        <div v-else-if="activeChannel === 'workbuddy'" class="flex items-center gap-2 bg-slate-900/80 border border-slate-800 px-3 py-1.5 rounded-xl text-xs">
+          <span class="text-slate-400 font-medium">轮询算法</span>
+          <select
+            v-model="poolConfig.workbuddyLbMode"
+            class="bg-slate-800 text-white font-medium border border-slate-700/80 rounded-lg px-2 py-1 focus:outline-none focus:border-indigo-500 cursor-pointer"
+            @change="saveConfig"
+          >
+            <option value="round-robin">游标轮询 (默认)</option>
+            <option value="sticky">粘性会话</option>
+          </select>
+
+          <div class="h-4 w-[1px] bg-slate-800 mx-1"></div>
+
+          <span class="text-slate-400 font-medium whitespace-nowrap">并发上限</span>
+          <input
+            v-model.number="poolConfig.workbuddyMaxConcurrency"
+            type="number"
+            min="1"
+            max="1000"
+            class="w-14 px-1.5 py-1 bg-slate-800 border border-slate-700/80 rounded-lg text-white text-center focus:outline-none focus:border-indigo-500"
+            @blur="saveConfig"
+          />
+        </div>
+
         <!-- Other 号池按组控制栏 -->
         <div v-else-if="activeChannel === 'other' && selectedOtherGroup" class="flex items-center gap-2 bg-slate-900/80 border border-slate-800 px-3 py-1.5 rounded-xl text-xs">
           <span class="text-slate-400 font-medium">组内负载均衡</span>
@@ -159,7 +184,7 @@
           type="button"
           :disabled="loading"
           class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900/80 hover:bg-slate-800 border border-slate-800 rounded-xl text-xs font-semibold text-slate-300 hover:text-white transition-all shadow-sm"
-          @click="loadAccounts"
+          @click="() => loadAccounts(true)"
           title="刷新账号列表"
         >
           <span class="material-symbols-outlined text-16px" :class="{ 'animate-spin': loading }">refresh</span>
@@ -394,7 +419,7 @@
       :current-channel="activeChannel"
       :existing-other-groups="otherGroups"
       @close="showAccountModal = false"
-      @saved="loadAccounts"
+      @saved="() => loadAccounts(true)"
     />
 
     <AccountImportModal
@@ -408,18 +433,24 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { accountApi, type AccountItem, type PoolConfig } from '../../../api/client'
+import { storeToRefs } from 'pinia'
+import type { AccountItem } from '../../../api/client'
+import { useAccountPoolStore } from '../../../stores'
 import AccountModal from './AccountModal.vue'
 import AccountImportModal from './AccountImportModal.vue'
 import AccountCard from './AccountCard.vue'
 import AccountTableView from './AccountTableView.vue'
 import LoadingSpinner from '../../../components/common/LoadingSpinner.vue'
 
+const poolStore = useAccountPoolStore()
+const { poolConfig } = storeToRefs(poolStore)
+
 const channels = [
   { id: 'antigravity', name: 'Antigravity 官方账号', icon: 'extension' },
   { id: 'project', name: '谷歌云项目 API', icon: 'cloud' },
   { id: 'nvidia', name: 'NVIDIA 号池', icon: 'bolt' },
   { id: 'grok', name: 'Grok 号池', icon: 'smart_toy' },
+  { id: 'workbuddy', name: 'WorkBuddy 号池', icon: 'psychology' },
   { id: 'other', name: 'Other 号池', icon: 'hub' },
 ]
 
@@ -432,33 +463,15 @@ const statusFilter = ref('all')
 const currentPage = ref(1)
 const pageSize = 10
 
-const loading = ref(false)
+const loading = computed(() => poolStore.loading)
 const batchDeleting = ref(false)
-const allAccounts = ref<AccountItem[]>([])
-const otherGroups = ref<any[]>([])
+const allAccounts = computed(() => poolStore.accounts)
+const otherGroups = computed(() => poolStore.otherGroups)
 const selectedAccountIds = ref<string[]>([])
 
 const showAccountModal = ref(false)
 const editingAccount = ref<AccountItem | null>(null)
 const showImportModal = ref(false)
-
-const poolConfig = ref<PoolConfig>({
-  poolMode: true,
-  projectPoolMode: false,
-  geminiCliPoolMode: false,
-  activeChannel: 'nvidia',
-  otherLbModes: {},
-  nvidiaLbMode: 'round-robin',
-  grokLbMode: 'round-robin',
-  nvidiaMaxConcurrency: 40,
-  antigravityMaxConcurrency: 10,
-  antigravityCliVersion: '2.3.1',
-  projectMaxConcurrency: 10,
-  otherMaxConcurrency: {},
-  grokMaxConcurrency: 10,
-  grokCliVersion: '1.0.0',
-  grokQuotaCooldownHours: 24,
-})
 
 const gridColsClass = computed(() => {
   if (gridColumns.value === 3) return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
@@ -538,29 +551,14 @@ const allPageSelected = computed(() => {
 })
 
 onMounted(async () => {
-  await loadAccounts()
+  await loadAccounts(false)
 })
 
-async function loadAccounts() {
-  loading.value = true
+async function loadAccounts(force = false) {
   try {
-    const res = await accountApi.getAccounts()
-    if (res) {
-      allAccounts.value = res.accounts || []
-      if (res.config) {
-        poolConfig.value = {
-          ...poolConfig.value,
-          ...res.config,
-          otherLbModes: res.config.otherLbModes || {},
-          otherMaxConcurrency: res.config.otherMaxConcurrency || {},
-        }
-      }
-      otherGroups.value = res.otherGroups || []
-    }
+    await poolStore.fetchAccounts(force)
   } catch (err) {
     console.error('加载账号池数据失败:', err)
-  } finally {
-    loading.value = false
   }
 }
 
@@ -587,7 +585,7 @@ function formatAddedAt(str: string): string {
 
 async function saveConfig() {
   try {
-    await accountApi.savePoolConfig(poolConfig.value)
+    await poolStore.saveConfig()
   } catch (err) {
     console.error('保存号池配置失败:', err)
   }
@@ -628,8 +626,7 @@ function toggleSelectAllPage() {
 async function handleToggleAccount(acc: AccountItem) {
   const target = !acc.enabled
   try {
-    await accountApi.toggleAccount(acc.id, target)
-    acc.enabled = target
+    await poolStore.toggleAccount(acc.id, target)
   } catch (err) {
     console.error('切换账号状态失败:', err)
   }
@@ -648,8 +645,7 @@ function openEditModal(acc: AccountItem) {
 async function handleDeleteAccount(acc: AccountItem) {
   if (!confirm(`确认删除账号 ${acc.email || acc.id} 吗？`)) return
   try {
-    await accountApi.deleteAccount(acc.id)
-    await loadAccounts()
+    await poolStore.deleteAccount(acc.id)
   } catch (err) {
     console.error('删除失败:', err)
   }
@@ -659,9 +655,8 @@ async function handleBatchDelete() {
   if (!confirm(`确认批量删除选中的 ${selectedAccountIds.value.length} 个账号吗？`)) return
   batchDeleting.value = true
   try {
-    await accountApi.batchDeleteAccounts(selectedAccountIds.value)
+    await poolStore.batchDeleteAccounts(selectedAccountIds.value)
     selectedAccountIds.value = []
-    await loadAccounts()
   } catch (err) {
     console.error('批量删除失败:', err)
   } finally {
@@ -691,7 +686,7 @@ function exportSingleAccount(acc: AccountItem) {
   URL.revokeObjectURL(url)
 }
 
-function onAccountsImported(count: number) {
-  loadAccounts()
+function onAccountsImported(_count: number) {
+  loadAccounts(true)
 }
 </script>

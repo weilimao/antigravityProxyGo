@@ -114,6 +114,13 @@ func (am *AuthManager) RefreshToken(acc *account.Account) (string, error) {
 
 	clientID, clientSecret := getCredentials(acc.Provider)
 
+	// WorkBuddy 账号使用独立 Keycloak 授权体系，不支持 Google OAuth 刷新流，防御性拦截
+	if acc.Provider == "workbuddy" {
+		err := errors.New("workbuddy does not support Google OAuth refresh flow")
+		promise.err = err
+		return "", err
+	}
+
 	// xAI (Grok) OAuth 刷新:走 xai 设备码流 RefreshTokens(无 client_secret),
 	// token_endpoint 取账号自带字段,回退默认 auth.x.ai 端点;其余 provider 走原 Google 路径。
 	if acc.Provider == "grok" {

@@ -69,6 +69,8 @@ type APICompatHandler struct {
 	// 与 pickOtherAccount 的 otherCursors(按组隔离)同构, 但 Grok 是单池无组, 故用单一标量即可;
 	// 不接 nvidiaStats 那套「1 分钟请求计数盘」(Grok 流量小, 最少计数语义无显著收益)。
 	grokCursor uint64
+	// workbuddyCursor 是 WorkBuddy 号池 round-robin 模式下的全局取模轮询游标, 单调递增。
+	workbuddyCursor uint64
 	// otherCursors 是 Other 号池按组隔离的轮询游标 (key: groupID, value: *uint64)
 	// 采用按组隔离避免多个数量极少的组（如2个号）在全局游标累加时发生取模共振（Stride Collision）导致饿死。
 	otherCursors sync.Map
@@ -279,8 +281,8 @@ func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. 模型列表接口
-	if path == "/v1/models" && r.Method == http.MethodGet {
-		h.handleModels(w, r)
+	if (path == "/v1/models" || path == "/models") && r.Method == http.MethodGet {
+		h.handleModels(w, r, session)
 		return
 	}
 
@@ -309,6 +311,12 @@ func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 收敛(排除 /grokfoo 等紧跟非斜杠字符的误吞路径),见 grokPathPrefix.go。
 	if grokAliasPrefixMatch(path) {
 		h.handleGrok(w, r, session)
+		return
+	}
+
+	// 4c. WorkBuddy 专属号池接口 (/workbuddy/v1/models, /workbuddy/v1/chat/completions, /workbuddy/v1/messages, 以及 /wb/* 别名路由)
+	if workbuddyAliasPrefixMatch(path) {
+		h.handleWorkBuddy(w, r, session)
 		return
 	}
 

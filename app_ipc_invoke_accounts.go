@@ -163,6 +163,31 @@ func (a *App) handleAccountsInvokeIPC(channel string, args []interface{}) (strin
 			a.AddLog(fmt.Sprintf("✅ [配额刷新] NVIDIA 账号 %s 可用，可用模型数 %d 个", acc.Email, modelCount))
 			return marshalResponse(res)
 		}
+		if acc.Provider == "workbuddy" {
+			if account.IsWorkBuddyDomesticAccount(acc) {
+				a.AddLog(fmt.Sprintf("ℹ️ [配额刷新] WorkBuddy 账号 %s 属于国内邮箱注册，无需请求配额积分（推理正常）", acc.Email))
+				res := &account.QuotaResult{Tier: "Free", Buckets: []account.QuotaBucket{}}
+				return marshalResponse(res)
+			}
+			a.AddLog(fmt.Sprintf("🔄 [配额刷新] 开始刷新 WorkBuddy 国外账号 %s 的官方配额积分...", acc.Email))
+			res, err := a.accountMgr.FetchQuota(acc)
+			if err != nil {
+				a.AddLog(fmt.Sprintf("❌ [配额刷新] WorkBuddy 账号 %s 刷新配额失败: %v", acc.Email, err))
+				return marshalResponse(map[string]interface{}{"error": err.Error(), "buckets": []interface{}{}})
+			}
+			if acc.NoQuota {
+				a.accountMgr.UpdateAccountNoQuota(accId, true)
+				a.AddLog(fmt.Sprintf("ℹ️ [配额刷新] WorkBuddy 账号 %s 上游未开通计量中心，已自动标记为免配额探测（推理正常）", acc.Email))
+			} else {
+				a.accountMgr.UpdateAccountQuota(accId, res)
+				creditsDesc := "0"
+				if res.Credits != nil {
+					creditsDesc = fmt.Sprintf("%.0f", *res.Credits)
+				}
+				a.AddLog(fmt.Sprintf("✅ [配额刷新] WorkBuddy 国外账号 %s 官方积分刷新成功！当前积分余额: %s", acc.Email, creditsDesc))
+			}
+			return marshalResponse(res)
+		}
 		a.AddLog(fmt.Sprintf("🔄 [配额刷新] 开始刷新账号 %s 的配额...", acc.Email))
 		res, err := a.accountMgr.FetchQuota(acc)
 		if err != nil {

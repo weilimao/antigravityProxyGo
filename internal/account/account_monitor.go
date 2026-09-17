@@ -180,10 +180,10 @@ func (m *Manager) CheckAndRefreshTokens() {
 	var refreshAccounts []*Account
 	nowSec := time.Now().Unix()
 	for _, a := range m.accounts {
-		// grok 号池脱离本全局 5min tick,改走专用 1h 节奏的 CheckAndPurgeGrokAuth
-		// (见 StartGrokAuthMonitor)。grok OAuth 刷新语义已收口到「过期检查→刷新→失效移除」,
-		// 不再混入本「TokenRefreshedAt 超 50min 即刷」的粗粒度节奏,避免双重 tick 重复刷。
-		if a.Provider == "grok" {
+		// grok 与 workbuddy 号池脱离本全局 5min tick:
+		// grok 走专用 1h 节奏的 CheckAndPurgeGrokAuth;
+		// workbuddy 为 Keycloak JWT / 独立凭证体系，不可走 Google OAuth 刷新流，避免启动期向 Google 发送无效请求。
+		if a.Provider == "grok" || a.Provider == "workbuddy" {
 			continue
 		}
 		// 仅对已启用，有刷新Token和AccessToken的非2fa账号做定时刷新

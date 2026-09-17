@@ -2,6 +2,7 @@ package quota
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -680,6 +682,128 @@ func fetchGrokQuota(acc *account.Account) (*account.QuotaResult, error) {
 	}, nil
 }
 
+// fetchWorkBuddyQuota 向 WorkBuddy 官方套餐端点 /billing/meter/get-user-resource-summary 发送请求，
+// 实时拉取并聚合各资源包的剩余积分（CycleRemainCapacity），返回真实积分余额与套餐版本。
+func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
+	baseURL := strings.TrimSpace(acc.BaseURL)
+	if baseURL == "" {
+		baseURL = account.DefaultWorkBuddyBaseURL
+	}
+
+	token := strings.TrimSpace(acc.AccessToken)
+	if token == "" {
+		return nil, errors.New("账号 AccessToken 为空")
+	}
+
+	summaryURL := strings.TrimRight(baseURL, "/") + "/billing/meter/get-user-resource-summary"
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, summaryURL, strings.NewReader("{}"))
+	if err != nil {
+		return nil, fmt.Errorf("创建配额探测请求失败: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "WorkBuddy/5.5.2")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-IDE-Type", "WorkBuddy")
+	req.Header.Set("X-IDE-Name", "WorkBuddy")
+	req.Header.Set("X-IDE-Version", "5.5.2")
+	req.Header.Set("X-Product", "WorkBuddy")
+
+	client := &http.Client{Timeout: 15 * time.Second, Transport: netutil.NewTransport()}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("配额请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("凭证已失效 (HTTP %d)，请重新授权或导入", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		bodyStr := string(b)
+		// 腾讯云 CAM 计量资源包未开通/无权限或端点异常（如 20017 / system policy not verify 500 错误）
+		// 用户指示：如果报错就不请求配额积分了。直接标记免配额探测，返回空桶，绝不进冷静期，保持账号正常活跃推理。
+		acc.NoQuota = true
+		fmt.Printf("[WorkBuddyQuota] 账号 %s 上游配额接口返回异常 (HTTP %d: %s)，已自动标记免配额探测，不再请求配额积分\n", acc.Email, resp.StatusCode, bodyStr)
+		return &account.QuotaResult{
+			Tier:    "Free",
+			Buckets: []account.QuotaBucket{},
+		}, nil
+	}
+
+	var respData struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Packages []struct {
+				PackageCode         string `json:"PackageCode"`
+				CycleTotalCapacity  string `json:"CycleTotalCapacity"`
+				CycleRemainCapacity string `json:"CycleRemainCapacity"`
+				CycleUsedCapacity   string `json:"CycleUsedCapacity"`
+				CapacityUnit        string `json:"CapacityUnit"`
+			} `json:"Packages"`
+			IsPaidUser bool `json:"IsPaidUser"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return nil, fmt.Errorf("解析配额响应 JSON 失败: %w", err)
+	}
+
+	if respData.Code != 0 {
+		// 业务错误码（如 20017 CAM 错误等）：自动标记免配额探测，不再请求配额积分
+		acc.NoQuota = true
+		fmt.Printf("[WorkBuddyQuota] 账号 %s 上游配额服务返回错误 (code=%d, msg=%s)，已自动标记免配额探测，不再请求配额积分\n", acc.Email, respData.Code, respData.Msg)
+		return &account.QuotaResult{
+			Tier:    "Free",
+			Buckets: []account.QuotaBucket{},
+		}, nil
+	}
+
+	totalRemain := int64(0)
+	totalCapacity := int64(0)
+	for _, pkg := range respData.Data.Packages {
+		if val, err := strconv.ParseInt(strings.TrimSpace(pkg.CycleRemainCapacity), 10, 64); err == nil && val > 0 {
+			totalRemain += val
+		}
+		if val, err := strconv.ParseInt(strings.TrimSpace(pkg.CycleTotalCapacity), 10, 64); err == nil && val > 0 {
+			totalCapacity += val
+		}
+	}
+
+	tier := "Free"
+	if respData.Data.IsPaidUser {
+		tier = "Pro"
+	}
+
+	modelID := fmt.Sprintf("积分余额: %d", totalRemain)
+
+	remainPercent := 100
+	remainFraction := 1.0
+	if totalCapacity > 0 {
+		remainFraction = float64(totalRemain) / float64(totalCapacity)
+		remainPercent = int(remainFraction * 100)
+		if remainPercent > 100 {
+			remainPercent = 100
+		}
+	}
+
+	credits := float64(totalRemain)
+	return &account.QuotaResult{
+		Tier: tier,
+		Buckets: []account.QuotaBucket{
+			{
+				Group:             "WorkBuddy 官方账号",
+				ModelID:           modelID,
+				RemainingFraction: remainFraction,
+				RemainPercent:     remainPercent,
+			},
+		},
+		Credits: &credits,
+	}, nil
+}
+
 func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*account.Account) (string, error), updateTokenCallback func(string, string)) (*account.QuotaResult, error) {
 	if acc.Provider == "nvidia" {
 		return fetchNvidiaQuota(acc)
@@ -704,6 +828,18 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 	// 复用 fetchNvidiaQuota 的语义 bucket 组装口径, 仅替换族文案(Tier/Group/ModelID 前缀为 Grok)。
 	if acc.Provider == "grok" {
 		return fetchGrokQuota(acc)
+	}
+	// WorkBuddy 官方号池:
+	// - 国内邮箱注册账号（QQ/163 等）：无海外计量策略，按用户需求直接短路，不请求亦不显示配额积分；
+	// - 国外账号（Gmail/Outlook 等）：正常请求官方端点，返回真实积分额度并显示。
+	if acc.Provider == "workbuddy" {
+		if account.IsWorkBuddyDomesticAccount(acc) {
+			return &account.QuotaResult{
+				Tier:    "Free",
+				Buckets: []account.QuotaBucket{},
+			}, nil
+		}
+		return fetchWorkBuddyQuota(acc)
 	}
 
 	token := acc.AccessToken

@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
-import { getToken, authState, refreshCurrentUser } from '../api/client'
+import { getToken } from '../api/client'
+import { useUserStore } from '../stores/user'
 import LoginView from '../views/LoginView.vue'
 import DashboardView from '../views/DashboardView.vue'
 import PricingView from '../views/PricingView.vue'
@@ -65,7 +66,8 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to, _from, next) => {
-  const token = getToken()
+  const userStore = useUserStore()
+  const token = userStore.token || getToken()
   if (to.meta.requiresAuth && !token) {
     return next('/login')
   }
@@ -74,10 +76,14 @@ router.beforeEach(async (to, _from, next) => {
     if (!token) {
       return next('/login')
     }
-    if (!authState.user) {
-      await refreshCurrentUser()
+    if (!userStore.user) {
+      try {
+        await userStore.fetchUserProfile()
+      } catch {
+        return next('/login')
+      }
     }
-    if (authState.user?.role !== 'admin') {
+    if (userStore.user?.role !== 'admin') {
       // 非管理员直接重定向至用户控制台
       return next('/dashboard')
     }

@@ -144,7 +144,7 @@ func anthropicToOpenAIChat(req *AnthropicRequest, preserveImages bool, targetPro
 	// 与思考 on/off 无关;官方未文档化该头,关思考的正路是 body thinking.type=disabled 或省略 thinking 字段)。
 	// 解析目标号池归属: 优先使用显式声明的 targetProvider; 若未声明则通过 model 前缀及 mapping 启发式识别
 	isOther := false
-	if strings.EqualFold(strings.TrimSpace(targetProvider), "other") {
+	if strings.EqualFold(strings.TrimSpace(targetProvider), "other") || strings.EqualFold(strings.TrimSpace(targetProvider), "workbuddy") {
 		isOther = true
 	} else if strings.EqualFold(strings.TrimSpace(targetProvider), "nvidia") || strings.EqualFold(strings.TrimSpace(targetProvider), "grok") {
 		isOther = false

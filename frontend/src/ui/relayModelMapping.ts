@@ -18,7 +18,7 @@ import {
 let allMappings: any[] = [];
 let poolTabs: PoolTabInfo[] = [];
 let activeTabId: string = 'google';
-let availableChannels: string[] = ['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok'];
+let availableChannels: string[] = ['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok', 'workbuddy'];
 let channelModelsCache: Record<string, string[]> = {};
 // Other 组上次拉取的「远端全集」缓存,作为 Other 组「新增」diff 的小快照基准
 // (Other 走独立 IPC 无后端快照,前端自持。全局 Tab 走后端 snapshot 字段,无需此)。
@@ -86,13 +86,14 @@ export async function loadModelMappings() {
         const list = await ipcRenderer.invoke('relay:get-model-mapping');
         allMappings = list || [];
 
-        // 3. 构建默认 Tab 列表 (默认预设五个,对齐账号池页面顶部通道,含 Other/Grok)
+        // 3. 构建默认 Tab 列表 (默认预设五个,对齐账号池页面顶部通道,含 Other/Grok/WorkBuddy)
         poolTabs = [
             { id: 'google', name: 'Gemini (Google)', targetProvider: 'google' },
             { id: 'nvidia', name: 'NVIDIA 号池', targetProvider: 'nvidia' },
             { id: 'other', name: 'Other 号池', targetProvider: 'other' },
             { id: 'gcp', name: '谷歌云 API', targetProvider: 'gcp' },
-            { id: 'grok', name: 'Grok 号池', targetProvider: 'grok' }
+            { id: 'grok', name: 'Grok 号池', targetProvider: 'grok' },
+            { id: 'workbuddy', name: 'WorkBuddy 号池', targetProvider: 'workbuddy' }
         ];
 
         // 4. 根据已有 mappings 里的 ownedBy 填充可删除的自定义 Tab
@@ -241,6 +242,7 @@ function getMappingTab(m: any): string {
     if (modelName.startsWith('other/')) return 'other';
     if (modelName.startsWith('nvidia/') || modelName.endsWith('-nemotron')) return 'nvidia';
     if (modelName.startsWith('grok/')) return 'grok';
+    if (modelName.startsWith('workbuddy/')) return 'workbuddy';
     if (modelName.startsWith('deepseek')) return 'deepseek';
     if (modelName.startsWith('qwen')) return 'qwen';
     if (modelName.startsWith('claude')) return 'anthropic';
@@ -796,7 +798,7 @@ export function initRelayModelMapping() {
     allMappings = [];
     poolTabs = [];
     activeTabId = 'google';
-    availableChannels = ['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok'];
+    availableChannels = ['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok', 'workbuddy'];
     channelModelsCache = {};
     channelModelsCachePrev = {};
     modelMappingSearchQuery = '';

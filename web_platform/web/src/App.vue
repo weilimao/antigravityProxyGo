@@ -1,25 +1,25 @@
 <template>
-  <div class="min-h-screen flex flex-col bg-[#0b0f19] text-slate-100">
+  <div class="min-h-screen flex flex-col text-slate-100 relative selection:bg-indigo-500 selection:text-white">
     <!-- 全局顶部导航栏 -->
-    <header v-if="!isAuthPage" class="sticky top-0 z-40 bg-[#0f172a]/80 backdrop-blur-md border-b border-slate-800">
-      <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+    <header v-if="!isAuthPage" class="sticky top-0 z-40 bg-[#0a0e1a]/95 backdrop-blur-md border-b border-slate-800/80">
+      <div class="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         <!-- Brand Logo -->
-        <router-link to="/" class="flex items-center gap-2.5 text-white no-underline">
-          <div class="w-9 h-9 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center">
+        <router-link to="/" class="flex items-center gap-2.5 text-white no-underline group">
+          <div class="w-9 h-9 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center transition-all group-hover:bg-indigo-600/30">
             <span class="material-symbols-outlined text-22px">rocket_launch</span>
           </div>
           <div>
             <span class="text-base font-extrabold tracking-tight gradient-text">{{ siteName }}</span>
-            <span class="text-[10px] block text-slate-400 -mt-1 font-mono">Proxy & Subscriptions</span>
+            <span class="text-[10px] block text-slate-400 -mt-1 font-mono tracking-wider">PROXY & SUBSCRIPTIONS</span>
           </div>
         </router-link>
 
         <!-- 中间导航项 -->
-        <nav class="hidden md:flex items-center gap-1">
+        <nav class="hidden md:flex items-center gap-1.5 p-1 rounded-xl bg-slate-900/60 border border-slate-800">
           <router-link
             to="/pricing"
-            class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5"
-            :class="$route.path === '/pricing' ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-400 hover:text-white'"
+            class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5"
+            :class="$route.path === '/pricing' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'"
           >
             <span class="material-symbols-outlined text-16px">workspace_premium</span>
             <span>订阅套餐</span>
@@ -28,8 +28,8 @@
           <router-link
             v-if="isLoggedIn"
             to="/dashboard"
-            class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5"
-            :class="$route.path === '/dashboard' ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-400 hover:text-white'"
+            class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5"
+            :class="$route.path === '/dashboard' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'"
           >
             <span class="material-symbols-outlined text-16px">dashboard</span>
             <span>用户控制台</span>
@@ -38,8 +38,8 @@
           <router-link
             v-if="isLoggedIn"
             to="/orders"
-            class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5"
-            :class="$route.path.startsWith('/orders') ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-400 hover:text-white'"
+            class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5"
+            :class="$route.path.startsWith('/orders') ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'"
           >
             <span class="material-symbols-outlined text-16px">receipt_long</span>
             <span>我的订单</span>
@@ -48,10 +48,10 @@
           <router-link
             v-if="isAdmin"
             to="/admin"
-            class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5"
-            :class="$route.path.startsWith('/admin') ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'text-slate-400 hover:text-amber-300'"
+            class="px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5"
+            :class="$route.path.startsWith('/admin') ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'text-slate-400 hover:text-amber-300 hover:bg-slate-800/50'"
           >
-            <span class="material-symbols-outlined text-16px">admin_panel_settings</span>
+            <span class="material-symbols-outlined text-16px text-amber-400">admin_panel_settings</span>
             <span>管理后台</span>
           </router-link>
         </nav>
@@ -59,9 +59,9 @@
         <!-- 右侧用户状态与登出 -->
         <div class="flex items-center gap-3">
           <template v-if="isLoggedIn">
-            <span class="text-xs text-slate-300 hidden sm:inline-flex items-center gap-1">
-              <span class="material-symbols-outlined text-16px text-slate-400">person</span>
-              <span>{{ username }}</span>
+            <span class="text-xs text-slate-300 hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.04] border border-white/[0.06]">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]"></span>
+              <span class="font-mono text-slate-200">{{ username }}</span>
             </span>
             <button
               type="button"
@@ -79,6 +79,8 @@
           </template>
         </div>
       </div>
+      <!-- 导航栏底部微米科技高光反射线 -->
+      <div class="specular-line"></div>
     </header>
 
     <!-- 核心主体内容 -->
@@ -87,29 +89,34 @@
     </main>
 
     <!-- 页脚 -->
-    <footer v-if="!isAuthPage" class="border-t border-slate-800/80 py-6 text-center text-xs text-slate-500">
-      <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-        <span>{{ siteName }} · 下一代高吞吐企业级大模型服务平台</span>
-        <span class="font-mono text-11px text-slate-600">Pure Go + Modern Vue 3 · 企业级高可用算力保障</span>
+    <footer v-if="!isAuthPage" class="border-t border-white/[0.06] py-6 text-center text-xs text-slate-500 bg-[#06080f]/50 backdrop-blur">
+      <div class="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2">
+        <span class="text-slate-400">{{ siteName }} · 下一代高吞吐企业级大模型服务平台</span>
+        <span class="text-11px text-cyan-400/70 font-mono flex items-center gap-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]"></span>
+          <span>SYSTEM RUNNING · 高可用算力引擎</span>
+        </span>
       </div>
     </footer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { authState, clearToken, refreshCurrentUser, systemApi, authApi } from './api/client'
+import { authApi } from './api/client'
+import { useUserStore, useSystemStore } from './stores'
 
 const router = useRouter()
 const route = useRoute()
+const userStore = useUserStore()
+const systemStore = useSystemStore()
 
-const siteName = ref('MAX API')
+const siteName = computed(() => systemStore.siteName)
 const isAuthPage = computed(() => route.path === '/login')
-const isLoggedIn = computed(() => !!authState.token)
-const username = computed(() => authState.user?.username || '')
-const role = computed(() => authState.user?.role || '')
-const isAdmin = computed(() => role.value === 'admin')
+const isLoggedIn = computed(() => userStore.isLoggedIn)
+const username = computed(() => userStore.username)
+const isAdmin = computed(() => userStore.isAdmin)
 
 async function handleLogout() {
   try {
@@ -117,29 +124,14 @@ async function handleLogout() {
   } catch (e) {
     // 登出容错
   }
-  clearToken()
+  userStore.logout()
   router.push('/login')
 }
 
-watch(() => route.path, () => {
-  if (authState.token && !authState.user) {
-    refreshCurrentUser()
+onMounted(() => {
+  if (userStore.token) {
+    userStore.fetchUserProfile()
   }
-})
-
-onMounted(async () => {
-  if (authState.token) {
-    refreshCurrentUser()
-  }
-  try {
-    const cfg = await systemApi.getPublicConfig()
-    if (cfg && cfg.siteName && cfg.siteName !== 'Antigravity Web' && cfg.siteName !== 'open max api') {
-      siteName.value = cfg.siteName
-    } else {
-      siteName.value = 'MAX API'
-    }
-  } catch {
-    // 降级使用默认 MAX API
-  }
+  systemStore.fetchSystemConfig()
 })
 </script>

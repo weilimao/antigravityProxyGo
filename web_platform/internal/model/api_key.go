@@ -15,9 +15,10 @@ type APIKey struct {
 	UsedTokens       int64      `gorm:"default:0" json:"usedTokens"`
 	UsedGeminiTokens int64      `gorm:"default:0" json:"usedGeminiTokens"`
 	UsedClaudeTokens int64      `gorm:"default:0" json:"usedClaudeTokens"`
-	UsedNvidiaTokens int64      `gorm:"default:0" json:"usedNvidiaTokens"`
-	UsedGrokTokens   int64      `gorm:"default:0" json:"usedGrokTokens"`
-	Status           string     `gorm:"size:32;default:'active';not null" json:"status"`
+	UsedNvidiaTokens    int64      `gorm:"default:0" json:"usedNvidiaTokens"`
+	UsedGrokTokens      int64      `gorm:"default:0" json:"usedGrokTokens"`
+	UsedWorkbuddyTokens int64      `gorm:"default:0" json:"usedWorkbuddyTokens"`
+	Status              string     `gorm:"size:32;default:'active';not null" json:"status"`
 	LastUsedAt       *time.Time `json:"lastUsedAt,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`

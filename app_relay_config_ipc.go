@@ -255,7 +255,7 @@ func (a *App) handleRelayConfigIPC(channel string, args []interface{}) (string, 
 		if a.accountMgr != nil {
 			return marshalResponse(a.accountMgr.GetAllChannels())
 		}
-		return marshalResponse([]string{"antigravity", "google", "gcp", "nvidia"})
+		return marshalResponse([]string{"antigravity", "google", "gcp", "nvidia", "other", "grok", "workbuddy"})
 
 	case "relay:fetch-channel-models":
 		channel := ""

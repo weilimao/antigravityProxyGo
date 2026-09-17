@@ -9,7 +9,10 @@ docs/
 .checkpoints/
 tests/
 scratch/
-logs/
+/logs/
+/internal/relay/logs/
+/tests/logs/
+*.log
 .env.local
 scripts/.secret_token
 scripts/.secret_token copy

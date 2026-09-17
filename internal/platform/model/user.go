@@ -15,6 +15,7 @@ type User struct {
 	Status       string    `gorm:"size:32;default:'active';not null" json:"status"`
 	PlanID       *uint     `gorm:"index" json:"planId,omitempty"`
 	PlanExpireAt int64     `gorm:"default:0" json:"planExpireAt"` // Unix timestamp in seconds, 0 = no active subscription
+	ExtraTokens  int64     `gorm:"default:0" json:"extraTokens"`  // 增值包累计充值的额外 Token 额度
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 

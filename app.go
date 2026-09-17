@@ -41,6 +41,7 @@ type App struct {
 	ctx               context.Context
 	settingsMgr       *settings.Manager
 	accountMgr        *account.Manager
+	workbuddyOAuthMgr *account.WorkBuddyOAuthManager
 	sessionRouter     *session.Router
 	pricingMgr        *pricing.Manager
 	statsTracker      *stats.Tracker
@@ -218,6 +219,7 @@ func (a *App) showMainWindow() {
 		defer func() { _ = recover() }()
 		wailsRuntime.WindowShow(a.ctx)
 	}()
+	go a.foregroundFallback()
 	a.SetWindowVisible(true)
 }
 

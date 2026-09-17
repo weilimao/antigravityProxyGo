@@ -44,3 +44,8 @@ func (l *Lock) Unlock() {
 func ShowAlreadyRunningMessage() {
 	_, _ = fmt.Fprintln(os.Stderr, "Antigravity Proxy is already running.")
 }
+
+// ActivateExistingWindow 在非 Windows 平台是 no-op。
+func ActivateExistingWindow() bool {
+	return false
+}

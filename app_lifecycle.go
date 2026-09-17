@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -128,6 +129,18 @@ func (a *App) startup(ctx context.Context) {
 
 	// 4. Initialize Accounts & Session Router
 	a.accountMgr = account.NewManager()
+	a.workbuddyOAuthMgr = account.NewWorkBuddyOAuthManager(a.accountMgr)
+	a.workbuddyOAuthMgr.SetOnSuccess(func(acc *account.Account) {
+		a.emitAccountsRes()
+		a.AddLog(fmt.Sprintf("🎉 [WorkBuddy] 官方网页授权登录成功: %s (UID: %s)", acc.Email, acc.ProjectID))
+		if a.ctx != nil {
+			wailsRuntime.EventsEmit(a.ctx, "workbuddy:oauth-success", map[string]interface{}{
+				"id":    acc.ID,
+				"email": acc.Email,
+				"uid":   acc.ProjectID,
+			})
+		}
+	})
 	a.sessionRouter = session.NewRouter()
 
 	// Setup Callbacks
@@ -542,4 +555,12 @@ func (a *App) domReady(ctx context.Context) {
 
 	// DOM 就绪后立即异步推送一次实时内存数据
 	go a.emitMemoryStats()
+
+	// 首屏初始化完成后异步主动回收 Go 冷启动期解包与初始化产生的闲置物理内存
+	go func() {
+		time.Sleep(1 * time.Second)
+		debug.FreeOSMemory()
+		stats.TrimProcessWorkingSet()
+		a.emitMemoryStats()
+	}()
 }

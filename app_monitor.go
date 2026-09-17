@@ -37,10 +37,9 @@ func (a *App) startMemoryMonitor(ctx context.Context) {
 				if a.IsWindowVisibleAndActive() {
 					a.emitEvent("stats-updated", a.getStatsPayload(false))
 				}
-				// 仅后台/挂机态修剪:窗口可见/前台使用时,TrimProcessWorkingSet(EmptyWorkingSet 全进程树)
-				// 会把 Go 主进程及所有 WebView2 子进程的物理内存页驱逐回磁盘,下一次交互即触发缺页回盘风暴,
-				// 这正是"每 30s 卡一下"的最强嫌疑源;故前台绝不修剪,只在后台托盘挂机时维持低内存水位。
-				if !a.IsWindowVisibleAndActive() {
+				// 仅后台/挂机态修剪: 窗口不可见或最小化后台挂机时, 安全归还 Go 引擎未占用的物理内存页。
+				// 已在 TrimProcessWorkingSet 内部隔离 WebView2 进程树, 避免对 Chromium 渲染器施加 EmptyWorkingSet 导致崩溃。
+				if !a.IsWindowVisibleAndActive() && !a.IsQuitting() {
 					stats.TrimProcessWorkingSet()
 					debug.FreeOSMemory()
 				}

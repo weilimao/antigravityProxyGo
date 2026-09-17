@@ -277,3 +277,158 @@ func TestPaymentFlow_EpayDirectAndWebhook(t *testing.T) {
 		t.Fatalf("expected tampered epay webhook to fail, but succeeded")
 	}
 }
+
+// TestPaymentFlow_AmountTamperRejected_Relay 测试切单中继下金额篡改（如订单88元但回调0.01元）被拦截拒绝
+func TestPaymentFlow_AmountTamperRejected_Relay(t *testing.T) {
+	teardown := setupTestEnvironment(t)
+	defer teardown()
+
+	secret := "relay_secret_test_tamper_1"
+	mockRelayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"order_no": "B_ORDER_TAMPER",
+			"pay_url":  "http://127.0.0.1:8080/checkout/B_ORDER_TAMPER",
+		})
+	}))
+	defer mockRelayServer.Close()
+
+	settingSvc := NewSettingService()
+	authSvc := NewAuthService()
+	planSvc := NewPlanService()
+	paymentSvc := NewPaymentService()
+
+	_ = settingSvc.SetPaymentConfig(&model.PaymentConfig{
+		PayProvider:    "epay",
+		RelayURL:       mockRelayServer.URL,
+		RelaySecret:    secret,
+		RelayNotifyURL: "http://localhost:8100/api/v1/pay/notify/relay",
+	})
+
+	user, _, _ := authSvc.Register("tamper_user", "tamper@example.com", "pass123")
+	plan := model.Plan{
+		Name:         "高端定制方案",
+		PriceCents:   8800, // 88.00 元
+		DurationDays: 30,
+		Status:       "active",
+	}
+	_ = planSvc.CreatePlan(&plan)
+
+	// 创建订单
+	order, _, err := paymentSvc.CreateRelayOrder(user.ID, plan.ID)
+	if err != nil {
+		t.Fatalf("create relay order failed: %v", err)
+	}
+
+	// 攻击者伪造 0.01 元合法签名的中继回调
+	tamperedParams := map[string]interface{}{
+		"out_trade_no": order.OrderNo,
+		"trade_no":     "RELAY_TXN_FAKE_001",
+		"trade_status": "TRADE_SUCCESS",
+		"money":        "0.01", // 恶意篡改为 1 分钱
+	}
+	tamperedParams["sign"] = crypto.GenerateRelaySign(tamperedParams, secret)
+
+	err = paymentSvc.HandleRelayWebhook(tamperedParams)
+	if err == nil {
+		t.Fatalf("expected amount mismatch error, got nil")
+	}
+
+	// 验证订单状态仍为 pending
+	dbOrder, _ := paymentSvc.GetOrderByNo(order.OrderNo)
+	if dbOrder.Status != "pending" || dbOrder.PaidAt != nil {
+		t.Fatalf("expected order status to remain pending, got %s", dbOrder.Status)
+	}
+
+	// 验证用户订阅并未被开通
+	profile, _ := authSvc.GetProfile(user.ID)
+	if profile.IsSubscriptionActive() {
+		t.Fatalf("expected user subscription to remain inactive")
+	}
+
+	// 再次发送全额 88.00 元合法签名回调，验证可以正常开通
+	validParams := map[string]interface{}{
+		"out_trade_no": order.OrderNo,
+		"trade_no":     "RELAY_TXN_REAL_001",
+		"trade_status": "TRADE_SUCCESS",
+		"money":        "88.00",
+	}
+	validParams["sign"] = crypto.GenerateRelaySign(validParams, secret)
+
+	if err := paymentSvc.HandleRelayWebhook(validParams); err != nil {
+		t.Fatalf("handle valid relay webhook failed: %v", err)
+	}
+
+	// 验证开通成功
+	dbOrder2, _ := paymentSvc.GetOrderByNo(order.OrderNo)
+	if dbOrder2.Status != "paid" {
+		t.Fatalf("expected order to be paid after valid webhook")
+	}
+
+	// 验证重复回调幂等处理
+	if err := paymentSvc.HandleRelayWebhook(validParams); err != nil {
+		t.Fatalf("expected idempotent webhook call to succeed, got %v", err)
+	}
+}
+
+// TestPaymentFlow_AmountTamperRejected_Epay 测试易支付直连模式下金额篡改被拦截
+func TestPaymentFlow_AmountTamperRejected_Epay(t *testing.T) {
+	teardown := setupTestEnvironment(t)
+	defer teardown()
+
+	epayKey := "epay_key_tamper_test_2"
+	settingSvc := NewSettingService()
+	authSvc := NewAuthService()
+	planSvc := NewPlanService()
+	paymentSvc := NewPaymentService()
+
+	_ = settingSvc.SetPaymentConfig(&model.PaymentConfig{
+		PayProvider:   "epay",
+		EpayURL:       "https://epay.test.com",
+		EpayPID:       "8888",
+		EpayKey:       epayKey,
+		EpayType:      "alipay",
+		EpayNotifyURL: "http://mysite.com/api/v1/pay/notify/epay",
+	})
+
+	user, _, _ := authSvc.Register("epay_tamper", "epay_tamper@example.com", "pass123")
+	plan := model.Plan{
+		Name:         "标准套餐",
+		PriceCents:   4500, // 45.00 元
+		DurationDays: 30,
+		Status:       "active",
+	}
+	_ = planSvc.CreatePlan(&plan)
+
+	order, _, err := paymentSvc.CreateRelayOrder(user.ID, plan.ID)
+	if err != nil {
+		t.Fatalf("create order failed: %v", err)
+	}
+
+	// 攻击者篡改金额为 0.05 元并发起 MD5 签名
+	tamperedParams := map[string]interface{}{
+		"pid":          "8888",
+		"type":         "alipay",
+		"out_trade_no": order.OrderNo,
+		"trade_no":     "EPAY_TXN_TAMPER_002",
+		"trade_status": "TRADE_SUCCESS",
+		"money":        "0.05",
+	}
+	tamperedParams["sign"] = crypto.GenerateEpaySign(tamperedParams, epayKey)
+
+	err = paymentSvc.HandleEpayWebhook(tamperedParams)
+	if err == nil {
+		t.Fatalf("expected epay amount mismatch error, got nil")
+	}
+
+	// 验证订单未开通
+	dbOrder, _ := paymentSvc.GetOrderByNo(order.OrderNo)
+	if dbOrder.Status != "pending" {
+		t.Fatalf("expected order to remain pending")
+	}
+
+	profile, _ := authSvc.GetProfile(user.ID)
+	if profile.IsSubscriptionActive() {
+		t.Fatalf("expected subscription to remain inactive")
+	}
+}

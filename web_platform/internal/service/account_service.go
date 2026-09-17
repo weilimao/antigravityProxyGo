@@ -38,6 +38,8 @@ func (s *AccountService) partitionFileName(provider string) string {
 		return "accounts_other.json"
 	case "grok":
 		return "accounts_grok.json"
+	case "workbuddy":
+		return "accounts_workbuddy.json"
 	case "project":
 		return "accounts_project.json"
 	case "antigravity":
@@ -146,7 +148,7 @@ func (s *AccountService) GetAccountsData() (*model.AccountsDataResponse, error) 
 
 	// 2. 读取各分区账号
 	var allAccounts []*model.AccountDTO
-	partitions := []string{"antigravity", "project", "nvidia", "grok", "other"}
+	partitions := []string{"antigravity", "project", "nvidia", "grok", "workbuddy", "other"}
 	for _, p := range partitions {
 		fn := s.partitionFileName(p)
 		accs, _ := s.readPartitionAccounts(fn)
@@ -177,6 +179,7 @@ func (s *AccountService) loadPoolConfigInternal() *model.PoolConfigDTO {
 		OtherLBModes:              make(map[string]string),
 		NvidiaLBMode:              "round-robin",
 		GrokLBMode:                "round-robin",
+		WorkbuddyLBMode:           "round-robin",
 		NvidiaMaxConcurrency:      40,
 		AntigravityMaxConcurrency: 10,
 		AntigravityCliVersion:     "2.3.1",
@@ -187,6 +190,7 @@ func (s *AccountService) loadPoolConfigInternal() *model.PoolConfigDTO {
 		GrokMaxConcurrency:        10,
 		GrokCliVersion:            "1.0.0",
 		GrokQuotaCooldownHours:    24,
+		WorkbuddyMaxConcurrency:   10,
 	}
 
 	path := s.getTargetFilePath("accounts_pool.json")
@@ -294,6 +298,8 @@ func (s *AccountService) AddAccount(req *model.AddAccountRequest) (*model.Accoun
 			tier = "NVIDIA (第三方 API Key)"
 		} else if provider == "other" {
 			tier = "Other 自定义上游"
+		} else if provider == "workbuddy" {
+			tier = "Free"
 		} else {
 			tier = "Pro"
 		}
@@ -328,6 +334,8 @@ func (s *AccountService) AddAccount(req *model.AddAccountRequest) (*model.Accoun
 			newAcc.BaseURL = "https://integrate.api.nvidia.com/v1"
 		} else if provider == "grok" {
 			newAcc.BaseURL = "https://cli-chat-proxy.grok.com"
+		} else if provider == "workbuddy" {
+			newAcc.BaseURL = "https://www.codebuddy.ai"
 		}
 	}
 
@@ -345,7 +353,7 @@ func (s *AccountService) UpdateAccount(id string, req *model.UpdateAccountReques
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	partitions := []string{"nvidia", "other", "grok", "project", "antigravity"}
+	partitions := []string{"nvidia", "other", "grok", "workbuddy", "project", "antigravity"}
 	for _, p := range partitions {
 		fn := s.partitionFileName(p)
 		accounts, _ := s.readPartitionAccounts(fn)
@@ -429,7 +437,7 @@ func (s *AccountService) DeleteAccount(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	partitions := []string{"nvidia", "other", "grok", "project", "antigravity"}
+	partitions := []string{"nvidia", "other", "grok", "workbuddy", "project", "antigravity"}
 	for _, p := range partitions {
 		fn := s.partitionFileName(p)
 		accounts, _ := s.readPartitionAccounts(fn)
@@ -467,7 +475,7 @@ func (s *AccountService) BatchDeleteAccounts(ids []string) (int, error) {
 	}
 
 	totalDeleted := 0
-	partitions := []string{"nvidia", "other", "grok", "project", "antigravity"}
+	partitions := []string{"nvidia", "other", "grok", "workbuddy", "project", "antigravity"}
 	for _, p := range partitions {
 		fn := s.partitionFileName(p)
 		accounts, _ := s.readPartitionAccounts(fn)
@@ -572,7 +580,7 @@ func (s *AccountService) ExportAccounts(channel string) ([]*model.AccountDTO, er
 	}
 
 	var all []*model.AccountDTO
-	partitions := []string{"antigravity", "project", "nvidia", "grok", "other"}
+	partitions := []string{"antigravity", "project", "nvidia", "grok", "workbuddy", "other"}
 	for _, p := range partitions {
 		fn := s.partitionFileName(p)
 		accs, _ := s.readPartitionAccounts(fn)

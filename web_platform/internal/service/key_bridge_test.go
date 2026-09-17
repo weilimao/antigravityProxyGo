@@ -2,9 +2,11 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"antigravity-web-platform/internal/config"
 	"antigravity-web-platform/internal/database"
@@ -38,8 +40,17 @@ func TestKeyService_BridgeAndStrictModels(t *testing.T) {
 			}
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			lastCreatedAllowedModels = req.AllowedModels
+			keyStr := fmt.Sprintf("sk-ant-mocked-%d", time.Now().UnixNano())
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"success":true,"key":{"id":"k1","key":"sk-ant-mocked-123456","allowedModels":["auto","gemini-2.5-flash"]}}`))
+			respBytes, _ := json.Marshal(map[string]interface{}{
+				"success": true,
+				"key": map[string]interface{}{
+					"id":            "k1",
+					"key":           keyStr,
+					"allowedModels": req.AllowedModels,
+				},
+			})
+			w.Write(respBytes)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -84,9 +95,9 @@ func TestKeyService_BridgeAndStrictModels(t *testing.T) {
 	user.PlanID = &plan.ID
 	db.Save(user)
 
-	// 5. 创建 API Key，尝试传入未经管理员授权的模型 claude-3-7-sonnet
+	// 5. 创建 API Key，尝试传入包含 auto、套餐允许模型 gemini-2.5-flash 与未经授权的模型 claude-3-7-sonnet
 	keySvc := NewKeyService()
-	customAttempt := []string{"gemini-2.5-flash", "claude-3-7-sonnet"}
+	customAttempt := []string{"auto", "gemini-2.5-flash", "claude-3-7-sonnet"}
 	createdKey, err := keySvc.CreateKey(user.ID, "Bob Key", customAttempt)
 	if err != nil {
 		t.Fatalf("CreateKey failed: %v", err)
@@ -96,7 +107,7 @@ func TestKeyService_BridgeAndStrictModels(t *testing.T) {
 	}
 
 	// 6. 严格断言模型白名单:
-	// a. 必须包含 auto (核心竞速模型)
+	// a. 必须包含 auto (显式勾选)
 	// b. 必须包含 gemini-2.5-flash (套餐允许模型)
 	// c. 坚决不能包含 claude-3-7-sonnet (非管理员后台配置模型被剔除)
 	hasAuto := false
@@ -128,6 +139,17 @@ func TestKeyService_BridgeAndStrictModels(t *testing.T) {
 	for _, m := range lastCreatedAllowedModels {
 		if m == "claude-3-7-sonnet" {
 			t.Errorf("gateway payload contained unauthorized model 'claude-3-7-sonnet'")
+		}
+	}
+
+	// 7. 测试未显式勾选 auto 时，Key 中绝不包含 auto
+	keyWithoutAuto, err := keySvc.CreateKey(user.ID, "Bob Key Without Auto", []string{"gemini-2.5-flash"})
+	if err != nil {
+		t.Fatalf("CreateKey without auto failed: %v", err)
+	}
+	for _, m := range keyWithoutAuto.AllowedModels {
+		if m == "auto" {
+			t.Errorf("key created without auto should not contain 'auto', got %v", keyWithoutAuto.AllowedModels)
 		}
 	}
 }

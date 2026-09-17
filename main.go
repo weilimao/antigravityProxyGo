@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
+	"antigravity-proxy/internal/settings"
 	"antigravity-proxy/internal/singleinstance"
 )
 
@@ -42,10 +44,39 @@ func localMediaHandler() http.Handler {
 	})
 }
 
+// isSilentStartRequested 检查当前是否为系统开机自启且用户配置了静默启动。
+// 仅当两者均满足时才开启 StartHidden，日常用户手动双击启动时保持 StartHidden=false，
+// 使得操作系统在进程创建之初就建立可见前台窗口，牢固锁定前台输入焦点，彻底杜绝焦点回退到外部浏览器。
+func isSilentStartRequested() bool {
+	isAutostart := false
+	for _, arg := range os.Args {
+		if arg == "--autostart" || arg == "-autostart" {
+			isAutostart = true
+			break
+		}
+	}
+	if !isAutostart {
+		return false
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	var defaultUserData string
+	if runtime.GOOS == "windows" {
+		defaultUserData = filepath.Join(homeDir, "AppData", "Roaming", "antigravity-proxy-desktop")
+	} else {
+		defaultUserData = filepath.Join(homeDir, "Library", "Application Support", "antigravity-proxy-desktop")
+	}
+	mgr := settings.NewManager()
+	mgr.Init(defaultUserData)
+	return mgr.GetSilentStart()
+}
+
 func main() {
-	// 内存轻量化配置：设置 Go 堆内存软上限为 96MB，GOGC 调整为 60，主动抑制大流量突发时的堆膨胀
-	debug.SetMemoryLimit(96 * 1024 * 1024)
-	debug.SetGCPercent(60)
+	// 内存与性能平衡配置：设置 Go 堆内存软上限为 256MB，GOGC 调整为 80，兼顾挂机轻量化与大流量突发稳定性
+	debug.SetMemoryLimit(256 * 1024 * 1024)
+	debug.SetGCPercent(80)
 
 	// 将工作目录切换为可执行文件实际目录，确保自启动时工作目录正确，防止托盘初始化失败
 	if exePath, err := os.Executable(); err == nil {
@@ -64,8 +95,8 @@ func main() {
 		defer lock.Unlock()
 	}
 
-	// Set WebView2 environment variable: 深度精简无关后台进程、合并网络栈并限制 V8 堆上限，消除多余空闲渲染器与冗余子进程开销。
-	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--mute-audio --disable-audio --disable-features=AudioServiceSandbox,VideoCaptureService,Translate,MediaRouter,SpareRendererForSitePerProcess,CalculateNativeWinOcclusion,InterestFeedContentSuggestions,OptimizationHints --enable-features=NetworkServiceInProcess --renderer-process-limit=1 --disable-site-isolation-trials --disable-background-networking --disable-component-update --disable-extensions --disable-sync --disable-breakpad --js-flags=\"--max-old-space-size=64 --expose-gc\" --disable-gpu-program-caches --disable-gpu-shader-disk-cache --prune-gpu-command-buffer --enable-aggressive-domstorage-flushing")
+	// Set WebView2 environment variable: 精简无关功能模块，保留 GPU Shader 缓存消除启动卡顿，V8 堆放宽至 256MB 消除大数据渲染 OOM
+	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--mute-audio --disable-audio --disable-features=AudioServiceSandbox,VideoCaptureService,Translate,MediaRouter,SpareRendererForSitePerProcess,CalculateNativeWinOcclusion,InterestFeedContentSuggestions,OptimizationHints --renderer-process-limit=1 --disable-site-isolation-trials --disable-background-networking --disable-component-update --disable-extensions --disable-sync --js-flags=\"--max-old-space-size=256\"")
 
 	// Create an instance of the app structure
 	app := NewApp()
@@ -80,7 +111,7 @@ func main() {
 			Handler: localMediaHandler(),
 		},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
-		StartHidden:      true,
+		StartHidden:      isSilentStartRequested(),
 		OnStartup:        app.startup,
 		OnDomReady:       app.domReady,
 		OnShutdown:       func(ctx context.Context) { app.shutdown() },
@@ -89,7 +120,7 @@ func main() {
 			app,
 		},
 		Windows: &windows.Options{
-			WebviewGpuIsDisabled: true, // 彻底禁用独立 GPU Process 与 D3D11 交换链，节省 350MB+ 物理内存并消除启动 900MB 脉冲
+			WebviewGpuIsDisabled: true, // 彻底禁用独立 GPU Process 与 D3D11 交换链，节省 350MB+ 物理内存并消除启动脉冲
 		},
 	})
 

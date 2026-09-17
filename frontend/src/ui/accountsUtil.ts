@@ -96,5 +96,135 @@ export function updateBatchActionBarUI() {
     }
 }
 
+export function updatePoolModeUI() {
+    const poolModeToggle = document.getElementById('poolModeToggle') as HTMLInputElement | null;
+    if (!poolModeToggle) return;
+    const isPool = poolModeToggle.checked;
+    const label = poolModeToggle.nextElementSibling;
+    if (!label) return;
+    
+    if (isPool) {
+        poolModeToggle.className = 'toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-primary appearance-none cursor-pointer translate-x-5 transition-transform duration-200 ease-in-out';
+        label.className = 'toggle-label block overflow-hidden h-5 rounded-full bg-primary cursor-pointer';
+    } else {
+        poolModeToggle.className = 'toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
+        label.className = 'toggle-label block overflow-hidden h-5 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
+    }
+}
+
+export function updateLayoutUI() {
+    const gridBtn = document.getElementById('btnLayoutGrid') as HTMLButtonElement | null;
+    const listBtn = document.getElementById('btnLayoutList') as HTMLButtonElement | null;
+    const selectGridColumns = document.getElementById('selectGridColumns') as HTMLSelectElement | null;
+    const accountsListEl = document.getElementById('accountsList');
+    
+    const activeClass = 'p-1 rounded-md cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm flex items-center justify-center';
+    const inactiveClass = 'p-1 rounded-md cursor-pointer transition-all duration-200 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 flex items-center justify-center';
+    
+    if (state.accountLayout === 'grid') {
+        if (gridBtn) gridBtn.className = activeClass;
+        if (listBtn) listBtn.className = inactiveClass;
+        if (selectGridColumns) {
+            selectGridColumns.classList.remove('hidden');
+            selectGridColumns.value = String(state.accountGridColumns);
+        }
+        if (accountsListEl) {
+            accountsListEl.classList.remove('layout-list');
+            accountsListEl.classList.add('layout-grid');
+            accountsListEl.classList.remove('cols-3', 'cols-4', 'cols-5');
+            accountsListEl.classList.add(`cols-${state.accountGridColumns}`);
+        }
+    } else {
+        if (gridBtn) gridBtn.className = inactiveClass;
+        if (listBtn) listBtn.className = activeClass;
+        if (selectGridColumns) {
+            selectGridColumns.classList.add('hidden');
+        }
+        if (accountsListEl) {
+            accountsListEl.classList.remove('layout-grid', 'cols-3', 'cols-4', 'cols-5');
+            accountsListEl.classList.add('layout-list');
+        }
+    }
+}
+
+export function initBatchActionEvents(): void {
+    const chkAll = document.getElementById('chkSelectAllAccounts') as HTMLInputElement | null;
+    if (chkAll) {
+        chkAll.addEventListener('change', (e: any) => {
+            const isChecked = e.target.checked;
+            const visibleCheckboxes = document.querySelectorAll('.account-card-checkbox') as NodeListOf<HTMLInputElement>;
+            visibleCheckboxes.forEach(cb => {
+                const accId = cb.getAttribute('data-account-id');
+                if (!accId) return;
+                cb.checked = isChecked;
+                if (isChecked) {
+                    if (!state.selectedAccountIds.includes(accId)) {
+                        state.selectedAccountIds.push(accId);
+                    }
+                } else {
+                    state.selectedAccountIds = state.selectedAccountIds.filter(id => id !== accId);
+                }
+            });
+            updateBatchActionBarUI();
+        });
+    }
+
+    const btnBatchDelete = document.getElementById('btnBatchDeleteAccounts') as HTMLButtonElement | null;
+    if (btnBatchDelete) {
+        btnBatchDelete.addEventListener('click', async () => {
+            const count = state.selectedAccountIds.length;
+            if (count === 0) return;
+
+            const dict = i18n[state.currentLanguage] || i18n.zh;
+            const confirmMsg = (dict.batchDeleteAccountsConfirm || '确定要删除选中的 {count} 个账号吗？删除后不可恢复！')
+                .replace('{count}', String(count));
+
+            const $confirm = (window as any).$confirm;
+            let confirmed = false;
+            if (typeof $confirm === 'function') {
+                confirmed = await $confirm(confirmMsg);
+            } else {
+                confirmed = confirm(confirmMsg);
+            }
+            if (!confirmed) return;
+
+            const toDeleteIds = [...state.selectedAccountIds];
+            try {
+                await ipcRenderer.invoke('accounts:batch-remove', toDeleteIds);
+            } catch (err) {
+                ipcRenderer.send('accounts:batch-remove', toDeleteIds);
+            }
+
+            state.selectedAccountIds = [];
+            updateBatchActionBarUI();
+            ipcRenderer.send('accounts:get');
+        });
+    }
+}
+
+export function initImportExportEvents(): void {
+    const btnExportAccounts = document.getElementById('btnExportAccounts') as HTMLButtonElement | null;
+    if (btnExportAccounts) {
+        btnExportAccounts.addEventListener('click', async () => {
+            const provider = state.currentViewTab || 'antigravity';
+            await exportAccountConfig(provider);
+        });
+    }
+
+    const btnImportAccounts = document.getElementById('btnImportAccounts') as HTMLButtonElement | null;
+    if (btnImportAccounts) {
+        btnImportAccounts.addEventListener('click', async () => {
+            try {
+                const res = await ipcRenderer.invoke('accounts:import');
+                const payload = (res && typeof res === 'object') ? res : null;
+                if (!payload || payload.success === false) return;
+                ipcRenderer.send('accounts:get');
+            } catch (err) {
+                console.error('Failed to import accounts:', err);
+            }
+        });
+    }
+}
+
 // 导出到原 accountsController 语义命名(内部使用)
 export { exportAccountConfig, setGrokThawButtonVisible, setGrokCheckAuthButtonVisible, setNvidiaBatchAssignIPButtonVisible };

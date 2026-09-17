@@ -27,14 +27,15 @@ a {
 
 :root {
   --bg-dark: #0b0f19;
-  --bg-card: #131b2e;
-  --bg-card-hover: #1a243d;
-  --border-color: rgba(255, 255, 255, 0.08);
-  --border-active: rgba(99, 102, 241, 0.5);
+  --bg-card: #11192e;
+  --bg-card-hover: #17223b;
+  --border-color: #1e293b;
+  --border-highlight: #334155;
+  --border-active: #6366f1;
   --primary: #6366f1;
   --primary-hover: #4f46e5;
-  --primary-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%);
-  --accent-cyan: #06b6d4;
+  --primary-gradient: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
+  --accent-cyan: #38bdf8;
   --accent-emerald: #10b981;
   --accent-amber: #f59e0b;
   --accent-rose: #f43f5e;
@@ -51,7 +52,9 @@ a {
 
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background-color: var(--bg-dark);
+  background-color: #080c16;
+  background-image: radial-gradient(circle at 50% 0%, #131d36 0%, #080c16 75%);
+  background-attachment: fixed;
   color: var(--text-main);
   min-height: 100vh;
   overflow-x: hidden;
@@ -67,7 +70,7 @@ code, pre, .font-mono {
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #090d16;
+  background: #080c16;
 }
 ::-webkit-scrollbar-thumb {
   background: #1e293b;
@@ -77,26 +80,36 @@ code, pre, .font-mono {
   background: #334155;
 }
 
-/* 毛玻璃质感卡片 */
-.glass-card {
-  background: rgba(19, 27, 46, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--border-color);
+/* 现代科技深色卡片 (Solid Dark Tech Card - 绝不透底，字迹锐利) */
+.glass-card,
+.glass-card-addon {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.5);
   border-radius: 14px;
-  transition: all 0.25s ease;
+  padding: 24px;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.glass-card:hover {
-  border-color: rgba(255, 255, 255, 0.16);
+.glass-card:hover,
+.glass-card-addon:hover {
+  border-color: #38bdf8;
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.65);
+  transform: translateY(-2px);
 }
 
 .glass-card-glow {
-  background: rgba(19, 27, 46, 0.85);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(99, 102, 241, 0.3);
-  box-shadow: 0 0 25px -5px rgba(99, 102, 241, 0.15);
+  background: #111a33;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5);
   border-radius: 14px;
+  padding: 24px;
+}
+
+/* 顶部微细分割线 */
+.specular-line {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.3) 50%, transparent);
 }
 
 /* 渐变标题文字 */
@@ -106,26 +119,32 @@ code, pre, .font-mono {
   -webkit-text-fill-color: transparent;
 }
 
+.gradient-text-amber {
+  color: #fbbf24;
+}
+
 /* 按钮通用风格 */
 .btn-primary {
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  background: #4f46e5;
   color: #ffffff;
   font-weight: 600;
   padding: 8px 16px;
   border-radius: 8px;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.35);
 }
 
 .btn-primary:hover {
-  filter: brightness(1.1);
-  box-shadow: 0 6px 18px rgba(99, 102, 241, 0.4);
+  background: #4338ca;
+  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.5);
   transform: translateY(-1px);
 }
 
@@ -133,10 +152,38 @@ code, pre, .font-mono {
   transform: translateY(0);
 }
 
+.btn-amber-tech {
+  background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+  color: #ffffff;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 8px rgba(217, 119, 6, 0.35);
+}
+
+.btn-amber-tech:hover {
+  background: linear-gradient(135deg, #b45309 0%, #92400e 100%);
+  box-shadow: 0 4px 14px rgba(217, 119, 6, 0.5);
+  transform: translateY(-1px);
+}
+
+.btn-amber-tech:active {
+  transform: translateY(0);
+}
+
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.05);
   color: var(--text-main);
-  border: 1px solid var(--border-color);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   font-weight: 500;
   padding: 8px 16px;
   border-radius: 8px;
@@ -144,11 +191,13 @@ code, pre, .font-mono {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.2s;
 }
 
 .btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.2);
 }
 
@@ -163,6 +212,8 @@ code, pre, .font-mono {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.2s;
 }
 
@@ -173,7 +224,7 @@ code, pre, .font-mono {
 /* 输入框风格 */
 @layer components {
   .input-dark {
-    background: rgba(11, 15, 25, 0.85);
+    background: #0b0f19;
     border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 8px 12px;
@@ -185,7 +236,7 @@ code, pre, .font-mono {
 
   .input-dark:focus {
     border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
   }
 }
 
@@ -200,7 +251,7 @@ input:-webkit-autofill:active {
   transition: background-color 5000s ease-in-out 0s;
 }
 
-/* 标签 Badge */
+/* 标签 Badge (清晰锐利、无重影) */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -212,26 +263,32 @@ input:-webkit-autofill:active {
 
 .badge-indigo {
   background: rgba(99, 102, 241, 0.15);
-  color: #818cf8;
+  color: #a5b4fc;
   border: 1px solid rgba(99, 102, 241, 0.3);
 }
 
 .badge-emerald {
   background: rgba(16, 185, 129, 0.15);
-  color: #34d399;
+  color: #6ee7b7;
   border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
 .badge-amber {
   background: rgba(245, 158, 11, 0.15);
-  color: #fbbf24;
+  color: #fcd34d;
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 .badge-cyan {
   background: rgba(6, 182, 212, 0.15);
-  color: #22d3ee;
+  color: #67e8f9;
   border: 1px solid rgba(6, 182, 212, 0.3);
+}
+
+.badge-cyber {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #38bdf8;
 }
 
 /* 表格风格 */

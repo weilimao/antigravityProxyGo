@@ -167,9 +167,9 @@ export async function refreshAllAccountsQuotas() {
 
     try {
         for (const acc of state.currentAccountsList) {
-            // 自动过滤并跳过已停用的灰色账号及 NVIDIA/Grok 账号
-            // (nvidia/grok 不走此异步聚合循环,其配额逐卡刷新走 renderAccounts→loadAccountQuota→renderGrok/NvidiaAccountQuota)。
-            if (!acc.enabled || acc.provider === 'nvidia' || acc.provider === 'grok') {
+            // 自动过滤并跳过已停用的灰色账号及 NVIDIA/Grok/WorkBuddy 账号
+            // (nvidia/grok/workbuddy 不走此异步聚合循环,其配额逐卡刷新走 renderAccounts→loadAccountQuota→renderGrok/Nvidia/WorkBuddyAccountQuota)。
+            if (!acc.enabled || acc.provider === 'nvidia' || acc.provider === 'grok' || acc.provider === 'workbuddy') {
                 continue;
             }
             try {
@@ -202,7 +202,7 @@ export async function refreshAllAccountsQuotasSilently() {
     if (!state.currentAccountsList || state.currentAccountsList.length === 0) return;
     try {
         for (const acc of state.currentAccountsList) {
-            if (!acc.enabled || acc.provider === 'nvidia' || acc.provider === 'grok') {
+            if (!acc.enabled || acc.provider === 'nvidia' || acc.provider === 'grok' || acc.provider === 'workbuddy') {
                 continue;
             }
             try {

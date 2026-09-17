@@ -56,8 +56,25 @@ func (s *RelayBridgeService) getAdminKey() string {
 	return key
 }
 
+func (s *RelayBridgeService) isSyncEnabled() bool {
+	cfg := config.GlobalConfig
+	if cfg == nil {
+		return false
+	}
+	if cfg.Gateway.SyncEnabled {
+		return true
+	}
+	if strings.TrimSpace(cfg.Gateway.GatewayURL) != "" {
+		return true
+	}
+	return false
+}
+
 // SyncUserToRelay 桥接同步注册或激活 18444 Relay 用户
 func (s *RelayBridgeService) SyncUserToRelay(username, password, remark string, planExpireAt ...int64) error {
+	if !s.isSyncEnabled() {
+		return nil
+	}
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return fmt.Errorf("username is empty")
@@ -102,6 +119,9 @@ func (s *RelayBridgeService) SyncUserToRelay(username, password, remark string, 
 
 // SyncUserExpireToRelay 桥接同步用户的套餐到期时间至 18444 Relay 网关
 func (s *RelayBridgeService) SyncUserExpireToRelay(username string, expireAt int64) error {
+	if !s.isSyncEnabled() {
+		return nil
+	}
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return fmt.Errorf("username is empty")
@@ -138,6 +158,15 @@ func (s *RelayBridgeService) SyncUserExpireToRelay(username string, expireAt int
 
 // CreateKeyOnRelay 桥接在 18444 Relay 服务端为指定用户生成受控 API Key（支持可选的总限额 limitTokens 与到期时间 planExpireAt）
 func (s *RelayBridgeService) CreateKeyOnRelay(username, name, customKey string, allowedModels []string, limitTokensAndExpire ...int64) (*RelayCreatedKey, error) {
+	if !s.isSyncEnabled() {
+		return &RelayCreatedKey{
+			ID:            "local-" + customKey,
+			Name:          name,
+			Key:           customKey,
+			AllowedModels: allowedModels,
+			CreatedAt:     time.Now(),
+		}, nil
+	}
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, fmt.Errorf("username is empty")
@@ -200,6 +229,9 @@ func (s *RelayBridgeService) CreateKeyOnRelay(username, name, customKey string, 
 
 // DeleteKeyOnRelay 桥接在 18444 Relay 服务端删除指定 API Key
 func (s *RelayBridgeService) DeleteKeyOnRelay(username, keyStr string) error {
+	if !s.isSyncEnabled() {
+		return nil
+	}
 	username = strings.TrimSpace(username)
 	keyStr = strings.TrimSpace(keyStr)
 	if username == "" || keyStr == "" {
@@ -237,6 +269,9 @@ func (s *RelayBridgeService) DeleteKeyOnRelay(username, keyStr string) error {
 
 // FetchUserKeysUsage 桥接从 18444 Relay 服务端拉取指定用户全部 API Key 的最新 Token 消耗
 func (s *RelayBridgeService) FetchUserKeysUsage(username string) (map[string]int64, error) {
+	if !s.isSyncEnabled() {
+		return make(map[string]int64), nil
+	}
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, fmt.Errorf("username is empty")
@@ -273,6 +308,35 @@ func (s *RelayBridgeService) FetchUserKeysUsage(username string) (map[string]int
 	}
 
 	return res.Usages, nil
+}
+
+// ResetUserKeysUsage 桥接请求 18444 Relay 服务端重置指定用户全部 API Key 的已消耗 Token 计数器
+func (s *RelayBridgeService) ResetUserKeysUsage(username string) error {
+	if !s.isSyncEnabled() {
+		return nil
+	}
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return fmt.Errorf("username is empty")
+	}
+
+	url := fmt.Sprintf("%s/api/admin/users/keys-usage/reset?username=%s", s.getGatewayURL(), username)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.getAdminKey())
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request relay gateway failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("relay gateway returned status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 type AdminLogItem struct {

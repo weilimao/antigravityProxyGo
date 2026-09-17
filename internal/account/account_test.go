@@ -176,10 +176,34 @@ func TestAccountManager_TokenRefreshMonitor(t *testing.T) {
 		TokenRefreshedAt: time.Now().Unix() - 60*60,
 	}
 
+	// 5. 创建 workbuddy 账号 (TokenRefreshedAt 为 0，绝对不走 Google OAuth 刷新流)
+	accWorkBuddy := &Account{
+		ID:               "acc-wb",
+		Email:            "wb@workbuddy.ai",
+		AccessToken:      "token-wb",
+		RefreshToken:     "refresh-wb",
+		Provider:         "workbuddy",
+		Enabled:          true,
+		TokenRefreshedAt: 0,
+	}
+
+	// 6. 创建 grok 账号 (不走通用 5min 刷新流)
+	accGrok := &Account{
+		ID:               "acc-grok",
+		Email:            "grok@x.ai",
+		AccessToken:      "token-grok",
+		RefreshToken:     "refresh-grok",
+		Provider:         "grok",
+		Enabled:          true,
+		TokenRefreshedAt: 0,
+	}
+
 	m.AddAccount(accNormal)
 	m.AddAccount(accExpired)
 	m.AddAccount(accDisabled)
 	m.AddAccount(acc2FA)
+	m.AddAccount(accWorkBuddy)
+	m.AddAccount(accGrok)
 
 	// 手动触发一次检查刷新
 	m.CheckAndRefreshTokens()

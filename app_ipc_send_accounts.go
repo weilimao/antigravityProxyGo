@@ -279,6 +279,22 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		a.emitAccountsRes()
 		return true
 
+	case "workbuddy:set-lb-mode":
+		// args: [mode]。WorkBuddy 单池单值 LB 算法(与 grok:set-lb-mode 同构)。
+		mode := getStringArg(0)
+		a.accountMgr.SetWorkBuddyLBMode(mode)
+		a.AddLog("🔄 WorkBuddy Load Balancing Algorithm switched to: " + a.accountMgr.GetWorkBuddyLBMode())
+		a.emitAccountsRes()
+		return true
+
+	case "workbuddy:set-max-concurrency":
+		// 单账号在途并发上限:0=未配置回退默认 10;超过自动换号(超额降级最少并发号)。
+		v := getIntArg(0)
+		a.accountMgr.SetWorkBuddyMaxConcurrency(v)
+		a.AddLog(fmt.Sprintf("🔄 WorkBuddy Max Concurrency → %d", a.accountMgr.GetWorkBuddyMaxConcurrency()))
+		a.emitAccountsRes()
+		return true
+
 	case "grok:set-cli-version":
 		// Grok 号池全局 CLI 客户端版本号(单池单值,对仗 grok:set-max-concurrency)。
 		// 用于发往 cli-chat-proxy.grok.com 上游的 x-grok-client-version 身份头(规避 426 版本闸门)。

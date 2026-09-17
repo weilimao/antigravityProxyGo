@@ -1,5 +1,5 @@
 <template>
-  <div class="max-w-7xl mx-auto px-4 py-6">
+  <div class="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
     <!-- 管理员控制台头部 -->
     <div class="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
       <div>
@@ -184,11 +184,7 @@
 
     <!-- Tab 9: 请求命中模型日志 (按账号筛选/全量监控) -->
     <div v-else-if="activeTab === 'logs'">
-      <!-- <RequestLogsPanel mode="admin" /> -->
-      <div class="glass-card p-8 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
-        <span class="material-symbols-outlined text-32px text-slate-500">pending</span>
-        <span>请求命中模型日志面板维护中，组件即将恢复...</span>
-      </div>
+      <RequestLogsPanel mode="admin" />
     </div>
   </div>
 </template>
@@ -196,7 +192,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { authState, refreshCurrentUser } from '../../api/client'
+import { useUserStore } from '../../stores'
 import AdminPlansTab from './tabs/AdminPlansTab.vue'
 import AdminOrdersTab from './tabs/AdminOrdersTab.vue'
 import AdminPaymentTab from './tabs/AdminPaymentTab.vue'
@@ -206,9 +202,10 @@ import AdminAccountsTab from './tabs/AdminAccountsTab.vue'
 import AdminAutoTab from './tabs/AdminAutoTab.vue'
 import AdminOcrTab from './tabs/AdminOcrTab.vue'
 import AdminSystemTab from './tabs/AdminSystemTab.vue'
-// import RequestLogsPanel from '../../components/logs/RequestLogsPanel.vue'
+import RequestLogsPanel from '../../components/request_logs/RequestLogsPanel.vue'
 
 const router = useRouter()
+const userStore = useUserStore()
 const activeTab = ref('plans')
 
 // 下拉菜单控制
@@ -240,10 +237,15 @@ onMounted(async () => {
   document.addEventListener('click', handleClickOutside)
   document.addEventListener('keydown', handleKeydown)
 
-  if (!authState.user && authState.token) {
-    await refreshCurrentUser()
+  if (!userStore.user && userStore.token) {
+    try {
+      await userStore.fetchUserProfile()
+    } catch {
+      router.replace('/login')
+      return
+    }
   }
-  if (authState.user?.role !== 'admin') {
+  if (userStore.user?.role !== 'admin') {
     router.replace('/dashboard')
   }
 })

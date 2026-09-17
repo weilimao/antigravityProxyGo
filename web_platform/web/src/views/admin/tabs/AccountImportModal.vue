@@ -65,6 +65,7 @@
               <option value="nvidia">NVIDIA 号池 (nvidia)</option>
               <option value="other">Other 自定义号池 (other)</option>
               <option value="grok">Grok 号池 (grok)</option>
+              <option value="workbuddy">WorkBuddy 号池 (workbuddy)</option>
               <option value="antigravity">Antigravity 官方账号</option>
               <option value="project">谷歌云项目 API</option>
             </select>

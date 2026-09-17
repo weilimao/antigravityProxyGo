@@ -79,7 +79,19 @@ func FetchChannelAvailableModels(accountMgr *account.Manager, channel string) ([
 		return models, nil
 	}
 
-	// 2. 对于 Google / Antigravity / GCP 号池，真正发起 v1internal:fetchAvailableModels 请求
+	// 2. 如果是 WorkBuddy 号池
+	if ch == "workbuddy" || activeAcc.Provider == "workbuddy" {
+		models, err := fetchWorkBuddyModels(activeAcc)
+		if err != nil {
+			return nil, fmt.Errorf("打 WorkBuddy 上游获取模型失败 (账号 %s): %w", activeAcc.Email, err)
+		}
+		if len(models) == 0 {
+			return nil, fmt.Errorf("WorkBuddy 上游返回的模型列表为空")
+		}
+		return models, nil
+	}
+
+	// 3. 对于 Google / Antigravity / GCP 号池，真正发起 v1internal:fetchAvailableModels 请求
 	models, err := fetchGeminiInternalModels(activeAcc)
 	if err != nil {
 		return nil, fmt.Errorf("打 Google 上游 v1internal:fetchAvailableModels 失败 (账号 %s): %w", activeAcc.Email, err)
@@ -178,3 +190,61 @@ func FetchOtherGroupModels(accountMgr *account.Manager, groupID string, directBa
 	}
 	return models, nil
 }
+
+// fetchWorkBuddyModels 从 WorkBuddy 官方配置端点 /v3/config 拉取可用模型列表。
+func fetchWorkBuddyModels(acc *account.Account) ([]string, error) {
+	baseURL := strings.TrimSpace(acc.BaseURL)
+	if baseURL == "" {
+		baseURL = account.DefaultWorkBuddyBaseURL
+	}
+
+	configURL := strings.TrimRight(baseURL, "/") + "/v3/config"
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, configURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "WorkBuddy/5.5.2")
+	if token := acc.GetAccessToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second, Transport: netutil.NewTransport()}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("网络连接失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
+	}
+
+	var parsed struct {
+		Code int `json:"code"`
+		Data struct {
+			Models []struct {
+				ID string `json:"id"`
+			} `json:"models"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("解析上游响应 JSON 失败: %w", err)
+	}
+
+	seen := make(map[string]bool)
+	var list []string
+	for _, m := range parsed.Data.Models {
+		id := strings.TrimSpace(m.ID)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			list = append(list, id)
+		}
+	}
+	if len(list) == 0 {
+		list = account.WorkBuddySupportedModels
+	}
+	return list, nil
+}
+

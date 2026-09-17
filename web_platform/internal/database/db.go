@@ -158,6 +158,10 @@ func seedData(db *gorm.DB) {
 						EnableHourly: true, HourlyHours: 5, HourlyTokens: 50000,
 						EnableDaily: true, DailyDays: 7, DailyTokens: 500000,
 					},
+					Workbuddy: model.QuotaBucket{
+						EnableHourly: true, HourlyHours: 5, HourlyTokens: 50000,
+						EnableDaily: true, DailyDays: 7, DailyTokens: 500000,
+					},
 					RateLimit: 30,
 				},
 			},
@@ -185,6 +189,10 @@ func seedData(db *gorm.DB) {
 						EnableDaily: true, DailyDays: 7, DailyTokens: 5000000,
 					},
 					Grok: model.QuotaBucket{
+						EnableHourly: true, HourlyHours: 5, HourlyTokens: 250000,
+						EnableDaily: true, DailyDays: 7, DailyTokens: 2500000,
+					},
+					Workbuddy: model.QuotaBucket{
 						EnableHourly: true, HourlyHours: 5, HourlyTokens: 250000,
 						EnableDaily: true, DailyDays: 7, DailyTokens: 2500000,
 					},

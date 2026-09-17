@@ -172,6 +172,7 @@
     <OtherAccountModal />
     <OtherCooldownConfigModal />
     <BenchmarkConfigModal />
+    <WorkBuddyAccountModal />
   </div>
 </template>
 
@@ -206,6 +207,7 @@ import GrokThawModal from './components/modals/GrokThawModal.vue';
 import OtherAccountModal from './components/modals/OtherAccountModal.vue';
 import OtherCooldownConfigModal from './components/modals/OtherCooldownConfigModal.vue';
 import BenchmarkConfigModal from './components/modals/BenchmarkConfigModal.vue';
+import WorkBuddyAccountModal from './components/modals/WorkBuddyAccountModal.vue';
 import { initRemoteEvents } from './ui/remoteController';
 import { setLanguage, switchView, initDashboardEvents, initModelRangeFilter } from './ui/dashboard';
 import { ipcRenderer } from './shared/ipc';

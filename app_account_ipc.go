@@ -27,6 +27,9 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 	if res, handled, err := a.handleAccountIPCGrok(channel, args); handled {
 		return res, handled, err
 	}
+	if res, handled, err := a.handleAccountIPCWorkBuddy(channel, args); handled {
+		return res, handled, err
+	}
 
 	marshalResponse := func(val interface{}) (string, error) {
 		b, err := json.Marshal(val)

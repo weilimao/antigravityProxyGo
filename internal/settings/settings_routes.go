@@ -18,6 +18,12 @@ func GetDefaultModelRoutes() []ModelRouteRule {
 		// 与 nvidia/* 同优先级 50, 命中优于顶层兜底通配 "*"。
 		{Pattern: "grok/*", TargetProvider: "grok", Priority: 50, Enabled: true},
 		{Pattern: "xai/*", TargetProvider: "grok", Priority: 50, Enabled: true},
+		// WorkBuddy 号池(腾讯): workbuddy/* 与 免费模型 (deepseek-v4.1-flash / hy4-preview-f / hy3)
+		{Pattern: "workbuddy/*", TargetProvider: "workbuddy", Priority: 50, Enabled: true},
+		{Pattern: "wb/*", TargetProvider: "workbuddy", Priority: 50, Enabled: true},
+		{Pattern: "deepseek-v4.1-flash", TargetProvider: "workbuddy", Priority: 50, Enabled: true},
+		{Pattern: "hy4-preview-f", TargetProvider: "workbuddy", Priority: 50, Enabled: true},
+		{Pattern: "hy3", TargetProvider: "workbuddy", Priority: 50, Enabled: true},
 		// 顶层兜底:未命中其它规则的模型统一丢给 nvidia 号池(向后兼容,与原 /nvidia 行为对齐)。
 		{Pattern: "*", TargetProvider: "nvidia", Priority: 0, Enabled: true},
 	}

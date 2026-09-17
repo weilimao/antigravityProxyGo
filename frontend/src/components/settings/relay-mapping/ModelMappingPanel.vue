@@ -246,7 +246,7 @@ const providerOptions = computed(() => {
   const tab = mm.currentTab.value;
   if (!tab) return [];
   return Array.from(new Set([
-    'google', 'nvidia', 'gcp', 'antigravity', 'deepseek', 'qwen', 'anthropic', 'moonshot',
+    'google', 'nvidia', 'gcp', 'antigravity', 'deepseek', 'qwen', 'anthropic', 'moonshot', 'grok', 'workbuddy',
     ...mm.availableChannels.value, tab.targetProvider,
   ].filter(Boolean)));
 });

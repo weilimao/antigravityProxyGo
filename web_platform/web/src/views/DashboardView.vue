@@ -1,5 +1,5 @@
 <template>
-  <div class="max-w-6xl mx-auto px-4 py-6 flex flex-col gap-6">
+  <div class="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
     <!-- 用户概览与订阅状态卡片 -->
     <div class="glass-card-glow p-6 flex flex-wrap items-center justify-between gap-4">
       <div class="flex items-center gap-4">
@@ -7,18 +7,39 @@
           <span class="material-symbols-outlined text-32px">account_circle</span>
         </div>
         <div>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
             <h2 class="text-xl font-bold text-white">{{ user?.username || '加载中...' }}</h2>
             <span v-if="user?.role === 'admin'" class="badge badge-amber">管理员</span>
             <span v-if="user?.isActive" class="badge badge-emerald">已激活订阅</span>
             <span v-else class="badge badge-rose">无有效订阅</span>
+            <span
+              v-if="user?.plan && (!user.plan.type || user.plan.type === 'subscription')"
+              :class="getTierBadgeClass(user.plan.tier)"
+              class="badge text-[10px] font-mono font-bold uppercase"
+            >
+              {{ formatTierName(user.plan.tier) }} 会员
+            </span>
           </div>
-          <p class="text-xs text-slate-400 mt-1">
-            当前套餐: <strong class="text-white">{{ user?.plan?.name || '无激活套餐' }}</strong>
-            <span v-if="user?.planExpireAt" class="ml-2">
+          <p class="text-xs text-slate-400 mt-1 flex items-center flex-wrap gap-1.5">
+            <span>当前套餐:</span>
+            <span
+              v-if="user?.plan && (!user.plan.type || user.plan.type === 'subscription')"
+              :class="getTierBadgeClass(user.plan.tier)"
+              class="px-2 py-0.5 rounded text-[11px] font-mono font-extrabold uppercase shadow-sm shrink-0"
+            >
+              {{ formatTierName(user.plan.tier) }}
+            </span>
+            <span
+              v-else-if="user?.plan?.type === 'addon'"
+              class="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0"
+            >
+              加油包
+            </span>
+            <strong class="text-white">{{ user?.plan?.name || '无激活套餐' }}</strong>
+            <span v-if="user?.planExpireAt" class="text-slate-400">
               (有效期至: {{ formatTime(user?.planExpireAt) }})
             </span>
-            <span v-if="user?.plan" class="ml-2 text-slate-300">
+            <span v-if="user?.plan" class="text-slate-300">
               · 额度限制: <strong class="text-indigo-300">{{ formatTokenDisplay(user?.plan?.tokenLimit, true) }}</strong>
             </span>
           </p>
@@ -85,8 +106,23 @@
         </div>
       </div>
 
-      <!-- 核心指标统计三列卡片 -->
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+      <!-- 核心指标统计卡片 (4列自适应) -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+        <!-- 0. 请求次数 -->
+        <div class="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 flex flex-col justify-between">
+          <div class="flex items-center justify-between text-slate-400 text-11px mb-1.5">
+            <span>请求次数</span>
+            <span class="material-symbols-outlined text-cyan-400 text-16px">query_stats</span>
+          </div>
+          <div class="flex items-baseline gap-1.5">
+            <span class="text-xl font-mono font-extrabold text-white">{{ totalRequests.toLocaleString() }}</span>
+            <span class="text-10px text-slate-400 font-sans">次</span>
+          </div>
+          <div class="text-[10px] text-slate-400 mt-1">
+            累计调用 API 请求总量
+          </div>
+        </div>
+
         <!-- 1. 已消耗 Tokens -->
         <div class="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 flex flex-col justify-between">
           <div class="flex items-center justify-between text-slate-400 text-11px mb-1.5">
@@ -152,9 +188,12 @@
             </template>
           </div>
           <div class="text-[10px] text-slate-400 mt-1">
-            <template v-if="!hasActivePlan">暂无激活套餐</template>
+            <template v-if="!hasActivePlan && extraTokens <= 0">暂无激活套餐</template>
             <template v-else-if="isUnlimitedPlan">不设配额上限</template>
-            <template v-else>约 {{ formatTokenDisplay(planTokenLimit, true) }}</template>
+            <template v-else>
+              <span>约 {{ formatTokenDisplay(planTokenLimit, true) }}</span>
+              <span v-if="extraTokens > 0" class="text-amber-300 ml-1">(含加油包: {{ formatTokenDisplay(extraTokens, false) }})</span>
+            </template>
           </div>
         </div>
       </div>
@@ -192,8 +231,8 @@
           ></div>
         </div>
 
-        <div class="flex items-center justify-between text-[10px] text-slate-400 font-mono">
-          <span>0 Tokens</span>
+        <div class="flex items-center justify-between text-[10px] text-slate-400 font-mono gap-2 flex-wrap">
+          <span>已消耗: {{ formatTokenNumber(totalUsedTokens) }} Tokens (约 {{ formatTokenDisplay(totalUsedTokens, false) }})</span>
           <span v-if="!hasActivePlan">未激活</span>
           <span v-else-if="isUnlimitedPlan">无限制</span>
           <span v-else>总限额: {{ formatTokenDisplay(planTokenLimit, true) }}</span>
@@ -218,7 +257,7 @@
             </div>
           </transition>
         </div>
-        <button type="button" class="btn-primary text-xs cursor-pointer" @click="showCreateKeyModal = true">
+        <button type="button" class="btn-primary text-xs cursor-pointer" @click="openCreateKeyModal">
           <span class="material-symbols-outlined text-16px">add</span>
           <span>新建 API Key</span>
         </button>
@@ -243,7 +282,7 @@
               <th>已用量 (Used)</th>
               <th>限频 (RPM)</th>
               <th>创建时间</th>
-              <th class="text-right">操作</th>
+              <th class="text-right whitespace-nowrap w-24">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -297,11 +336,11 @@
               </td>
               <td><span class="text-xs font-mono text-slate-300">{{ k.rateLimit }}</span></td>
               <td class="text-xs text-slate-400">{{ formatTime(k.createdAt) }}</td>
-              <td class="text-right">
+              <td class="text-right whitespace-nowrap">
                 <button
                   type="button"
                   :disabled="deletingKeyId === k.id"
-                  class="btn-danger cursor-pointer inline-flex items-center gap-1 disabled:opacity-50"
+                  class="btn-danger cursor-pointer inline-flex items-center gap-1 whitespace-nowrap shrink-0 disabled:opacity-50 text-xs py-1 px-2.5"
                   @click="handleDeleteKey(k.id)"
                 >
                   <span v-if="deletingKeyId === k.id" class="material-symbols-outlined text-14px animate-spin">progress_activity</span>
@@ -328,10 +367,10 @@
       :has-keys="keys.length > 0"
     />
 
-    <!-- 请求命中模型日志监控卡片 (按当前用户账号隔离) -->
-    <!-- <div class="glass-card p-6 flex flex-col gap-4">
+    <!-- 请求命中模型日志监控卡片 (仅管理员角色可见) -->
+    <div v-if="isAdmin" class="glass-card p-6 flex flex-col gap-4">
       <RequestLogsPanel mode="user" />
-    </div> -->
+    </div>
 
     <!-- 新建 Key Modal 弹窗 -->
     <div v-if="showCreateKeyModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
@@ -345,9 +384,40 @@
             <label class="block text-xs text-slate-300 mb-1">密钥描述名称</label>
             <input v-model="newKeyForm.name" type="text" class="input-dark w-full" placeholder="如: OpenCode 专用" />
           </div>
-          <p class="text-11px text-slate-400 leading-relaxed">
-            该密钥由大模型平台实时签发与绑定，授权调用范围为 <code class="text-amber-400 font-mono">auto</code> (并发竞速) 以及管理员在后台配置的当前套餐模型。非授权模型将被平台网关自动拦截。
-          </p>
+
+          <div>
+            <div class="flex items-center justify-between mb-1.5">
+              <label class="block text-xs text-slate-300 font-medium">授权模型范围 (Allowed Models)</label>
+              <div class="flex items-center gap-2 text-[11px]">
+                <button
+                  type="button"
+                  class="text-indigo-400 hover:text-indigo-300 cursor-pointer"
+                  @click="selectAllModels"
+                >
+                  全选
+                </button>
+                <span class="text-slate-600">|</span>
+                <button
+                  type="button"
+                  class="text-slate-400 hover:text-slate-300 cursor-pointer"
+                  @click="clearAllModels"
+                >
+                  清空
+                </button>
+              </div>
+            </div>
+            <ModelSearchSelect
+              :multiple="true"
+              :model-ids="newKeyForm.allowedModels"
+              :options="selectableModels"
+              :allow-custom="isAdmin"
+              placeholder="搜索或勾选授权模型..."
+              @update:model-ids="(val) => newKeyForm.allowedModels = val"
+            />
+            <p class="text-[10px] text-slate-500 mt-1">
+              客户端使用此 Key 获取模型列表时，将仅显示所选授权模型
+            </p>
+          </div>
           <div class="flex items-center justify-end gap-3 mt-2">
             <button type="button" class="btn-secondary text-xs" :disabled="creatingKey" @click="showCreateKeyModal = false">取消</button>
             <button type="button" :disabled="creatingKey" class="btn-primary text-xs flex items-center gap-1.5 disabled:opacity-60" @click="handleCreateKey">
@@ -363,17 +433,23 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
-import { authApi, keyApi, systemApi, type SystemConfig } from '../api/client'
 import LoadingSpinner from '../components/common/LoadingSpinner.vue'
+import ModelSearchSelect from '../components/common/ModelSearchSelect.vue'
 import QuickAccessPanel from '../components/dashboard/QuickAccessPanel.vue'
-// import RequestLogsPanel from '../components/logs/RequestLogsPanel.vue'
+import RequestLogsPanel from '../components/request_logs/RequestLogsPanel.vue'
+import { useUserStore, useSystemStore } from '../stores'
 
-const user = ref<any>(null)
-const keys = ref<any[]>([])
-const loadingKeys = ref(false)
+const userStore = useUserStore()
+const systemStore = useSystemStore()
+
+const user = computed(() => userStore.user)
+const isAdmin = computed(() => userStore.isAdmin)
+const keys = computed(() => userStore.keys)
+const loadingKeys = computed(() => userStore.loadingKeys)
+const totalRequests = computed(() => userStore.totalRequests)
+const systemConfig = computed(() => systemStore.config)
 const creatingKey = ref(false)
 const deletingKeyId = ref<number | null>(null)
-const systemConfig = ref<SystemConfig | null>(null)
 const copyToast = ref('')
 let toastTimer: any = null
 
@@ -382,24 +458,28 @@ const showCreateKeyModal = ref(false)
 
 const newKeyForm = reactive({
   name: '',
+  allowedModels: [] as string[],
 })
 
-const currentHostname = window.location.hostname || '127.0.0.1'
+const selectableModels = computed(() => userStore.selectableModels)
 
-const apiBaseUrl = computed(() => {
-  if (systemConfig.value?.apiBaseUrl) {
-    return systemConfig.value.apiBaseUrl.trim().replace(/\/+$/, '')
-  }
-  return `http://${currentHostname}:18444`
-})
+function openCreateKeyModal() {
+  newKeyForm.name = ''
+  newKeyForm.allowedModels = [...selectableModels.value]
+  showCreateKeyModal.value = true
+}
 
-const openaiBaseUrl = computed(() => {
-  return `${apiBaseUrl.value}/v1`
-})
+function selectAllModels() {
+  newKeyForm.allowedModels = [...selectableModels.value]
+}
 
-const anthropicBaseUrl = computed(() => {
-  return apiBaseUrl.value
-})
+function clearAllModels() {
+  newKeyForm.allowedModels = []
+}
+
+const apiBaseUrl = computed(() => systemStore.apiBaseUrl)
+const openaiBaseUrl = computed(() => systemStore.openaiBaseUrl)
+const anthropicBaseUrl = computed(() => systemStore.anthropicBaseUrl)
 
 const activeApiKey = computed(() => {
   if (keys.value && keys.value.length > 0) {
@@ -408,42 +488,20 @@ const activeApiKey = computed(() => {
   return 'sk-ant-xxxxxxxx'
 })
 
-async function fetchUserData() {
-  try {
-    user.value = await authApi.getMe()
-  } catch (err) {
-    console.error(err)
-  }
-}
-
-async function fetchKeys() {
-  loadingKeys.value = true
-  try {
-    keys.value = await keyApi.list()
-  } catch (err) {
-    console.error(err)
-  } finally {
-    loadingKeys.value = false
-  }
-}
-
-async function fetchSystemConfig() {
-  try {
-    systemConfig.value = await systemApi.getPublicConfig()
-  } catch (err) {
-    console.error('获取系统公开配置失败:', err)
-  }
-}
-
 async function handleCreateKey() {
+  if (newKeyForm.allowedModels.length === 0) {
+    alert('请至少选择一个授权模型')
+    return
+  }
   creatingKey.value = true
   try {
-    await keyApi.create({
+    await userStore.createKey({
       name: newKeyForm.name || '默认密钥',
+      allowedModels: newKeyForm.allowedModels,
     })
     showCreateKeyModal.value = false
     newKeyForm.name = ''
-    await fetchKeys()
+    newKeyForm.allowedModels = []
   } catch (err: any) {
     alert(err.message || '创建密钥失败')
   } finally {
@@ -455,8 +513,7 @@ async function handleDeleteKey(id: number) {
   if (!confirm('确定要删除此 API Key 吗？相关客户端将无法继续调用。')) return
   deletingKeyId.value = id
   try {
-    await keyApi.delete(id)
-    await fetchKeys()
+    await userStore.deleteKey(id)
   } catch (err: any) {
     alert(err.message || '删除失败')
   } finally {
@@ -493,74 +550,36 @@ function formatTokenDisplay(val?: number, isLimit = false): string {
   return `${val.toLocaleString()} Tokens`
 }
 
+function formatTierName(tier?: string): string {
+  const t = (tier || 'pro').toLowerCase().trim()
+  if (t === 'max++') return 'MAX++'
+  if (t === 'max+') return 'MAX+'
+  if (t === 'max') return 'MAX'
+  return 'Pro'
+}
+
+function getTierBadgeClass(tier?: string): string {
+  const t = (tier || 'pro').toLowerCase().trim()
+  if (t === 'max++') return 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+  if (t === 'max+') return 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+  if (t === 'max') return 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
+  return 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+}
+
 const refreshingUsage = ref(false)
 
-const totalUsedTokens = computed(() => {
-  return keys.value.reduce((acc, k) => acc + (Number(k.usedTokens) || 0), 0)
-})
-
-// 判定用户是否具备有效订阅套餐
-const hasActivePlan = computed(() => {
-  return Boolean(user.value?.isActive && user.value?.plan)
-})
-
-const planTokenLimit = computed(() => {
-  if (!hasActivePlan.value) return 0
-  return Number(user.value?.plan?.tokenLimit) || 0
-})
-
-// 仅在已激活订阅且额度限制 <= 0 时，才判定为无限额度套餐
-const isUnlimitedPlan = computed(() => {
-  return hasActivePlan.value && planTokenLimit.value <= 0
-})
-
-const remainingTokens = computed(() => {
-  if (!hasActivePlan.value || isUnlimitedPlan.value) return 0
-  return Math.max(0, planTokenLimit.value - totalUsedTokens.value)
-})
-
-const usagePercent = computed(() => {
-  if (!hasActivePlan.value || isUnlimitedPlan.value || planTokenLimit.value <= 0) return 0
-  return Math.min(100, (totalUsedTokens.value / planTokenLimit.value) * 100)
-})
-
-const usageBadgeText = computed(() => {
-  if (!hasActivePlan.value) return '未激活套餐'
-  if (isUnlimitedPlan.value) return '不限配额'
-  if (usagePercent.value >= 90) return '额度告急'
-  if (usagePercent.value >= 70) return '注意余量'
-  return '额度充裕'
-})
-
-const usageBadgeClass = computed(() => {
-  if (!hasActivePlan.value) return 'bg-slate-500/15 text-slate-300 border border-slate-500/30'
-  if (isUnlimitedPlan.value) return 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-  if (usagePercent.value >= 90) return 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
-  if (usagePercent.value >= 70) return 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-  return 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'
-})
-
-const remainingTokensColor = computed(() => {
-  if (!hasActivePlan.value) return 'text-slate-400'
-  if (isUnlimitedPlan.value) return 'text-emerald-400'
-  if (usagePercent.value >= 90) return 'text-rose-400'
-  if (usagePercent.value >= 70) return 'text-amber-400'
-  return 'text-emerald-400'
-})
-
-const usagePercentColor = computed(() => {
-  if (!hasActivePlan.value) return 'text-slate-400'
-  if (isUnlimitedPlan.value) return 'text-emerald-400'
-  if (usagePercent.value >= 90) return 'text-rose-400'
-  if (usagePercent.value >= 70) return 'text-amber-400'
-  return 'text-indigo-400'
-})
-
-const progressBarClass = computed(() => {
-  if (usagePercent.value >= 90) return 'bg-gradient-to-r from-rose-600 via-rose-500 to-red-400'
-  if (usagePercent.value >= 70) return 'bg-gradient-to-r from-amber-500 via-orange-500 to-amber-400'
-  return 'bg-gradient-to-r from-indigo-500 via-cyan-400 to-emerald-400'
-})
+const totalUsedTokens = computed(() => userStore.totalUsedTokens)
+const extraTokens = computed(() => userStore.extraTokens)
+const hasActivePlan = computed(() => userStore.hasActivePlan)
+const planTokenLimit = computed(() => userStore.planTokenLimit)
+const isUnlimitedPlan = computed(() => userStore.isUnlimitedPlan)
+const remainingTokens = computed(() => userStore.remainingTokens)
+const usagePercent = computed(() => userStore.usagePercent)
+const usageBadgeText = computed(() => userStore.usageBadgeText)
+const usageBadgeClass = computed(() => userStore.usageBadgeClass)
+const remainingTokensColor = computed(() => userStore.remainingTokensColor)
+const usagePercentColor = computed(() => userStore.usagePercentColor)
+const progressBarClass = computed(() => userStore.progressBarClass)
 
 function formatTokenNumber(val: number): string {
   if (!val || isNaN(val)) return '0'
@@ -570,7 +589,7 @@ function formatTokenNumber(val: number): string {
 async function refreshAllUsage() {
   refreshingUsage.value = true
   try {
-    await Promise.all([fetchUserData(), fetchKeys()])
+    await userStore.refreshAll()
   } finally {
     setTimeout(() => {
       refreshingUsage.value = false
@@ -579,8 +598,9 @@ async function refreshAllUsage() {
 }
 
 onMounted(() => {
-  fetchUserData()
-  fetchKeys()
-  fetchSystemConfig()
+  userStore.fetchUserProfile()
+  userStore.fetchKeys()
+  userStore.fetchRequestCount()
+  systemStore.fetchSystemConfig()
 })
 </script>

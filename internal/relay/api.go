@@ -146,6 +146,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleAdminKeyDelete(w, r)
 	case path == "/api/admin/users/keys-usage" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
 		h.handleAdminUserKeysUsage(w, r)
+	case path == "/api/admin/users/keys-usage/reset" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+		h.handleAdminUserKeysUsageReset(w, r)
 	case path == "/api/admin/logs" && r.Method == http.MethodGet:
 		h.handleAdminLogs(w, r)
 	case path == "/api/admin/logs/detail" && r.Method == http.MethodGet:

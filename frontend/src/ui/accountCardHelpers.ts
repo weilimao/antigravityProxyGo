@@ -330,6 +330,153 @@ export function renderGrokAccountQuota(containerEl: HTMLElement, acc: any, isZH:
     `;
 }
 
+// WorkBuddy 号池配额气泡渲染(4 态,镜像 renderGrokAccountQuota):
+// 1 停用 → 灰泡 workbuddyAccountDisabled
+// 1.5 冷却 → 琥珀泡 workbuddyCooldownBubble
+// 2 失败 → 红泡 workbuddyQuotaFail + 错误信息
+// 3 成功 → 绿泡 workbuddyAccountAvailable + 官方免费积分 · 0积分调用
+// 4 未刷新 → 绿泡 workbuddyAccountAvailable + 点击刷新验证
+// isDomesticWorkBuddyAccount 判定 WorkBuddy 账号是否是由国内邮箱注册的账号。
+// 国内邮箱账号在腾讯云官方缺少 CAM 海外计量策略，因此不请求也不显示积分配额。
+export function isDomesticWorkBuddyAccount(acc: any): boolean {
+    if (!acc || acc.provider !== 'workbuddy') return false;
+    if (acc.noQuota) return true;
+    let email = (acc.email || '').toLowerCase().trim();
+    if (!email.includes('@') && acc.access_token) {
+        try {
+            const parts = acc.access_token.split('.');
+            if (parts.length >= 2) {
+                let p = parts[1];
+                p += '='.repeat((4 - (p.length % 4)) % 4);
+                const payload = JSON.parse(atob(p));
+                if (payload.email) email = String(payload.email).toLowerCase().trim();
+            }
+        } catch (_) {}
+    }
+    if (!email.includes('@')) return false;
+    const domain = email.split('@')[1] || '';
+    if (domain.endsWith('.cn')) return true;
+    const domesticDomains = new Set([
+        'qq.com', 'vip.qq.com', 'foxmail.com',
+        '163.com', '126.com', 'yeah.net',
+        'sina.com', 'sina.cn', 'sohu.com',
+        'aliyun.com', '139.com', '189.com', 'wo.cn', 'tom.com'
+    ]);
+    return domesticDomains.has(domain);
+}
+
+// renderWorkBuddyCardStatus 为 WorkBuddy 账号卡片渲染状态：
+// - 国内邮箱注册账号：完全不请求亦不显示积分相关文案，只显示纯粹的“账号可用”；
+// - 国外账号：正常请求上游端点，显示积分余额胶囊（如 410 积分）。
+export function renderWorkBuddyAccountQuota(containerEl: HTMLElement, acc: any, isZH: boolean, dict: any) {
+    if (!containerEl) return;
+    const isEnabled = acc && acc.enabled !== false;
+
+    // 1. 停用账号：灰泡
+    if (!isEnabled) {
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-slate-500/10 dark:bg-slate-500/5 border border-slate-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                <span class="text-[10px] font-medium text-slate-500 dark:text-slate-400" data-i18n="workbuddyAccountDisabled">${isZH ? '账号已停用' : (dict.workbuddyAccountDisabled || 'Account Disabled')}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 1.5 冷却中 (严格只认 workbuddy 自身冷却通道)
+    const now = Date.now();
+    let wbCooldownUntil = 0;
+    if (acc.cooldowns && typeof acc.cooldowns.workbuddy === 'number' && acc.cooldowns.workbuddy > now) {
+        wbCooldownUntil = acc.cooldowns.workbuddy;
+    }
+    if (wbCooldownUntil > 0) {
+        const resumeAbs = formatCooldownTime(wbCooldownUntil);
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-amber-500/10 dark:bg-amber-500/5 border border-amber-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                <span class="material-symbols-outlined text-amber-500 text-[12px]">hourglass_empty</span>
+                <span class="text-[10px] font-bold text-amber-600 dark:text-amber-400" data-i18n="workbuddyCooldownBubble">${dict.workbuddyCooldownBubble || '冷静中'}</span>
+                <span class="text-[9px] text-amber-500/70 dark:text-amber-400/60 ml-auto">${isZH ? `${resumeAbs} 恢复` : `Resumes ${resumeAbs}`}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 2. 国内邮箱注册账号：完全不请求亦不显示积分相关文案，只显示纯粹的“账号可用”
+    if (isDomesticWorkBuddyAccount(acc)) {
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400" data-i18n="workbuddyAccountAvailable">${isZH ? '账号可用' : (dict.workbuddyAccountAvailable || 'Account Available')}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 3. 国外账号：刷新失败红泡
+    const loadState = state.quotaLoadingState ? state.quotaLoadingState[acc.id] : undefined;
+    const errMsg = state.nvidiaQuotaError ? state.nvidiaQuotaError[acc.id] : '';
+    if (loadState === 'error' || errMsg) {
+        const reason = errMsg || (isZH ? '未知错误' : 'Unknown error');
+        containerEl.innerHTML = `
+            <div class="flex flex-col gap-1 bg-red-500/10 dark:bg-red-500/5 border border-red-500/20 rounded-lg p-2.5 mt-1">
+                <div class="flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                    <span class="text-[10px] font-bold text-red-600 dark:text-red-400" data-i18n="workbuddyQuotaFail">${isZH ? '配额请求失败' : (dict.workbuddyQuotaFail || 'Quota Probe Failed')}</span>
+                </div>
+                <span class="text-[9px] text-red-500/80 dark:text-red-400/70 truncate" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 4. 国外账号：刷新成功或已有积分缓存，显示积分胶囊
+    const buckets = state.quotaCache ? state.quotaCache[acc.id] : undefined;
+    if (loadState === 'success' && buckets && buckets.length > 0) {
+        const desc = (typeof buckets[0].modelId === 'string' && buckets[0].modelId)
+            ? buckets[0].modelId
+            : (dict.workbuddyQuotaDesc || '积分余额');
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400" data-i18n="workbuddyAccountAvailable">${isZH ? '账号可用' : (dict.workbuddyAccountAvailable || 'Account Available')}</span>
+                <span class="text-[10px] font-bold text-teal-700 dark:text-teal-300 ml-auto bg-teal-500/10 dark:bg-teal-500/20 border border-teal-500/30 px-2 py-0.5 rounded-full">${escapeHtml(desc)}</span>
+            </div>
+        `;
+        return;
+    }
+    if (typeof acc.credits === 'number') {
+        const desc = isZH ? `积分余额: ${acc.credits}` : `Credits: ${acc.credits}`;
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400" data-i18n="workbuddyAccountAvailable">${isZH ? '账号可用' : (dict.workbuddyAccountAvailable || 'Account Available')}</span>
+                <span class="text-[10px] font-bold text-teal-700 dark:text-teal-300 ml-auto bg-teal-500/10 dark:bg-teal-500/20 border border-teal-500/30 px-2 py-0.5 rounded-full">${escapeHtml(desc)}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 5. 国外账号：未刷新过 / loading 中
+    if (loadState === 'loading') {
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">${isZH ? '正在请求官方积分配额...' : 'Fetching credits...'}</span>
+            </div>
+        `;
+        return;
+    }
+
+    containerEl.innerHTML = `
+        <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400" data-i18n="workbuddyAccountAvailable">${isZH ? '账号可用' : (dict.workbuddyAccountAvailable || 'Account Available')}</span>
+            <span class="text-[9px] text-emerald-500/60 dark:text-emerald-400/50">${isZH ? '点击刷新获取积分余额' : (dict.workbuddyQuotaDesc || 'Click refresh to fetch credits balance')}</span>
+        </div>
+    `;
+}
+
 // escapeHtml 转义 HTML 特殊字符，避免把上游错误体直接 innerHTML 注入导致 XSS/样式破坏。
 // 实体采用显式 String.fromCharCode / 拼接构造，规避编辑器对实体的反转义。
 export function escapeHtml(s: string): string {

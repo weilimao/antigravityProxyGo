@@ -8,7 +8,7 @@ import (
 // compat_models.go: /v1/models 模型列表 handler(OpenAI 与 Anthropic 两种响应形态)。
 // 从 compat.go 按职责拆分而出,仅作物理搬移,逻辑与原文件逐行等价。
 
-func (h *APICompatHandler) handleModels(w http.ResponseWriter, r *http.Request) {
+func (h *APICompatHandler) handleModels(w http.ResponseWriter, r *http.Request, userSession ...*RelaySession) {
 	isAnthropic := r.Header.Get("anthropic-version") != "" ||
 		strings.Contains(r.Header.Get("User-Agent"), "Anthropic") ||
 		(strings.Contains(r.Header.Get("Accept"), "application/json") && strings.Contains(r.URL.Path, "messages"))
@@ -24,6 +24,49 @@ func (h *APICompatHandler) handleModels(w http.ResponseWriter, r *http.Request) 
 	// buildExposedModelMap 把「暴露的模型 -> OwnedBy 归属」聚成 map,供两种响应形态共用。
 	// OwnedBy 取自 ModelMappingEntry.OwnedBy;留空时由 inferOwnedBy 按模型名前缀兜底。
 	exposed := h.buildExposedModelMap(includePrefixed)
+
+	// 若当前请求携带了 API Key 凭证且该 Key 绑定了明确的授权模型白名单，严格按白名单过滤
+	var sess *RelaySession
+	if len(userSession) > 0 && userSession[0] != nil {
+		sess = userSession[0]
+	}
+	if sess != nil && sess.APIKeyID != "" && h.authMgr != nil && h.authMgr.userMgr != nil {
+		allowedModels := h.authMgr.userMgr.GetAllowedModelsForAPIKey(sess.UserID, sess.APIKeyID)
+		if len(allowedModels) > 0 {
+			allowedMap := make(map[string]struct{}, len(allowedModels))
+			for _, am := range allowedModels {
+				amClean := strings.ToLower(strings.TrimSpace(am))
+				if amClean != "" {
+					allowedMap[amClean] = struct{}{}
+				}
+			}
+
+			var filtered []exposedModel
+			for _, m := range exposed {
+				if _, ok := allowedMap[strings.ToLower(m.ID)]; ok {
+					filtered = append(filtered, m)
+					delete(allowedMap, strings.ToLower(m.ID))
+				}
+			}
+
+			// 对于白名单中存在但在 exposed 映射中未显式配置的模型（例如 auto 或特定上游别名），予以构造补充
+			for _, am := range allowedModels {
+				amClean := strings.ToLower(strings.TrimSpace(am))
+				if _, ok := allowedMap[amClean]; ok {
+					ownedBy := inferOwnedBy(am)
+					if amClean == "auto" {
+						ownedBy = "system"
+					}
+					filtered = append(filtered, exposedModel{
+						ID:      am,
+						OwnedBy: ownedBy,
+					})
+				}
+			}
+
+			exposed = filtered
+		}
+	}
 
 	if isAnthropic {
 		var data []map[string]interface{}

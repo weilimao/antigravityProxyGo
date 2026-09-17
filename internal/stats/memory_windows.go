@@ -33,50 +33,17 @@ var (
 	getProcessTimes      = kernel32.NewProc("GetProcessTimes")
 )
 
-// TrimProcessWorkingSet 主动修剪 Go 主进程及其所有 WebView2 子进程的未引用物理内存页，迫使操作系统回收闲置内存
+// TrimProcessWorkingSet 安全修剪 Go 主进程的闲置物理内存页。
+// 注意：严禁对 WebView2 复合渲染进程树（Renderer/GPU）调用 EmptyWorkingSet，
+// 否则会导致 Chromium 内部渲染管线或 V8 堆在失焦切换时发生剧烈缺页异常或崩溃。
 func TrimProcessWorkingSet() {
 	myPid := uint32(os.Getpid())
-
-	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_QUERY_INFORMATION, false, myPid)
 	if err != nil {
 		return
 	}
-	defer windows.CloseHandle(snapshot)
-
-	var entry windows.ProcessEntry32
-	entry.Size = uint32(unsafe.Sizeof(entry))
-
-	parentToChildren := make(map[uint32][]uint32)
-
-	err = windows.Process32First(snapshot, &entry)
-	for err == nil {
-		parentToChildren[entry.ParentProcessID] = append(parentToChildren[entry.ParentProcessID], entry.ProcessID)
-		err = windows.Process32Next(snapshot, &entry)
-	}
-
-	pidsToQuery := []uint32{myPid}
-	queue := []uint32{myPid}
-
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-
-		if children, exists := parentToChildren[current]; exists {
-			for _, child := range children {
-				pidsToQuery = append(pidsToQuery, child)
-				queue = append(queue, child)
-			}
-		}
-	}
-
-	for _, pid := range pidsToQuery {
-		h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_QUERY_INFORMATION, false, pid)
-		if err != nil {
-			continue
-		}
-		_, _, _ = emptyWorkingSet.Call(uintptr(h))
-		windows.CloseHandle(h)
-	}
+	defer windows.CloseHandle(h)
+	_, _, _ = emptyWorkingSet.Call(uintptr(h))
 }
 
 type processCpuRecord struct {

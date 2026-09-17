@@ -57,6 +57,7 @@ func SetupRouter() *gin.Engine {
 		userGroup.POST("/auth/password", authH.ChangePassword)
 
 		// 订单与收银
+		userGroup.GET("/checkout/quote", checkoutH.GetUpgradeQuote)
 		userGroup.POST("/checkout/create", checkoutH.CreateOrder)
 		userGroup.GET("/checkout/orders/:orderNo", checkoutH.GetOrderStatus)
 

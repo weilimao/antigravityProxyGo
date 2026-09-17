@@ -34,6 +34,7 @@ type Account struct {
 	CooldownUntil    int64            `json:"cooldownUntil"` // min(cooldowns)
 	TwoFASecret      string           `json:"twofa_secret,omitempty"`
 	TokenRefreshedAt int64            `json:"token_refreshed_at"`
+	NoQuota          bool             `json:"noQuota,omitempty"`
 	// MaskedKey 是 AccessToken(API Key) 的脱敏展示版(仅首尾保留,如 sk-****abcd),
 	// 仅在 GetAccounts 深拷贝时填充,供前端编辑态辨认"已配置 Key"且绝不下发明文。
 	MaskedKey string `json:"maskedKey,omitempty"`
@@ -197,6 +198,10 @@ type AccountsData struct {
 	// 单位小时)。仅在单账号 429/403 原地等 5s 重试 1 次仍失败时挂该冷却(默认 24h=1 天)。
 	// 0/负数=未配置, GetGrokQuotaCooldownHours 回退默认 DefaultGrokQuotaCooldownHours(24)。
 	GrokQuotaCooldownHours int `json:"grokQuotaCooldownHours,omitempty"`
+	// WorkBuddyLBMode 持久化 WorkBuddy 号池 LB 算法(与 NvidiaLBMode/GrokLBMode 同构单池单值)。
+	WorkBuddyLBMode string `json:"workbuddyLbMode,omitempty"`
+	// WorkBuddyMaxConcurrency 持久化 WorkBuddy 号池单账号在途并发上限(单池单值,与 NvidiaMaxConcurrency 同口径)。
+	WorkBuddyMaxConcurrency int `json:"workbuddyMaxConcurrency,omitempty"`
 }
 
 type Manager struct {
@@ -215,6 +220,8 @@ type Manager struct {
 	grokPoolMode bool
 	// grokLBMode 持久化 Grok 号池 LB 算法(round-robin/sticky),单池单值(与 nvidiaLBMode 同范式)。
 	grokLBMode string
+	// workbuddyLBMode 持久化 WorkBuddy 号池 LB 算法(round-robin/sticky),单池单值。
+	workbuddyLBMode string
 	// otherPoolMode 是 Other 号池(自定义多上游组)的负载均衡总开关,与 poolMode/projectPoolMode/nvidiaPoolMode 同构互斥。
 	otherPoolMode bool
 	// otherLBModes 按 GroupID 维度保存各组独立的 LB 算法(round-robin/sticky),与 nvidiaLBMode(单池单值)不同,
@@ -240,6 +247,9 @@ type Manager struct {
 	// grokMaxConcurrency 是 Grok 号池单账号在途并发上限(单池单值,与 nvidiaMaxConcurrency 同口径);
 	// 0/负数=未配置,Get 时回退默认 10。
 	grokMaxConcurrency int
+	// workbuddyMaxConcurrency 是 WorkBuddy 号池单账号在途并发上限(单池单值,与 nvidiaMaxConcurrency 同口径);
+	// 0/负数=未配置,Get 时回退默认 10。
+	workbuddyMaxConcurrency int
 	// grokCliVersion 持久化 Grok 号池全局 CLI 客户端版本号(单池单值,对仗 grokMaxConcurrency);
 	// 空串=未配置, GetGrokCliVersion 回退默认 DefaultGrokCliVersion("1.0.0")。用于发往
 	// cli-chat-proxy.grok.com 上游的 x-grok-client-version 身份头(规避 426 版本闸门)。

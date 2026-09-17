@@ -38,6 +38,9 @@ func (m *Manager) GetModelCategoryByProvider(provider, modelName string) string 
 	if p == "grok" {
 		return "grok"
 	}
+	if p == "workbuddy" {
+		return "workbuddy"
+	}
 	return m.GetModelCategory(modelName)
 }
 
@@ -419,6 +422,13 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 	}
 
 	m.ResetAccountError(id)
+
+	// 架构防线：配额桶冷却（gemini/claude）仅适用于 antigravity 渠道，nvidia 渠道走独立 nvidia 冷却。
+	// workbuddy、other、project、grok 等渠道绝不允许通过配额桶被误打上 gemini/claude 冷却！
+	providerLower := strings.ToLower(strings.TrimSpace(acc.Provider))
+	if providerLower != "antigravity" && providerLower != "nvidia" {
+		return false
+	}
 
 	// 冷却类别与 gemini/claude/nvidia 三族解耦：
 	// NVIDIA 号池走独立 "nvidia" 冷却键，避免其满额配额被误判为 gemini 恢复。

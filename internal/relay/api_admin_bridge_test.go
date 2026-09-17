@@ -50,11 +50,11 @@ func TestAdminBridge_FullFlow(t *testing.T) {
 		t.Errorf("expected user key 'alice', got %q", syncRes.User.Key)
 	}
 
-	// 3. 桥接为 alice 创建受限 API Key (只授权 auto 和 gemini-2.5-flash)
+	// 3. 桥接为 alice 创建受限 API Key (显式授权 auto 和 gemini-2.5-flash)
 	createKeyBody := []byte(`{
 		"username": "alice",
 		"name": "Alice OpenCode Key",
-		"allowedModels": ["gemini-2.5-flash"]
+		"allowedModels": ["auto", "gemini-2.5-flash"]
 	}`)
 	reqCreateKey := httptest.NewRequest(http.MethodPost, "/api/admin/keys/create", bytes.NewReader(createKeyBody))
 	reqCreateKey.Header.Set("Authorization", "Bearer sk-ant-admin")
@@ -73,7 +73,7 @@ func TestAdminBridge_FullFlow(t *testing.T) {
 		t.Fatalf("unmarshal key res failed: %v", err)
 	}
 
-	// 验证白名单自动包含 auto 以及 gemini-2.5-flash
+	// 验证白名单精确包含显式授权的 auto 以及 gemini-2.5-flash
 	models := keyRes.Key.AllowedModels
 	hasAuto := false
 	hasFlash := false

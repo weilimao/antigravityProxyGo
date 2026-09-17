@@ -44,8 +44,8 @@ const (
 )
 
 // knownProviderPartitions 是按 provider 切片的分区白名单(用于全量加载/全量写盘的确定性遍历顺序)。
-// 顺序固定便于测试断言与迁移幂等;与前端 tab 顺序对齐(antigravity/project/nvidia/other/grok)。
-var knownProviderPartitions = []string{"antigravity", "project", "nvidia", "other", "grok"}
+// 顺序固定便于测试断言与迁移幂等;与前端 tab 顺序对齐(antigravity/project/nvidia/other/grok/workbuddy)。
+var knownProviderPartitions = []string{"antigravity", "project", "nvidia", "other", "grok", "workbuddy"}
 
 // allPartitionKinds 返回全部分区 kind(5 provider + 2fa + pool),用于全量写盘与存在性探测。
 func allPartitionKinds() []string {
@@ -113,6 +113,8 @@ type poolConfigOnDisk struct {
 	GrokMaxConcurrency        int             `json:"grokMaxConcurrency,omitempty"`
 	GrokCliVersion            string          `json:"grokCliVersion,omitempty"`
 	GrokQuotaCooldownHours   int             `json:"grokQuotaCooldownHours,omitempty"`
+	WorkBuddyLBMode           string          `json:"workbuddyLbMode,omitempty"`
+	WorkBuddyMaxConcurrency   int             `json:"workbuddyMaxConcurrency,omitempty"`
 }
 
 // ============ 写盘:定向/全量 ============
@@ -241,6 +243,8 @@ func (m *Manager) marshalPoolConfig() ([]byte, error) {
 		GrokMaxConcurrency:        m.grokMaxConcurrency,
 		GrokCliVersion:            m.grokCliVersion,
 		GrokQuotaCooldownHours:   m.grokQuotaCooldownHours,
+		WorkBuddyLBMode:           m.workbuddyLBMode,
+		WorkBuddyMaxConcurrency:   m.workbuddyMaxConcurrency,
 	}
 	m.RUnlock()
 	return json.MarshalIndent(cfg, "", "  ")
@@ -329,8 +333,10 @@ func (m *Manager) loadPoolConfigIntoMemory() {
 	}
 	m.nvidiaLBMode = cfg.NvidiaLBMode
 	m.grokLBMode = cfg.GrokLBMode
+	m.workbuddyLBMode = cfg.WorkBuddyLBMode
 	m.nvidiaMaxConcurrency = cfg.NvidiaMaxConcurrency
 	m.grokMaxConcurrency = cfg.GrokMaxConcurrency
+	m.workbuddyMaxConcurrency = cfg.WorkBuddyMaxConcurrency
 	m.grokCliVersion = strings.TrimSpace(cfg.GrokCliVersion)
 	m.grokQuotaCooldownHours = cfg.GrokQuotaCooldownHours
 	if m.grokQuotaCooldownHours < 0 {
@@ -508,6 +514,8 @@ func (m *Manager) migrateLegacyFile() error {
 		GrokMaxConcurrency:        parsed.GrokMaxConcurrency,
 		GrokCliVersion:            parsed.GrokCliVersion,
 		GrokQuotaCooldownHours:   parsed.GrokQuotaCooldownHours,
+		WorkBuddyLBMode:           parsed.WorkBuddyLBMode,
+		WorkBuddyMaxConcurrency:   parsed.WorkBuddyMaxConcurrency,
 	}
 	poolBytes, pErr := json.MarshalIndent(cfg, "", "  ")
 	if pErr != nil {

@@ -474,6 +474,27 @@ func (m *UserManager) DeleteAPIKeyByKey(userIdentifier string, keyOrID string) e
 	return fmt.Errorf("user not found")
 }
 
+// ResetUserKeysUsage 供 Web 平台在用户跨套餐升级时将该用户名下全部 API Key 的已用用量清零
+func (m *UserManager) ResetUserKeysUsage(userIdentifier string) error {
+	m.Lock()
+	defer m.Unlock()
+
+	for _, u := range m.users {
+		if u.ID == userIdentifier || u.Key == userIdentifier {
+			for i := range u.APIKeys {
+				u.APIKeys[i].UsedTokens = 0
+				u.APIKeys[i].UsedGeminiTokens = 0
+				u.APIKeys[i].UsedClaudeTokens = 0
+				u.APIKeys[i].UsedNvidiaTokens = 0
+				u.APIKeys[i].UsedGrokTokens = 0
+			}
+			m.saveToDiskLocked()
+			return nil
+		}
+	}
+	return fmt.Errorf("user not found")
+}
+
 func (m *UserManager) ValidateAPIKey(token string) (*RelayUser, *UserAPIKey, error) {
 	m.RLock()
 	for _, u := range m.users {
@@ -572,6 +593,40 @@ func (m *UserManager) IsModelAuthorizedForAPIKey(userID, apiKeyID, model string)
 	}
 	return fmt.Errorf("model %q is not authorized for this API key; allowed: %v", model, key.AllowedModels)
 }
+
+// GetAllowedModelsForAPIKey 查询某 API Key 绑定的授权模型白名单。
+// 若 key 不存在或 key.AllowedModels 为空，返回 nil（表示无白名单限制，全部允许）。
+func (m *UserManager) GetAllowedModelsForAPIKey(userID, apiKeyID string) []string {
+	if apiKeyID == "" {
+		return nil
+	}
+	m.RLock()
+	defer m.RUnlock()
+
+	var user *RelayUser
+	for _, u := range m.users {
+		if u.ID == userID {
+			user = u
+			break
+		}
+	}
+	if user == nil {
+		return nil
+	}
+
+	for i := range user.APIKeys {
+		if user.APIKeys[i].ID == apiKeyID {
+			if len(user.APIKeys[i].AllowedModels) == 0 {
+				return nil
+			}
+			res := make([]string, len(user.APIKeys[i].AllowedModels))
+			copy(res, user.APIKeys[i].AllowedModels)
+			return res
+		}
+	}
+	return nil
+}
+
 
 // CheckAPIKeyQuota 校验某 API Key 在调用指定模型时是否已耗尽额度。
 // 规则：

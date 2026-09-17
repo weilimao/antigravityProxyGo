@@ -14,8 +14,12 @@ export interface UserInfo {
   username: string
   email?: string
   role: string
+  status?: string
   planId?: number
-  planExpireAt?: string
+  planExpireAt?: number | string
+  extraTokens?: number
+  isActive?: boolean
+  plan?: any
 }
 
 export const authState = reactive({
@@ -123,6 +127,7 @@ export const planApi = {
 
 // 订单与收银
 export const checkoutApi = {
+  getQuote: (planId: number) => request<any>(`/checkout/quote?planId=${planId}`),
   createOrder: (planId: number) => request<any>('/checkout/create', { method: 'POST', body: JSON.stringify({ planId }) }),
   getOrderStatus: (orderNo: string) => request<any>(`/checkout/orders/${orderNo}`),
 }
@@ -260,6 +265,8 @@ export interface PoolConfig {
   grokMaxConcurrency: number
   grokCliVersion: string
   grokQuotaCooldownHours: number
+  workbuddyLbMode?: string
+  workbuddyMaxConcurrency?: number
 }
 
 export interface AccountsResponse {

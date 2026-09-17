@@ -82,12 +82,11 @@ func (s *KeyService) CreateKey(userID uint, name string, customModels []string) 
 
 	// 若用户在前端自选了子集，必须严格受限于上述允许范围
 	var finalAllowedModels []string
-	finalAllowedModels = append(finalAllowedModels, "auto") // auto 必包含
 
 	if len(customModels) > 0 {
 		for _, cm := range customModels {
 			cm = strings.TrimSpace(cm)
-			if cm == "auto" {
+			if cm == "" {
 				continue
 			}
 			if _, ok := allowedSet[cm]; ok {
@@ -97,6 +96,9 @@ func (s *KeyService) CreateKey(userID uint, name string, customModels []string) 
 			}
 		}
 	} else {
+		if !containsString(finalAllowedModels, "auto") {
+			finalAllowedModels = append(finalAllowedModels, "auto")
+		}
 		for _, am := range adminConfiguredModels {
 			am = strings.TrimSpace(am)
 			if am != "auto" && !containsString(finalAllowedModels, am) {
@@ -118,6 +120,9 @@ func (s *KeyService) CreateKey(userID uint, name string, customModels []string) 
 		if user.Plan.TokenLimit > 0 {
 			planTokenLimit = user.Plan.TokenLimit
 		}
+	}
+	if user.ExtraTokens > 0 && planTokenLimit > 0 {
+		planTokenLimit += user.ExtraTokens
 	}
 
 	// 3. 桥接调用 18444 Relay 服务端生成/激活该 API Key

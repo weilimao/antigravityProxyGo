@@ -11,7 +11,7 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
-import { renderNvidiaAccountQuota, renderGrokAccountQuota, getRelativeResetTime, formatCooldownTime } from './accountCardHelpers';
+import { renderNvidiaAccountQuota, renderGrokAccountQuota, renderWorkBuddyAccountQuota, isDomesticWorkBuddyAccount, getRelativeResetTime, formatCooldownTime } from './accountCardHelpers';
 import { updateAggregateQuotaUI } from './aggregateQuotaUI';
 
 // Render account quota progress bars
@@ -31,6 +31,11 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
     // Grok 号池:镜像 NVIDIA 的 4 态渲染(停用/冷却/失败/可用),走 renderGrokAccountQuota。
     if (acc && acc.provider === 'grok') {
         renderGrokAccountQuota(containerEl, acc, isZH, dict);
+        return;
+    }
+    // WorkBuddy 号池: 4 态渲染(停用/冷却/失败/可用·官方免费积分), 走 renderWorkBuddyAccountQuota。
+    if (acc && acc.provider === 'workbuddy') {
+        renderWorkBuddyAccountQuota(containerEl, acc, isZH, dict);
         return;
     }
     // Other 号池:配额语义不适用(自定义多上游组),显示无额度限制提示,不画假进度条。
@@ -231,6 +236,33 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
             return;
         }
     }
+    if (accForProbe0 && accForProbe0.provider === 'workbuddy') {
+        // WorkBuddy 冷却短路:读 cooldowns.workbuddy(后端单冷却族 "workbuddy")。
+        // 冷却中走冷静气泡渲染,不发 quota:fetch 探活。
+        const now = Date.now();
+        const cdWb = accForProbe0.cooldowns && typeof accForProbe0.cooldowns.workbuddy === 'number'
+            ? accForProbe0.cooldowns.workbuddy : 0;
+        const cdUntil = (cdWb > now) ? cdWb : 0;
+        if (cdUntil > 0) {
+            const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
+            if (activeContainer) renderQuotaBars(activeContainer, [], accForProbe0.cooldowns || cooldowns);
+            if (refreshBtn) {
+                const icon = refreshBtn.querySelector('.material-symbols-outlined') || refreshBtn;
+                if (icon) icon.classList.remove('animate-spin');
+            }
+            return;
+        }
+        // 若账号为国内邮箱注册账号，短路不发网络探活
+        if (isDomesticWorkBuddyAccount(accForProbe0)) {
+            const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
+            if (activeContainer) renderQuotaBars(activeContainer, [], accForProbe0.cooldowns || cooldowns);
+            if (refreshBtn) {
+                const icon = refreshBtn.querySelector('.material-symbols-outlined') || refreshBtn;
+                if (icon) icon.classList.remove('animate-spin');
+            }
+            return;
+        }
+    }
 
     if (!force && state.quotaCache[accountId]) {
         const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
@@ -271,9 +303,9 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
 
         if (result.error) {
             state.quotaLoadingState[accountId] = 'error';
-            if (accForProbe && (accForProbe.provider === 'nvidia' || accForProbe.provider === 'grok')) {
-                // NVIDIA/Grok 失败：记失败原因并走红泡渲染(展示上游 HTTP/错误简述)
-                // 决策 B:Grok 失败亦写入 state.nvidiaQuotaError[acc.id](该 map 按 acc.id 索引,内容通用)。
+            if (accForProbe && (accForProbe.provider === 'nvidia' || accForProbe.provider === 'grok' || accForProbe.provider === 'workbuddy')) {
+                // NVIDIA/Grok/WorkBuddy 失败：记失败原因并走红泡渲染(展示上游 HTTP/错误简述)
+                // 决策 B:Grok/WorkBuddy 失败亦写入 state.nvidiaQuotaError[acc.id](该 map 按 acc.id 索引,内容通用)。
                 if (!state.nvidiaQuotaError) state.nvidiaQuotaError = {};
                 state.nvidiaQuotaError[accountId] = String(result.error);
                 renderQuotaBars(activeContainer, [], cooldowns);
@@ -289,7 +321,7 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
     } catch (e) {
         state.quotaLoadingState[accountId] = 'error';
         const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
-        if (accForProbe && (accForProbe.provider === 'nvidia' || accForProbe.provider === 'grok')) {
+        if (accForProbe && (accForProbe.provider === 'nvidia' || accForProbe.provider === 'grok' || accForProbe.provider === 'workbuddy')) {
             const reason = (e && (e as any).message) ? String((e as any).message) : (isZH ? '请求失败' : 'Request failed');
             if (!state.nvidiaQuotaError) state.nvidiaQuotaError = {};
             state.nvidiaQuotaError[accountId] = reason;

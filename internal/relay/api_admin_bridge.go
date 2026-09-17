@@ -147,21 +147,18 @@ func (h *APIHandler) handleAdminKeyCreate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 核心模型权限准则: 白名单强制包含 auto，并且仅允许管理员配置的模型
-	hasAuto := false
-	cleanedModels := make([]string, 0, len(req.AllowedModels)+1)
+	// 核心模型权限准则: 尊重调用方传递的 AllowedModels 授权白名单，未传时兜底 auto
+	cleanedModels := make([]string, 0, len(req.AllowedModels))
+	seen := make(map[string]bool)
 	for _, m := range req.AllowedModels {
 		m = strings.TrimSpace(m)
-		if m == "" {
-			continue
+		if m != "" && !seen[m] {
+			seen[m] = true
+			cleanedModels = append(cleanedModels, m)
 		}
-		if m == "auto" {
-			hasAuto = true
-		}
-		cleanedModels = append(cleanedModels, m)
 	}
-	if !hasAuto {
-		cleanedModels = append([]string{"auto"}, cleanedModels...)
+	if len(req.AllowedModels) == 0 && len(cleanedModels) == 0 {
+		cleanedModels = []string{"auto"}
 	}
 
 	keyName := strings.TrimSpace(req.Name)
@@ -603,5 +600,42 @@ func (h *APIHandler) handleAdminUserKeysUsage(w http.ResponseWriter, r *http.Req
 		"username":  username,
 		"usages":    usages,
 		"totalUsed": totalUsed,
+	})
+}
+
+// handleAdminUserKeysUsageReset 供 Web 平台在用户跨套餐升级时将该用户名下全部 API Key 的已用用量清零
+func (h *APIHandler) handleAdminUserKeysUsageReset(w http.ResponseWriter, r *http.Request) {
+	if !h.checkAdminAuth(r) {
+		writeJSON(w, http.StatusForbidden, map[string]interface{}{"error": "permission denied: admin only"})
+		return
+	}
+
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if username == "" && r.Body != nil {
+		var req struct {
+			Username string `json:"username"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		username = strings.TrimSpace(req.Username)
+	}
+
+	if username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "username is required"})
+		return
+	}
+
+	if h.authMgr == nil || h.authMgr.userMgr == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "user manager unavailable"})
+		return
+	}
+
+	if err := h.authMgr.userMgr.ResetUserKeysUsage(username); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":  true,
+		"username": username,
 	})
 }

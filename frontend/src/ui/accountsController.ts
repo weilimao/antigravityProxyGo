@@ -35,12 +35,15 @@ export { ensureGrokCooldownTimer } from './grokCooldownTimer';
 export { openEditOtherAccount } from './otherAccountModal';
 export { openEditNvidiaAccount } from './nvidiaAccountModal';
 export { openEditGrokAccount } from './grokAccountModal';
+import { initWorkBuddyAccountModalEvents, openWorkBuddyAccountModal, openEditWorkBuddyAccount } from './workbuddyAccountModal';
+export { openEditWorkBuddyAccount } from './workbuddyAccountModal';
+import { initWorkBuddyLBEvents, setWorkBuddyLBContainerVisible, updateWorkBuddyLBUI } from './workbuddyLBController';
 
 // 账号导出 / 布局缓存 / 批量操作栏 / Grok·NVIDIA 工具栏按钮显隐等纯工具函数已迁至 accountsUtil.ts,
 // 此处 re-export 保持对外 API 完全兼容(exportAccountConfig / refreshAccountLayoutFromCache /
-// updateBatchActionBarUI 等符号对外不变)。exportSingleAccount 已在 accountsUtil 顶层注册到 window。
-import { exportAccountConfig, refreshAccountLayoutFromCache, setGrokThawButtonVisible, setGrokCheckAuthButtonVisible, setNvidiaBatchAssignIPButtonVisible, updateBatchActionBarUI } from './accountsUtil';
-export { refreshAccountLayoutFromCache, updateBatchActionBarUI } from './accountsUtil';
+// updateBatchActionBarUI / updatePoolModeUI / updateLayoutUI 等符号对外不变)。exportSingleAccount 已在 accountsUtil 顶层注册到 window。
+import { exportAccountConfig, refreshAccountLayoutFromCache, setGrokThawButtonVisible, setGrokCheckAuthButtonVisible, setNvidiaBatchAssignIPButtonVisible, updateBatchActionBarUI, updatePoolModeUI, updateLayoutUI, initBatchActionEvents, initImportExportEvents } from './accountsUtil';
+export { refreshAccountLayoutFromCache, updateBatchActionBarUI, updatePoolModeUI, updateLayoutUI } from './accountsUtil';
 import { startProjectLogin } from './accountsLogin';
 
 let btnAddAccount: HTMLButtonElement | null;
@@ -54,7 +57,9 @@ let btnChannelGeminiCli: HTMLButtonElement | null;
 let btnChannelNvidia: HTMLButtonElement | null;
 let btnChannelOther: HTMLButtonElement | null;
 let btnChannelGrok: HTMLButtonElement | null;
+let btnChannelWorkbuddy: HTMLButtonElement | null;
 let btnAddOtherAccount: HTMLButtonElement | null;
+let btnAddWorkBuddyAccount: HTMLButtonElement | null;
 let nvidiaPoolModeContainer: HTMLDivElement | null;
 let nvidiaPoolModeToggle: HTMLInputElement | null;
 let nvidiaLBModeContainer: HTMLDivElement | null;
@@ -88,62 +93,10 @@ let grokWorkerProxyUrl: HTMLInputElement | null;
 let antigravityWorkerProxyWrap: HTMLDivElement | null;
 let antigravityWorkerProxyEnabled: HTMLInputElement | null;
 let antigravityWorkerProxyUrl: HTMLInputElement | null;
-let btnExportAccounts: HTMLButtonElement | null;
-let btnImportAccounts: HTMLButtonElement | null;
 let btnLayoutGrid: HTMLButtonElement | null;
 let btnLayoutList: HTMLButtonElement | null;
 
 let isGlobalEventsInitialized = false;
-
-export function updatePoolModeUI() {
-    if (!poolModeToggle) return;
-    const isPool = poolModeToggle.checked;
-    const label = poolModeToggle.nextElementSibling;
-    if (!label) return;
-    
-    if (isPool) {
-        poolModeToggle.className = 'toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-primary appearance-none cursor-pointer translate-x-5 transition-transform duration-200 ease-in-out';
-        label.className = 'toggle-label block overflow-hidden h-5 rounded-full bg-primary cursor-pointer';
-    } else {
-        poolModeToggle.className = 'toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 border-outline-variant appearance-none cursor-pointer translate-x-0 transition-transform duration-200 ease-in-out';
-        label.className = 'toggle-label block overflow-hidden h-5 rounded-full bg-outline-variant/50 dark:bg-white/10 cursor-pointer';
-    }
-}
-
-export function updateLayoutUI() {
-    const gridBtn = btnLayoutGrid || (document.getElementById('btnLayoutGrid') as HTMLButtonElement | null);
-    const listBtn = btnLayoutList || (document.getElementById('btnLayoutList') as HTMLButtonElement | null);
-    const selectGridColumns = document.getElementById('selectGridColumns') as HTMLSelectElement | null;
-    const accountsListEl = document.getElementById('accountsList');
-    
-    const activeClass = 'p-1 rounded-md cursor-pointer transition-all duration-200 bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim shadow-sm flex items-center justify-center';
-    const inactiveClass = 'p-1 rounded-md cursor-pointer transition-all duration-200 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 flex items-center justify-center';
-    
-    if (state.accountLayout === 'grid') {
-        if (gridBtn) gridBtn.className = activeClass;
-        if (listBtn) listBtn.className = inactiveClass;
-        if (selectGridColumns) {
-            selectGridColumns.classList.remove('hidden');
-            selectGridColumns.value = String(state.accountGridColumns);
-        }
-        if (accountsListEl) {
-            accountsListEl.classList.remove('layout-list');
-            accountsListEl.classList.add('layout-grid');
-            accountsListEl.classList.remove('cols-3', 'cols-4', 'cols-5');
-            accountsListEl.classList.add(`cols-${state.accountGridColumns}`);
-        }
-    } else {
-        if (gridBtn) gridBtn.className = inactiveClass;
-        if (listBtn) listBtn.className = activeClass;
-        if (selectGridColumns) {
-            selectGridColumns.classList.add('hidden');
-        }
-        if (accountsListEl) {
-            accountsListEl.classList.remove('layout-grid', 'cols-3', 'cols-4', 'cols-5');
-            accountsListEl.classList.add('layout-list');
-        }
-    }
-}
 
 // refreshAccountLayoutFromCache 已迁至 accountsUtil.ts(见顶部 re-export)。
 
@@ -163,11 +116,13 @@ export function updateViewTabUI() {
             if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
             if (btnChannelOther) btnChannelOther.className = inactiveClass;
             if (btnChannelGrok) btnChannelGrok.className = inactiveClass;
+            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = inactiveClass;
 
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (nvidiaPoolModeContainer) nvidiaPoolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
+            setWorkBuddyLBContainerVisible(false);
             setGrokThawButtonVisible(false);
             setGrokCheckAuthButtonVisible(false);
             setNvidiaBatchAssignIPButtonVisible(false);
@@ -208,11 +163,13 @@ export function updateViewTabUI() {
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
             if (btnChannelOther) btnChannelOther.className = inactiveClass;
             if (btnChannelGrok) btnChannelGrok.className = inactiveClass;
+            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = inactiveClass;
 
             // NVIDIA 用独立算法选择框
             if (poolModeContainer) poolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.remove('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
+            setWorkBuddyLBContainerVisible(false);
             // NVIDIA Tab 显示穿梭框入口按钮与分配住宅IP按钮。
             setNvidiaPreferredModelsButtonVisible(true);
             setNvidiaBatchAssignIPButtonVisible(true);
@@ -232,11 +189,13 @@ export function updateViewTabUI() {
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
             if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
             if (btnChannelOther) btnChannelOther.className = inactiveClass;
+            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = inactiveClass;
 
             // Grok 用独立 LB 算法选择框(与 NVIDIA 同构),无总开关 toggle(决策 C)。
             if (poolModeContainer) poolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.remove('hidden');
+            setWorkBuddyLBContainerVisible(false);
             setNvidiaPreferredModelsButtonVisible(false);
             setNvidiaBatchAssignIPButtonVisible(false);
             setGrokThawButtonVisible(true);
@@ -271,11 +230,31 @@ export function updateViewTabUI() {
             if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
             if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
             if (btnChannelGrok) btnChannelGrok.className = inactiveClass;
+            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = inactiveClass;
 
             // Other 号池:暂无独立负载均衡控件(组内轮换由后端 LBMode 控制),隐藏两个 toggle 容器。
             if (poolModeContainer) poolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
+            setWorkBuddyLBContainerVisible(false);
+            setNvidiaPreferredModelsButtonVisible(false);
+            setNvidiaBatchAssignIPButtonVisible(false);
+            setGrokThawButtonVisible(false);
+            setGrokCheckAuthButtonVisible(false);
+        } else if (state.currentViewTab === 'workbuddy') {
+            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = activeClass;
+            btnChannelAntigravity.className = inactiveClass;
+            btnChannelProject.className = inactiveClass;
+            if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
+            if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
+            if (btnChannelOther) btnChannelOther.className = inactiveClass;
+            if (btnChannelGrok) btnChannelGrok.className = inactiveClass;
+
+            if (poolModeContainer) poolModeContainer.classList.add('hidden');
+            if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
+            if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
+            setWorkBuddyLBContainerVisible(true);
+            updateWorkBuddyLBUI(state.lastBackendData);
             setNvidiaPreferredModelsButtonVisible(false);
             setNvidiaBatchAssignIPButtonVisible(false);
             setGrokThawButtonVisible(false);
@@ -287,10 +266,12 @@ export function updateViewTabUI() {
             if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
             if (btnChannelOther) btnChannelOther.className = inactiveClass;
             if (btnChannelGrok) btnChannelGrok.className = inactiveClass;
+            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = inactiveClass;
 
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
+            setWorkBuddyLBContainerVisible(false);
             setNvidiaPreferredModelsButtonVisible(false);
             setNvidiaBatchAssignIPButtonVisible(false);
             setGrokThawButtonVisible(false);
@@ -320,6 +301,7 @@ export function updateViewTabUI() {
         if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
         if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
         if (btnAddGrokAccount) btnAddGrokAccount.classList.add('hidden');
+        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.add('hidden');
         setNvidiaPreferredModelsButtonVisible(false);
     /* } else if (state.currentViewTab === 'gemini-cli') {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
@@ -332,6 +314,7 @@ export function updateViewTabUI() {
         if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.remove('hidden');
         if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
         if (btnAddGrokAccount) btnAddGrokAccount.classList.add('hidden');
+        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.add('hidden');
         // NVIDIA Tab 显示穿梭框入口按钮（委托穿梭框模块控制显隐,不跨簇共享 DOM 句柄）。
         setNvidiaPreferredModelsButtonVisible(true);
     } else if (state.currentViewTab === 'grok') {
@@ -341,6 +324,7 @@ export function updateViewTabUI() {
         if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
         if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
         if (btnAddGrokAccount) btnAddGrokAccount.classList.remove('hidden');
+        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.add('hidden');
         setNvidiaPreferredModelsButtonVisible(false);
     } else if (state.currentViewTab === 'other') {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
@@ -349,6 +333,16 @@ export function updateViewTabUI() {
         if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
         if (btnAddOtherAccount) btnAddOtherAccount.classList.remove('hidden');
         if (btnAddGrokAccount) btnAddGrokAccount.classList.add('hidden');
+        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.add('hidden');
+        setNvidiaPreferredModelsButtonVisible(false);
+    } else if (state.currentViewTab === 'workbuddy') {
+        if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
+        if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
+        if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
+        if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
+        if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
+        if (btnAddGrokAccount) btnAddGrokAccount.classList.add('hidden');
+        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.remove('hidden');
         setNvidiaPreferredModelsButtonVisible(false);
     } else {
         if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
@@ -357,6 +351,7 @@ export function updateViewTabUI() {
         if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
         if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
         if (btnAddGrokAccount) btnAddGrokAccount.classList.add('hidden');
+        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.add('hidden');
         setNvidiaPreferredModelsButtonVisible(false);
     }
 }
@@ -379,6 +374,7 @@ export function initAccountsEvents() {
     btnChannelNvidia = document.getElementById('btnChannelNvidia') as HTMLButtonElement | null;
     btnChannelOther = document.getElementById('btnChannelOther') as HTMLButtonElement | null;
     btnChannelGrok = document.getElementById('btnChannelGrok') as HTMLButtonElement | null;
+    btnChannelWorkbuddy = document.getElementById('btnChannelWorkbuddy') as HTMLButtonElement | null;
     nvidiaPoolModeContainer = document.getElementById('nvidiaPoolModeContainer') as HTMLDivElement | null;
     nvidiaPoolModeToggle = document.getElementById('nvidiaPoolModeToggle') as HTMLInputElement | null;
     nvidiaLBModeContainer = document.getElementById('nvidiaLBModeContainer') as HTMLDivElement | null;
@@ -392,6 +388,7 @@ export function initAccountsEvents() {
     btnAddNvidiaAccount = document.getElementById('btnAddNvidiaAccount') as HTMLButtonElement | null;
     btnAddOtherAccount = document.getElementById('btnAddOtherAccount') as HTMLButtonElement | null;
     btnAddGrokAccount = document.getElementById('btnAddGrokAccount') as HTMLButtonElement | null;
+    btnAddWorkBuddyAccount = document.getElementById('btnAddWorkBuddyAccount') as HTMLButtonElement | null;
     // Grok 池 LB 容器 + 算法 select + 并发上限 input + CLI 版本号 input(与 NVIDIA 同构,DOM 在 Accounts.vue)。
     grokLBModeContainer = document.getElementById('grokLBModeContainer') as HTMLDivElement | null;
     grokLBModeSelect = document.getElementById('grokLBModeSelect') as HTMLSelectElement | null;
@@ -410,6 +407,11 @@ export function initAccountsEvents() {
 
     // Other 账号 Modal：句柄赋值 + 事件绑定（已抽离 otherAccountModal.ts）
     initOtherAccountModalEvents();
+
+    // WorkBuddy 账号 Modal: 句柄赋值 + 事件绑定（已抽离 workbuddyAccountModal.ts）
+    initWorkBuddyAccountModalEvents();
+    // WorkBuddy 负载均衡与轮询调度：句柄赋值 + 事件绑定（已抽离 workbuddyLBController.ts）
+    initWorkBuddyLBEvents();
 
     // Other 组级自定义冷却 Modal:句柄赋值 + 事件绑定(已抽离 otherCooldownModal.ts,
     // 工具栏入口按钮 btnOtherCooldownConfig 在 Other 通道选中具体组时显示)。
@@ -431,8 +433,8 @@ export function initAccountsEvents() {
     // 与一键解冻成对,走 grok:check-auth IPC,后端复用 1h 定时同一套 CheckAndPurgeGrokAuth 逻辑。
     initGrokCheckAuthEvents();
 
-    btnExportAccounts = document.getElementById('btnExportAccounts') as HTMLButtonElement | null;
-    btnImportAccounts = document.getElementById('btnImportAccounts') as HTMLButtonElement | null;
+    // 账号导入导出事件绑定（已抽离 accountsUtil.ts）
+    initImportExportEvents();
 
     // 会话绑定 Modal：句柄赋值 + 事件绑定（已抽离 sessionBindingsModal.ts）
     initSessionBindingsModalEvents();
@@ -607,6 +609,21 @@ export function initAccountsEvents() {
         });
     }
 
+    // WorkBuddy 通道切换 Tab
+    if (btnChannelWorkbuddy) {
+        btnChannelWorkbuddy.addEventListener('click', () => {
+            state.selectedAccountIds = [];
+            state.currentViewTab = 'workbuddy';
+            updateViewTabUI();
+            renderOtherGroupTabs();
+            if (state.currentAccountsList) {
+                renderAccounts(state.currentAccountsList);
+            }
+            updateAggregateQuotaUI();
+            updateBatchActionBarUI();
+        });
+    }
+
     // Other 添加账号下拉项 → 打开 Other 账号模态
     if (btnAddOtherAccount) {
         btnAddOtherAccount.addEventListener('click', () => {
@@ -628,6 +645,14 @@ export function initAccountsEvents() {
         btnAddGrokAccount.addEventListener('click', () => {
             if (addAccountDropdown) addAccountDropdown.classList.add('hidden');
             openGrokAccountModal();
+        });
+    }
+
+    // WorkBuddy 添加账号下拉项 → 打开 WorkBuddy 账号模态
+    if (btnAddWorkBuddyAccount) {
+        btnAddWorkBuddyAccount.addEventListener('click', () => {
+            if (addAccountDropdown) addAccountDropdown.classList.add('hidden');
+            openWorkBuddyAccountModal();
         });
     }
 
@@ -788,37 +813,7 @@ export function initAccountsEvents() {
         writeGrokModalError(msg);
     });
 
-    if (btnExportAccounts) {
-        btnExportAccounts.addEventListener('click', async () => {
-            const provider = state.currentViewTab || 'antigravity';
-            // 导出账号配置：走统一文件服务，后端负责对话框+目录记忆+自动打开文件夹
-            await exportAccountConfig(provider);
-        });
-    }
 
-    if (btnImportAccounts) {
-        btnImportAccounts.addEventListener('click', async () => {
-            // 导入账号配置：后端 Open 对话框 + 目录记忆。
-            // 后端返回 {success, added, dir}：dir 为本次导入文件所在目录，
-            // 据此"定位到之前选择的文件夹"，与导出侧行为对称。
-            try {
-                const res = await ipcRenderer.invoke('accounts:import');
-                const payload = (res && typeof res === 'object') ? res : null;
-                if (!payload || payload.success === false) {
-                    // 后端表示用户取消或失败，不做提示
-                    return;
-                }
-                // 兜底刷新:后端导入成功后会广播 accounts-res,但为确保任何路径下
-                // 前端 currentAccountsList 都拿到最新快照(用户可能停在非账号页/广播时序交错),
-                // 这里主动再拉一次全量账号,避免"导入后切 Grok 等号池 Tab 看不到新账号"的旧快照问题。
-                // 注意:导入成功后不再自动打开文件夹——"打开/定位文件"是导出侧(后端 RevealFile)
-                // 和下载专属语义,导入只需刷新列表即可;后端返回的 dir 字段保留但前端不消费。
-                ipcRenderer.send('accounts:get');
-            } catch (err) {
-                console.error('Failed to import accounts:', err);
-            }
-        });
-    }
 
     if (btnChannelAntigravity) {
         btnChannelAntigravity.addEventListener('click', () => {
@@ -861,61 +856,8 @@ export function initAccountsEvents() {
     // Register accounts data update channel listener
     // (Moved to global initAccountsGlobalEvents below)
 
-    // 全选按钮绑定
-    const chkAll = document.getElementById('chkSelectAllAccounts') as HTMLInputElement | null;
-    if (chkAll) {
-        chkAll.addEventListener('change', (e: any) => {
-            const isChecked = e.target.checked;
-            const visibleCheckboxes = document.querySelectorAll('.account-card-checkbox') as NodeListOf<HTMLInputElement>;
-            visibleCheckboxes.forEach(cb => {
-                const accId = cb.getAttribute('data-account-id');
-                if (!accId) return;
-                cb.checked = isChecked;
-                if (isChecked) {
-                    if (!state.selectedAccountIds.includes(accId)) {
-                        state.selectedAccountIds.push(accId);
-                    }
-                } else {
-                    state.selectedAccountIds = state.selectedAccountIds.filter(id => id !== accId);
-                }
-            });
-            updateBatchActionBarUI();
-        });
-    }
-
-    // 批量删除按钮绑定与二次确认弹窗
-    const btnBatchDelete = document.getElementById('btnBatchDeleteAccounts') as HTMLButtonElement | null;
-    if (btnBatchDelete) {
-        btnBatchDelete.addEventListener('click', async () => {
-            const count = state.selectedAccountIds.length;
-            if (count === 0) return;
-
-            const dict = i18n[state.currentLanguage] || i18n.zh;
-            const confirmMsg = (dict.batchDeleteAccountsConfirm || '确定要删除选中的 {count} 个账号吗？删除后不可恢复！')
-                .replace('{count}', String(count));
-
-            const $confirm = (window as any).$confirm;
-            let confirmed = false;
-            if (typeof $confirm === 'function') {
-                confirmed = await $confirm(confirmMsg);
-            } else {
-                confirmed = confirm(confirmMsg);
-            }
-            if (!confirmed) return;
-
-            const toDeleteIds = [...state.selectedAccountIds];
-            try {
-                await ipcRenderer.invoke('accounts:batch-remove', toDeleteIds);
-            } catch (err) {
-                // 兜底 send 兼容
-                ipcRenderer.send('accounts:batch-remove', toDeleteIds);
-            }
-
-            state.selectedAccountIds = [];
-            updateBatchActionBarUI();
-            ipcRenderer.send('accounts:get');
-        });
-    }
+    // 全选与批量删除事件绑定（已抽离 accountsUtil.ts）
+    initBatchActionEvents();
 
     // 触发测试回复 Modal：句柄赋值 + 事件绑定（已抽离 triggerTestModal.ts）
     initTriggerTestModalEvents();

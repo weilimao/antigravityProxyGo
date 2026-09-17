@@ -175,6 +175,21 @@ func (m *Manager) LoadAccounts() {
 		}
 	}
 
+	// 兜底修复：清洗非 Antigravity / NVIDIA 账号上误入的 gemini/claude/nvidia 冷却脏数据
+	for _, acc := range m.accounts {
+		if acc.Provider != "antigravity" && acc.Provider != "nvidia" {
+			if acc.Cooldowns != nil {
+				delete(acc.Cooldowns, "gemini")
+				delete(acc.Cooldowns, "claude")
+				delete(acc.Cooldowns, "nvidia")
+			}
+			channelCat := m.GetModelCategoryByProvider(acc.Provider, "")
+			if acc.Cooldowns == nil || acc.Cooldowns[channelCat] == 0 {
+				acc.CooldownUntil = 0
+			}
+		}
+	}
+
 	// 兜底修复：清除历史遗留的「重复 Account.ID」。
 	// 背景:旧版 generateAccountID 在同纳秒下会生成相同 ID;一旦 accounts.json 中已落库多个共用同一 ID 的账号,
 	// 前端 renderAccounts 以 acc.id 为 DOM 主键进行 querySelector 只会命中第一张,
@@ -402,6 +417,7 @@ func (m *Manager) GetAccounts() []*Account {
 			CooldownUntil:    a.CooldownUntil,
 			TwoFASecret:      a.TwoFASecret,
 			TokenRefreshedAt: a.GetTokenRefreshedAt(),
+			NoQuota:          a.NoQuota,
 			MaskedKey:        maskedKeyForAccount(a),
 			BaseURL:          a.BaseURL,
 			EgressIP:         a.EgressIP,
@@ -754,6 +770,30 @@ func (m *Manager) UpdateAccountTier(id, tier string) {
 	}
 }
 
+func (m *Manager) UpdateAccountNoQuota(id string, noQuota bool) {
+	m.Lock()
+	changed := false
+	provider := ""
+	for _, a := range m.accounts {
+		if a.ID == id {
+			provider = a.Provider
+			if a.NoQuota != noQuota {
+				a.NoQuota = noQuota
+				changed = true
+			}
+			break
+		}
+	}
+	m.Unlock()
+
+	if changed {
+		_ = m.SaveAccountsFor(true, provider)
+		if m.OnAccountsUpdated != nil {
+			go m.OnAccountsUpdated(m.accounts)
+		}
+	}
+}
+
 // ============ 账号派生映射(Email/Provider) ============
 
 func (m *Manager) GetAccountEmailMap() map[string]string {
@@ -796,8 +836,9 @@ func (m *Manager) GetAllChannels() []string {
 		"nvidia":      true,
 		"other":       true,
 		"grok":        true,
+		"workbuddy":   true,
 	}
-	out := []string{"antigravity", "google", "gcp", "nvidia", "other", "grok"}
+	out := []string{"antigravity", "google", "gcp", "nvidia", "other", "grok", "workbuddy"}
 
 	for _, acc := range m.accounts {
 		if acc != nil && acc.Provider != "" {

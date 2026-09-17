@@ -13,7 +13,7 @@
 
       <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
         <span class="material-symbols-outlined text-16px">verified_user</span>
-        <span>官方安全收银 · 即开即用 · 15分钟有效</span>
+        <span>{{ plan?.type === 'addon' ? '官方算力加油包 · 即充即用 · 15分钟有效' : '官方安全收银 · 即开即用 · 15分钟有效' }}</span>
       </div>
     </div>
 
@@ -30,6 +30,67 @@
       </button>
     </div>
 
+    <!-- 降级拦截警告 -->
+    <div v-else-if="isDowngradeBlocked" class="max-w-lg mx-auto p-6 text-center glass-card border-rose-500/40 my-8">
+      <span class="material-symbols-outlined text-48px text-rose-400 mb-2 block">block</span>
+      <h3 class="text-base font-bold text-white mb-2">不支持降级订购方案</h3>
+      <p class="text-xs text-slate-300 mb-4 leading-relaxed">
+        {{ quote?.cannotUpgradeReason || '您当前已在更高或同等层级方案生效期内，系统暂不支持降级订购。' }}
+      </p>
+      <p class="text-xs text-rose-300 mb-6 font-medium">
+        当前生效方案：【{{ quote?.currentPlanName || (currentUser as any)?.plan?.name || '当前订阅' }}】({{ quote?.currentPlanTier || '高级别' }})。<br />
+        如需更改为更低等级方案，请等待当前方案到期后再行订购，或选择升级至更高级别方案。
+      </p>
+      <div class="flex items-center justify-center gap-3">
+        <button type="button" class="btn-secondary text-xs py-2 px-4 cursor-pointer" @click="goBack">
+          返回选择更高级别方案
+        </button>
+        <router-link to="/dashboard" class="btn-primary text-xs py-2 px-4">
+          前往用户控制台
+        </router-link>
+      </div>
+    </div>
+
+    <!-- 同一订阅未到期防重复订购警告 -->
+    <div v-else-if="isSameSubscriptionConflict" class="max-w-lg mx-auto p-6 text-center glass-card border-amber-500/40 my-8">
+      <span class="material-symbols-outlined text-48px text-amber-400 mb-2 block">lock_clock</span>
+      <h3 class="text-base font-bold text-white mb-2">当前方案正在生效中</h3>
+      <p class="text-xs text-slate-300 mb-4 leading-relaxed">
+        您当前账户已绑定并正在使用此会员订阅方案。按照会员规则，同方案生效期内无需重复购买。
+      </p>
+      <p class="text-xs text-amber-300 mb-6 font-medium">
+        有效期至: {{ formatExpireText(currentUser?.planExpireAt) }}。如需续费请到期后再行操作，或返回方案列表升级其他方案。
+      </p>
+      <div class="flex items-center justify-center gap-3">
+        <button type="button" class="btn-secondary text-xs py-2 px-4 cursor-pointer" @click="goBack">
+          选择其他方案升级
+        </button>
+        <router-link to="/dashboard" class="btn-primary text-xs py-2 px-4">
+          前往用户控制台
+        </router-link>
+      </div>
+    </div>
+
+    <!-- 加油包限会员购买拦截警告 -->
+    <div v-else-if="isAddonWithoutSubscription" class="max-w-lg mx-auto p-6 text-center glass-card border-amber-500/40 my-8">
+      <span class="material-symbols-outlined text-48px text-amber-400 mb-2 block">lock</span>
+      <h3 class="text-base font-bold text-white mb-2">需先开通会员订阅</h3>
+      <p class="text-xs text-slate-300 mb-4 leading-relaxed">
+        Token 加油包属于会员专属补充算力，仅限持有有效会员订阅的账户购买。您当前账户尚未开通会员或订阅已到期。
+      </p>
+      <p class="text-xs text-amber-300 mb-6 font-medium">
+        请先开通会员订阅，即可随时按需选购 Token 加油包叠加算力。
+      </p>
+      <div class="flex items-center justify-center gap-3">
+        <button type="button" class="btn-secondary text-xs py-2 px-4 cursor-pointer" @click="goBack">
+          返回方案列表
+        </button>
+        <router-link to="/pricing" class="btn-primary text-xs py-2 px-4">
+          选购会员订阅方案
+        </router-link>
+      </div>
+    </div>
+
     <!-- 主体双列布局 -->
     <div v-else-if="plan" class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
       <!-- 左侧：方案详情与规格卡片 (7-8 列) -->
@@ -39,14 +100,47 @@
           <div class="flex items-center justify-between mb-4">
             <div class="flex items-center gap-2">
               <span class="material-symbols-outlined text-indigo-400 text-20px">inventory_2</span>
-              <h3 class="text-base font-bold text-white">已选订阅方案</h3>
+              <h3 class="text-base font-bold text-white">{{ plan.type === 'addon' ? '已选算力加油包' : '已选订阅方案' }}</h3>
             </div>
-            <span class="badge badge-indigo">官方精选方案</span>
+            <div class="flex items-center gap-2">
+              <span v-if="plan.type !== 'addon' && plan.tier" class="badge badge-purple uppercase font-bold text-[10px]">
+                {{ plan.tier }} 级方案
+              </span>
+              <span :class="plan.type === 'addon' ? 'badge badge-amber' : 'badge badge-indigo'">
+                {{ plan.type === 'addon' ? '⚡ Token 加油包' : '官方精选方案' }}
+              </span>
+            </div>
+          </div>
+
+          <!-- 套餐升级专属折算抵扣提示卡片 -->
+          <div v-if="quote?.isUpgrade" class="p-4 rounded-xl bg-gradient-to-r from-purple-950/60 via-indigo-950/40 to-slate-900/60 border border-purple-500/40 mb-5 flex items-start gap-3.5 shadow-lg shadow-purple-500/5">
+            <div class="w-8 h-8 rounded-lg bg-purple-500/20 border border-purple-500/40 flex items-center justify-center shrink-0 text-purple-300 mt-0.5">
+              <span class="material-symbols-outlined text-18px">auto_mode</span>
+            </div>
+            <div>
+              <div class="flex items-center gap-2 mb-1">
+                <h4 class="text-xs font-bold text-white">已开启「按当前剩余 Token 折算抵扣」升级通道</h4>
+                <span class="badge bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[10px]">立减 ¥{{ (quote.discountCents / 100).toFixed(2) }}</span>
+              </div>
+              <p class="text-[11px] text-purple-200/80 leading-relaxed">
+                您当前生效中的套餐为 <strong class="text-white">【{{ quote.currentPlanName }}】</strong>，剩余可用 Token 额度为 <strong class="text-purple-300">{{ formatTokenLimit(quote.currentRemainingTokens) }}</strong>。
+                系统已按剩余额度精确折算剩余价值 <strong class="text-emerald-400">¥{{ (quote.remainingFeeCents / 100).toFixed(2) }}</strong>，已自动抵扣升级费用（升级实付保底最低 ¥1.00）。
+              </p>
+            </div>
           </div>
 
           <div class="p-4 rounded-xl bg-gradient-to-r from-indigo-900/30 via-slate-900/40 to-slate-950/60 border border-indigo-500/20 mb-6">
-            <h2 class="text-2xl font-extrabold text-white tracking-tight mb-1">{{ plan.name }}</h2>
-            <p class="text-xs text-slate-400 leading-relaxed">{{ plan.description || '高可用企业级大模型算力包，畅享极速响应与专属调用额度' }}</p>
+            <h2 class="text-2xl font-extrabold text-white tracking-tight mb-1 flex items-center gap-2.5 flex-wrap">
+              <span
+                v-if="!plan.type || plan.type === 'subscription'"
+                class="px-2.5 py-0.5 rounded-lg text-xs font-mono font-extrabold uppercase shadow-sm"
+                :class="plan.tier === 'max++' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : (plan.tier === 'max+' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40' : (plan.tier === 'max' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40' : 'bg-blue-500/20 text-blue-300 border border-blue-500/40'))"
+              >
+                {{ (plan.tier || 'pro').toUpperCase() }}
+              </span>
+              <span>{{ plan.name }}</span>
+            </h2>
+            <p class="text-xs text-slate-400 leading-relaxed">{{ plan.description || (plan.type === 'addon' ? '一次性充值叠加专属大模型算力，不冲掉基础会员订阅' : '高可用企业级大模型算力包，畅享极速响应与专属调用额度') }}</p>
           </div>
 
           <!-- 4 列核心规格参数卡片 -->
@@ -57,7 +151,7 @@
                 有效周期
               </span>
               <span class="text-sm font-bold text-white">
-                {{ plan.durationDays === 0 ? '永久有效' : `${plan.durationDays} 天` }}
+                {{ plan.durationDays === 0 ? '永久有效' : `${plan.durationDays} 天有效` }}
               </span>
             </div>
 
@@ -189,22 +283,25 @@
           <div class="flex flex-col gap-3 mb-6">
             <div class="flex items-center justify-between text-xs text-slate-400">
               <span>方案标准原价</span>
-              <span class="font-mono text-slate-200">¥{{ (plan.priceCents / 100).toFixed(2) }}</span>
+              <span class="font-mono text-slate-200">¥{{ ((quote?.priceCents || plan.priceCents) / 100).toFixed(2) }}</span>
             </div>
 
-            <div class="flex items-center justify-between text-xs text-slate-400">
-              <span>优惠 / 抵扣</span>
-              <span class="font-mono text-emerald-400">-¥0.00</span>
+            <div v-if="quote?.isUpgrade && quote.discountCents > 0" class="flex items-center justify-between text-xs text-slate-400">
+              <span class="flex items-center gap-1 text-purple-300">
+                <span class="material-symbols-outlined text-14px">savings</span>
+                <span>原订阅剩余 Token 折算抵扣</span>
+              </span>
+              <span class="font-mono text-emerald-400 font-bold">-¥{{ (quote.discountCents / 100).toFixed(2) }}</span>
             </div>
 
             <div class="pt-3 border-t border-slate-800 flex items-baseline justify-between">
               <div>
                 <span class="text-xs font-bold text-white block">实际应付总额</span>
-                <span class="text-[10px] text-slate-500">已含专属算力保障服务</span>
+                <span class="text-[10px] text-slate-500">{{ quote?.isUpgrade ? '已扣减旧方案剩余价值（保底实付 ¥1.00）' : '已含专属算力保障服务' }}</span>
               </div>
               <div class="flex items-baseline gap-0.5 text-indigo-400">
                 <span class="text-sm font-semibold">¥</span>
-                <span class="text-3xl font-extrabold tracking-tight">{{ (plan.priceCents / 100).toFixed(2) }}</span>
+                <span class="text-3xl font-extrabold tracking-tight">{{ (finalPayAmountCents / 100).toFixed(2) }}</span>
               </div>
             </div>
           </div>
@@ -213,20 +310,22 @@
           <div class="mb-6 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-center gap-2">
             <span class="material-symbols-outlined text-16px shrink-0">hourglass_top</span>
             <span class="text-[11px] leading-relaxed">
-              订单创建后请在 <strong>15 分钟</strong> 内完成支付，超时未支付系统将自动取消。
+              订单创建后请在 15 分钟内完成支付，超时未支付系统将自动取消。
             </span>
           </div>
 
           <!-- 提交支付按钮 -->
           <button
             type="button"
-            :disabled="submitting"
-            class="btn-primary w-full py-3 text-xs font-bold cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60 shadow-lg shadow-indigo-600/30"
+            :disabled="submitting || isSameSubscriptionConflict || isDowngradeBlocked"
+            class="w-full py-3 text-xs font-bold rounded-xl cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60 shadow-lg transition-all"
+            :class="isDowngradeBlocked ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700' : (finalPayAmountCents === 0 ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-600/30' : 'btn-primary shadow-indigo-600/30')"
             @click="handleConfirmAndPay"
           >
             <span v-if="submitting" class="material-symbols-outlined text-16px animate-spin">progress_activity</span>
-            <span v-else class="material-symbols-outlined text-16px">payments</span>
-            <span>{{ submitting ? '正在创建订单并连接收银台...' : `立即支付 ¥${(plan.priceCents / 100).toFixed(2)} →` }}</span>
+            <span v-else-if="isDowngradeBlocked" class="material-symbols-outlined text-16px text-rose-400">block</span>
+            <span v-else class="material-symbols-outlined text-16px">{{ finalPayAmountCents === 0 ? 'verified' : 'payments' }}</span>
+            <span>{{ submitButtonText }}</span>
           </button>
 
           <!-- 支持的支付方式图标 -->
@@ -253,18 +352,79 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { planApi, checkoutApi, getToken } from '../api/client'
 import LoadingSpinner from '../components/common/LoadingSpinner.vue'
+import { useUserStore } from '../stores'
 
 const route = useRoute()
 const router = useRouter()
+const userStore = useUserStore()
 
 const loading = ref(true)
 const submitting = ref(false)
 const plan = ref<any>(null)
+const quote = ref<any>(null)
 const errorMsg = ref('')
+const currentUser = computed(() => userStore.user)
+
+// 校验是否与用户已有完全相同的生效中订阅冲突（同方案生效期内无需重复购买）
+const isSameSubscriptionConflict = computed(() => {
+  if (!plan.value || !currentUser.value) return false
+  if (plan.value.type === 'addon') return false // 加油包不冲突
+  const pId = currentUser.value.planId
+  if (!pId || pId !== plan.value.id) return false
+  const expRaw = currentUser.value.planExpireAt
+  const exp = typeof expRaw === 'number' ? expRaw : (Number(expRaw) || 0)
+  const now = Math.floor(Date.now() / 1000)
+  return exp === 0 || exp > now
+})
+
+// 校验加油包是否要求必须持有有效会员订阅
+const isAddonWithoutSubscription = computed(() => {
+  if (!plan.value || !currentUser.value) return false
+  if (plan.value.type !== 'addon') return false
+  const pId = currentUser.value.planId
+  const expRaw = currentUser.value.planExpireAt
+  if (!pId || pId <= 0) return true
+  const exp = typeof expRaw === 'number' ? expRaw : (Number(expRaw) || 0)
+  const now = Math.floor(Date.now() / 1000)
+  return exp !== 0 && exp <= now
+})
+
+// 校验是否属于被禁止的同级或降级订购（当前用户生效订阅的等级 >= 目标套餐等级）
+const isDowngradeBlocked = computed(() => {
+  if (!plan.value || plan.value.type === 'addon') return false
+  if (quote.value && quote.value.canUpgrade === false) {
+    return true
+  }
+  return false
+})
+
+// 计算最终需要支付的金额（分）
+const finalPayAmountCents = computed(() => {
+  if (quote.value && typeof quote.value.finalAmountCents === 'number') {
+    return quote.value.finalAmountCents
+  }
+  return plan.value ? plan.value.priceCents : 0
+})
+
+// 提交支付按钮文案
+const submitButtonText = computed(() => {
+  if (submitting.value) return '正在创建订单并连接收银台...'
+  if (isDowngradeBlocked.value) return '无法降级订购'
+  if (quote.value?.isUpgrade) return `立即支付升级 ¥${(finalPayAmountCents.value / 100).toFixed(2)} →`
+  if (plan.value?.type === 'addon') return `立即支付购买 ¥${(finalPayAmountCents.value / 100).toFixed(2)} →`
+  return `立即支付 ¥${(finalPayAmountCents.value / 100).toFixed(2)} →`
+})
+
+function formatExpireText(timestamp?: number | string): string {
+  if (!timestamp || timestamp === 0 || timestamp === '0') return '永久有效'
+  const ts = typeof timestamp === 'string' ? (isNaN(Number(timestamp)) ? Date.parse(timestamp) / 1000 : Number(timestamp)) : timestamp
+  const d = new Date(ts * 1000)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 
 function formatTokenLimit(val?: number): string {
   if (!val || val <= 0) return '不限额度'
@@ -292,6 +452,15 @@ async function fetchPlanDetail() {
   try {
     const res = await planApi.getDetail(planId)
     plan.value = res
+    // 若用户已登录，并发尝试获取升级报价与抵扣详情
+    if (getToken()) {
+      try {
+        const q = await checkoutApi.getQuote(planId)
+        quote.value = q
+      } catch (e) {
+        console.warn('获取套餐升级折算报价失败:', e)
+      }
+    }
   } catch (err: any) {
     errorMsg.value = err.message || '获取套餐详情失败'
   } finally {
@@ -299,8 +468,17 @@ async function fetchPlanDetail() {
   }
 }
 
+async function fetchUser() {
+  if (!userStore.token) return
+  try {
+    await userStore.fetchUserProfile()
+  } catch (err) {
+    console.warn('获取用户信息失败:', err)
+  }
+}
+
 async function handleConfirmAndPay() {
-  if (!plan.value || submitting.value) return
+  if (!plan.value || submitting.value || isSameSubscriptionConflict.value || isDowngradeBlocked.value) return
 
   if (!getToken()) {
     router.push(`/login?redirect=${encodeURIComponent(route.fullPath)}`)
@@ -311,7 +489,7 @@ async function handleConfirmAndPay() {
   try {
     const res = await checkoutApi.createOrder(plan.value.id)
     if (res && res.payUrl) {
-      // 成功获得支付链接，跳转收银台
+      // 成功获得支付链接或完成免单核销，跳转收银台或控制台
       window.location.href = res.payUrl
     } else {
       alert('创建订单失败：未返回有效的支付链接')
@@ -323,11 +501,11 @@ async function handleConfirmAndPay() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (!getToken()) {
     router.push(`/login?redirect=${encodeURIComponent(route.fullPath)}`)
     return
   }
-  fetchPlanDetail()
+  await Promise.all([fetchUser(), fetchPlanDetail()])
 })
 </script>
