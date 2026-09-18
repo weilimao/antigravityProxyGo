@@ -536,10 +536,44 @@ export function renderAccounts(accounts: any[]) {
                 }
             };
 
+            // WorkBuddy 每日签到按钮
+            const btnWbCheckin = document.createElement('button');
+            const todayStr = new Date().toISOString().split('T')[0];
+            const isWbCheckedIn = acc.lastCheckinDate === todayStr;
+            btnWbCheckin.className = isWbCheckedIn
+                ? 'text-[11px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0 cursor-pointer'
+                : 'text-[11px] font-medium text-primary hover:text-primary-focus hover:bg-primary/10 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0 cursor-pointer';
+            btnWbCheckin.innerHTML = isWbCheckedIn
+                ? `<span class="material-symbols-outlined text-[14px]">done</span> ${acc.checkinStreak > 0 ? `已签到(${acc.checkinStreak}天)` : '已签到'}`
+                : `<span class="material-symbols-outlined text-[14px]">event_available</span> 签到`;
+            btnWbCheckin.title = isWbCheckedIn ? '今日已签到，点击可强制再次请求上游探测' : '点击执行每日签到领积分';
+            btnWbCheckin.setAttribute('data-wb-checkin-btn', '');
+            btnWbCheckin.onclick = async () => {
+                btnWbCheckin.disabled = true;
+                const oldHTML = btnWbCheckin.innerHTML;
+                btnWbCheckin.innerHTML = `<span class="material-symbols-outlined text-[14px] animate-spin">refresh</span> 签到中...`;
+                try {
+                    const res = await ipcRenderer.invoke('workbuddy:checkin', acc.id, true);
+                    if (res && res.success && res.result) {
+                        alert(res.result.message || '签到成功！');
+                    } else if (res && res.error) {
+                        alert(res.error);
+                    }
+                } catch (err: any) {
+                    alert('签到异常: ' + (err.message || String(err)));
+                } finally {
+                    btnWbCheckin.disabled = false;
+                    btnWbCheckin.innerHTML = oldHTML;
+                }
+            };
+
             const rightGroup = document.createElement('div');
             rightGroup.className = 'flex items-center gap-1 flex-shrink-0';
             if (acc.provider === 'nvidia' || acc.provider === 'other' || acc.provider === 'grok' || acc.provider === 'workbuddy') {
                 rightGroup.appendChild(btnEdit);
+            }
+            if (acc.provider === 'workbuddy') {
+                rightGroup.appendChild(btnWbCheckin);
             }
             // 仅 Grok 号池且整体冷却中时插入解冻按钮(置于编辑之后、导出之前)。
             if (acc.provider === 'grok' && isOverallCooling) {
@@ -621,6 +655,22 @@ export function renderAccounts(accounts: any[]) {
                 } else if (!isOverallCooling && existingThaw) {
                     // 已解冻:移除解冻按钮,徽标已翻绿。
                     existingThaw.remove();
+                }
+            }
+
+            // 4.6 Update WorkBuddy checkin button state in patch branch
+            if (acc.provider === 'workbuddy') {
+                const existingWbBtn = card.querySelector('[data-wb-checkin-btn]') as HTMLButtonElement | null;
+                if (existingWbBtn) {
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    const isWbCheckedIn = acc.lastCheckinDate === todayStr;
+                    existingWbBtn.className = isWbCheckedIn
+                        ? 'text-[11px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0 cursor-pointer'
+                        : 'text-[11px] font-medium text-primary hover:text-primary-focus hover:bg-primary/10 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0 cursor-pointer';
+                    existingWbBtn.innerHTML = isWbCheckedIn
+                        ? `<span class="material-symbols-outlined text-[14px]">done</span> ${acc.checkinStreak > 0 ? `已签到(${acc.checkinStreak}天)` : '已签到'}`
+                        : `<span class="material-symbols-outlined text-[14px]">event_available</span> 签到`;
+                    existingWbBtn.title = isWbCheckedIn ? '今日已签到，点击可强制再次请求上游探测' : '点击执行每日签到领积分';
                 }
             }
 

@@ -38,12 +38,13 @@ func NewUserUsageStore(db *gorm.DB, fileFlushFn func()) UserUsageStore {
 // ==================== DB 模式：异步批量落库 ====================
 
 type aggregatedUsage struct {
-	tokens        int64
-	geminiTokens  int64
-	claudeTokens  int64
-	nvidiaTokens  int64
-	grokTokens    int64
-	lastTimestamp time.Time
+	tokens          int64
+	geminiTokens    int64
+	claudeTokens    int64
+	nvidiaTokens    int64
+	grokTokens      int64
+	workbuddyTokens int64
+	lastTimestamp   time.Time
 }
 
 type flushReq struct {
@@ -166,6 +167,8 @@ func (s *DBUserUsageStore) accumulate(r UsageRecord) {
 		item.nvidiaTokens += r.Tokens
 	case FamilyGrok:
 		item.grokTokens += r.Tokens
+	case FamilyWorkbuddy:
+		item.workbuddyTokens += r.Tokens
 	default:
 		item.geminiTokens += r.Tokens
 	}
@@ -195,6 +198,7 @@ func (s *DBUserUsageStore) flushPending() {
 				    used_claude_tokens = used_claude_tokens + ?,
 				    used_nvidia_tokens = used_nvidia_tokens + ?,
 				    used_grok_tokens = used_grok_tokens + ?,
+				    used_workbuddy_tokens = used_workbuddy_tokens + ?,
 				    last_used_at = ?,
 				    updated_at = ?
 				WHERE ` + "`key`" + ` = ? OR id = ?
@@ -205,6 +209,7 @@ func (s *DBUserUsageStore) flushPending() {
 				usage.claudeTokens,
 				usage.nvidiaTokens,
 				usage.grokTokens,
+				usage.workbuddyTokens,
 				usage.lastTimestamp,
 				now,
 				keyStr,
@@ -218,6 +223,7 @@ func (s *DBUserUsageStore) flushPending() {
 				    used_claude_tokens = used_claude_tokens + ?,
 				    used_nvidia_tokens = used_nvidia_tokens + ?,
 				    used_grok_tokens = used_grok_tokens + ?,
+				    used_workbuddy_tokens = used_workbuddy_tokens + ?,
 				    last_used_at = ?,
 				    updated_at = ?
 				WHERE ` + "`key`" + ` = ?
@@ -228,6 +234,7 @@ func (s *DBUserUsageStore) flushPending() {
 				usage.claudeTokens,
 				usage.nvidiaTokens,
 				usage.grokTokens,
+				usage.workbuddyTokens,
 				usage.lastTimestamp,
 				now,
 				keyStr,
@@ -252,7 +259,7 @@ func (s *DBUserUsageStore) applySingleRecord(r UsageRecord) {
 		return
 	}
 
-	var gemini, claude, nvidia, grok int64
+	var gemini, claude, nvidia, grok, workbuddy int64
 	switch r.Family {
 	case FamilyClaude:
 		claude = r.Tokens
@@ -260,6 +267,8 @@ func (s *DBUserUsageStore) applySingleRecord(r UsageRecord) {
 		nvidia = r.Tokens
 	case FamilyGrok:
 		grok = r.Tokens
+	case FamilyWorkbuddy:
+		workbuddy = r.Tokens
 	default:
 		gemini = r.Tokens
 	}
@@ -274,11 +283,12 @@ func (s *DBUserUsageStore) applySingleRecord(r UsageRecord) {
 			    used_claude_tokens = used_claude_tokens + ?,
 			    used_nvidia_tokens = used_nvidia_tokens + ?,
 			    used_grok_tokens = used_grok_tokens + ?,
+			    used_workbuddy_tokens = used_workbuddy_tokens + ?,
 			    last_used_at = ?,
 			    updated_at = ?
 			WHERE ` + "`key`" + ` = ? OR id = ?
 		`
-		_ = s.db.Exec(sqlQuery, r.Tokens, gemini, claude, nvidia, grok, r.Timestamp, now, lookupKey, idVal).Error
+		_ = s.db.Exec(sqlQuery, r.Tokens, gemini, claude, nvidia, grok, workbuddy, r.Timestamp, now, lookupKey, idVal).Error
 	} else {
 		sqlQuery := `
 			UPDATE api_keys 
@@ -287,11 +297,12 @@ func (s *DBUserUsageStore) applySingleRecord(r UsageRecord) {
 			    used_claude_tokens = used_claude_tokens + ?,
 			    used_nvidia_tokens = used_nvidia_tokens + ?,
 			    used_grok_tokens = used_grok_tokens + ?,
+			    used_workbuddy_tokens = used_workbuddy_tokens + ?,
 			    last_used_at = ?,
 			    updated_at = ?
 			WHERE ` + "`key`" + ` = ?
 		`
-		_ = s.db.Exec(sqlQuery, r.Tokens, gemini, claude, nvidia, grok, r.Timestamp, now, lookupKey).Error
+		_ = s.db.Exec(sqlQuery, r.Tokens, gemini, claude, nvidia, grok, workbuddy, r.Timestamp, now, lookupKey).Error
 	}
 }
 

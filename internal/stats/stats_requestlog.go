@@ -72,11 +72,15 @@ func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 		outputCost := math.Round((float64(rl.OutTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
 		cachedCost := math.Round((float64(rl.CachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
 
+		userID := rl.Account
+		if strings.TrimSpace(rl.UserID) != "" {
+			userID = strings.TrimSpace(rl.UserID)
+		}
 		dbItem := &db.RequestLog{
 			ReqID:        rl.ID,
 			Timestamp:    timestamp,
 			Mode:         "local",
-			UserID:       rl.Account,
+			UserID:       userID,
 			ModelName:    rl.Model,
 			InTokens:     rl.InTokens,
 			OutTokens:    rl.OutTokens,
@@ -139,11 +143,15 @@ func (t *Tracker) AddRequestLogForFamily(reqLog *RequestLog) {
 		outputCost := math.Round((float64(rl.OutTokens)*rate.Output/1000000.0)*1000000.0) / 1000000.0
 		cachedCost := math.Round((float64(rl.CachedTokens)*rate.Cached/1000000.0)*1000000.0) / 1000000.0
 
+		userID := rl.Account
+		if strings.TrimSpace(rl.UserID) != "" {
+			userID = strings.TrimSpace(rl.UserID)
+		}
 		dbItem := &db.RequestLog{
 			ReqID:           rl.ID,
 			Timestamp:       timestamp,
 			Mode:            "local",
-			UserID:          rl.Account,
+			UserID:          userID,
 			ModelName:       rl.Model,
 			InTokens:        rl.InTokens,
 			OutTokens:       rl.OutTokens,

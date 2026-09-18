@@ -156,6 +156,10 @@ func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model str
 		if cached > 0 {
 			cacheStatus = "HIT"
 		}
+		relayUserID := ""
+		if userSession != nil {
+			relayUserID = userSession.UserKey
+		}
 		reqLog := &stats.RequestLog{
 			ID:             fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
 			Timestamp:      time.Now().Format("01/02 15:04:05"),
@@ -169,12 +173,13 @@ func (h *APICompatHandler) recordOtherUsage(userSession *RelaySession, model str
 			CacheStatus:    cacheStatus,
 			StatusCode:     logCtx.StatusCode,
 			Account:        logCtx.Account,
+			UserID:         relayUserID,
 			RequestBody:    logCtx.ReqBody,
 			RequestHeaders: logCtx.ReqHeaders,
 			SessionID:      logCtx.SessionID,
 			DurationMs:     durationMs,
 			FirstByteMs:    firstByteMs,
-			Family:          "other",
+			Family:         "other",
 			ReasoningEffort: logCtx.ReasoningEffort,
 		}
 		h.globalStatsTracker.AddRequestLogForFamily(reqLog)

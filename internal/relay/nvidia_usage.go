@@ -69,9 +69,9 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 		})
 
 		// 单 API Key 的 NVIDIA 用量回填（与 UsedNvidiaTokens 配合形成按 Key 限额）。
-		// 与 gemini/claude 链路(app.go proxyHandler 回调 RecordAPIKeyUsage)对齐。
+		// 显式传入 FamilyNvidia 消除布尔二态串扰。
 		if h.authMgr != nil && h.authMgr.userMgr != nil && userSession.APIKeyID != "" {
-			h.authMgr.userMgr.RecordAPIKeyUsage(userSession.UserID, userSession.APIKeyID, false, int64(input+output))
+			h.authMgr.userMgr.RecordAPIKeyUsageForFamily(userSession.UserID, userSession.APIKeyID, FamilyNvidia, int64(input+output))
 		}
 	}
 
@@ -153,6 +153,10 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 			durationMs = 1
 		}
 		firstByteMs := logCtx.FirstByteRec.FirstByteMs(endToEndMs)
+		relayUserID := ""
+		if userSession != nil {
+			relayUserID = userSession.UserKey
+		}
 		reqLog := &stats.RequestLog{
 			ID:             fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
 			Timestamp:      time.Now().Format("01/02 15:04:05"),
@@ -166,6 +170,7 @@ func (h *APICompatHandler) recordNvidiaUsage(userSession *RelaySession, model st
 			CacheStatus:    cacheStatus,
 			StatusCode:     logCtx.StatusCode,
 			Account:        logCtx.Account,
+			UserID:         relayUserID,
 			RequestBody:    logCtx.ReqBody,
 			RequestHeaders: logCtx.ReqHeaders,
 			SessionID:      logCtx.SessionID,

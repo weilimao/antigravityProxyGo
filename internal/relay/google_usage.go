@@ -151,6 +151,10 @@ func (h *APICompatHandler) recordGoogleUsage(userSession *RelaySession, model st
 		if cached > 0 {
 			cacheStatus = "HIT"
 		}
+		relayUserID := ""
+		if userSession != nil {
+			relayUserID = userSession.UserKey
+		}
 		reqLog := &stats.RequestLog{
 			ID:             fmt.Sprintf("aglog-%d-%d", time.Now().UnixNano(), atomic.AddUint64(&googleReqLogSeq, 1)),
 			Timestamp:      time.Now().Format("01/02 15:04:05"),
@@ -164,6 +168,7 @@ func (h *APICompatHandler) recordGoogleUsage(userSession *RelaySession, model st
 			CacheStatus:    cacheStatus,
 			StatusCode:     logCtx.StatusCode,
 			Account:        logCtx.Account,
+			UserID:         relayUserID,
 			RequestBody:    logCtx.ReqBody,
 			RequestHeaders: logCtx.ReqHeaders,
 			SessionID:      logCtx.SessionID,

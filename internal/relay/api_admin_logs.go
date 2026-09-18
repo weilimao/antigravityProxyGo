@@ -104,16 +104,22 @@ func (h *APIHandler) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 	// 1. Resolve user mapping if username is provided
 	var targetSessionIDs []string
 	var targetUserIDs []string
+	var resolvedUser *RelayUser
 	if username != "" && username != "all" {
 		targetUserIDs = append(targetUserIDs, username)
 		if h.authMgr != nil && h.authMgr.userMgr != nil {
-			user := h.authMgr.userMgr.GetUserByKey(username)
-			if user == nil {
-				user = h.authMgr.userMgr.GetUserByID(username)
+			resolvedUser = h.authMgr.userMgr.GetUserByKey(username)
+			if resolvedUser == nil {
+				resolvedUser = h.authMgr.userMgr.GetUserByID(username)
 			}
-			if user != nil {
-				targetSessionIDs = append(targetSessionIDs, user.ID)
-				targetUserIDs = append(targetUserIDs, user.Key)
+			if resolvedUser != nil {
+				targetSessionIDs = append(targetSessionIDs, resolvedUser.ID)
+				targetUserIDs = append(targetUserIDs, resolvedUser.Key)
+				for _, k := range resolvedUser.APIKeys {
+					if k.Key != "" {
+						targetUserIDs = append(targetUserIDs, k.Key)
+					}
+				}
 			}
 		}
 	}
@@ -229,6 +235,24 @@ func (h *APIHandler) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 
 		if summary.TotalInputTokens > 0 {
 			summary.CacheHitRate = math.Round((float64(summary.TotalCachedTokens)/float64(summary.TotalInputTokens))*1000.0) / 10.0
+		}
+	}
+
+	// 若查询指定中继用户，且中继统计管理器中记录了该用户的权威生命周期请求与用量，在未做二次状态/搜索过滤时优先以其为准
+	if resolvedUser != nil && h.statsMgr != nil {
+		if uStats := h.statsMgr.GetUserStats(resolvedUser.ID); uStats != nil && uStats.TotalRequests > 0 {
+			if status == "" && search == "" {
+				summary.TotalRequests = uStats.TotalRequests
+				summary.TotalInputTokens = int64(uStats.TotalInputTokens)
+				summary.TotalOutputTokens = int64(uStats.TotalOutputTokens)
+				summary.TotalCachedTokens = int64(uStats.TotalCachedTokens)
+				summary.TotalCost = math.Round(uStats.TotalCost*1000000.0) / 1000000.0
+				if totalCount == 0 {
+					totalCount = uStats.TotalRequests
+				}
+			} else if summary.TotalRequests == 0 {
+				summary.TotalRequests = uStats.TotalRequests
+			}
 		}
 	}
 

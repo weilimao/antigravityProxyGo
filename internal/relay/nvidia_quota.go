@@ -13,10 +13,11 @@ import (
 type APIKeyFamily string
 
 const (
-	FamilyGemini APIKeyFamily = "gemini"
-	FamilyClaude APIKeyFamily = "claude"
-	FamilyNvidia APIKeyFamily = "nvidia"
-	FamilyGrok   APIKeyFamily = "grok"
+	FamilyGemini    APIKeyFamily = "gemini"
+	FamilyClaude    APIKeyFamily = "claude"
+	FamilyNvidia    APIKeyFamily = "nvidia"
+	FamilyGrok      APIKeyFamily = "grok"
+	FamilyWorkbuddy APIKeyFamily = "workbuddy"
 )
 
 func QuotaTypeHourly(family APIKeyFamily) string {
@@ -36,6 +37,9 @@ func DetectAPIKeyFamily(model string) APIKeyFamily {
 	// 用量回填(RecordAPIKeyUsageForFamily)能正确命中 FamilyGrok。
 	if strings.HasPrefix(m, "grok/") || strings.HasPrefix(m, "grok-") {
 		return FamilyGrok
+	}
+	if strings.HasPrefix(m, "workbuddy/") || strings.HasPrefix(m, "wb/") || strings.Contains(m, "workbuddy/") {
+		return FamilyWorkbuddy
 	}
 	if strings.HasPrefix(m, "claude") {
 		return FamilyClaude

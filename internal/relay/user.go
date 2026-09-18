@@ -51,11 +51,13 @@ type UserAPIKey struct {
 	LimitGeminiTokens int64     `json:"limitGeminiTokens"`
 	LimitClaudeTokens int64     `json:"limitClaudeTokens"`
 	LimitNvidiaTokens int64     `json:"limitNvidiaTokens"`
-	LimitGrokTokens   int64     `json:"limitGrokTokens"`
-	UsedGeminiTokens  int64     `json:"usedGeminiTokens"`
-	UsedClaudeTokens  int64     `json:"usedClaudeTokens"`
-	UsedNvidiaTokens  int64     `json:"usedNvidiaTokens"`
-	UsedGrokTokens    int64     `json:"usedGrokTokens"`
+	LimitGrokTokens      int64     `json:"limitGrokTokens"`
+	LimitWorkbuddyTokens int64     `json:"limitWorkbuddyTokens"`
+	UsedGeminiTokens     int64     `json:"usedGeminiTokens"`
+	UsedClaudeTokens     int64     `json:"usedClaudeTokens"`
+	UsedNvidiaTokens     int64     `json:"usedNvidiaTokens"`
+	UsedGrokTokens       int64     `json:"usedGrokTokens"`
+	UsedWorkbuddyTokens  int64     `json:"usedWorkbuddyTokens"`
 	// AllowedModels 是该 API Key 授权可调用的模型白名单(精确匹配)。
 	// 空/nil = 不限制(全部模型授权,兼容旧数据); 非空 = 仅允许列表中的模型名完全一致时调用。
 	AllowedModels []string `json:"allowedModels,omitempty"`
@@ -487,6 +489,7 @@ func (m *UserManager) ResetUserKeysUsage(userIdentifier string) error {
 				u.APIKeys[i].UsedClaudeTokens = 0
 				u.APIKeys[i].UsedNvidiaTokens = 0
 				u.APIKeys[i].UsedGrokTokens = 0
+				u.APIKeys[i].UsedWorkbuddyTokens = 0
 			}
 			m.saveToDiskLocked()
 			return nil
@@ -736,6 +739,8 @@ func (m *UserManager) RecordAPIKeyUsageForFamily(userID string, apiKeyID string,
 						u.APIKeys[i].UsedNvidiaTokens += tokens
 					case FamilyGrok:
 						u.APIKeys[i].UsedGrokTokens += tokens
+					case FamilyWorkbuddy:
+						u.APIKeys[i].UsedWorkbuddyTokens += tokens
 					default: // FamilyGemini / 未识别
 						u.APIKeys[i].UsedGeminiTokens += tokens
 					}

@@ -61,9 +61,10 @@ func (m *UserManager) SyncFromDB() {
 		UsedTokens       int64     `gorm:"column:used_tokens"`
 		UsedGeminiTokens int64     `gorm:"column:used_gemini_tokens"`
 		UsedClaudeTokens int64     `gorm:"column:used_claude_tokens"`
-		UsedNvidiaTokens int64     `gorm:"column:used_nvidia_tokens"`
-		UsedGrokTokens   int64     `gorm:"column:used_grok_tokens"`
-		CreatedAt        time.Time `gorm:"column:created_at"`
+		UsedNvidiaTokens    int64     `gorm:"column:used_nvidia_tokens"`
+		UsedGrokTokens      int64     `gorm:"column:used_grok_tokens"`
+		UsedWorkbuddyTokens int64     `gorm:"column:used_workbuddy_tokens"`
+		CreatedAt           time.Time `gorm:"column:created_at"`
 	}
 
 	var userRows []dbUserRow
@@ -148,12 +149,14 @@ func (m *UserManager) SyncFromDB() {
 				LimitGeminiTokens: kr.LimitTokens,
 				LimitClaudeTokens: kr.LimitTokens,
 				LimitNvidiaTokens: kr.LimitTokens,
-				LimitGrokTokens:   kr.LimitTokens,
-				UsedTokens:        kr.UsedTokens,
-				UsedGeminiTokens:  kr.UsedGeminiTokens,
-				UsedClaudeTokens:  kr.UsedClaudeTokens,
-				UsedNvidiaTokens:  kr.UsedNvidiaTokens,
-				UsedGrokTokens:    kr.UsedGrokTokens,
+				LimitGrokTokens:      kr.LimitTokens,
+				LimitWorkbuddyTokens: kr.LimitTokens,
+				UsedTokens:           kr.UsedTokens,
+				UsedGeminiTokens:     kr.UsedGeminiTokens,
+				UsedClaudeTokens:     kr.UsedClaudeTokens,
+				UsedNvidiaTokens:     kr.UsedNvidiaTokens,
+				UsedGrokTokens:       kr.UsedGrokTokens,
+				UsedWorkbuddyTokens:  kr.UsedWorkbuddyTokens,
 			})
 		} else {
 			matchedKey.Name = kr.Name
@@ -164,12 +167,14 @@ func (m *UserManager) SyncFromDB() {
 				matchedKey.LimitClaudeTokens = kr.LimitTokens
 				matchedKey.LimitNvidiaTokens = kr.LimitTokens
 				matchedKey.LimitGrokTokens = kr.LimitTokens
+				matchedKey.LimitWorkbuddyTokens = kr.LimitTokens
 			}
 			matchedKey.UsedTokens = kr.UsedTokens
 			matchedKey.UsedGeminiTokens = kr.UsedGeminiTokens
 			matchedKey.UsedClaudeTokens = kr.UsedClaudeTokens
 			matchedKey.UsedNvidiaTokens = kr.UsedNvidiaTokens
 			matchedKey.UsedGrokTokens = kr.UsedGrokTokens
+			matchedKey.UsedWorkbuddyTokens = kr.UsedWorkbuddyTokens
 		}
 	}
 	m.saveToDiskLocked()
@@ -192,9 +197,10 @@ func (m *UserManager) findAndCacheKeyFromDB(token string) (*RelayUser, *UserAPIK
 		UsedTokens       int64     `gorm:"column:used_tokens"`
 		UsedGeminiTokens int64     `gorm:"column:used_gemini_tokens"`
 		UsedClaudeTokens int64     `gorm:"column:used_claude_tokens"`
-		UsedNvidiaTokens int64     `gorm:"column:used_nvidia_tokens"`
-		UsedGrokTokens   int64     `gorm:"column:used_grok_tokens"`
-		CreatedAt        time.Time `gorm:"column:created_at"`
+		UsedNvidiaTokens    int64     `gorm:"column:used_nvidia_tokens"`
+		UsedGrokTokens      int64     `gorm:"column:used_grok_tokens"`
+		UsedWorkbuddyTokens int64     `gorm:"column:used_workbuddy_tokens"`
+		CreatedAt           time.Time `gorm:"column:created_at"`
 	}
 
 	var kr dbKeyRow
@@ -260,32 +266,36 @@ func (m *UserManager) findAndCacheKeyFromDB(token string) (*RelayUser, *UserAPIK
 			targetUser.APIKeys[i].LimitClaudeTokens = kr.LimitTokens
 			targetUser.APIKeys[i].LimitNvidiaTokens = kr.LimitTokens
 			targetUser.APIKeys[i].LimitGrokTokens = kr.LimitTokens
+			targetUser.APIKeys[i].LimitWorkbuddyTokens = kr.LimitTokens
 			targetUser.APIKeys[i].UsedTokens = kr.UsedTokens
 			targetUser.APIKeys[i].UsedGeminiTokens = kr.UsedGeminiTokens
 			targetUser.APIKeys[i].UsedClaudeTokens = kr.UsedClaudeTokens
 			targetUser.APIKeys[i].UsedNvidiaTokens = kr.UsedNvidiaTokens
 			targetUser.APIKeys[i].UsedGrokTokens = kr.UsedGrokTokens
+			targetUser.APIKeys[i].UsedWorkbuddyTokens = kr.UsedWorkbuddyTokens
 			m.saveToDiskLocked()
 			return targetUser, &targetUser.APIKeys[i], nil
 		}
 	}
 
 	newKey := UserAPIKey{
-		ID:                keyIDStr,
-		Name:              kr.Name,
-		Key:               kr.Key,
-		CreatedAt:         kr.CreatedAt,
-		AllowedModels:     allowedModels,
-		LimitTokens:       kr.LimitTokens,
-		LimitGeminiTokens: kr.LimitTokens,
-		LimitClaudeTokens: kr.LimitTokens,
-		LimitNvidiaTokens: kr.LimitTokens,
-		LimitGrokTokens:   kr.LimitTokens,
-		UsedTokens:        kr.UsedTokens,
-		UsedGeminiTokens:  kr.UsedGeminiTokens,
-		UsedClaudeTokens:  kr.UsedClaudeTokens,
-		UsedNvidiaTokens:  kr.UsedNvidiaTokens,
-		UsedGrokTokens:    kr.UsedGrokTokens,
+		ID:                   keyIDStr,
+		Name:                 kr.Name,
+		Key:                  kr.Key,
+		CreatedAt:            kr.CreatedAt,
+		AllowedModels:        allowedModels,
+		LimitTokens:          kr.LimitTokens,
+		LimitGeminiTokens:    kr.LimitTokens,
+		LimitClaudeTokens:    kr.LimitTokens,
+		LimitNvidiaTokens:    kr.LimitTokens,
+		LimitGrokTokens:      kr.LimitTokens,
+		LimitWorkbuddyTokens: kr.LimitTokens,
+		UsedTokens:           kr.UsedTokens,
+		UsedGeminiTokens:     kr.UsedGeminiTokens,
+		UsedClaudeTokens:     kr.UsedClaudeTokens,
+		UsedNvidiaTokens:     kr.UsedNvidiaTokens,
+		UsedGrokTokens:       kr.UsedGrokTokens,
+		UsedWorkbuddyTokens:  kr.UsedWorkbuddyTokens,
 	}
 	targetUser.APIKeys = append(targetUser.APIKeys, newKey)
 	m.saveToDiskLocked()

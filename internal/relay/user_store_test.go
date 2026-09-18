@@ -295,3 +295,85 @@ func TestUserManager_HighConcurrency_NoLag(t *testing.T) {
 		t.Fatalf("expected final tokens %d, got %d", expectedTokens, finalKey.UsedTokens)
 	}
 }
+
+// TestUserManager_RecordWorkbuddyAndNvidiaUsage 验证 WorkBuddy 与 NVIDIA 请求用量精准落入各自独立渠道桶，绝不误入 Gemini
+func TestUserManager_RecordWorkbuddyAndNvidiaUsage(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "relay_workbuddy_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(tempDir)
+	})
+
+	testDB, err := gorm.Open(sqlite.Open(filepath.Join(tempDir, "wb_test.db")), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("failed to open test db: %v", err)
+	}
+
+	if errMigrate := testDB.AutoMigrate(&model.User{}, &model.APIKey{}); errMigrate != nil {
+		t.Fatalf("failed to migrate schema: %v", errMigrate)
+	}
+
+	testUser := model.User{
+		Username: "wb_user",
+		Role:     "user",
+		Status:   "active",
+	}
+	testDB.Create(&testUser)
+
+	testKey := model.APIKey{
+		UserID:     testUser.ID,
+		Name:       "WB Test Key",
+		Key:        "sk-ant-wb-key-001",
+		Status:     "active",
+		UsedTokens: 0,
+	}
+	testDB.Create(&testKey)
+
+	mgr := &UserManager{
+		users:      make([]*RelayUser, 0),
+		gormDB:     testDB,
+		usageStore: NewDBUserUsageStore(testDB),
+	}
+	t.Cleanup(func() {
+		_ = mgr.usageStore.Close()
+	})
+
+	u, k, err := mgr.ValidateAPIKey("sk-ant-wb-key-001")
+	if err != nil {
+		t.Fatalf("ValidateAPIKey failed: %v", err)
+	}
+
+	// 1. 模拟 WorkBuddy 请求 100,000 Tokens
+	mgr.RecordAPIKeyUsageForFamily(u.ID, k.Key, FamilyWorkbuddy, 100000)
+
+	// 2. 模拟 NVIDIA 请求 50,000 Tokens
+	mgr.RecordAPIKeyUsageForFamily(u.ID, k.Key, FamilyNvidia, 50000)
+
+	// 3. 强制 Flush
+	if errFlush := mgr.usageStore.Flush(); errFlush != nil {
+		t.Fatalf("Flush failed: %v", errFlush)
+	}
+
+	// 4. 从 DB 重新查询并断言
+	var updatedKey model.APIKey
+	if errFind := testDB.First(&updatedKey, testKey.ID).Error; errFind != nil {
+		t.Fatalf("Failed to query updated key: %v", errFind)
+	}
+
+	if updatedKey.UsedTokens != 150000 {
+		t.Errorf("expected UsedTokens 150000, got %d", updatedKey.UsedTokens)
+	}
+	if updatedKey.UsedWorkbuddyTokens != 100000 {
+		t.Errorf("expected UsedWorkbuddyTokens 100000, got %d", updatedKey.UsedWorkbuddyTokens)
+	}
+	if updatedKey.UsedNvidiaTokens != 50000 {
+		t.Errorf("expected UsedNvidiaTokens 50000, got %d", updatedKey.UsedNvidiaTokens)
+	}
+	if updatedKey.UsedGeminiTokens != 0 {
+		t.Errorf("CRITICAL BUG: UsedGeminiTokens must be 0, but got %d", updatedKey.UsedGeminiTokens)
+	}
+}

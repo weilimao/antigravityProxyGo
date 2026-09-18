@@ -267,6 +267,52 @@ func (a *App) handleAccountIPCWorkBuddy(channel string, args []interface{}) (str
 		data, _ := marshalResponse(map[string]interface{}{"success": true, "models": models})
 		return data, true, nil
 
+	case "workbuddy:checkin":
+		id := strAt(0)
+		force := boolAt(1)
+		if id == "" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "缺少 accountId"})
+			return data, true, nil
+		}
+		res, err := a.accountMgr.CheckinWorkBuddyAccount(id, force, a.AddLog)
+		if err != nil {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+			return data, true, nil
+		}
+		a.emitAccountsRes()
+		data, _ := marshalResponse(map[string]interface{}{"success": true, "result": res})
+		return data, true, nil
+
+	case "workbuddy:checkin-all":
+		force := boolAt(0)
+		a.AddLog("🚀 [WorkBuddy] 开始对号池中全部可用账号执行每日签到...")
+		go func() {
+			results := a.accountMgr.RunDailyCheckinForWorkBuddyPool(force, a.AddLog)
+			a.emitAccountsRes()
+			a.AddLog(fmt.Sprintf("✨ [WorkBuddy] 号池每日签到已完成，共处理 %d 个账号", len(results)))
+		}()
+		data, _ := marshalResponse(map[string]interface{}{"success": true, "message": "号池签到任务已在后台启动"})
+		return data, true, nil
+
+	case "workbuddy:checkin-status":
+		id := strAt(0)
+		if id == "" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "缺少 accountId"})
+			return data, true, nil
+		}
+		target := a.accountMgr.GetAccountByID(id)
+		if target == nil || target.Provider != "workbuddy" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "账号不存在或非 WorkBuddy 类型"})
+			return data, true, nil
+		}
+		status, err := account.FetchWorkBuddyCheckinStatus(target)
+		if err != nil {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+			return data, true, nil
+		}
+		data, _ := marshalResponse(map[string]interface{}{"success": true, "status": status})
+		return data, true, nil
+
 	default:
 		if strings.HasPrefix(channel, "workbuddy:") {
 			data, _ := marshalResponse(map[string]interface{}{

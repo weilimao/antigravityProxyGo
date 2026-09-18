@@ -83,6 +83,7 @@ type RequestLog struct {
 	StatusCode     int         `json:"statusCode"`
 	Cost           float64     `json:"cost"`
 	Account        string      `json:"account"`
+	UserID         string      `json:"userId,omitempty"`
 	RequestBody    interface{} `json:"requestBody"`
 	RequestHeaders interface{} `json:"requestHeaders"`
 	SessionID      string      `json:"sessionId"`
@@ -125,6 +126,7 @@ type RequestLogLite struct {
 	StatusCode   int     `json:"statusCode"`
 	Cost         float64 `json:"cost"`
 	Account      string  `json:"account"`
+	UserID       string  `json:"userId,omitempty"`
 	SessionID    string  `json:"sessionId"`
 	DurationMs   int64   `json:"durationMs"`
 	// FirstByteMs 为首字响应延迟(TTFT, 毫秒), 随轻量投影下行到 IPC 热路径,
@@ -153,6 +155,7 @@ func toRequestLogLite(r *RequestLog) RequestLogLite {
 		StatusCode:      r.StatusCode,
 		Cost:            r.Cost,
 		Account:         r.Account,
+		UserID:          r.UserID,
 		SessionID:       r.SessionID,
 		DurationMs:      r.DurationMs,
 		FirstByteMs:     r.FirstByteMs,

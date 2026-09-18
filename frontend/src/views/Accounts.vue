@@ -133,6 +133,11 @@
                     <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="maxConcurrencyLabel">并发上限</span>
                     <input type="number" min="0" max="1000" id="workbuddyMaxConcurrency" class="w-14 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="maxConcurrencyTip" title="0=未配置(默认10);超过自动换号" />
                 </div>
+                <!-- WorkBuddy 一键签到按钮 -->
+                <button type="button" id="btnWorkBuddyCheckinAll" class="flex items-center gap-1 px-2 py-0.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 rounded text-[12px] font-medium cursor-pointer transition-colors whitespace-nowrap ml-1" title="对 WorkBuddy 号池所有可用账号执行每日签到并刷新积分">
+                    <span class="material-symbols-outlined text-[15px]" id="iconWbCheckin">event_available</span>
+                    <span id="textWbCheckin">每日签到</span>
+                </button>
             </div>
             <button type="button" id="btnNvidiaPreferredModels" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg text-[13px] font-medium text-amber-600 dark:text-amber-400 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer" data-i18n-title="nvidiaPreferredModelsBtn">
                 <span class="material-symbols-outlined text-[16px]">inventory</span>

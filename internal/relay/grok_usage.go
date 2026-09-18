@@ -201,6 +201,10 @@ func (h *APICompatHandler) recordGrokUsage(userSession *RelaySession, model stri
 			cacheStatus = "HIT"
 		}
 		// 原子序列保证高并发下 RequestLog.ID 无碰撞(同纳秒也唯一, 见 nvidiaReqLogSeq 注释)。
+		relayUserID := ""
+		if userSession != nil {
+			relayUserID = userSession.UserKey
+		}
 		seq := atomic.AddUint64(&grokReqLogSeq, 1)
 		reqLog := &stats.RequestLog{
 			ID:             fmt.Sprintf("groklog-%d-%d", seq, rand.Intn(1000)),
@@ -215,12 +219,13 @@ func (h *APICompatHandler) recordGrokUsage(userSession *RelaySession, model stri
 			CacheStatus:    cacheStatus,
 			StatusCode:     logCtx.StatusCode,
 			Account:        logCtx.Account,
+			UserID:         relayUserID,
 			RequestBody:    logCtx.ReqBody,
 			RequestHeaders: logCtx.ReqHeaders,
 			SessionID:      logCtx.SessionID,
 			DurationMs:     durationMs,
 			FirstByteMs:    firstByteMs,
-			Family:          "grok",
+			Family:         "grok",
 			ReasoningEffort: logCtx.ReasoningEffort,
 		}
 		h.globalStatsTracker.AddRequestLogForFamily(reqLog)

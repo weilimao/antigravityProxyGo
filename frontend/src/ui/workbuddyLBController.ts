@@ -36,6 +36,29 @@ export function initWorkBuddyLBEvents(): void {
             }, 300);
         });
     }
+
+    const btnCheckinAll = document.getElementById('btnWorkBuddyCheckinAll') as HTMLButtonElement | null;
+    if (btnCheckinAll) {
+        btnCheckinAll.addEventListener('click', async () => {
+            const icon = document.getElementById('iconWbCheckin');
+            const text = document.getElementById('textWbCheckin');
+            if (icon) icon.classList.add('animate-spin');
+            if (text) text.textContent = '签到中...';
+            btnCheckinAll.disabled = true;
+
+            try {
+                await ipcRenderer.invoke('workbuddy:checkin-all', true);
+            } catch (e: any) {
+                console.error('[WorkBuddy] Checkin error:', e);
+            } finally {
+                setTimeout(() => {
+                    if (icon) icon.classList.remove('animate-spin');
+                    if (text) text.textContent = '每日签到';
+                    btnCheckinAll.disabled = false;
+                }, 1000);
+            }
+        });
+    }
 }
 
 /**

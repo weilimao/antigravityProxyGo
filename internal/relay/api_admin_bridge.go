@@ -595,19 +595,30 @@ func (h *APIHandler) handleAdminUserKeysUsage(w http.ResponseWriter, r *http.Req
 
 	usages := make(map[string]int64)
 	var totalUsed int64
+	var totalRequests int
 	if user != nil {
 		for _, k := range user.APIKeys {
-			uTokens := k.UsedGeminiTokens + k.UsedClaudeTokens + k.UsedNvidiaTokens + k.UsedGrokTokens
+			uTokens := k.UsedTokens
+			sumTokens := k.UsedGeminiTokens + k.UsedClaudeTokens + k.UsedNvidiaTokens + k.UsedGrokTokens + k.UsedWorkbuddyTokens
+			if sumTokens > uTokens {
+				uTokens = sumTokens
+			}
 			usages[k.Key] = uTokens
 			totalUsed += uTokens
+		}
+		if h.statsMgr != nil {
+			if uStats := h.statsMgr.GetUserStats(user.ID); uStats != nil {
+				totalRequests = uStats.TotalRequests
+			}
 		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success":   true,
-		"username":  username,
-		"usages":    usages,
-		"totalUsed": totalUsed,
+		"success":       true,
+		"username":      username,
+		"usages":        usages,
+		"totalUsed":     totalUsed,
+		"totalRequests": totalRequests,
 	})
 }
 

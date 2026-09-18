@@ -418,6 +418,8 @@ func (m *Manager) GetAccounts() []*Account {
 			TwoFASecret:      a.TwoFASecret,
 			TokenRefreshedAt: a.GetTokenRefreshedAt(),
 			NoQuota:          a.NoQuota,
+			LastCheckinDate:  a.LastCheckinDate,
+			CheckinStreak:    a.CheckinStreak,
 			MaskedKey:        maskedKeyForAccount(a),
 			BaseURL:          a.BaseURL,
 			EgressIP:         a.EgressIP,

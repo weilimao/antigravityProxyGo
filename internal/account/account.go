@@ -35,6 +35,10 @@ type Account struct {
 	TwoFASecret      string           `json:"twofa_secret,omitempty"`
 	TokenRefreshedAt int64            `json:"token_refreshed_at"`
 	NoQuota          bool             `json:"noQuota,omitempty"`
+	// LastCheckinDate 记录账号最后成功签到或探测已签到的本地日期（YYYY-MM-DD），用于每日自动签到幂等去重。
+	LastCheckinDate string `json:"lastCheckinDate,omitempty"`
+	// CheckinStreak 记录连续签到天数。
+	CheckinStreak int `json:"checkinStreak,omitempty"`
 	// MaskedKey 是 AccessToken(API Key) 的脱敏展示版(仅首尾保留,如 sk-****abcd),
 	// 仅在 GetAccounts 深拷贝时填充,供前端编辑态辨认"已配置 Key"且绝不下发明文。
 	MaskedKey string `json:"maskedKey,omitempty"`

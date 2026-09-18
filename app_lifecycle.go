@@ -196,6 +196,29 @@ func (a *App) startup(ctx context.Context) {
 	)
 	a.autoTriggerScheduler.Start()
 
+	// 5.1 挂载 WorkBuddy 号池每日打开自动签到与跨天定时巡检
+	go func() {
+		// 冷启动延迟 3 秒，避开应用启动主流程网络与磁盘竞争
+		time.Sleep(3 * time.Second)
+		if a.accountMgr != nil {
+			a.accountMgr.RunDailyCheckinForWorkBuddyPool(false, a.AddLog)
+		}
+
+		// 每日跨天巡检（每小时检查一次）
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-a.ctx.Done():
+				return
+			case <-ticker.C:
+				if a.accountMgr != nil {
+					a.accountMgr.RunDailyCheckinForWorkBuddyPool(false, a.AddLog)
+				}
+			}
+		}
+	}()
+
 	// Initialize relay managers early so they are always available
 	a.ensureRelayInitialized()
 
