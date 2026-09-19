@@ -46,7 +46,7 @@ func FetchChannelAvailableModels(accountMgr *account.Manager, channel string) ([
 		// 兜底：若寻找指定 Google 族标签未命中，回退查寻任意未冷却、具备 AccessToken 的 Antigravity/Google 账号
 		if activeAcc == nil && isGoogleChannel(ch) {
 			for _, acc := range rawAccounts {
-				if acc != nil && acc.Enabled && acc.GetAccessToken() != "" && acc.Provider != "nvidia" && acc.Provider != "2fa" {
+				if acc != nil && acc.Enabled && acc.GetAccessToken() != "" && acc.Provider != "nvidia" && acc.Provider != "2fa" && acc.Provider != "workbuddy" && acc.Provider != "opencode" {
 					activeAcc = acc
 					break
 				}
@@ -91,7 +91,19 @@ func FetchChannelAvailableModels(accountMgr *account.Manager, channel string) ([
 		return models, nil
 	}
 
-	// 3. 对于 Google / Antigravity / GCP 号池，真正发起 v1internal:fetchAvailableModels 请求
+	// 3. 如果是 OpenCode 号池
+	if ch == "opencode" || activeAcc.Provider == "opencode" {
+		models, err := fetchOpenCodeModels(activeAcc)
+		if err != nil {
+			return nil, fmt.Errorf("打 OpenCode 上游获取模型失败 (账号 %s): %w", activeAcc.Email, err)
+		}
+		if len(models) == 0 {
+			return nil, fmt.Errorf("OpenCode 上游返回的模型列表为空")
+		}
+		return models, nil
+	}
+
+	// 4. 对于 Google / Antigravity / GCP 号池，真正发起 v1internal:fetchAvailableModels 请求
 	models, err := fetchGeminiInternalModels(activeAcc)
 	if err != nil {
 		return nil, fmt.Errorf("打 Google 上游 v1internal:fetchAvailableModels 失败 (账号 %s): %w", activeAcc.Email, err)
@@ -247,4 +259,32 @@ func fetchWorkBuddyModels(acc *account.Account) ([]string, error) {
 	}
 	return list, nil
 }
+
+// fetchOpenCodeModels 从 OpenCode 端点拉取可用模型列表，若上游暂无模型端点或失败则以内置清单兜底。
+func fetchOpenCodeModels(acc *account.Account) ([]string, error) {
+	baseURL := strings.TrimSpace(acc.BaseURL)
+	if baseURL == "" {
+		baseURL = account.DefaultOpenCodeBaseURL
+	}
+	apiKey := acc.GetAccessToken()
+
+	// 优先尝试 OpenAI 规范的 FetchModels 端点查询
+	if apiKey != "" {
+		models, err := FetchModels(baseURL, apiKey)
+		if err == nil && len(models) > 0 {
+			return models, nil
+		}
+	}
+
+	// 兜底返回 OpenCode 预置支持的模型列表
+	if len(account.OpenCodeSupportedModels) > 0 {
+		list := make([]string, len(account.OpenCodeSupportedModels))
+		copy(list, account.OpenCodeSupportedModels)
+		sort.Strings(list)
+		return list, nil
+	}
+
+	return nil, fmt.Errorf("OpenCode 上游返回的模型列表为空")
+}
+
 

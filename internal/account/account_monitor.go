@@ -180,10 +180,10 @@ func (m *Manager) CheckAndRefreshTokens() {
 	var refreshAccounts []*Account
 	nowSec := time.Now().Unix()
 	for _, a := range m.accounts {
-		// grok 与 workbuddy 号池脱离本全局 5min tick:
+		// grok、workbuddy 与 opencode 号池脱离本全局 5min tick:
 		// grok 走专用 1h 节奏的 CheckAndPurgeGrokAuth;
-		// workbuddy 为 Keycloak JWT / 独立凭证体系，不可走 Google OAuth 刷新流，避免启动期向 Google 发送无效请求。
-		if a.Provider == "grok" || a.Provider == "workbuddy" {
+		// workbuddy 为 Keycloak JWT / 独立凭证体系，opencode 为 API Key 体系，不可走 Google OAuth 刷新流。
+		if a.Provider == "grok" || a.Provider == "workbuddy" || a.Provider == "opencode" {
 			continue
 		}
 		// 仅对已启用，有刷新Token和AccessToken的非2fa账号做定时刷新

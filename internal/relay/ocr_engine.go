@@ -506,7 +506,11 @@ func (s *OCRService) ocrRouteAttempt(ctx context.Context, userSession *RelaySess
 		return ocrAttemptResult{err: fmt.Errorf("create ocr route request: %w", errReq)}
 	}
 	ocrHTTPReq.Header.Set("Content-Type", "application/json")
-	ocrHTTPReq.Header.Set("Authorization", "Bearer "+userSession.UserKey)
+	bearerToken := strings.TrimSpace(userSession.Token)
+	if bearerToken == "" {
+		bearerToken = strings.TrimSpace(userSession.UserKey)
+	}
+	ocrHTTPReq.Header.Set("Authorization", "Bearer "+bearerToken)
 	ocrHTTPReq.Header.Set("X-Relay-User-Id", userSession.UserID)
 	if userSession.APIKeyID != "" {
 		ocrHTTPReq.Header.Set("X-Relay-Api-Key-Id", userSession.APIKeyID)

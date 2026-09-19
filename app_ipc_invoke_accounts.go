@@ -188,6 +188,11 @@ func (a *App) handleAccountsInvokeIPC(channel string, args []interface{}) (strin
 			}
 			return marshalResponse(res)
 		}
+		if acc.Provider == "opencode" || acc.Provider == "other" {
+			// OpenCode 与 Other 号池为第三方 API Key 体系，无 Google Cloud 配额接口，返回免配额成功响应
+			res := &account.QuotaResult{Tier: "Active", Buckets: []account.QuotaBucket{}}
+			return marshalResponse(res)
+		}
 		a.AddLog(fmt.Sprintf("🔄 [配额刷新] 开始刷新账号 %s 的配额...", acc.Email))
 		res, err := a.accountMgr.FetchQuota(acc)
 		if err != nil {

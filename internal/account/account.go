@@ -206,6 +206,10 @@ type AccountsData struct {
 	WorkBuddyLBMode string `json:"workbuddyLbMode,omitempty"`
 	// WorkBuddyMaxConcurrency 持久化 WorkBuddy 号池单账号在途并发上限(单池单值,与 NvidiaMaxConcurrency 同口径)。
 	WorkBuddyMaxConcurrency int `json:"workbuddyMaxConcurrency,omitempty"`
+	// OpenCodeLBMode 持久化 OpenCode 号池 LB 算法(与 WorkBuddyLBMode 同构单池单值)。
+	OpenCodeLBMode string `json:"opencodeLbMode,omitempty"`
+	// OpenCodeMaxConcurrency 持久化 OpenCode 号池单账号在途并发上限(单池单值)。
+	OpenCodeMaxConcurrency int `json:"opencodeMaxConcurrency,omitempty"`
 }
 
 type Manager struct {
@@ -226,6 +230,8 @@ type Manager struct {
 	grokLBMode string
 	// workbuddyLBMode 持久化 WorkBuddy 号池 LB 算法(round-robin/sticky),单池单值。
 	workbuddyLBMode string
+	// opencodeLBMode 持久化 OpenCode 号池 LB 算法(round-robin/sticky),单池单值。
+	opencodeLBMode string
 	// otherPoolMode 是 Other 号池(自定义多上游组)的负载均衡总开关,与 poolMode/projectPoolMode/nvidiaPoolMode 同构互斥。
 	otherPoolMode bool
 	// otherLBModes 按 GroupID 维度保存各组独立的 LB 算法(round-robin/sticky),与 nvidiaLBMode(单池单值)不同,
@@ -254,6 +260,9 @@ type Manager struct {
 	// workbuddyMaxConcurrency 是 WorkBuddy 号池单账号在途并发上限(单池单值,与 nvidiaMaxConcurrency 同口径);
 	// 0/负数=未配置,Get 时回退默认 10。
 	workbuddyMaxConcurrency int
+	// opencodeMaxConcurrency 是 OpenCode 号池单账号在途并发上限(单池单值);
+	// 0/负数=未配置,Get 时回退默认 10。
+	opencodeMaxConcurrency int
 	// grokCliVersion 持久化 Grok 号池全局 CLI 客户端版本号(单池单值,对仗 grokMaxConcurrency);
 	// 空串=未配置, GetGrokCliVersion 回退默认 DefaultGrokCliVersion("1.0.0")。用于发往
 	// cli-chat-proxy.grok.com 上游的 x-grok-client-version 身份头(规避 426 版本闸门)。

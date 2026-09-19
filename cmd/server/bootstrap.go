@@ -129,9 +129,10 @@ func NewServerInstance(cfg ServerConfig, logFn func(string)) (*ServerInstance, e
 
 	// 启动时异步清理超出 150 条的旧请求日志
 	go func() {
-		if err := db.PruneAllUsersRequestLogs(150); err != nil {
-			logFn(fmt.Sprintf("⚠️ [DB] 修剪旧请求日志失败: %v", err))
+		if err := db.PruneGlobalRequestLogs(150); err != nil {
+			logFn(fmt.Sprintf("⚠️ [DB] 全局修剪旧请求日志失败: %v", err))
 		}
+		_ = db.PruneAllUsersRequestLogs(150)
 	}()
 
 	// 初始化业务数据库 (支持远程 MySQL 模式与本地 SQLite 双模自动探测)
@@ -332,6 +333,7 @@ func (s *ServerInstance) Start() error {
 				if s.RelayAuthMgr != nil {
 					s.RelayAuthMgr.CleanExpired()
 				}
+				_ = db.PruneGlobalRequestLogs(150)
 				_ = db.PruneAllUsersRequestLogs(150)
 			}
 		}

@@ -2,6 +2,7 @@ import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
 import { ensureNvidiaCooldownTimer, ensureGrokCooldownTimer, openEditNvidiaAccount, openEditGrokAccount, openEditOtherAccount, openEditWorkBuddyAccount, renderOtherGroupTabs } from './accountsController';
+import { openEditOpenCodeAccount } from './opencodeAccountModal';
 import { escapeHtml, buildNvidiaCooldownTickSpan, buildGrokCooldownTickSpan, formatCooldownTime } from './accountCardHelpers';
 import { loadAccountQuota } from './quotaBarsRenderer';
 import { updateAggregateQuotaUI } from './aggregateQuotaUI';
@@ -63,7 +64,8 @@ function buildAccountHeaderInnerHTML(acc: any, dict: any): string {
             : (acc.provider === 'nvidia' ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 dark:text-amber-400 text-[9px] font-bold border border-amber-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">NVIDIA</span>'
             : (acc.provider === 'grok' ? '<span class="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 text-[9px] font-bold border border-sky-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Grok</span>'
             : (acc.provider === 'workbuddy' ? '<span class="px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400 text-[9px] font-bold border border-teal-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">WorkBuddy</span>'
-            : (acc.provider === 'other' ? '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Other</span>' : '')))));
+            : (acc.provider === 'opencode' ? '<span class="px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-600 dark:text-orange-400 text-[9px] font-bold border border-orange-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">OpenCode</span>'
+            : (acc.provider === 'other' ? '<span class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 dark:text-purple-300 text-[9px] font-bold border border-purple-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Other</span>' : ''))))));
     let otherExtraBadges = '';
     if (acc.provider === 'other') {
         const groupName = acc.groupName || acc.groupId || '';
@@ -77,7 +79,7 @@ function buildAccountHeaderInnerHTML(acc: any, dict: any): string {
         }
     }
 
-    const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.provider !== 'nvidia' && acc.provider !== 'other' && acc.provider !== 'grok' && acc.provider !== 'workbuddy' && acc.projectId)
+    const projectBadge = (acc.provider !== 'antigravity' && acc.provider !== 'gemini-cli' && acc.provider !== 'nvidia' && acc.provider !== 'other' && acc.provider !== 'grok' && acc.provider !== 'workbuddy' && acc.provider !== 'opencode' && acc.projectId)
         ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold border border-emerald-500/20 ml-2 mt-0.5 self-center flex-shrink-0 whitespace-nowrap">Project</span>'
         : '';
 
@@ -282,7 +284,8 @@ export function renderAccounts(accounts: any[]) {
         const isOtherAcc = acc.provider === 'other';
         const isGrokAcc = acc.provider === 'grok';
         const isWorkBuddyAcc = acc.provider === 'workbuddy';
-        const singleCategoryCooling = isNvidiaAcc || isOtherAcc || isGrokAcc || isWorkBuddyAcc;
+        const isOpencodeAcc = acc.provider === 'opencode';
+        const singleCategoryCooling = isNvidiaAcc || isOtherAcc || isGrokAcc || isWorkBuddyAcc || isOpencodeAcc;
         const isOverallCooling = isCooling && (singleCategoryCooling
             ? coolingCategories.length >= 1
             : (coolingCategories.includes('all') || (coolingCategories.length === 2)));
@@ -456,6 +459,8 @@ export function renderAccounts(accounts: any[]) {
                     void ipcRenderer.invoke('grok:toggle-enabled', acc.id, enabled);
                 } else if (acc.provider === 'workbuddy') {
                     void ipcRenderer.invoke('workbuddy:toggle-enabled', acc.id, enabled);
+                } else if (acc.provider === 'opencode') {
+                    void ipcRenderer.invoke('opencode:toggle-enabled', acc.id, enabled);
                 } else {
                     ipcRenderer.send('accounts:toggle-enabled', acc.id, enabled);
                 }
@@ -496,13 +501,15 @@ export function renderAccounts(accounts: any[]) {
                         void ipcRenderer.invoke('grok:remove', acc.id);
                     } else if (acc.provider === 'workbuddy') {
                         void ipcRenderer.invoke('workbuddy:remove', acc.id);
+                    } else if (acc.provider === 'opencode') {
+                        void ipcRenderer.invoke('opencode:remove', acc.id);
                     } else {
                         ipcRenderer.send('accounts:remove', acc.id);
                     }
                 }
             };
 
-            // 编辑按钮:仅 API Key / WorkBuddy 型号池(NVIDIA / Other / Grok / WorkBuddy)提供,复用各自添加账号模态框做预填编辑。
+            // 编辑按钮:仅 API Key / WorkBuddy / OpenCode 型号池(NVIDIA / Other / Grok / WorkBuddy / OpenCode)提供,复用各自添加账号模态框做预填编辑。
             const btnEdit = document.createElement('button');
             btnEdit.className = 'text-[11px] font-medium text-primary hover:text-primary/80 hover:bg-primary/5 dark:hover:bg-primary/10 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0';
             btnEdit.innerHTML = `<span class="material-symbols-outlined text-[14px]">edit</span> ${dict.btnEdit || '编辑'}`;
@@ -516,10 +523,12 @@ export function renderAccounts(accounts: any[]) {
                     openEditGrokAccount(acc);
                 } else if (acc.provider === 'workbuddy') {
                     openEditWorkBuddyAccount(acc);
+                } else if (acc.provider === 'opencode') {
+                    openEditOpenCodeAccount(acc);
                 }
             };
 
-            // 解冻按钮:仅 Grok 号池 + 当前处于冷却态时显示。点击经二次确认后 invoke grok:clear-cooldown,
+            // 解冻按钮:Grok / OpenCode 号池 + 当前处于冷却态时显示。点击经二次确认后 invoke clear-cooldown,
             // 后端清冷却 + emitAccountsRes,前端卡片徽标即时翻绿。与编辑/导出/删除同级,置于最左以便冷却态显眼。
             const btnThaw = document.createElement('button');
             btnThaw.className = 'text-[11px] font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0';
@@ -529,7 +538,8 @@ export function renderAccounts(accounts: any[]) {
             btnThaw.onclick = async () => {
                 const msg = (dict.grokThawConfirmSingle || '确定要手动解冻账号 {email} 吗？该账号将立即恢复可承接请求。').replace('{email}', acc.email);
                 if (await $confirm(msg)) {
-                    const res = await ipcRenderer.invoke('grok:clear-cooldown', acc.id);
+                    const ch = acc.provider === 'opencode' ? 'opencode:clear-cooldown' : 'grok:clear-cooldown';
+                    const res = await ipcRenderer.invoke(ch, acc.id);
                     if (!res || res.success !== true) {
                         alert((res && res.error) || (dict.grokThawFailed || '解冻失败'));
                     }
@@ -569,14 +579,14 @@ export function renderAccounts(accounts: any[]) {
 
             const rightGroup = document.createElement('div');
             rightGroup.className = 'flex items-center gap-1 flex-shrink-0';
-            if (acc.provider === 'nvidia' || acc.provider === 'other' || acc.provider === 'grok' || acc.provider === 'workbuddy') {
+            if (acc.provider === 'nvidia' || acc.provider === 'other' || acc.provider === 'grok' || acc.provider === 'workbuddy' || acc.provider === 'opencode') {
                 rightGroup.appendChild(btnEdit);
             }
             if (acc.provider === 'workbuddy') {
                 rightGroup.appendChild(btnWbCheckin);
             }
-            // 仅 Grok 号池且整体冷却中时插入解冻按钮(置于编辑之后、导出之前)。
-            if (acc.provider === 'grok' && isOverallCooling) {
+            // 仅 Grok / OpenCode 号池且整体冷却中时插入解冻按钮(置于编辑之后、导出之前)。
+            if ((acc.provider === 'grok' || acc.provider === 'opencode') && isOverallCooling) {
                 rightGroup.appendChild(btnThaw);
             }
             rightGroup.appendChild(btnDownload);

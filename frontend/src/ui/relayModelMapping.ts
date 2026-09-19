@@ -72,28 +72,27 @@ function makeMappingEntry(clientModel: string, targetModel: string, provider: st
 
 export async function loadModelMappings() {
     try {
-        // 1. 获取动态账号池 Channel 列表
+        // 1. 获取可用渠道列表 (若后端提供)
         try {
-            const chans = await ipcRenderer.invoke('relay:get-account-channels');
+            const chans = await ipcRenderer.invoke('relay:get-channels');
             if (Array.isArray(chans) && chans.length > 0) {
                 availableChannels = Array.from(new Set([...availableChannels, ...chans]));
             }
-        } catch (e) {
-            console.warn('[RelayController] Failed to get channels:', e);
-        }
+        } catch (_) {}
 
         // 2. 获取模型映射数据
         const list = await ipcRenderer.invoke('relay:get-model-mapping');
         allMappings = list || [];
 
-        // 3. 构建默认 Tab 列表 (默认预设五个,对齐账号池页面顶部通道,含 Other/Grok/WorkBuddy)
+        // 3. 构建默认 Tab 列表 (默认预设,对齐账号池页面顶部通道,含 Other/Grok/WorkBuddy/OpenCode)
         poolTabs = [
             { id: 'google', name: 'Gemini (Google)', targetProvider: 'google' },
             { id: 'nvidia', name: 'NVIDIA 号池', targetProvider: 'nvidia' },
             { id: 'other', name: 'Other 号池', targetProvider: 'other' },
             { id: 'gcp', name: '谷歌云 API', targetProvider: 'gcp' },
             { id: 'grok', name: 'Grok 号池', targetProvider: 'grok' },
-            { id: 'workbuddy', name: 'WorkBuddy 号池', targetProvider: 'workbuddy' }
+            { id: 'workbuddy', name: 'WorkBuddy 号池', targetProvider: 'workbuddy' },
+            { id: 'opencode', name: 'OpenCode 号池', targetProvider: 'opencode' }
         ];
 
         // 4. 根据已有 mappings 里的 ownedBy 填充可删除的自定义 Tab
@@ -243,6 +242,7 @@ function getMappingTab(m: any): string {
     if (modelName.startsWith('nvidia/') || modelName.endsWith('-nemotron')) return 'nvidia';
     if (modelName.startsWith('grok/')) return 'grok';
     if (modelName.startsWith('workbuddy/')) return 'workbuddy';
+    if (modelName.startsWith('opencode/')) return 'opencode';
     if (modelName.startsWith('deepseek')) return 'deepseek';
     if (modelName.startsWith('qwen')) return 'qwen';
     if (modelName.startsWith('claude')) return 'anthropic';
@@ -798,7 +798,7 @@ export function initRelayModelMapping() {
     allMappings = [];
     poolTabs = [];
     activeTabId = 'google';
-    availableChannels = ['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok', 'workbuddy'];
+    availableChannels = ['antigravity', 'google', 'gcp', 'nvidia', 'other', 'grok', 'workbuddy', 'opencode'];
     channelModelsCache = {};
     channelModelsCachePrev = {};
     modelMappingSearchQuery = '';

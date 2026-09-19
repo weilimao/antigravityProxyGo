@@ -36,6 +36,9 @@
                 <button class="px-3 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 whitespace-nowrap" id="btnChannelWorkbuddy" type="button">
                     <span data-i18n="workbuddyPool">WorkBuddy 号池</span>
                 </button>
+                <button class="px-3 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 whitespace-nowrap" id="btnChannelOpencode" type="button">
+                    <span data-i18n="opencodePool">OpenCode 号池</span>
+                </button>
             </div>
         </div>
         <!-- 右侧：负载均衡开关与操作按钮组 -->
@@ -139,6 +142,19 @@
                     <span id="textWbCheckin">每日签到</span>
                 </button>
             </div>
+            <!-- OpenCode 池负载均衡方式(仅 OpenCode 通道显示): 轮询算法 select + 单账号在途并发上限 input -->
+            <div class="flex items-center gap-2 bg-slate-50/50 dark:bg-white/5 px-3 py-1.5 rounded-lg border border-outline-variant/30 flex-shrink-0 hidden" id="opencodeLBModeContainer">
+                <span class="text-[13px] font-medium text-on-surface dark:text-white">轮询算法</span>
+                <select class="bg-transparent text-[13px] font-medium text-on-surface dark:text-white border border-outline-variant/40 rounded px-1.5 py-0.5 focus:outline-none cursor-pointer" id="opencodeLBModeSelect">
+                    <option value="round-robin" class="dark:bg-[#1a1f30] text-slate-800 dark:text-white" data-i18n="lbRoundRobin">游标轮询 (默认)</option>
+                    <option value="sticky" class="dark:bg-[#1a1f30] text-slate-800 dark:text-white" data-i18n="lbSticky">粘性会话</option>
+                </select>
+                <!-- OpenCode 池单账号在途并发上限: 0=未配置回退默认 10; 超过自动换号。 -->
+                <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20">
+                    <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="maxConcurrencyLabel">并发上限</span>
+                    <input type="number" min="0" max="1000" id="opencodeMaxConcurrency" class="w-14 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="maxConcurrencyTip" title="0=未配置(默认10);超过自动换号" />
+                </div>
+            </div>
             <button type="button" id="btnNvidiaPreferredModels" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg text-[13px] font-medium text-amber-600 dark:text-amber-400 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer" data-i18n-title="nvidiaPreferredModelsBtn">
                 <span class="material-symbols-outlined text-[16px]">inventory</span>
                 <span data-i18n="nvidiaPreferredModelsBtn">专属模型</span>
@@ -193,6 +209,13 @@
                         <div>
                             <div class="font-bold" data-i18n="workbuddyItemTitle">WorkBuddy (官方网页登录 / 凭证导入)</div>
                             <div class="text-[10px] text-outline" data-i18n="workbuddyItemDesc">官方网页一键授权登录 (推荐)，支持本机导入与手动录入</div>
+                        </div>
+                    </button>
+                    <button class="w-full text-left px-4 py-2 text-[13px] text-on-surface dark:text-white hover:bg-slate-50 dark:hover:bg-white/5 transition-colors flex items-center gap-2 border-t border-outline-variant/10 mt-1 pt-3 cursor-pointer" id="btnAddOpenCodeAccount" onclick="window.openOpenCodeAccountModal && window.openOpenCodeAccountModal()">
+                        <span class="material-symbols-outlined text-orange-500 text-[16px]">terminal</span>
+                        <div>
+                            <div class="font-bold" data-i18n="opencodeItemTitle">OpenCode (Zen API Key)</div>
+                            <div class="text-[10px] text-outline" data-i18n="opencodeItemDesc">填写 OpenCode Zen API Key (sk-...) 接入</div>
                         </div>
                     </button>
                 </div>

@@ -277,6 +277,26 @@ func (s *StatsTracker) GetAllUsersStats() map[string]*RelayUserStats {
 	return result
 }
 
+// GetGlobalSummary 汇总全平台所有用户的权威生命周期请求与用量
+func (s *StatsTracker) GetGlobalSummary() (totalReqs int, inTokens, outTokens, cachedTokens int64, totalCost float64) {
+	s.RLock()
+	defer s.RUnlock()
+
+	for _, u := range s.users {
+		if u == nil {
+			continue
+		}
+		totalReqs += u.TotalRequests
+		inTokens += int64(u.TotalInputTokens)
+		outTokens += int64(u.TotalOutputTokens)
+		cachedTokens += int64(u.TotalCachedTokens)
+		totalCost += u.TotalCost
+	}
+	totalCost = math.Round(totalCost*1000000.0) / 1000000.0
+	return
+}
+
+
 func (s *StatsTracker) scheduleSave() {
 	s.saveTimeoutLock.Lock()
 	defer s.saveTimeoutLock.Unlock()

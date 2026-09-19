@@ -182,8 +182,11 @@ func (r *AnthropicRequest) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		var sb strings.Builder
-		for _, b := range blocks {
+		for i, b := range blocks {
 			if b.Text != "" {
+				if i > 0 && sb.Len() > 0 && !strings.HasSuffix(sb.String(), " ") && !strings.HasSuffix(sb.String(), "\n") {
+					sb.WriteString("\n\n")
+				}
 				sb.WriteString(b.Text)
 			}
 		}

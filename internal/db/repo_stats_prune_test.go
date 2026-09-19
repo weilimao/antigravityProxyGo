@@ -112,13 +112,70 @@ func TestPruneAllUsersRequestLogs(t *testing.T) {
 		t.Fatalf("PruneAllUsersRequestLogs failed: %v", err)
 	}
 
-	// 验证修剪后各自正好剩 150 条
-	_ = GlobalDB.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE user_id = ?`, userA).Scan(&countA)
-	_ = GlobalDB.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE user_id = ?`, userB).Scan(&countB)
-	if countA != 150 {
-		t.Errorf("Expected userA to have 150 logs, got %d", countA)
-	}
-	if countB != 150 {
-		t.Errorf("Expected userB to have 150 logs, got %d", countB)
+	// 验证全局硬上限兜底生效: 全表总数严格 <= 150 条
+	var totalCount int
+	_ = GlobalDB.QueryRow(`SELECT COUNT(*) FROM request_logs`).Scan(&totalCount)
+	if totalCount != 150 {
+		t.Errorf("Expected total logs to be strictly 150, got %d", totalCount)
 	}
 }
+
+func TestPruneGlobalRequestLogs_Strict150Limit(t *testing.T) {
+	dir := t.TempDir()
+	if err := InitDB(dir); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer func() {
+		CloseDB()
+		GlobalDB = nil
+	}()
+
+	// 模拟多用户交替产生 200 条请求
+	users := []string{"user-alpha", "user-beta", "user-gamma", "user-delta"}
+	for i := 1; i <= 200; i++ {
+		uid := users[i%len(users)]
+		log := &RequestLog{
+			ReqID:      fmt.Sprintf("req-multi-%d", i),
+			Timestamp:  time.Now().Add(time.Duration(i) * time.Second).Format(time.RFC3339),
+			Mode:       "local",
+			UserID:     uid,
+			ModelName:  "claude-3-5-sonnet",
+			DurationMs: 120,
+			StatusCode: 200,
+		}
+		if err := InsertRequestLog(log); err != nil {
+			t.Fatalf("InsertRequestLog(%d): %v", i, err)
+		}
+	}
+
+	// 验证无论多少个用户，每次写入后全表总记录数均严格保持在 150 条以内
+	var totalCount int
+	err := GlobalDB.QueryRow(`SELECT COUNT(*) FROM request_logs`).Scan(&totalCount)
+	if err != nil {
+		t.Fatalf("Query count failed: %v", err)
+	}
+	if totalCount != 150 {
+		t.Fatalf("Expected total 150 logs in database, but got %d", totalCount)
+	}
+
+	// 验证最旧的 50 条 (req-multi-1 ~ req-multi-50) 已被完全剔除
+	for i := 1; i <= 50; i++ {
+		reqID := fmt.Sprintf("req-multi-%d", i)
+		var exists int
+		_ = GlobalDB.QueryRow(`SELECT 1 FROM request_logs WHERE req_id = ?`, reqID).Scan(&exists)
+		if exists == 1 {
+			t.Errorf("Expected oldest log %s to be pruned, but found", reqID)
+		}
+	}
+
+	// 验证最新的 150 条 (req-multi-51 ~ req-multi-200) 均保留
+	for i := 51; i <= 200; i += 25 {
+		reqID := fmt.Sprintf("req-multi-%d", i)
+		var exists int
+		_ = GlobalDB.QueryRow(`SELECT 1 FROM request_logs WHERE req_id = ?`, reqID).Scan(&exists)
+		if exists != 1 {
+			t.Errorf("Expected recent log %s to exist, but missing", reqID)
+		}
+	}
+}
+

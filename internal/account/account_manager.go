@@ -839,8 +839,9 @@ func (m *Manager) GetAllChannels() []string {
 		"other":       true,
 		"grok":        true,
 		"workbuddy":   true,
+		"opencode":    true,
 	}
-	out := []string{"antigravity", "google", "gcp", "nvidia", "other", "grok", "workbuddy"}
+	out := []string{"antigravity", "google", "gcp", "nvidia", "other", "grok", "workbuddy", "opencode"}
 
 	for _, acc := range m.accounts {
 		if acc != nil && acc.Provider != "" {

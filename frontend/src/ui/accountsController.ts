@@ -38,6 +38,9 @@ export { openEditGrokAccount } from './grokAccountModal';
 import { initWorkBuddyAccountModalEvents, openWorkBuddyAccountModal, openEditWorkBuddyAccount } from './workbuddyAccountModal';
 export { openEditWorkBuddyAccount } from './workbuddyAccountModal';
 import { initWorkBuddyLBEvents, setWorkBuddyLBContainerVisible, updateWorkBuddyLBUI } from './workbuddyLBController';
+import { initOpenCodeAccountModalEvents, openOpenCodeAccountModal, openEditOpenCodeAccount } from './opencodeAccountModal';
+export { openEditOpenCodeAccount } from './opencodeAccountModal';
+import { initOpenCodeLBEvents, setOpenCodeLBContainerVisible, updateOpenCodeLBUI } from './opencodeLBController';
 
 // 账号导出 / 布局缓存 / 批量操作栏 / Grok·NVIDIA 工具栏按钮显隐等纯工具函数已迁至 accountsUtil.ts,
 // 此处 re-export 保持对外 API 完全兼容(exportAccountConfig / refreshAccountLayoutFromCache /
@@ -58,8 +61,10 @@ let btnChannelNvidia: HTMLButtonElement | null;
 let btnChannelOther: HTMLButtonElement | null;
 let btnChannelGrok: HTMLButtonElement | null;
 let btnChannelWorkbuddy: HTMLButtonElement | null;
+let btnChannelOpencode: HTMLButtonElement | null;
 let btnAddOtherAccount: HTMLButtonElement | null;
 let btnAddWorkBuddyAccount: HTMLButtonElement | null;
+let btnAddOpenCodeAccount: HTMLButtonElement | null;
 let nvidiaPoolModeContainer: HTMLDivElement | null;
 let nvidiaPoolModeToggle: HTMLInputElement | null;
 let nvidiaLBModeContainer: HTMLDivElement | null;
@@ -109,20 +114,27 @@ export function updateViewTabUI() {
         const inactiveClass = 'px-4 py-1.5 rounded-md font-medium cursor-pointer transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200';
         const dict = i18n[state.currentLanguage] || i18n.zh;
 
-        if (state.currentViewTab === 'antigravity') {
-            btnChannelAntigravity.className = activeClass;
-            btnChannelProject.className = inactiveClass;
-            if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
-            if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
-            if (btnChannelOther) btnChannelOther.className = inactiveClass;
-            if (btnChannelGrok) btnChannelGrok.className = inactiveClass;
-            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = inactiveClass;
+        const tabsMap = [
+            { id: 'antigravity', el: btnChannelAntigravity },
+            { id: 'project', el: btnChannelProject },
+            { id: 'gemini-cli', el: btnChannelGeminiCli },
+            { id: 'nvidia', el: btnChannelNvidia },
+            { id: 'other', el: btnChannelOther },
+            { id: 'grok', el: btnChannelGrok },
+            { id: 'workbuddy', el: btnChannelWorkbuddy },
+            { id: 'opencode', el: btnChannelOpencode },
+        ];
+        for (const t of tabsMap) {
+            if (t.el) t.el.className = (t.id === state.currentViewTab) ? activeClass : inactiveClass;
+        }
 
+        if (state.currentViewTab === 'antigravity') {
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (nvidiaPoolModeContainer) nvidiaPoolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
             setWorkBuddyLBContainerVisible(false);
+            setOpenCodeLBContainerVisible(false);
             setGrokThawButtonVisible(false);
             setGrokCheckAuthButtonVisible(false);
             setNvidiaBatchAssignIPButtonVisible(false);
@@ -146,30 +158,13 @@ export function updateViewTabUI() {
             if (antigravityWorkerProxyUrl && state.lastBackendData) {
                 antigravityWorkerProxyUrl.value = state.lastBackendData.antigravityWorkerProxyUrl || '';
             }
-        /* } else if (state.currentViewTab === 'gemini-cli') {
-            if (btnChannelGeminiCli) btnChannelGeminiCli.className = activeClass;
-            btnChannelAntigravity.className = inactiveClass;
-            btnChannelProject.className = inactiveClass;
-
-            if (poolModeContainer) poolModeContainer.classList.remove('hidden');
-            if (lblPoolMode) lblPoolMode.innerText = 'CLI号池负载均衡';
-            if (poolModeToggle && state.lastBackendData) {
-                poolModeToggle.checked = state.lastBackendData.geminiCliPoolMode;
-            } */
         } else if (state.currentViewTab === 'nvidia') {
-            if (btnChannelNvidia) btnChannelNvidia.className = activeClass;
-            btnChannelAntigravity.className = inactiveClass;
-            btnChannelProject.className = inactiveClass;
-            if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
-            if (btnChannelOther) btnChannelOther.className = inactiveClass;
-            if (btnChannelGrok) btnChannelGrok.className = inactiveClass;
-            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = inactiveClass;
-
             // NVIDIA 用独立算法选择框
             if (poolModeContainer) poolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.remove('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
             setWorkBuddyLBContainerVisible(false);
+            setOpenCodeLBContainerVisible(false);
             // NVIDIA Tab 显示穿梭框入口按钮与分配住宅IP按钮。
             setNvidiaPreferredModelsButtonVisible(true);
             setNvidiaBatchAssignIPButtonVisible(true);
@@ -182,20 +177,15 @@ export function updateViewTabUI() {
             if (nvidiaMaxConcurrency && state.lastBackendData) {
                 nvidiaMaxConcurrency.value = String(state.lastBackendData.nvidiaMaxConcurrency ?? 10);
             }
+            if (antigravityCliVersionWrap) antigravityCliVersionWrap.classList.add('hidden');
+            if (antigravityWorkerProxyWrap) antigravityWorkerProxyWrap.classList.add('hidden');
         } else if (state.currentViewTab === 'grok') {
-            if (btnChannelGrok) btnChannelGrok.className = activeClass;
-            btnChannelAntigravity.className = inactiveClass;
-            btnChannelProject.className = inactiveClass;
-            if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
-            if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
-            if (btnChannelOther) btnChannelOther.className = inactiveClass;
-            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = inactiveClass;
-
             // Grok 用独立 LB 算法选择框(与 NVIDIA 同构),无总开关 toggle(决策 C)。
             if (poolModeContainer) poolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.remove('hidden');
             setWorkBuddyLBContainerVisible(false);
+            setOpenCodeLBContainerVisible(false);
             setNvidiaPreferredModelsButtonVisible(false);
             setNvidiaBatchAssignIPButtonVisible(false);
             setGrokThawButtonVisible(true);
@@ -223,55 +213,53 @@ export function updateViewTabUI() {
             if (grokWorkerProxyUrl && state.lastBackendData) {
                 grokWorkerProxyUrl.value = state.lastBackendData.grokWorkerProxyUrl || '';
             }
+            if (antigravityCliVersionWrap) antigravityCliVersionWrap.classList.add('hidden');
+            if (antigravityWorkerProxyWrap) antigravityWorkerProxyWrap.classList.add('hidden');
         } else if (state.currentViewTab === 'other') {
-            if (btnChannelOther) btnChannelOther.className = activeClass;
-            btnChannelAntigravity.className = inactiveClass;
-            btnChannelProject.className = inactiveClass;
-            if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
-            if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
-            if (btnChannelGrok) btnChannelGrok.className = inactiveClass;
-            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = inactiveClass;
-
             // Other 号池:暂无独立负载均衡控件(组内轮换由后端 LBMode 控制),隐藏两个 toggle 容器。
             if (poolModeContainer) poolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
             setWorkBuddyLBContainerVisible(false);
+            setOpenCodeLBContainerVisible(false);
             setNvidiaPreferredModelsButtonVisible(false);
             setNvidiaBatchAssignIPButtonVisible(false);
             setGrokThawButtonVisible(false);
             setGrokCheckAuthButtonVisible(false);
+            if (antigravityCliVersionWrap) antigravityCliVersionWrap.classList.add('hidden');
+            if (antigravityWorkerProxyWrap) antigravityWorkerProxyWrap.classList.add('hidden');
         } else if (state.currentViewTab === 'workbuddy') {
-            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = activeClass;
-            btnChannelAntigravity.className = inactiveClass;
-            btnChannelProject.className = inactiveClass;
-            if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
-            if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
-            if (btnChannelOther) btnChannelOther.className = inactiveClass;
-            if (btnChannelGrok) btnChannelGrok.className = inactiveClass;
-
             if (poolModeContainer) poolModeContainer.classList.add('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
             setWorkBuddyLBContainerVisible(true);
+            setOpenCodeLBContainerVisible(false);
             updateWorkBuddyLBUI(state.lastBackendData);
             setNvidiaPreferredModelsButtonVisible(false);
             setNvidiaBatchAssignIPButtonVisible(false);
             setGrokThawButtonVisible(false);
             setGrokCheckAuthButtonVisible(false);
+            if (antigravityCliVersionWrap) antigravityCliVersionWrap.classList.add('hidden');
+            if (antigravityWorkerProxyWrap) antigravityWorkerProxyWrap.classList.add('hidden');
+        } else if (state.currentViewTab === 'opencode') {
+            if (poolModeContainer) poolModeContainer.classList.add('hidden');
+            if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
+            if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
+            setWorkBuddyLBContainerVisible(false);
+            setOpenCodeLBContainerVisible(true);
+            updateOpenCodeLBUI(state.lastBackendData);
+            setNvidiaPreferredModelsButtonVisible(false);
+            setNvidiaBatchAssignIPButtonVisible(false);
+            setGrokThawButtonVisible(false);
+            setGrokCheckAuthButtonVisible(false);
+            if (antigravityCliVersionWrap) antigravityCliVersionWrap.classList.add('hidden');
+            if (antigravityWorkerProxyWrap) antigravityWorkerProxyWrap.classList.add('hidden');
         } else {
-            btnChannelProject.className = activeClass;
-            btnChannelAntigravity.className = inactiveClass;
-            if (btnChannelGeminiCli) btnChannelGeminiCli.className = inactiveClass;
-            if (btnChannelNvidia) btnChannelNvidia.className = inactiveClass;
-            if (btnChannelOther) btnChannelOther.className = inactiveClass;
-            if (btnChannelGrok) btnChannelGrok.className = inactiveClass;
-            if (btnChannelWorkbuddy) btnChannelWorkbuddy.className = inactiveClass;
-
             if (poolModeContainer) poolModeContainer.classList.remove('hidden');
             if (nvidiaLBModeContainer) nvidiaLBModeContainer.classList.add('hidden');
             if (grokLBModeContainer) grokLBModeContainer.classList.add('hidden');
             setWorkBuddyLBContainerVisible(false);
+            setOpenCodeLBContainerVisible(false);
             setNvidiaPreferredModelsButtonVisible(false);
             setNvidiaBatchAssignIPButtonVisible(false);
             setGrokThawButtonVisible(false);
@@ -291,69 +279,27 @@ export function updateViewTabUI() {
     }
 
     const btnAntigravityLogin = document.getElementById('btnAntigravityLogin');
-    const btnGeminiCliLogin = document.getElementById('btnGeminiCliLogin');
     const btnProjectLogin = document.getElementById('btnProjectLogin');
 
-    if (state.currentViewTab === 'antigravity') {
-        if (btnAntigravityLogin) btnAntigravityLogin.classList.remove('hidden');
-        if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
-        if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
-        if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
-        if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
-        if (btnAddGrokAccount) btnAddGrokAccount.classList.add('hidden');
-        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.add('hidden');
-        setNvidiaPreferredModelsButtonVisible(false);
-    /* } else if (state.currentViewTab === 'gemini-cli') {
-        if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
-        if (btnGeminiCliLogin) btnGeminiCliLogin.classList.remove('hidden');
-        if (btnProjectLogin) btnProjectLogin.classList.add('hidden'); */
-    } else if (state.currentViewTab === 'nvidia') {
-        if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
-        if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
-        if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
-        if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.remove('hidden');
-        if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
-        if (btnAddGrokAccount) btnAddGrokAccount.classList.add('hidden');
-        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.add('hidden');
-        // NVIDIA Tab 显示穿梭框入口按钮（委托穿梭框模块控制显隐,不跨簇共享 DOM 句柄）。
-        setNvidiaPreferredModelsButtonVisible(true);
-    } else if (state.currentViewTab === 'grok') {
-        if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
-        if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
-        if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
-        if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
-        if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
-        if (btnAddGrokAccount) btnAddGrokAccount.classList.remove('hidden');
-        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.add('hidden');
-        setNvidiaPreferredModelsButtonVisible(false);
-    } else if (state.currentViewTab === 'other') {
-        if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
-        if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
-        if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
-        if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
-        if (btnAddOtherAccount) btnAddOtherAccount.classList.remove('hidden');
-        if (btnAddGrokAccount) btnAddGrokAccount.classList.add('hidden');
-        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.add('hidden');
-        setNvidiaPreferredModelsButtonVisible(false);
-    } else if (state.currentViewTab === 'workbuddy') {
-        if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
-        if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
-        if (btnProjectLogin) btnProjectLogin.classList.add('hidden');
-        if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
-        if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
-        if (btnAddGrokAccount) btnAddGrokAccount.classList.add('hidden');
-        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.remove('hidden');
-        setNvidiaPreferredModelsButtonVisible(false);
-    } else {
-        if (btnAntigravityLogin) btnAntigravityLogin.classList.add('hidden');
-        if (btnGeminiCliLogin) btnGeminiCliLogin.classList.add('hidden');
-        if (btnProjectLogin) btnProjectLogin.classList.remove('hidden');
-        if (btnAddNvidiaAccount) btnAddNvidiaAccount.classList.add('hidden');
-        if (btnAddOtherAccount) btnAddOtherAccount.classList.add('hidden');
-        if (btnAddGrokAccount) btnAddGrokAccount.classList.add('hidden');
-        if (btnAddWorkBuddyAccount) btnAddWorkBuddyAccount.classList.add('hidden');
-        setNvidiaPreferredModelsButtonVisible(false);
-    }
+    const addAccountButtons: Record<string, HTMLElement | null> = {
+        antigravity: btnAntigravityLogin,
+        project: btnProjectLogin,
+        nvidia: btnAddNvidiaAccount,
+        grok: btnAddGrokAccount,
+        other: btnAddOtherAccount,
+        workbuddy: btnAddWorkBuddyAccount,
+        opencode: btnAddOpenCodeAccount,
+    };
+    Object.entries(addAccountButtons).forEach(([tab, btn]) => {
+        if (btn) {
+            if (tab === state.currentViewTab) {
+                btn.classList.remove('hidden');
+            } else {
+                btn.classList.add('hidden');
+            }
+        }
+    });
+    setNvidiaPreferredModelsButtonVisible(state.currentViewTab === 'nvidia');
 }
 
 // startLogin / startProjectLogin 已迁至 accountsLogin.ts(采用自包含 DOM 句柄策略,零耦合)。
@@ -375,6 +321,7 @@ export function initAccountsEvents() {
     btnChannelOther = document.getElementById('btnChannelOther') as HTMLButtonElement | null;
     btnChannelGrok = document.getElementById('btnChannelGrok') as HTMLButtonElement | null;
     btnChannelWorkbuddy = document.getElementById('btnChannelWorkbuddy') as HTMLButtonElement | null;
+    btnChannelOpencode = document.getElementById('btnChannelOpencode') as HTMLButtonElement | null;
     nvidiaPoolModeContainer = document.getElementById('nvidiaPoolModeContainer') as HTMLDivElement | null;
     nvidiaPoolModeToggle = document.getElementById('nvidiaPoolModeToggle') as HTMLInputElement | null;
     nvidiaLBModeContainer = document.getElementById('nvidiaLBModeContainer') as HTMLDivElement | null;
@@ -389,6 +336,7 @@ export function initAccountsEvents() {
     btnAddOtherAccount = document.getElementById('btnAddOtherAccount') as HTMLButtonElement | null;
     btnAddGrokAccount = document.getElementById('btnAddGrokAccount') as HTMLButtonElement | null;
     btnAddWorkBuddyAccount = document.getElementById('btnAddWorkBuddyAccount') as HTMLButtonElement | null;
+    btnAddOpenCodeAccount = document.getElementById('btnAddOpenCodeAccount') as HTMLButtonElement | null;
     // Grok 池 LB 容器 + 算法 select + 并发上限 input + CLI 版本号 input(与 NVIDIA 同构,DOM 在 Accounts.vue)。
     grokLBModeContainer = document.getElementById('grokLBModeContainer') as HTMLDivElement | null;
     grokLBModeSelect = document.getElementById('grokLBModeSelect') as HTMLSelectElement | null;
@@ -412,6 +360,11 @@ export function initAccountsEvents() {
     initWorkBuddyAccountModalEvents();
     // WorkBuddy 负载均衡与轮询调度：句柄赋值 + 事件绑定（已抽离 workbuddyLBController.ts）
     initWorkBuddyLBEvents();
+
+    // OpenCode 账号 Modal: 句柄赋值 + 事件绑定（已抽离 opencodeAccountModal.ts）
+    initOpenCodeAccountModalEvents();
+    // OpenCode 负载均衡与轮询调度：句柄赋值 + 事件绑定（已抽离 opencodeLBController.ts）
+    initOpenCodeLBEvents();
 
     // Other 组级自定义冷却 Modal:句柄赋值 + 事件绑定(已抽离 otherCooldownModal.ts,
     // 工具栏入口按钮 btnOtherCooldownConfig 在 Other 通道选中具体组时显示)。
@@ -621,6 +574,29 @@ export function initAccountsEvents() {
             }
             updateAggregateQuotaUI();
             updateBatchActionBarUI();
+        });
+    }
+
+    // OpenCode 通道切换 Tab
+    if (btnChannelOpencode) {
+        btnChannelOpencode.addEventListener('click', () => {
+            state.selectedAccountIds = [];
+            state.currentViewTab = 'opencode';
+            updateViewTabUI();
+            renderOtherGroupTabs();
+            if (state.currentAccountsList) {
+                renderAccounts(state.currentAccountsList);
+            }
+            updateAggregateQuotaUI();
+            updateBatchActionBarUI();
+        });
+    }
+
+    // OpenCode 添加账号下拉项 → 打开 OpenCode 账号模态
+    if (btnAddOpenCodeAccount) {
+        btnAddOpenCodeAccount.addEventListener('click', () => {
+            if (addAccountDropdown) addAccountDropdown.classList.add('hidden');
+            openOpenCodeAccountModal();
         });
     }
 
@@ -841,17 +817,6 @@ export function initAccountsEvents() {
             updateBatchActionBarUI();
         });
     }
-    /* if (btnChannelGeminiCli) {
-        btnChannelGeminiCli.addEventListener('click', () => {
-            state.currentViewTab = 'gemini-cli';
-            ipcRenderer.send('channel:switch', 'gemini-cli');
-            updateViewTabUI();
-            if (state.currentAccountsList) {
-                renderAccounts(state.currentAccountsList);
-            }
-            updateAggregateQuotaUI();
-        });
-    } */
 
     // Register accounts data update channel listener
     // (Moved to global initAccountsGlobalEvents below)
@@ -972,7 +937,3 @@ state.callbacks.renderAccounts = renderAccounts;
 state.callbacks.updateAggregateQuotaUI = updateAggregateQuotaUI;
 // updateBatchActionBarUI 注入 state.callbacks,供 triggerTestModal 间接调用,切断循环 import。
 state.callbacks.updateBatchActionBarUI = updateBatchActionBarUI;
-
-// ===== NVIDIA 全局专属模型清单 Modal 逻辑 =====
-
-// ==================== Other 号池 Modal 控制逻辑 ====================

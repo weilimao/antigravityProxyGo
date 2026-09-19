@@ -11,7 +11,7 @@
 import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
-import { renderNvidiaAccountQuota, renderGrokAccountQuota, renderWorkBuddyAccountQuota, isDomesticWorkBuddyAccount, getRelativeResetTime, formatCooldownTime } from './accountCardHelpers';
+import { renderNvidiaAccountQuota, renderGrokAccountQuota, renderWorkBuddyAccountQuota, renderOpenCodeAccountQuota, isDomesticWorkBuddyAccount, getRelativeResetTime, formatCooldownTime } from './accountCardHelpers';
 import { updateAggregateQuotaUI } from './aggregateQuotaUI';
 
 // Render account quota progress bars
@@ -36,6 +36,11 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
     // WorkBuddy 号池: 4 态渲染(停用/冷却/失败/可用·官方免费积分), 走 renderWorkBuddyAccountQuota。
     if (acc && acc.provider === 'workbuddy') {
         renderWorkBuddyAccountQuota(containerEl, acc, isZH, dict);
+        return;
+    }
+    // OpenCode 号池: 3 态渲染(停用/冷却/可用), 走 renderOpenCodeAccountQuota。
+    if (acc && acc.provider === 'opencode') {
+        renderOpenCodeAccountQuota(containerEl, acc, isZH, dict);
         return;
     }
     // Other 号池:配额语义不适用(自定义多上游组),显示无额度限制提示,不画假进度条。
@@ -235,6 +240,16 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
             }
             return;
         }
+    }
+    if (accForProbe0 && accForProbe0.provider === 'opencode') {
+        // OpenCode 号池: 基于 API Key 认证，无 Google Cloud 配额端点，直接走状态气泡渲染，绝不发 quota:fetch 探活。
+        const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
+        if (activeContainer) renderQuotaBars(activeContainer, [], accForProbe0.cooldowns || cooldowns);
+        if (refreshBtn) {
+            const icon = refreshBtn.querySelector('.material-symbols-outlined') || refreshBtn;
+            if (icon) icon.classList.remove('animate-spin');
+        }
+        return;
     }
     if (accForProbe0 && accForProbe0.provider === 'workbuddy') {
         // WorkBuddy 冷却短路:读 cooldowns.workbuddy(后端单冷却族 "workbuddy")。

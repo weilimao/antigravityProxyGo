@@ -67,28 +67,59 @@ func ensureWorkBuddySystemPrompt(req *OpenAIChatRequest) {
 	}
 }
 
-var reWorkBuddyBillingHeader = regexp.MustCompile(`(?i)x-anthropic-billing-header:[^\r\n]*[\r\n]*`)
+var reWorkBuddyBillingHeader = regexp.MustCompile(`(?i)x-anthropic-billing-header[^\r\n]*[\r\n]*`)
 
-// sanitizeWorkBuddyMessages 清洗触碰 WorkBuddy 安全策略（11128）的客户端特有标识（如 Claude Code CLI、计费头等）。
+// sanitizeWorkBuddyText 统一脱敏字符串中触碰 WorkBuddy 安全策略（11128）的客户端渠道特征。
+func sanitizeWorkBuddyText(text string) string {
+	if text == "" {
+		return ""
+	}
+	if reWorkBuddyBillingHeader.MatchString(text) {
+		text = reWorkBuddyBillingHeader.ReplaceAllString(text, "")
+	}
+	if strings.Contains(strings.ToLower(text), "x-anthropic-billing-header") {
+		// 兜底清除无换行或特殊分隔符的残留标记
+		reFallback := regexp.MustCompile(`(?i)x-anthropic-billing-header[a-zA-Z0-9_=:;.\- ]*`)
+		text = reFallback.ReplaceAllString(text, "")
+	}
+	if strings.Contains(text, "You are Claude Code, Anthropic's official CLI for Claude.") {
+		text = strings.ReplaceAll(text, "You are Claude Code, Anthropic's official CLI for Claude.", "You are an interactive AI assistant helping with coding.")
+	}
+	if strings.Contains(text, "Claude Code") {
+		text = strings.ReplaceAll(text, "Claude Code", "AI Assistant")
+	}
+	if strings.Contains(text, "claude-code") {
+		text = strings.ReplaceAll(text, "claude-code", "ai-assistant")
+	}
+	if strings.Contains(text, "claude-cli") {
+		text = strings.ReplaceAll(text, "claude-cli", "ai-cli")
+	}
+	return text
+}
+
+// sanitizeWorkBuddyMessages 清洗触碰 WorkBuddy 安全策略（11128）的客户端特有标识（如 Claude Code CLI、计费头、Tools描述等）。
 func sanitizeWorkBuddyMessages(req *OpenAIChatRequest) {
 	if req == nil {
 		return
 	}
 	for i := range req.Messages {
-		content := req.Messages[i].Content
-		if content == "" {
-			continue
+		req.Messages[i].Content = sanitizeWorkBuddyText(req.Messages[i].Content)
+		if len(req.Messages[i].ContentParts) > 0 {
+			for j := range req.Messages[i].ContentParts {
+				switch p := req.Messages[i].ContentParts[j].(type) {
+				case ChatMessageTextPart:
+					p.Text = sanitizeWorkBuddyText(p.Text)
+					req.Messages[i].ContentParts[j] = p
+				case *ChatMessageTextPart:
+					if p != nil {
+						p.Text = sanitizeWorkBuddyText(p.Text)
+					}
+				}
+			}
 		}
-		if reWorkBuddyBillingHeader.MatchString(content) {
-			content = reWorkBuddyBillingHeader.ReplaceAllString(content, "")
-		}
-		if strings.Contains(content, "You are Claude Code, Anthropic's official CLI for Claude.") {
-			content = strings.ReplaceAll(content, "You are Claude Code, Anthropic's official CLI for Claude.", "You are an interactive AI assistant helping with coding.")
-		}
-		if strings.Contains(content, "Claude Code") {
-			content = strings.ReplaceAll(content, "Claude Code", "AI Assistant")
-		}
-		req.Messages[i].Content = content
+	}
+	for i := range req.Tools {
+		req.Tools[i].Function.Description = sanitizeWorkBuddyText(req.Tools[i].Function.Description)
 	}
 }
 
@@ -473,6 +504,14 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 			errBytes, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
 			h.log("❌ [WorkBuddy 中继] 上游返回异常状态码 %d (%s): %s", resp.StatusCode, poolAccount.Email, string(errBytes))
+			// 若上游返回 11128 或渠道安全策略拦截，冷冻该账号并换号重试(防止单账号受限拖垮整个模型分支)
+			if resp.StatusCode == http.StatusBadRequest && (strings.Contains(string(errBytes), "11128") || strings.Contains(string(errBytes), "unapproved channel")) {
+				skippedAccounts[poolAccount.ID] = true
+				cooldownUntilMs := time.Now().UnixNano()/1e6 + 5*60*1000 // 冷冻 5 分钟
+				h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, cooldownUntilMs, workbuddyChannel, inModel)
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
+				continue
+			}
 			h.accountMgr.ReleaseAccount(poolAccount.ID)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(resp.StatusCode)

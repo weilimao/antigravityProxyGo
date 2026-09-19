@@ -224,6 +224,14 @@
                   <div class="flex items-center gap-2">
                     <button
                       class="text-[10px] text-outline hover:text-primary font-medium flex items-center gap-0.5 cursor-pointer"
+                      :title="`编辑${field.childKeyLabel || '模型名'}`"
+                      @click.stop="openEditObjectChild(field, item, childName)"
+                    >
+                      <span class="material-symbols-outlined text-[12px]">edit</span>
+                      编辑
+                    </button>
+                    <button
+                      class="text-[10px] text-outline hover:text-primary font-medium flex items-center gap-0.5 cursor-pointer"
                       :title="isModelCopied(field.key + '.' + item + '.' + childName) ? '已复制' : '复制模型名'"
                       @click.stop="copyModelName(field, item, childName)"
                     >
@@ -237,6 +245,59 @@
                       <span class="material-symbols-outlined text-[12px]">delete</span>
                       删除
                     </button>
+                  </div>
+                </div>
+                <!-- 编辑模型名称内联区域 -->
+                <div
+                  v-if="isEditingObjectChild(field, item, childName)"
+                  class="px-3 py-2 bg-primary/10 dark:bg-primary/20 border-t border-b border-primary/20 flex flex-col gap-1.5"
+                  @click.stop
+                >
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-1">
+                      <span class="material-symbols-outlined text-[13px] text-primary">edit</span>
+                      <span class="text-[11px] font-bold text-primary dark:text-primary-fixed-dim">
+                        修改{{ field.childKeyLabel || '模型名' }}
+                      </span>
+                    </div>
+                    <button
+                      class="text-[11px] text-outline hover:text-on-surface dark:hover:text-white cursor-pointer"
+                      @click="cancelEditObjectChild(field, item, childName)"
+                      title="关闭"
+                    >
+                      <span class="material-symbols-outlined text-[13px]">close</span>
+                    </button>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <input
+                      type="text"
+                      v-model="getEditingState(field, item, childName).newName"
+                      @input="clearEditObjectChildError(field, item, childName)"
+                      @keydown.enter.prevent="confirmEditObjectChild(field, item, childName)"
+                      @keydown.esc.prevent="cancelEditObjectChild(field, item, childName)"
+                      :placeholder="`请输入新的${field.childKeyLabel || '模型名'}`"
+                      class="flex-1 px-2.5 py-1 text-[11px] rounded bg-white dark:bg-[#1a1f30] border border-outline-variant/40 focus:border-primary focus:outline-none text-on-surface dark:text-white"
+                      autofocus
+                    />
+                    <button
+                      class="px-2.5 py-1 text-[11px] font-bold bg-primary hover:bg-primary/90 text-white rounded flex items-center gap-1 cursor-pointer transition-colors shadow-xs shrink-0"
+                      @click="confirmEditObjectChild(field, item, childName)"
+                    >
+                      <span class="material-symbols-outlined text-[12px]">check</span>
+                      保存
+                    </button>
+                    <button
+                      class="px-2 py-1 text-[11px] bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-on-surface dark:text-white border border-outline-variant/30 rounded cursor-pointer transition-colors shrink-0"
+                      @click="cancelEditObjectChild(field, item, childName)"
+                    >
+                      取消
+                    </button>
+                  </div>
+                  <div
+                    v-if="getEditingState(field, item, childName)?.error"
+                    class="text-[10px] text-error font-medium"
+                  >
+                    {{ getEditingState(field, item, childName).error }}
                   </div>
                 </div>
                 <div v-show="isModelCardExpanded(field.key + '.' + item + '.' + childName)" class="px-3 pb-3 flex flex-col gap-0.5">
@@ -394,6 +455,31 @@ import { ref, watch } from 'vue';
 import { AgentSchema, ConfigField, ConfigSection } from './types';
 import FieldRenderer from './FieldRenderer.vue';
 import ModelSearchSelect from './ModelSearchSelect.vue';
+import {
+  cleanModelName,
+  getChildPrefix,
+  getObjectChildStateKey,
+  getRepeatableObjectNames,
+  resolveChildKey,
+  getNestedBasePath,
+  findTargetRepeatableField,
+  getNestedRepeatableObjectNames,
+  renameRepeatableObjectChild,
+  removeRepeatableObjectChildKeys,
+  getSectionPrefix,
+  getRepeatableItems,
+  resolveSectionKey,
+  removeRepeatableItemKeys,
+  addRepeatableObjectChildHelper,
+  addSectionItemHelper,
+  copyToClipboard,
+} from './repeatableHelper';
+import {
+  isVariantEffortChecked as isVariantEffortCheckedHelper,
+  toggleVariantEffortHelper,
+  addNestedVariantHelper,
+  removeNestedVariantHelper,
+} from './variantsHelper';
 
 const props = defineProps<{
   schema: AgentSchema;
@@ -437,11 +523,8 @@ function isModelCardExpanded(key: string): boolean {
 }
 
 function toggleModelCardExpansion(key: string) {
-  if (expandedModels.value.has(key)) {
-    expandedModels.value.delete(key);
-  } else {
-    expandedModels.value.add(key);
-  }
+  if (expandedModels.value.has(key)) expandedModels.value.delete(key);
+  else expandedModels.value.add(key);
   expandedModels.value = new Set(expandedModels.value);
 }
 
@@ -450,11 +533,8 @@ function isProviderExpanded(key: string): boolean {
 }
 
 function toggleProviderExpansion(key: string) {
-  if (expandedProviders.value.has(key)) {
-    expandedProviders.value.delete(key);
-  } else {
-    expandedProviders.value.add(key);
-  }
+  if (expandedProviders.value.has(key)) expandedProviders.value.delete(key);
+  else expandedProviders.value.add(key);
   expandedProviders.value = new Set(expandedProviders.value);
 }
 
@@ -462,12 +542,6 @@ function toggleProviderExpansion(key: string) {
 watch(() => props.formData, (newVal) => {
   localFormData.value = { ...newVal };
 }, { deep: false });
-
-function cleanModelName(val: any): string {
-  if (val === undefined || val === null) return '';
-  const str = String(val).trim();
-  return str.replace(/\[1M\]$/i, '').trim();
-}
 
 // Emit changes directly from event handlers, NOT from a watch on localFormData
 // (which would create an infinite loop: child watch → emit → parent update → child watch)
@@ -484,75 +558,8 @@ function onFieldUpdate(field: ConfigField, value: any) {
 }
 
 // Repeatable section logic
-function getSectionPrefix(section: ConfigSection): string {
-  if (!section.fields.length) return '';
-  const firstKey = section.fields[0].key;
-  const idx = firstKey.indexOf('{name}');
-  if (idx < 0) return '';
-  const prefix = firstKey.substring(0, idx);
-  return prefix.endsWith('.') ? prefix.slice(0, -1) : prefix;
-}
-
 function repeatableItems(section: ConfigSection): string[] {
-  const prefix = getSectionPrefix(section);
-
-  // 分别收集顶层普通字段后缀和嵌套 repeatable-object 的中间路径标记（如 ".models."）
-  const normalSuffixes: string[] = [];
-  const roSubPaths: string[] = [];
-
-  for (const f of section.fields) {
-    const idx = f.key.indexOf('{name}');
-    if (idx < 0) continue;
-    const afterName = f.key.substring(idx + '{name}'.length); // 如 ".npm" 或 ".options.apiKey" 或 ".models"
-    if (f.type === 'repeatable-object') {
-      roSubPaths.push(afterName + '.'); // 如 ".models."
-    } else if (afterName) {
-      normalSuffixes.push(afterName);
-    }
-  }
-
-  const names = new Set<string>();
-  const prefixDot = prefix ? prefix + '.' : '';
-  for (const key of Object.keys(localFormData.value)) {
-    if (!key.startsWith(prefixDot)) continue;
-    const afterPrefix = key.substring(prefixDot.length);
-    if (!afterPrefix) continue;
-
-    // 1. 优先识别是否属于嵌套 repeatable-object（如 "antigravityproxy.models.gemini-3.7..."）
-    let matchedRO = false;
-    for (const roPath of roSubPaths) {
-      const roIdx = afterPrefix.indexOf(roPath);
-      if (roIdx > 0) {
-        names.add(afterPrefix.substring(0, roIdx));
-        matchedRO = true;
-        break;
-      }
-    }
-    if (matchedRO) continue;
-
-    // 2. 匹配顶层普通字段后缀（如 "other/aliyun/qwen3.8-max.slug"）
-    let matchedSuffix = false;
-    for (const suffix of normalSuffixes) {
-      if (suffix.startsWith('.') && afterPrefix.endsWith(suffix)) {
-        const namePart = afterPrefix.substring(0, afterPrefix.length - suffix.length);
-        if (namePart) {
-          names.add(namePart);
-          matchedSuffix = true;
-          break;
-        }
-      }
-    }
-    if (matchedSuffix) continue;
-
-    // 3. 兜底：仅当既无普通后缀也无 RO 路径定义时提取
-    if (!normalSuffixes.length && !roSubPaths.length) {
-      const dotIdx = afterPrefix.indexOf('.');
-      if (dotIdx > 0) {
-        names.add(afterPrefix.substring(0, dotIdx));
-      }
-    }
-  }
-  return Array.from(names);
+  return getRepeatableItems(localFormData.value, section);
 }
 
 function repeatableItemLabel(section: ConfigSection, name: string): string {
@@ -560,7 +567,7 @@ function repeatableItemLabel(section: ConfigSection, name: string): string {
 }
 
 function resolveKey(keyTemplate: string, name: string): string {
-  return keyTemplate.replace('{name}', name);
+  return resolveSectionKey(keyTemplate, name);
 }
 
 function getRepeatableFieldValue(field: ConfigField, name: string): any {
@@ -619,38 +626,13 @@ function cancelAddSection(section: ConfigSection) {
 function confirmAddSection(section: ConfigSection) {
   const st = addingSectionState.value[section.title];
   if (!st) return;
+  const res = addSectionItemHelper(localFormData.value, section, st.name);
+  if (res.error) {
+    st.error = res.error;
+    return;
+  }
   const name = st.name.trim();
-  if (!name) {
-    st.error = isModelSection(section) ? '请选择或输入模型名称' : '请输入名称';
-    return;
-  }
-  const existing = repeatableItems(section);
-  if (existing.includes(name)) {
-    st.error = `「${name}」已存在，请使用其他名称`;
-    return;
-  }
-
-  const prefix = getSectionPrefix(section);
-  if (section.itemTemplate) {
-    for (const [tmplKey, tmplVal] of Object.entries(section.itemTemplate)) {
-      const resolvedKey = `${prefix}.${name}.${tmplKey}`;
-      localFormData.value[resolvedKey] = tmplVal;
-    }
-  }
-  // 若定义了 itemKeyField（如 slug 或 name），自动回填该字段
-  if (section.itemKeyField) {
-    const keyFieldKey = `${prefix}.${name}.${section.itemKeyField}`;
-    if (!localFormData.value[keyFieldKey]) {
-      localFormData.value[keyFieldKey] = name;
-    }
-  }
-  // 若是模型条目且 display_name 字段为空，则默认回填模型名称
-  const displayNameKey = `${prefix}.${name}.display_name`;
-  if (localFormData.value[displayNameKey] === '') {
-    localFormData.value[displayNameKey] = name;
-  }
-
-  localFormData.value = { ...localFormData.value };
+  localFormData.value = res.updatedFormData;
   emit('update:formData', { ...localFormData.value });
 
   // 自动展开新建的 Section 项
@@ -663,95 +645,14 @@ function confirmAddSection(section: ConfigSection) {
 }
 
 function removeRepeatableItem(section: ConfigSection, name: string) {
-  const prefix = getSectionPrefix(section);
-  const toRemove: string[] = [];
-  for (const key of Object.keys(localFormData.value)) {
-    if (key.startsWith(`${prefix}.${name}.`)) {
-      toRemove.push(key);
-    }
-  }
-  for (const key of toRemove) {
-    delete localFormData.value[key];
-  }
-  localFormData.value = { ...localFormData.value };
+  localFormData.value = removeRepeatableItemKeys(localFormData.value, section, name);
   emit('update:formData', { ...localFormData.value });
 }
 
 // ===== repeatable-object nested logic (e.g. provider.{name}.models.{modelName}.field) =====
 
-function getChildPrefix(field: ConfigField, parentName: string): string {
-  return field.key.replace('{name}', parentName);
-}
-
-function getObjectChildStateKey(field: ConfigField, parentName: string): string {
-  return `${field.key}.${parentName}`;
-}
-
 function repeatableObjectNames(field: ConfigField, parentName: string): string[] {
-  const childPrefix = getChildPrefix(field, parentName);
-  const names = new Set<string>();
-  const leafSuffixes = collectLeafSuffixesRecursive(field);
-
-  for (const key of Object.keys(localFormData.value)) {
-    if (!key.startsWith(childPrefix + '.')) continue;
-    const afterPrefix = key.substring(childPrefix.length + 1);
-    for (const suffix of leafSuffixes) {
-      const namePart = matchSuffix(afterPrefix, suffix);
-      if (namePart) {
-        names.add(namePart);
-        break;
-      }
-    }
-  }
-  return Array.from(names);
-}
-
-function collectLeafSuffixesRecursive(field: ConfigField): string[] {
-  if (!field.children) return [];
-  const suffixes: string[] = [];
-  for (const child of field.children) {
-    if (child.type === 'repeatable-object' && child.children && child.children.length > 0) {
-      const nestedLeaves = collectLeafSuffixesRecursive(child);
-      for (const leaf of nestedLeaves) {
-        suffixes.push('.' + child.key + '.*' + leaf);
-      }
-    } else {
-      suffixes.push('.' + child.key);
-    }
-  }
-  return suffixes;
-}
-
-function matchSuffix(afterPrefix: string, suffix: string): string | null {
-  if (!suffix.includes('*')) {
-    if (afterPrefix.endsWith(suffix)) {
-      const namePart = afterPrefix.substring(0, afterPrefix.length - suffix.length);
-      if (namePart && !namePart.endsWith('.')) return namePart;
-    }
-    return null;
-  }
-  const suffixParts = suffix.split('.');
-  const starIdx = suffixParts.indexOf('*');
-  if (starIdx < 0) return null;
-  const fixedPrefix = suffixParts.slice(0, starIdx).join('.');
-  const fixedSuffix = suffixParts.slice(starIdx + 1).join('.');
-  if (!afterPrefix.endsWith(fixedSuffix)) return null;
-  const withoutSuffix = afterPrefix.substring(0, afterPrefix.length - fixedSuffix.length);
-  if (fixedPrefix) {
-    const lastIdx = withoutSuffix.lastIndexOf(fixedPrefix + '.');
-    if (lastIdx < 0) return null;
-    const starValue = withoutSuffix.substring(lastIdx + fixedPrefix.length + 1);
-    if (!starValue || starValue.includes('.')) return null;
-    const namePart = afterPrefix.substring(0, lastIdx);
-    if (namePart && !namePart.endsWith('.')) return namePart;
-    return null;
-  }
-  return null;
-}
-
-function resolveChildKey(field: ConfigField, parentName: string, childName: string, childField: ConfigField): string {
-  const childPrefix = getChildPrefix(field, parentName);
-  return `${childPrefix}.${childName}.${childField.key}`;
+  return getRepeatableObjectNames(localFormData.value, field, parentName);
 }
 
 function getRepeatableObjectChildValue(field: ConfigField, parentName: string, childName: string, childField: ConfigField): any {
@@ -817,26 +718,13 @@ function confirmAddObjectChild(field: ConfigField, parentName: string) {
   const st = addingObjectChildState.value[key];
   if (!st) return;
   const childName = (st.customModel.trim() || st.selectedModel.trim());
-  if (!childName) {
-    st.error = `请输入或选择${field.childKeyLabel || '名称'}`;
-    return;
-  }
-  const existingNames = repeatableObjectNames(field, parentName);
-  if (existingNames.includes(childName)) {
-    st.error = `「${childName}」已存在，请勿重复添加`;
+  const res = addRepeatableObjectChildHelper(localFormData.value, field, parentName, childName);
+  if (res.error) {
+    st.error = res.error;
     return;
   }
 
-  if (field.childTemplate) {
-    const childPrefix = getChildPrefix(field, parentName);
-    for (const [tmplKey, tmplVal] of Object.entries(field.childTemplate)) {
-      const resolvedKey = `${childPrefix}.${childName}.${tmplKey}`;
-      if (localFormData.value[resolvedKey] === undefined) {
-        localFormData.value[resolvedKey] = tmplVal;
-      }
-    }
-  }
-  localFormData.value = { ...localFormData.value };
+  localFormData.value = res.updatedFormData;
   emit('update:formData', { ...localFormData.value });
 
   // 关键体验：自动展开新建的模型卡片，方便用户立即配置
@@ -851,18 +739,104 @@ function confirmAddObjectChild(field: ConfigField, parentName: string) {
 }
 
 function removeRepeatableObjectChild(field: ConfigField, parentName: string, childName: string) {
-  const childPrefix = getChildPrefix(field, parentName);
-  const toRemove: string[] = [];
-  for (const key of Object.keys(localFormData.value)) {
-    if (key.startsWith(`${childPrefix}.${childName}.`)) {
-      toRemove.push(key);
+  localFormData.value = removeRepeatableObjectChildKeys(localFormData.value, field, parentName, childName);
+  emit('update:formData', { ...localFormData.value });
+}
+
+// ===== Repeatable Object (模型) 内联编辑操作 =====
+const editingObjectChildState = ref<Record<string, {
+  open: boolean;
+  newName: string;
+  error: string;
+}>>({});
+
+function getEditingChildKey(field: ConfigField, parentName: string, childName: string): string {
+  return `${field.key}.${parentName}.${childName}`;
+}
+
+function isEditingObjectChild(field: ConfigField, parentName: string, childName: string): boolean {
+  const key = getEditingChildKey(field, parentName, childName);
+  return Boolean(editingObjectChildState.value[key]?.open);
+}
+
+function getEditingState(field: ConfigField, parentName: string, childName: string) {
+  const key = getEditingChildKey(field, parentName, childName);
+  if (!editingObjectChildState.value[key]) {
+    editingObjectChildState.value[key] = {
+      open: false,
+      newName: childName,
+      error: '',
+    };
+  }
+  return editingObjectChildState.value[key];
+}
+
+function openEditObjectChild(field: ConfigField, parentName: string, childName: string) {
+  const key = getEditingChildKey(field, parentName, childName);
+  editingObjectChildState.value[key] = {
+    open: true,
+    newName: childName,
+    error: '',
+  };
+}
+
+function cancelEditObjectChild(field: ConfigField, parentName: string, childName: string) {
+  const key = getEditingChildKey(field, parentName, childName);
+  if (editingObjectChildState.value[key]) {
+    editingObjectChildState.value[key].open = false;
+    editingObjectChildState.value[key].error = '';
+  }
+}
+
+function clearEditObjectChildError(field: ConfigField, parentName: string, childName: string) {
+  const key = getEditingChildKey(field, parentName, childName);
+  if (editingObjectChildState.value[key]) {
+    editingObjectChildState.value[key].error = '';
+  }
+}
+
+function confirmEditObjectChild(field: ConfigField, parentName: string, oldName: string) {
+  const key = getEditingChildKey(field, parentName, oldName);
+  const st = editingObjectChildState.value[key];
+  if (!st) return;
+
+  const res = renameRepeatableObjectChild(
+    localFormData.value,
+    field,
+    parentName,
+    oldName,
+    st.newName,
+  );
+
+  if (res.error) {
+    st.error = res.error;
+    return;
+  }
+
+  const newName = st.newName.trim();
+  if (newName !== oldName) {
+    localFormData.value = res.updatedFormData;
+    emit('update:formData', { ...localFormData.value });
+
+    // 迁移折叠卡片展开状态
+    const oldCardKey = `${field.key}.${parentName}.${oldName}`;
+    const newCardKey = `${field.key}.${parentName}.${newName}`;
+    if (expandedModels.value.has(oldCardKey)) {
+      expandedModels.value.delete(oldCardKey);
+      expandedModels.value.add(newCardKey);
+      expandedModels.value = new Set(expandedModels.value);
+    }
+
+    // 迁移复制提示状态
+    if (copiedModelKeys.value.has(oldCardKey)) {
+      copiedModelKeys.value.delete(oldCardKey);
+      copiedModelKeys.value = new Set(copiedModelKeys.value);
     }
   }
-  for (const key of toRemove) {
-    delete localFormData.value[key];
-  }
-  localFormData.value = { ...localFormData.value };
-  emit('update:formData', { ...localFormData.value });
+
+  st.open = false;
+  st.error = '';
+  delete editingObjectChildState.value[key];
 }
 
 // ===== 模型名一键复制 =====
@@ -876,22 +850,7 @@ function isModelCopied(key: string): boolean {
 
 async function copyModelName(field: ConfigField, parentName: string, childName: string) {
   const key = `${field.key}.${parentName}.${childName}`;
-  try {
-    await navigator.clipboard.writeText(childName);
-  } catch {
-    // clipboard API 不可用(如旧 WebView 非安全上下文)时回退 execCommand
-    const ta = document.createElement('textarea');
-    ta.value = childName;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand('copy');
-    } finally {
-      document.body.removeChild(ta);
-    }
-  }
+  await copyToClipboard(childName);
   copiedModelKeys.value.add(key);
   copiedModelKeys.value = new Set(copiedModelKeys.value);
   const prev = copyTimers.get(key);
@@ -905,15 +864,6 @@ async function copyModelName(field: ConfigField, parentName: string, childName: 
 
 // ===== 嵌套 repeatable-object 辅助（模型内的 variants 变体列表） =====
 
-function getNestedBasePath(outerField: ConfigField, parentName: string, childName: string, innerField: ConfigField): string {
-  const outerBase = getChildPrefix(outerField, parentName);
-  return `${outerBase}.${childName}.${innerField.key}`;
-}
-
-function findTargetRepeatableField(parentField: ConfigField, targetKey: string): ConfigField | undefined {
-  if (!parentField.children) return undefined;
-  return parentField.children.find(c => c.key === targetKey && c.type === 'repeatable-object');
-}
 
 function isVariantEffortChecked(
   outerField: ConfigField,
@@ -922,12 +872,7 @@ function isVariantEffortChecked(
   pickerField: ConfigField,
   opt: string,
 ): boolean {
-  const targetKey = pickerField.targetRepeatableKey;
-  if (!targetKey) return false;
-  const targetField = findTargetRepeatableField(outerField, targetKey);
-  if (!targetField) return false;
-  const existing = nestedRepeatableObjectNames(outerField, parentName, childName, targetField);
-  return existing.some(n => n === opt);
+  return isVariantEffortCheckedHelper(localFormData.value, outerField, parentName, childName, pickerField, opt);
 }
 
 function toggleVariantEffort(
@@ -937,30 +882,8 @@ function toggleVariantEffort(
   pickerField: ConfigField,
   opt: string,
 ) {
-  const targetKey = pickerField.targetRepeatableKey;
-  if (!targetKey) return;
-  const targetField = findTargetRepeatableField(outerField, targetKey);
-  if (!targetField) return;
-  if (isVariantEffortChecked(outerField, parentName, childName, pickerField, opt)) {
-    removeNestedRepeatableObjectChild(outerField, parentName, childName, targetField, opt);
-  } else {
-    const nestedBase = getNestedBasePath(outerField, parentName, childName, targetField);
-    if (targetField.childTemplate) {
-      for (const [tmplKey, tmplVal] of Object.entries(targetField.childTemplate)) {
-        const resolvedKey = `${nestedBase}.${opt}.${tmplKey}`;
-        if (localFormData.value[resolvedKey] === undefined) {
-          localFormData.value[resolvedKey] = tmplKey === 'reasoningEffort' ? opt : tmplVal;
-        }
-      }
-    } else {
-      const resolvedKey = `${nestedBase}.${opt}.reasoningEffort`;
-      if (localFormData.value[resolvedKey] === undefined) {
-        localFormData.value[resolvedKey] = opt;
-      }
-    }
-    localFormData.value = { ...localFormData.value };
-    emit('update:formData', { ...localFormData.value });
-  }
+  localFormData.value = toggleVariantEffortHelper(localFormData.value, outerField, parentName, childName, pickerField, opt);
+  emit('update:formData', { ...localFormData.value });
 }
 
 function nestedRepeatableObjectNames(
@@ -969,24 +892,7 @@ function nestedRepeatableObjectNames(
   childName: string,
   innerField: ConfigField,
 ): string[] {
-  const nestedBase = getNestedBasePath(outerField, parentName, childName, innerField);
-  const names = new Set<string>();
-  const leafSuffixes = (innerField.children || []).map(c => '.' + c.key);
-
-  for (const key of Object.keys(localFormData.value)) {
-    if (!key.startsWith(nestedBase + '.')) continue;
-    const afterPrefix = key.substring(nestedBase.length + 1);
-    for (const suffix of leafSuffixes) {
-      if (afterPrefix.endsWith(suffix)) {
-        const namePart = afterPrefix.substring(0, afterPrefix.length - suffix.length);
-        if (namePart && !namePart.endsWith('.')) {
-          names.add(namePart);
-          break;
-        }
-      }
-    }
-  }
-  return Array.from(names);
+  return getNestedRepeatableObjectNames(localFormData.value, outerField, parentName, childName, innerField);
 }
 
 function getNestedRepeatableObjectChildValue(
@@ -1054,31 +960,14 @@ function confirmAddNestedChild(
   const nestedBase = getNestedBasePath(outerField, parentName, childName, innerField);
   const st = addingNestedChildState.value[nestedBase];
   if (!st) return;
-  const variantName = st.name.trim();
-  if (!variantName) {
-    st.error = `请输入${innerField.childKeyLabel || '名称'}`;
-    return;
-  }
-  const existingNames = nestedRepeatableObjectNames(outerField, parentName, childName, innerField);
-  if (existingNames.includes(variantName)) {
-    st.error = `「${variantName}」已存在`;
+
+  const res = addNestedVariantHelper(localFormData.value, outerField, parentName, childName, innerField, st.name);
+  if (res.error) {
+    st.error = res.error;
     return;
   }
 
-  if (innerField.childTemplate) {
-    for (const [tmplKey, tmplVal] of Object.entries(innerField.childTemplate)) {
-      const resolvedKey = `${nestedBase}.${variantName}.${tmplKey}`;
-      if (localFormData.value[resolvedKey] === undefined) {
-        localFormData.value[resolvedKey] = tmplKey === 'reasoningEffort' ? variantName : tmplVal;
-      }
-    }
-  } else {
-    const resolvedKey = `${nestedBase}.${variantName}.reasoningEffort`;
-    if (localFormData.value[resolvedKey] === undefined) {
-      localFormData.value[resolvedKey] = variantName;
-    }
-  }
-  localFormData.value = { ...localFormData.value };
+  localFormData.value = res.updatedFormData;
   emit('update:formData', { ...localFormData.value });
 
   st.open = false;
@@ -1093,17 +982,7 @@ function removeNestedRepeatableObjectChild(
   innerField: ConfigField,
   variantName: string,
 ) {
-  const nestedBase = getNestedBasePath(outerField, parentName, childName, innerField);
-  const toRemove: string[] = [];
-  for (const key of Object.keys(localFormData.value)) {
-    if (key.startsWith(`${nestedBase}.${variantName}.`)) {
-      toRemove.push(key);
-    }
-  }
-  for (const key of toRemove) {
-    delete localFormData.value[key];
-  }
-  localFormData.value = { ...localFormData.value };
+  localFormData.value = removeNestedVariantHelper(localFormData.value, outerField, parentName, childName, innerField, variantName);
   emit('update:formData', { ...localFormData.value });
 }
 </script>

@@ -492,3 +492,50 @@ export function escapeHtml(s: string): string {
         .replace(new RegExp(QUOT, 'g'), AMP + 'quot;')
         .replace(new RegExp(APOS, 'g'), AMP + '#39;');
 }
+
+// OpenCode 号池状态气泡渲染 (3 态: 停用/冷静中/可用)
+export function renderOpenCodeAccountQuota(containerEl: HTMLElement, acc: any, isZH: boolean, dict: any) {
+    if (!containerEl) return;
+    const isEnabled = acc && acc.enabled !== false;
+
+    // 1. 停用账号：灰泡
+    if (!isEnabled) {
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-slate-500/10 dark:bg-slate-500/5 border border-slate-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                <span class="text-[10px] font-medium text-slate-500 dark:text-slate-400" data-i18n="opencodeAccountDisabled">${isZH ? '账号已停用' : (dict.opencodeAccountDisabled || 'Account Disabled')}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 2. 冷却中
+    const now = Date.now();
+    let ocCooldownUntil = 0;
+    if (acc.cooldowns && typeof acc.cooldowns.opencode === 'number' && acc.cooldowns.opencode > now) {
+        ocCooldownUntil = acc.cooldowns.opencode;
+    } else if (acc.cooldownUntil && typeof acc.cooldownUntil === 'number' && acc.cooldownUntil > now) {
+        ocCooldownUntil = acc.cooldownUntil;
+    }
+
+    if (ocCooldownUntil > 0) {
+        const resumeAbs = formatCooldownTime(ocCooldownUntil);
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-amber-500/10 dark:bg-amber-500/5 border border-amber-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                <span class="material-symbols-outlined text-amber-500 text-[12px]">hourglass_empty</span>
+                <span class="text-[10px] font-bold text-amber-600 dark:text-amber-400" data-i18n="opencodeCooldownBubble">${dict.opencodeCooldownBubble || '冷静中'}</span>
+                <span class="text-[9px] text-amber-500/70 dark:text-amber-400/60 ml-auto">${isZH ? `${resumeAbs} 恢复` : `Resumes ${resumeAbs}`}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 3. 正常可用态
+    containerEl.innerHTML = `
+        <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400" data-i18n="opencodeAccountAvailable">${isZH ? '账号可用' : (dict.opencodeAccountAvailable || 'Account Available')}</span>
+        </div>
+    `;
+}

@@ -160,6 +160,7 @@ import {
 import ConfigFormPanel from '../agent-config/ConfigFormPanel.vue';
 import JsonEditorPanel from '../agent-config/JsonEditorPanel.vue';
 import AiProviderGeneratorModal from '../../modals/AiProviderGeneratorModal.vue';
+import { deepMergeConfig } from '../agent-config/repeatableHelper';
 
 const agentList = ref<AgentProfile[]>([]);
 const selectedAgentId = ref('');
@@ -257,7 +258,7 @@ function onFormChange(data: Record<string, any>) {
     try {
       const existing = JSON.parse(jsonText.value);
       const generated = JSON.parse(newJson);
-      const merged = deepMerge(existing, generated);
+      const merged = deepMergeConfig(existing, generated, currentSchema.value);
       jsonText.value = JSON.stringify(merged, null, 2);
     } catch {
       jsonText.value = newJson;

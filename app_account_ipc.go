@@ -30,6 +30,9 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 	if res, handled, err := a.handleAccountIPCWorkBuddy(channel, args); handled {
 		return res, handled, err
 	}
+	if res, handled, err := a.handleAccountIPCOpenCode(channel, args); handled {
+		return res, handled, err
+	}
 
 	marshalResponse := func(val interface{}) (string, error) {
 		b, err := json.Marshal(val)
@@ -221,8 +224,8 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "缺少 accountId"})
 			return data, true, nil
 		}
-		if provider != "nvidia" && provider != "other" && provider != "grok" {
-			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "provider 仅支持 nvidia/other/grok"})
+		if provider != "nvidia" && provider != "other" && provider != "grok" && provider != "opencode" {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "provider 仅支持 nvidia/other/grok/opencode"})
 			return data, true, nil
 		}
 		acc := a.accountMgr.GetAccountByID(accID)

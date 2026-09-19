@@ -191,7 +191,7 @@ func (h *APIHandler) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 	if err := db.GlobalDB.QueryRow(countQuery, args...).Scan(&totalCount); err != nil {
 		totalCount = 0
 	}
-	if (len(targetSessionIDs) > 0 || len(targetUserIDs) > 0) && totalCount > 150 {
+	if totalCount > 150 {
 		totalCount = 150
 	}
 
@@ -254,6 +254,29 @@ func (h *APIHandler) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 				summary.TotalRequests = uStats.TotalRequests
 			}
 		}
+	} else if resolvedUser == nil && len(targetSessionIDs) == 0 && len(targetUserIDs) == 0 && h.statsMgr != nil && status == "" && search == "" {
+		// 全平台概览且未做筛选时，聚合全局生命周期统计指标，防止因明细日志修剪而丢失请求总数与累计用量
+		gReqs, gIn, gOut, gCached, gCost := h.statsMgr.GetGlobalSummary()
+		if gReqs > 0 {
+			if gReqs > summary.TotalRequests {
+				summary.TotalRequests = gReqs
+			}
+			if gIn > summary.TotalInputTokens {
+				summary.TotalInputTokens = gIn
+			}
+			if gOut > summary.TotalOutputTokens {
+				summary.TotalOutputTokens = gOut
+			}
+			if gCached > summary.TotalCachedTokens {
+				summary.TotalCachedTokens = gCached
+			}
+			if gCost > summary.TotalCost {
+				summary.TotalCost = gCost
+			}
+			if summary.TotalInputTokens > 0 {
+				summary.CacheHitRate = math.Round((float64(summary.TotalCachedTokens)/float64(summary.TotalInputTokens))*1000.0) / 10.0
+			}
+		}
 	}
 
 	// 6. Model perf breakdown
@@ -285,26 +308,24 @@ func (h *APIHandler) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 		modelPerfs = []ModelPerfStat{}
 	}
 
-	// 7. Paginated log items
+	// 7. Paginated log items (系统日志列表全局硬限制最多 150 条)
 	offset := (page - 1) * pageSize
 	actualPageSize := pageSize
-	if len(targetSessionIDs) > 0 || len(targetUserIDs) > 0 {
-		if offset >= 150 {
-			writeJSON(w, http.StatusOK, AdminLogsResponse{
-				Success:   true,
-				Total:     totalCount,
-				Page:      page,
-				PageSize:  pageSize,
-				Summary:   summary,
-				ModelPerf: modelPerfs,
-				List:      []AdminLogItem{},
-				Accounts:  accounts,
-			})
-			return
-		}
-		if offset+actualPageSize > 150 {
-			actualPageSize = 150 - offset
-		}
+	if offset >= 150 {
+		writeJSON(w, http.StatusOK, AdminLogsResponse{
+			Success:   true,
+			Total:     totalCount,
+			Page:      page,
+			PageSize:  pageSize,
+			Summary:   summary,
+			ModelPerf: modelPerfs,
+			List:      []AdminLogItem{},
+			Accounts:  accounts,
+		})
+		return
+	}
+	if offset+actualPageSize > 150 {
+		actualPageSize = 150 - offset
 	}
 
 	listArgs := append(args, actualPageSize, offset)

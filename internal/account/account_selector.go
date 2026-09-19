@@ -41,6 +41,9 @@ func (m *Manager) GetModelCategoryByProvider(provider, modelName string) string 
 	if p == "workbuddy" {
 		return "workbuddy"
 	}
+	if p == "opencode" {
+		return "opencode"
+	}
 	return m.GetModelCategory(modelName)
 }
 

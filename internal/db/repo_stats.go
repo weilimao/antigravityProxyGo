@@ -73,7 +73,7 @@ func InsertRequestLog(log *RequestLog) error {
 	LastInsertError = ""
 	id, _ := res.LastInsertId()
 	log.ID = id
-	_ = PruneUserRequestLogs(log.UserID, 150)
+	_ = PruneGlobalRequestLogs(150)
 	return nil
 }
 
@@ -383,5 +383,26 @@ func PruneAllUsersRequestLogs(maxPerUser int) error {
 
 	// 额外清理空用户
 	_ = PruneUserRequestLogs("", maxPerUser)
+
+	// 全局上限硬兜底: 无论多少用户, 数据库内最多保留 maxPerUser 条
+	_ = PruneGlobalRequestLogs(maxPerUser)
 	return nil
 }
+
+// PruneGlobalRequestLogs 将 request_logs 全表记录严格限制在最新的 maxLogs 条内 (全局 FIFO 淘汰),
+// 保证系统全局请求日志总数不超过 maxLogs 条, 防止数据库磁盘膨胀。
+func PruneGlobalRequestLogs(maxLogs int) error {
+	if GlobalDB == nil || maxLogs <= 0 {
+		return nil
+	}
+	_, err := GlobalDB.Exec(`
+		DELETE FROM request_logs
+		WHERE id <= (
+			SELECT id FROM request_logs
+			ORDER BY id DESC
+			LIMIT 1 OFFSET ?
+		)
+	`, maxLogs)
+	return err
+}
+

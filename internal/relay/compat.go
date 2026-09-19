@@ -71,6 +71,8 @@ type APICompatHandler struct {
 	grokCursor uint64
 	// workbuddyCursor 是 WorkBuddy 号池 round-robin 模式下的全局取模轮询游标, 单调递增。
 	workbuddyCursor uint64
+	// opencodeCursor 是 OpenCode 号池 round-robin 模式下的全局取模轮询游标, 单调递增。
+	opencodeCursor uint64
 	// otherCursors 是 Other 号池按组隔离的轮询游标 (key: groupID, value: *uint64)
 	// 采用按组隔离避免多个数量极少的组（如2个号）在全局游标累加时发生取模共振（Stride Collision）导致饿死。
 	otherCursors sync.Map
@@ -317,6 +319,12 @@ func (h *APICompatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 4c. WorkBuddy 专属号池接口 (/workbuddy/v1/models, /workbuddy/v1/chat/completions, /workbuddy/v1/messages, 以及 /wb/* 别名路由)
 	if workbuddyAliasPrefixMatch(path) {
 		h.handleWorkBuddy(w, r, session)
+		return
+	}
+
+	// 4d. OpenCode 专属号池接口 (/opencode/v1/models, /opencode/v1/chat/completions, /opencode/v1/messages, 以及 /oc/* 别名路由)
+	if opencodeAliasPrefixMatch(path) {
+		h.handleOpenCode(w, r, session)
 		return
 	}
 

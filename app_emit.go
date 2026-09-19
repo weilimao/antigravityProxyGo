@@ -35,6 +35,8 @@ func (a *App) emitAccountsRes() {
 		"projectMaxConcurrency":     a.accountMgr.GetProjectMaxConcurrency(),
 		"workbuddyLBMode":           a.accountMgr.GetWorkBuddyLBMode(),
 		"workbuddyMaxConcurrency":   a.accountMgr.GetWorkBuddyMaxConcurrency(),
+		"opencodeLBMode":            a.accountMgr.GetOpenCodeLBMode(),
+		"opencodeMaxConcurrency":    a.accountMgr.GetOpenCodeMaxConcurrency(),
 		// Grok / Antigravity 两池 Worker 代理出口配置(号池单值)同步给前端工具栏回填。
 		// 与 grokCliVersion/antigravityCliVersion 同范式,字段名复用设置层 JSON key 风格。
 		"grokWorkerProxyEnabled":        a.settingsMgr.IsGrokWorkerProxyEnabled(),

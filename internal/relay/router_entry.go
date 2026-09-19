@@ -229,6 +229,15 @@ func (h *APICompatHandler) executeForwardModel(
 		return
 	}
 
+	// 命中 opencode 号池(OpenCode Zen) → 复用 handleOpenCode 链路(注入 Canonical Session、User-Agent 等指纹头并 Bearer 鉴权)。
+	if provider == "opencode" {
+		newBody := patchRoutedBodyModel(bodyBytes, upstreamModel)
+		r.Body = io.NopCloser(strings.NewReader(newBody))
+		r.ContentLength = int64(len(newBody))
+		h.handleOpenCode(w, r, userSession)
+		return
+	}
+
 
 	// 命中 antigravity / google / gcp 等 Google 族号池 → 复用既有 handleAnthropicMessages / handleOpenAIChat 核心链路(含 Gemini 官方/v1internal 动态调度与 OAuth 鉴权)。
 	if isGoogleProvider(provider) {
