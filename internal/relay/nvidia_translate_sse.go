@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -101,21 +102,21 @@ func openAIChatSSEToAnthropicSSEIntoPinned(ctx context.Context, reader io.Reader
 	stopReason := ""
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
+		rawBytes := scanner.Bytes()
+		if len(rawBytes) == 0 {
 			continue
 		}
-		if !strings.HasPrefix(line, "data:") {
+		if !bytes.HasPrefix(rawBytes, []byte("data:")) {
 			continue
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "[DONE]" {
+		dataBytes := bytes.TrimSpace(bytes.TrimPrefix(rawBytes, []byte("data:")))
+		if bytes.Equal(dataBytes, []byte("[DONE]")) {
 			streamTerminated = true // OpenAI 协议权威终止符:流正常结束,非断流。
 			break
 		}
 
 		// 性能优化：仅在包含 "error" 键时才反序列化错误帧，避免常态每个 chunk 重复做双重 json.Unmarshal
-		if strings.Contains(data, "\"error\"") {
+		if bytes.Contains(dataBytes, []byte("\"error\"")) {
 			type sseErrorChunk struct {
 				Error *struct {
 					Message string      `json:"message"`
@@ -124,7 +125,7 @@ func openAIChatSSEToAnthropicSSEIntoPinned(ctx context.Context, reader io.Reader
 				} `json:"error"`
 			}
 			var errChunk sseErrorChunk
-			if json.Unmarshal([]byte(data), &errChunk) == nil && errChunk.Error != nil && errChunk.Error.Message != "" {
+			if json.Unmarshal(dataBytes, &errChunk) == nil && errChunk.Error != nil && errChunk.Error.Message != "" {
 				errMsg := fmt.Sprintf("upstream sse error: %s (code: %v)", errChunk.Error.Message, errChunk.Error.Code)
 				// 保住 err 供上层(writeNvidiaAnthropicStream 忽略返回值,但 watchCancel/日志可取)
 				// 仅在尚未被 ctx 取消语义占据时记录上游 error,避免覆盖既有 ctx 取消路径的语义。
@@ -145,7 +146,7 @@ func openAIChatSSEToAnthropicSSEIntoPinned(ctx context.Context, reader io.Reader
 		}
 
 		var chunk OpenAIChatStreamChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		if err := json.Unmarshal(dataBytes, &chunk); err != nil {
 			// 跳过无法解析的行，但不中断流
 			continue
 		}

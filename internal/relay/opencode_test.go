@@ -251,13 +251,26 @@ func TestOpenCode_ModelLevelCooldown(t *testing.T) {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		// 免费模型分支：按上游端点返回对应协议格式。
+		// 说明(2026-09-27):
+		//   - 非 muse-spark 免费模型走上游 /chat/completions, 中继把客户端非流式
+		//     请求强制转流式并本地聚合, 故需返回 Chat SSE 帧;
+		//   - muse-spark-* 实测仅支持 Responses API, 中继改用 /responses 端点并透传
+		//     Responses 协议, 故需返回 Responses SSE 帧, 否则聚合器报 empty_stream。
+		if strings.HasSuffix(r.URL.Path, "/responses") {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`data: {"type":"response.created","response":{"id":"resp_free","model":"muse-spark-1.3-contributor-free","created_at":1700000000}}` + "\n\n"))
+			_, _ = w.Write([]byte(`data: {"type":"response.output_text.delta","delta":"Free model success"}` + "\n\n"))
+			_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"id":"resp_free","usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}` + "\n\n"))
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":      "chatcmpl-free",
-			"choices": []map[string]interface{}{{"message": map[string]interface{}{"content": "Free model success"}}},
-			"usage":   map[string]interface{}{"total_tokens": 10},
-		})
+		_, _ = w.Write([]byte(`data: {"id":"chatcmpl-free","object":"chat.completion.chunk","model":"mimo-v2.5-free","choices":[{"index":0,"delta":{"role":"assistant","content":"Free model success"},"finish_reason":null}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"id":"chatcmpl-free","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer mockServer.Close()
 

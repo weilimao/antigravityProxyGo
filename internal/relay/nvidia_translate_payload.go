@@ -2,8 +2,10 @@ package relay
 
 import (
 	"antigravity-proxy/internal/account"
+	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -110,23 +112,37 @@ func contentBlockStartPayload(index int, kind, id, name string) string {
 }
 
 func contentBlockTextDeltaPayload(index int, text string) string {
-	return jsonString(map[string]interface{}{
-		"type":  "content_block_delta",
-		"index": index,
-		"delta": map[string]interface{}{"type": "text_delta", "text": text},
-	})
+	quotedText, err := json.Marshal(text)
+	if err != nil {
+		quotedText = []byte(`""`)
+	}
+	var b strings.Builder
+	b.Grow(64 + len(quotedText))
+	b.WriteString(`{"type":"content_block_delta","index":`)
+	b.WriteString(strconv.Itoa(index))
+	b.WriteString(`,"delta":{"type":"text_delta","text":`)
+	b.Write(quotedText)
+	b.WriteString(`}}`)
+	return b.String()
 }
 
 func contentBlockInputJSONDeltaPayload(index int, partialJSON string) string {
-	return jsonString(map[string]interface{}{
-		"type":  "content_block_delta",
-		"index": index,
-		"delta": map[string]interface{}{"type": "input_json_delta", "partial_json": partialJSON},
-	})
+	quoted, err := json.Marshal(partialJSON)
+	if err != nil {
+		quoted = []byte(`""`)
+	}
+	var b strings.Builder
+	b.Grow(72 + len(quoted))
+	b.WriteString(`{"type":"content_block_delta","index":`)
+	b.WriteString(strconv.Itoa(index))
+	b.WriteString(`,"delta":{"type":"input_json_delta","partial_json":`)
+	b.Write(quoted)
+	b.WriteString(`}}`)
+	return b.String()
 }
 
 func contentBlockStopPayload(index int) string {
-	return jsonString(map[string]interface{}{"type": "content_block_stop", "index": index})
+	return `{"type":"content_block_stop","index":` + strconv.Itoa(index) + `}`
 }
 
 // contentBlockThinkingStartPayload 构造 thinking 块的 content_block_start 负载。
@@ -136,34 +152,40 @@ func contentBlockStopPayload(index int) string {
 // 等同官方 display:"omitted" 形态 —— 满足事件序列形状,让 Claude Code SDK 的
 // MessageAccumulator 能正常识别并渲染思考块。
 func contentBlockThinkingStartPayload(index int) string {
-	return jsonString(map[string]interface{}{
-		"type":  "content_block_start",
-		"index": index,
-		"content_block": map[string]interface{}{
-			"type":      "thinking",
-			"thinking":  "",
-			"signature": "",
-		},
-	})
+	return `{"type":"content_block_start","index":` + strconv.Itoa(index) + `,"content_block":{"type":"thinking","thinking":"","signature":""}}`
 }
 
 // contentBlockThinkingDeltaPayload 构造 thinking_delta 增量负载,承载上游推理过程的分片文本。
 func contentBlockThinkingDeltaPayload(index int, thinking string) string {
-	return jsonString(map[string]interface{}{
-		"type":  "content_block_delta",
-		"index": index,
-		"delta": map[string]interface{}{"type": "thinking_delta", "thinking": thinking},
-	})
+	quoted, err := json.Marshal(thinking)
+	if err != nil {
+		quoted = []byte(`""`)
+	}
+	var b strings.Builder
+	b.Grow(64 + len(quoted))
+	b.WriteString(`{"type":"content_block_delta","index":`)
+	b.WriteString(strconv.Itoa(index))
+	b.WriteString(`,"delta":{"type":"thinking_delta","thinking":`)
+	b.Write(quoted)
+	b.WriteString(`}}`)
+	return b.String()
 }
 
 // contentBlockSignatureDeltaPayload 构造 signature_delta 负载:关 thinking 块前发一次。
 // 对无签名上游传空串占位,保证协议形态完整,避免客户端把缺 signature_delta 的 thinking 块判为不完整而丢弃。
 func contentBlockSignatureDeltaPayload(index int, signature string) string {
-	return jsonString(map[string]interface{}{
-		"type":  "content_block_delta",
-		"index": index,
-		"delta": map[string]interface{}{"type": "signature_delta", "signature": signature},
-	})
+	quoted, err := json.Marshal(signature)
+	if err != nil {
+		quoted = []byte(`""`)
+	}
+	var b strings.Builder
+	b.Grow(64 + len(quoted))
+	b.WriteString(`{"type":"content_block_delta","index":`)
+	b.WriteString(strconv.Itoa(index))
+	b.WriteString(`,"delta":{"type":"signature_delta","signature":`)
+	b.Write(quoted)
+	b.WriteString(`}}`)
+	return b.String()
 }
 
 // mapNvidiaModel 按账号配置把入站模型名映射成上游模型 id。

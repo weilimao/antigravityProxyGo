@@ -49,6 +49,84 @@ var (
 	opencodeSessionRe      = regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
 )
 
+// patchResponsesBodyModel 替换 Responses API 请求体的顶层 model 字段。
+//
+// 与 patchRoutedBodyModel 的差异: 后者用 map[string]json.RawMessage 保留所有字段,
+// 本函数同样保留全部字段(含 input/tools/max_output_tokens/store/include 等 Responses
+// 专有字段), 仅覆盖 model。返回 (新body, 是否成功); 解析失败时返回 (nil, false),
+// 由调用方回退原始 body。
+func patchResponsesBodyModel(body []byte, model string) ([]byte, bool) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return nil, false
+	}
+	mb, err := json.Marshal(model)
+	if err != nil {
+		return nil, false
+	}
+	obj["model"] = mb
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// isOpenCodeResponsesOnlyModel 判定模型是否仅支持 OpenAI Responses API。
+//
+// 实测(2026-09-27, 对 Zen /v1/models 全量免费模型逐个打两个端点):
+//   - muse-spark-1.2-contributor-free / muse-spark-1.3-contributor-free:
+//     POST /chat/completions → 400 {"type":"ModelProtocolUnsupported"}
+//     POST /responses        → 200 (需带完整 tools, 否则 403 FreeTierError)
+//   - jev-1.13-free: 两个端点均 400/403, 上游未开放, 不在此列(避免无效转发)。
+//
+// 命中该判定的模型, 中继需把上游端点从 /chat/completions 切到 /responses,
+// 并保持 Responses 协议透传(不做 Chat 转换), 否则必然 400。
+func isOpenCodeResponsesOnlyModel(model string) bool {
+	name := strings.ToLower(strings.TrimSpace(model))
+	if name == "" {
+		return false
+	}
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	if i := strings.Index(name, "["); i > 0 {
+		name = strings.TrimSpace(name[:i])
+	}
+	// muse-spark 系列: 实测 1.2 / 1.3 均仅支持 Responses API。
+	return strings.HasPrefix(name, "muse-spark-")
+}
+
+// isOpenCodeFreeModel 判定模型是否为 OpenCode Zen 免费额度模型。
+//
+// 判定依据(2026-09-27 对 Zen /v1/models 与实测):
+//   - 免费模型 id 统一以 "-free" 结尾(如 mimo-v2.5-free / ling-3.0-flash-fin-free);
+//   - big-pickle 为免费但无 -free 后缀, 需显式列出。
+//
+// 采用后缀判定而非硬编码全量清单: Zen 会持续新增免费模型(如 jev-1.13-free /
+// longcat-2.5-preview-free / space-bunny-free 均晚于代码内 OpenCodeSupportedModels
+// 清单出现), 硬编码清单会漏判导致这些模型在非流式请求下被上游 403。
+//
+// 该判定的唯一用途: 免费模型仅接受 stream=true, 故非流式请求需强制走上游流式
+// 并在本地聚合(见 opencode_sse_aggregate.go)。付费模型不受此限, 保持原行为。
+func isOpenCodeFreeModel(model string) bool {
+	name := strings.ToLower(strings.TrimSpace(model))
+	if name == "" {
+		return false
+	}
+	// 剥离可能存在的 "opencode/" 前缀与变体后缀, 兼容 clientModel 形态传入。
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	if i := strings.Index(name, "["); i > 0 {
+		name = strings.TrimSpace(name[:i])
+	}
+	if name == "big-pickle" {
+		return true
+	}
+	return strings.HasSuffix(name, "-free")
+}
+
 // generateOpenCodeSessionID 生成符合 OpenCode Canonical 规范的会话 ID (ses_ + 12 hex + 14 Base62)。
 func generateOpenCodeSessionID() string {
 	opencodeSessionMu.Lock()
@@ -341,8 +419,22 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 			upstreamReq = &chatReq
 		}
 
-		if isStreaming && upstreamReq.StreamOptions == nil {
-			upstreamReq.StreamOptions = &ChatStreamOptions{IncludeUsage: true}
+		// 免费模型仅接受 stream=true(实测: stream=false 恒被上游 403 FreeTierError)。
+		// 故客户端发非流式请求而目标为免费模型时, 强制向上游发流式, 拿到 SSE 后
+		// 由本层聚合回非流式响应, 下游回写路径与协议转换逻辑完全复用。
+		// upstreamStreaming 决定发往上游的 stream 字段; isStreaming 仍表示客户端期望形态。
+		upstreamStreaming := isStreaming
+		needAggregate := false
+		if !isStreaming && isOpenCodeFreeModel(upstreamModel) {
+			upstreamStreaming = true
+			needAggregate = true
+		}
+
+		if upstreamStreaming {
+			upstreamReq.Stream = true
+			if upstreamReq.StreamOptions == nil {
+				upstreamReq.StreamOptions = &ChatStreamOptions{IncludeUsage: true}
+			}
 		}
 
 		upstreamBytes, _ := json.Marshal(upstreamReq)
@@ -351,6 +443,50 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 			baseURL = account.DefaultOpenCodeBaseURL
 		}
 		targetURL := baseURL + "/chat/completions"
+
+		// Responses-only 模型(如 muse-spark-*): 上游仅接受 Responses API,
+		// 打 /chat/completions 恒返回 400 ModelProtocolUnsupported。
+		// 故改用 /responses 端点, 并直接透传客户端原始 body(仅替换 model 字段),
+		// 不做 Chat 协议转换 —— 保留 Responses 形态的 input/tools/max_output_tokens 等字段。
+		responsesOnly := isOpenCodeResponsesOnlyModel(upstreamModel)
+		if responsesOnly {
+			targetURL = baseURL + "/responses"
+			// body 来源分两种:
+			//   - 客户端本就是 Responses 格式(inboundResponses): 直接透传原始 body,
+			//     仅替换 model 字段, 保留 input/tools/max_output_tokens 等专有字段;
+			//   - 客户端是 Chat/Anthropic 格式: 需把 Chat body 转成 Responses 形态,
+			//     否则上游报 "unknown parameter `max_tokens`" 等字段错误。
+			if inboundResponses {
+				if patched, ok := patchResponsesBodyModel(bodyBytes, upstreamModel); ok {
+					upstreamBytes = patched
+				} else {
+					upstreamBytes = bodyBytes
+				}
+			} else {
+				chatBody, _ := json.Marshal(upstreamReq)
+				if converted, ok := chatToResponsesBody(chatBody, upstreamModel); ok {
+					upstreamBytes = converted
+				} else {
+					upstreamBytes = chatBody
+				}
+			}
+			// Responses API 恒为流式驱动; 客户端若要非流式, 本地聚合后回写。
+			upstreamStreaming = true
+			needAggregate = !isStreaming
+		}
+
+		// 免费模型工具集补齐(实测 2026-09-27):
+		// Zen 对免费模型做内容级嗅探 —— tools 必须同时含 bash 与 read(OpenCode agent
+		// 的标志性工具对), 否则上游只回一个 response.created 便结束流(空响应)或直接
+		// 403。单变量实验: [bash,read]→正常; [read]/[bash]/[bash,edit]/[glob,read] 等
+		// 任意组合→仅 120 字节空流。补齐仅用于通过嗅探, 不改变客户端语义。
+		if isOpenCodeFreeModel(upstreamModel) {
+			if responsesOnly {
+				upstreamBytes = ensureResponsesStyleFreeTools(upstreamBytes)
+			} else {
+				upstreamBytes = ensureChatStyleFreeTools(upstreamBytes)
+			}
+		}
 
 		httpReq, errReq := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(upstreamBytes))
 		if errReq != nil {
@@ -384,7 +520,10 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 		httpReq.Header.Set("x-opencode-project", projectID)
 		httpReq.Header.Set("x-opencode-session", canonicalSession)
 		httpReq.Header.Set("x-opencode-request", canonicalRequest)
-		if isStreaming {
+		// Accept 头按**上游实际协议**设置, 而非客户端期望形态:
+		// 免费模型/Responses-only 模型即便客户端要非流式, 上游仍必须是流式,
+		// 此时若发 Accept: application/json 会与 stream=true 语义冲突, 部分上游据此拒绝。
+		if upstreamStreaming {
 			httpReq.Header.Set("Accept", "text/event-stream")
 		} else {
 			httpReq.Header.Set("Accept", "application/json")
@@ -470,7 +609,143 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 			ReqBody:      upstreamReq,
 		}
 
+		// needAggregate: 客户端要非流式, 但免费模型只接受流式, 故上游按流式请求、
+		// 本地聚合为完整 OpenAI Chat 响应, 再走下方既有非流式回写路径
+		// (OpenAIChatToAnthropic / OpenAIChatToResponses), 下游协议转换零改动复用。
+		if needAggregate {
+			// 按上游端点选择聚合器: /responses 的事件模型与 Chat SSE 不同, 需分别解析。
+			var aggResp *OpenAIChatResponse
+			var aggErr error
+			if responsesOnly {
+				aggResp, aggErr = aggregateOpenAIResponsesSSE(resp.Body, upstreamModel)
+			} else {
+				aggResp, aggErr = aggregateOpenAIChatSSE(resp.Body, upstreamModel)
+			}
+			_ = resp.Body.Close()
+			h.accountMgr.ReleaseAccount(poolAccount.ID)
+			if aggErr != nil {
+				if uerr, ok := aggErr.(*openCodeUpstreamError); ok {
+					status := http.StatusBadGateway
+					if uerr.Type == "FreeTierError" {
+						status = http.StatusForbidden
+						h.log("⛔ [OpenCode 中继] 免费模型流式聚合时上游拒绝: %s (model=%s)", uerr.Message, inModel)
+					}
+					writeJSON(w, status, map[string]interface{}{
+						"type":  "error",
+						"error": map[string]interface{}{"type": uerr.Type, "message": uerr.Message},
+					})
+					return
+				}
+				writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "failed to aggregate upstream stream: " + aggErr.Error()})
+				return
+			}
+
+			inT := aggResp.Usage.PromptTokens
+			outT := aggResp.Usage.CompletionTokens
+			cachedT := aggResp.Usage.CachedTokens()
+			h.recordOpenCodeUsage(userSession, inModel, inT, outT, cachedT, poolAccount, logCtx)
+
+			if inboundAnthropic {
+				anthResp := OpenAIChatToAnthropic(aggResp)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(anthResp)
+				return
+			}
+			if inboundResponses {
+				respResp := OpenAIChatToResponses(aggResp, upstreamModel)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(respResp)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(aggResp)
+			return
+		}
+
 		if isStreaming {
+			// Responses-only 模型: 上游回的是 Responses SSE, 但下游三个回写路径
+			// (Anthropic / Responses / OpenAI 直出) 都以 Chat 结构为输入。
+			// 故先聚合为 Chat 响应, 再复用既有回写逻辑 —— 避免为每种协议各写一份
+			// Responses SSE 转换器, 也保证 reasoning/tool_calls 语义一致。
+			if responsesOnly {
+				aggResp, aggErr := aggregateOpenAIResponsesSSE(resp.Body, upstreamModel)
+				_ = resp.Body.Close()
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
+				if aggErr != nil {
+					if uerr, ok := aggErr.(*openCodeUpstreamError); ok {
+						status := http.StatusBadGateway
+						if uerr.Type == "FreeTierError" {
+							status = http.StatusForbidden
+							h.log("⛔ [OpenCode 中继] Responses 模型上游拒绝: %s (model=%s)", uerr.Message, inModel)
+						}
+						writeJSON(w, status, map[string]interface{}{
+							"type":  "error",
+							"error": map[string]interface{}{"type": uerr.Type, "message": uerr.Message},
+						})
+						return
+					}
+					writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "failed to aggregate responses stream: " + aggErr.Error()})
+					return
+				}
+				inT := aggResp.Usage.PromptTokens
+				outT := aggResp.Usage.CompletionTokens
+				cachedT := aggResp.Usage.CachedTokens()
+				h.recordOpenCodeUsage(userSession, inModel, inT, outT, cachedT, poolAccount, logCtx)
+
+				// 客户端要求流式时, 必须输出 SSE 流而非 JSON —— 否则客户端会判定
+				// "流断了"并反复重试(实测真实 opencode CLI 走 Anthropic 入站时,
+				// 收到 JSON 会持续重发请求直至超时)。
+				// 做法: 把聚合结果重建为 Chat SSE, 复用既有协议转换器输出,
+				// 保证事件序列与 usage 口径与常规路径完全一致。
+				if inboundAnthropic {
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.Header().Set("Cache-Control", "no-cache")
+					w.Header().Set("Connection", "keep-alive")
+					w.Header().Set("X-Accel-Buffering", "no")
+					w.WriteHeader(http.StatusOK)
+					flusher, _ := w.(http.Flusher)
+					if flusher != nil {
+						flusher.Flush()
+					}
+					sseBytes := rebuildChatSSEFromAggregated(aggResp)
+					bw := bufio.NewWriter(w)
+					inTokens := estimateInputTokensFromBody(bodyBytes)
+					_, _, _, _ = OpenAIChatSSEToAnthropicSSE(r.Context(), bytes.NewReader(sseBytes), io.NopCloser(bytes.NewReader(sseBytes)), bw, upstreamModel, inTokens, flusher)
+					_ = bw.Flush()
+					return
+				}
+				if inboundResponses {
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.Header().Set("Cache-Control", "no-cache")
+					w.Header().Set("Connection", "keep-alive")
+					w.Header().Set("X-Accel-Buffering", "no")
+					w.WriteHeader(http.StatusOK)
+					flusher, _ := w.(http.Flusher)
+					if flusher != nil {
+						flusher.Flush()
+					}
+					sseBytes := rebuildChatSSEFromAggregated(aggResp)
+					fw := newFlushWriter(fmt.Sprintf("oc_%d", time.Now().UnixNano()), bufio.NewWriter(w), flusher)
+					_, _, _ = OpenAIChatSSEToResponsesSSE(r.Context(), bytes.NewReader(sseBytes), io.NopCloser(bytes.NewReader(sseBytes)), fw, upstreamModel)
+					fw.flush()
+					return
+				}
+				// 客户端入站即 OpenAI Chat + 要求流式: 直接回重建的 Chat SSE。
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set("Connection", "keep-alive")
+				w.Header().Set("X-Accel-Buffering", "no")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(rebuildChatSSEFromAggregated(aggResp))
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				return
+			}
+
 			if inboundAnthropic {
 				w.Header().Set("Content-Type", "text/event-stream")
 				w.Header().Set("Cache-Control", "no-cache")
