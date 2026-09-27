@@ -227,23 +227,21 @@ func TestAuthManager_RefreshToken_WorkBuddyBlocked(t *testing.T) {
 	}
 }
 
-// TestWorkBuddyQuota_DomesticShortCircuit 验证国内邮箱账号完全不发网络请求，国外账号正常请求
-func TestWorkBuddyQuota_DomesticShortCircuit(t *testing.T) {
-	reqCount := 0
+// TestWorkBuddyQuota_FloatPoints 验证浮点数小数包混合累加计算与小数文案格式化
+func TestWorkBuddyQuota_FloatPoints(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reqCount++
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{
 			"code": 0,
-			"msg": "ok",
+			"msg": "OK",
 			"data": {
 				"Packages": [
-					{
-						"CycleRemainCapacity": "410",
-						"CycleTotalCapacity": "1000"
-					}
+					{"PackageCode": "pkg1", "CycleTotalCapacity": "250", "CycleRemainCapacity": "248.31", "CapacityUnit": "credit"},
+					{"PackageCode": "pkg2", "CycleTotalCapacity": "30", "CycleRemainCapacity": "30", "CapacityUnit": "credit"},
+					{"PackageCode": "pkg3", "CycleTotalCapacity": "100", "CycleRemainCapacity": "93.74", "CapacityUnit": "credits"}
 				],
+				"SubscriptionPackageCode": "",
 				"IsPaidUser": false
 			}
 		}`))
@@ -251,8 +249,70 @@ func TestWorkBuddyQuota_DomesticShortCircuit(t *testing.T) {
 	defer ts.Close() // Teardown
 
 	q := NewQuotaService()
+	acc := &account.Account{
+		ID:          "acc-wb-float",
+		Provider:    "workbuddy",
+		BaseURL:     ts.URL,
+		AccessToken: "valid-token",
+		Email:       "weilimao0714@gmail.com",
+	}
 
-	// 1. 国内 QQ 邮箱账号
+	res, err := q.FetchQuota(acc, nil, nil)
+	if err != nil {
+		t.Fatalf("FetchQuota 失败: %v", err)
+	}
+
+	if res.Tier != "Free" {
+		t.Errorf("Tier 期望 Free, 得到 %s", res.Tier)
+	}
+	if len(res.Buckets) != 1 {
+		t.Fatalf("Buckets 长度期望 1, 得到 %d", len(res.Buckets))
+	}
+	// 248.31 + 30 + 93.74 = 372.05
+	expectedModelID := "积分余额: 372.05"
+	if res.Buckets[0].ModelID != expectedModelID {
+		t.Errorf("ModelID 期望 %s, 得到 %s", expectedModelID, res.Buckets[0].ModelID)
+	}
+	if res.Credits == nil || *res.Credits < 372.04 || *res.Credits > 372.06 {
+		t.Errorf("Credits 期望 372.05, 得到 %v", res.Credits)
+	}
+}
+
+// TestWorkBuddyQuota_DomesticAdaptive 验证自适应探测：国内邮箱上游正常时如实展示积分，上游返回 20017 时优雅降级
+func TestWorkBuddyQuota_DomesticAdaptive(t *testing.T) {
+	reqCount := 0
+	serverStatus := http.StatusOK
+	respCode := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(serverStatus)
+		if serverStatus == http.StatusOK && respCode == 0 {
+			_, _ = w.Write([]byte(`{
+				"code": 0,
+				"msg": "ok",
+				"data": {
+					"Packages": [
+						{
+							"CycleRemainCapacity": "373.74",
+							"CycleTotalCapacity": "380"
+						}
+					],
+					"IsPaidUser": false
+				}
+			}`))
+		} else {
+			_, _ = w.Write([]byte(`{
+				"code": 20017,
+				"msg": "system policy not verify"
+			}`))
+		}
+	}))
+	defer ts.Close() // Teardown
+
+	q := NewQuotaService()
+
+	// 1. 国内 QQ 邮箱账号在上游正常拥有计量包时，如实展示 373.74 积分
 	accDomestic := &account.Account{
 		ID:          "acc-wb-qq",
 		Provider:    "workbuddy",
@@ -264,36 +324,74 @@ func TestWorkBuddyQuota_DomesticShortCircuit(t *testing.T) {
 	if errDom != nil {
 		t.Fatalf("国内账号 FetchQuota 不应报错: %v", errDom)
 	}
-	if len(resDom.Buckets) != 0 {
-		t.Errorf("国内账号 Buckets 期望为 0（不显示），实际为 %d", len(resDom.Buckets))
+	if len(resDom.Buckets) != 1 {
+		t.Fatalf("国内账号 Buckets 期望为 1，实际为 %d", len(resDom.Buckets))
 	}
-	if reqCount != 0 {
-		t.Errorf("国内账号期望 0 次网络请求，实际发送了 %d 次", reqCount)
+	if resDom.Buckets[0].ModelID != "积分余额: 373.74" {
+		t.Errorf("ModelID 期望 '积分余额: 373.74'，实际为 %s", resDom.Buckets[0].ModelID)
+	}
+	if accDomestic.NoQuota {
+		t.Errorf("探测成功后 NoQuota 期望为 false，实际为 true")
 	}
 
-	// 2. 国外 Gmail 账号
-	accForeign := &account.Account{
-		ID:          "acc-wb-gmail",
+	// 2. 当上游返回 20017 时，优雅降级为空桶不抛错
+	respCode = 20017
+	accDomesticFail := &account.Account{
+		ID:          "acc-wb-qq-fail",
 		Provider:    "workbuddy",
 		BaseURL:     ts.URL,
-		AccessToken: "token-gmail",
+		AccessToken: "token-qq",
+		Email:       "another@qq.com",
+	}
+	resFail, errFail := q.FetchQuota(accDomesticFail, nil, nil)
+	if errFail != nil {
+		t.Fatalf("降级场景不应抛错: %v", errFail)
+	}
+	if len(resFail.Buckets) != 0 {
+		t.Errorf("降级场景 Buckets 期望为 0，实际为 %d", len(resFail.Buckets))
+	}
+	if !accDomesticFail.NoQuota {
+		t.Errorf("失败场景 NoQuota 期望被标记为 true")
+	}
+}
+
+// TestWorkBuddyQuota_NoQuotaSelfHealing 验证带 noQuota: true 的账号在重新探测成功后自愈为 false
+func TestWorkBuddyQuota_NoQuotaSelfHealing(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"code": 0,
+			"msg": "ok",
+			"data": {
+				"Packages": [
+					{"CycleRemainCapacity": "438.31", "CycleTotalCapacity": "440"}
+				],
+				"IsPaidUser": false
+			}
+		}`))
+	}))
+	defer ts.Close() // Teardown
+
+	q := NewQuotaService()
+	acc := &account.Account{
+		ID:          "acc-wb-healing",
+		Provider:    "workbuddy",
+		BaseURL:     ts.URL,
+		AccessToken: "token-heal",
 		Email:       "weilimao0714@gmail.com",
+		NoQuota:     true, // 历史误标记
 	}
-	resFor, errFor := q.FetchQuota(accForeign, nil, nil)
-	if errFor != nil {
-		t.Fatalf("国外账号 FetchQuota 不应报错: %v", errFor)
+
+	res, err := q.FetchQuota(acc, nil, nil)
+	if err != nil {
+		t.Fatalf("自愈探测不应报错: %v", err)
 	}
-	if reqCount != 1 {
-		t.Errorf("国外账号期望发送 1 次网络请求，实际为 %d 次", reqCount)
+	if acc.NoQuota {
+		t.Errorf("自愈后 acc.NoQuota 期望为 false, 实际仍为 true")
 	}
-	if len(resFor.Buckets) != 1 {
-		t.Fatalf("国外账号 Buckets 期望为 1，实际为 %d", len(resFor.Buckets))
-	}
-	if resFor.Buckets[0].ModelID != "积分余额: 410" {
-		t.Errorf("国外账号 ModelID 期望 '积分余额: 410'，实际为 %s", resFor.Buckets[0].ModelID)
-	}
-	if resFor.Credits == nil || *resFor.Credits != 410 {
-		t.Errorf("国外账号 Credits 期望 410，实际为 %v", resFor.Credits)
+	if len(res.Buckets) != 1 || res.Buckets[0].ModelID != "积分余额: 438.31" {
+		t.Errorf("自愈后期望正常展示 '积分余额: 438.31', 实际为 %v", res.Buckets)
 	}
 }
 

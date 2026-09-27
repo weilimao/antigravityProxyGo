@@ -42,6 +42,12 @@ func (m *Manager) GetModelCategoryByProvider(provider, modelName string) string 
 		return "workbuddy"
 	}
 	if p == "opencode" {
+		mTrim := strings.ToLower(strings.TrimSpace(modelName))
+		mTrim = strings.TrimPrefix(mTrim, "opencode/")
+		mTrim = strings.TrimPrefix(mTrim, "oc/")
+		if mTrim != "" {
+			return "opencode:" + mTrim
+		}
 		return "opencode"
 	}
 	return m.GetModelCategory(modelName)
@@ -326,7 +332,7 @@ func (m *Manager) ClearAccountCooldown(id string) bool {
 		return false
 	}
 	provider := acc.Provider
-	hadCooldown := len(acc.Cooldowns) > 0 || acc.CooldownUntil > 0
+	hadCooldown := len(acc.Cooldowns) > 0 || acc.CooldownUntil > 0 || acc.NoQuota
 	// 收集被恢复的冷却族名,供 OnQuotaRestored 回调感知(与 UpdateAccountCooldownFromQuota 同口径)。
 	restoredCategories := make([]string, 0, len(acc.Cooldowns))
 	for cat := range acc.Cooldowns {
@@ -334,6 +340,7 @@ func (m *Manager) ClearAccountCooldown(id string) bool {
 	}
 	acc.Cooldowns = make(map[string]int64)
 	acc.CooldownUntil = 0
+	acc.NoQuota = false
 	m.Unlock()
 
 	if !hadCooldown {
@@ -396,6 +403,8 @@ func (m *Manager) GetAvailableAccountsForChannelAndGroup(channel, groupID string
 		cooldownUntil := int64(0)
 		if a.Cooldowns != nil {
 			if v, ok := a.Cooldowns[category]; ok {
+				cooldownUntil = v
+			} else if v, ok := a.Cooldowns["opencode"]; ok && channel == "opencode" {
 				cooldownUntil = v
 			}
 		} else {

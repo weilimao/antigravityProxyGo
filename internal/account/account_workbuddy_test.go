@@ -183,11 +183,74 @@ func TestWorkBuddyAccount_ResolveModel(t *testing.T) {
 	if m := ResolveWorkBuddyModel("workbuddy/hy4-preview-f", acc); m != "hy4-preview-f" {
 		t.Errorf("期望剥离前缀后得到 hy4-preview-f, 得到 %s", m)
 	}
+	if m := ResolveWorkBuddyModel("workbuddy/domestic/hunyuan-2.0-instruct", acc); m != "hunyuan-2.0-instruct" {
+		t.Errorf("期望剥离 domestic 前缀后得到 hunyuan-2.0-instruct, 得到 %s", m)
+	}
+	if m := ResolveWorkBuddyModel("workbuddy/intl/gpt-5.5", acc); m != "gpt-5.5" {
+		t.Errorf("期望剥离 intl 前缀后得到 gpt-5.5, 得到 %s", m)
+	}
+	if m := ResolveWorkBuddyModel("workbuddy/cn/minimax-m2.5", acc); m != "minimax-m2.5" {
+		t.Errorf("期望剥离 cn 前缀后得到 minimax-m2.5, 得到 %s", m)
+	}
+	if m := ResolveWorkBuddyModel("workbuddy/overseas/kimi-k3", acc); m != "kimi-k3" {
+		t.Errorf("期望剥离 overseas 前缀后得到 kimi-k3, 得到 %s", m)
+	}
 	if m := ResolveWorkBuddyModel("hy3[1M]", acc); m != "hy3" {
 		t.Errorf("期望剥离上下文后缀后得到 hy3, 得到 %s", m)
 	}
 	if m := ResolveWorkBuddyModel("", acc); m != "deepseek-v4.1-flash" {
 		t.Errorf("空入参期望回退账号默认模型, 得到 %s", m)
+	}
+}
+
+func TestWorkBuddy_ModelAffinity(t *testing.T) {
+	tests := []struct {
+		model    string
+		expected string
+	}{
+		// 显式前缀
+		{"workbuddy/domestic/hunyuan-chat", "domestic"},
+		{"workbuddy/cn/deepseek-v4.1-flash", "domestic"},
+		{"workbuddy/intl/gpt-5.5", "international"},
+		{"workbuddy/overseas/kimi-k3", "international"},
+		// 国内特征
+		{"hunyuan-2.0-instruct", "domestic"},
+		{"workbuddy/hunyuan-chat", "domestic"},
+		{"default-1.1", "domestic"},
+		{"default-1.2", "domestic"},
+		{"codewise-7b", "domestic"},
+		{"minimax-m2.5", "domestic"},
+		{"glm-5.1", "domestic"},
+		{"glm-5.0", "domestic"},
+		{"glm-4-flash", "domestic"},
+		{"deepseek-v3", "domestic"},
+		{"deepseek-r1", "domestic"},
+		// 国际特征
+		{"gpt-5.5", "international"},
+		{"gpt-5.4", "international"},
+		{"gemini-3.5-flash", "international"},
+		{"kimi-k3", "international"},
+		{"kimi-k2.8", "international"},
+		{"hy4-preview-f", "international"},
+		{"fast-model", "international"},
+		{"balanced-model", "international"},
+		{"deep-model", "international"},
+		{"primary-model", "international"},
+		{"gpt-5.5[128k]", "international"},
+		// 通用双端支持
+		{"deepseek-v4.1-flash", "any"},
+		{"deepseek-v4-flash", "any"},
+		{"hy3", "any"},
+		{"auto", "any"},
+		{"default-model", "any"},
+		{"unknown-custom-model", "any"},
+	}
+
+	for _, tc := range tests {
+		got := GetWorkBuddyModelAffinity(tc.model)
+		if got != tc.expected {
+			t.Errorf("model %q: expected affinity %q, got %q", tc.model, tc.expected, got)
+		}
 	}
 }
 
@@ -353,6 +416,133 @@ func TestWorkBuddy_DomesticEmailDetection(t *testing.T) {
 	}
 	if IsWorkBuddyDomesticAccount(accForeign) {
 		t.Errorf("Gmail 账号期望判定为国外账号(false)，实际判定为 true")
+	}
+}
+
+func TestWorkBuddy_DomesticDualVersion(t *testing.T) {
+	// 1. 测试解析国内版凭证
+	domesticJSON := []byte(`{
+		"account": {
+			"uid": "87582519-8c36-47f2-b7d7-9865e721225a",
+			"nickname": "会游的鱼",
+			"phoneNumber": "18776859497"
+		},
+		"auth": {
+			"accessToken": "test-domestic-token",
+			"refreshToken": "test-domestic-ref",
+			"expiresIn": 4751998,
+			"domain": "www.workbuddy.cn"
+		}
+	}`)
+
+	input, err := ParseWorkBuddyAuthInfo(domesticJSON)
+	if err != nil {
+		t.Fatalf("ParseWorkBuddyAuthInfo 国内版报错: %v", err)
+	}
+
+	if input.BaseURL != DefaultWorkBuddyDomesticBaseURL {
+		t.Errorf("国内版 BaseURL 期望 %s, 得到 %s", DefaultWorkBuddyDomesticBaseURL, input.BaseURL)
+	}
+	if input.Nickname != "会游的鱼" {
+		t.Errorf("国内版 Nickname 期望 会游的鱼, 得到 %s", input.Nickname)
+	}
+	if input.Label != "会游的鱼 (国内版)" {
+		t.Errorf("国内版 Label 期望 会游的鱼 (国内版), 得到 %s", input.Label)
+	}
+
+	// 2. 测试账号 IsWorkBuddyDomestic 与 BuildWorkBuddyHeaders
+	accDomestic := NewWorkBuddyAccount(*input)
+	if !accDomestic.IsWorkBuddyDomestic() {
+		t.Fatalf("国内版账号 IsWorkBuddyDomestic 期望 true, 实际得到 false")
+	}
+
+	domHeaders := BuildWorkBuddyHeaders(accDomestic)
+	if domHeaders["X-IDE-Type"] != "WorkBuddy" {
+		t.Errorf("国内版 X-IDE-Type 期望 WorkBuddy, 得到 %s", domHeaders["X-IDE-Type"])
+	}
+	if domHeaders["X-Domain"] != "www.workbuddy.cn" {
+		t.Errorf("国内版 X-Domain 期望 www.workbuddy.cn, 得到 %s", domHeaders["X-Domain"])
+	}
+	if domHeaders["X-User-Id"] != "87582519-8c36-47f2-b7d7-9865e721225a" {
+		t.Errorf("国内版 X-User-Id 期望 87582519-8c36-47f2-b7d7-9865e721225a, 得到 %s", domHeaders["X-User-Id"])
+	}
+	if domHeaders["Authorization"] != "Bearer test-domestic-token" {
+		t.Errorf("国内版 Authorization 期望 Bearer test-domestic-token, 得到 %s", domHeaders["Authorization"])
+	}
+
+	// 3. 国际版账号 Headers
+	accIntl := &Account{
+		Provider:    "workbuddy",
+		BaseURL:     DefaultWorkBuddyBaseURL,
+		AccessToken: "test-intl-token",
+		ProjectID:   "intl-uid-123",
+	}
+	if accIntl.IsWorkBuddyDomestic() {
+		t.Fatalf("国际版账号 IsWorkBuddyDomestic 期望 false, 实际得到 true")
+	}
+	intlHeaders := BuildWorkBuddyHeaders(accIntl)
+	if intlHeaders["X-IDE-Type"] != "CodeBuddy" {
+		t.Errorf("国际版 X-IDE-Type 期望 CodeBuddy, 得到 %s", intlHeaders["X-IDE-Type"])
+	}
+	if _, hasDomain := intlHeaders["X-Domain"]; hasDomain {
+		t.Errorf("国际版不应包含 X-Domain")
+	}
+
+	// 4. 扫描功能测试 (带隔离 Teardown)
+	tempDir := t.TempDir()
+	authDir := filepath.Join(tempDir, "CodeBuddyExtension", "Data", "Public", "auth")
+	if err := os.MkdirAll(authDir, 0755); err != nil {
+		t.Fatalf("创建临时 authDir 失败: %v", err)
+	}
+
+	f1 := filepath.Join(authDir, "workbuddy-desktop-ai.info")
+	f2 := filepath.Join(authDir, "workbuddy-desktop.info")
+	_ = os.WriteFile(f1, []byte("{}"), 0644)
+	time.Sleep(10 * time.Millisecond)
+	_ = os.WriteFile(f2, []byte("{}"), 0644)
+
+	t.Setenv("LOCALAPPDATA", tempDir)
+
+	paths := ScanAllWorkBuddyLocalInfoPaths()
+	if len(paths) < 2 {
+		t.Fatalf("期望扫描出至少 2 个凭证文件，实际得到 %d", len(paths))
+	}
+	if paths[0] != f2 {
+		t.Errorf("期望最新的文件排第一 (workbuddy-desktop.info), 实际得到 %s", paths[0])
+	}
+}
+
+func TestWorkBuddyAccount_SanitizeCodeBuddyURL(t *testing.T) {
+	// 1. NewWorkBuddyAccount 自动清洗 codebuddy.ai 为 workbuddy.ai
+	acc := NewWorkBuddyAccount(WorkBuddyAccountInput{
+		BaseURL:     "https://www.codebuddy.ai",
+		AccessToken: "test-token",
+		Nickname:    "intl-user",
+	})
+	if acc.BaseURL != DefaultWorkBuddyBaseURL {
+		t.Errorf("NewWorkBuddyAccount 期望自动纠正 BaseURL 为 %s, 实际为 %s", DefaultWorkBuddyBaseURL, acc.BaseURL)
+	}
+
+	// 2. ClearAccountCooldown 解除 WorkBuddy 账号冷却测试
+	mgr := NewManager()
+	testAcc := &Account{
+		ID:            "wb-test-1",
+		Email:         "test-overseas@example.com",
+		Provider:      "workbuddy",
+		BaseURL:       "https://www.codebuddy.ai",
+		Cooldowns:     map[string]int64{"workbuddy": 9999999999999},
+		CooldownUntil: 9999999999999,
+	}
+	mgr.AddAccount(testAcc)
+	if !mgr.ClearAccountCooldown("wb-test-1") {
+		t.Fatalf("ClearAccountCooldown 期望成功清除冷却并返回 true")
+	}
+	gotAcc := mgr.GetAccountByID("wb-test-1")
+	if gotAcc == nil {
+		t.Fatalf("未能找到账号 wb-test-1")
+	}
+	if gotAcc.CooldownUntil != 0 || len(gotAcc.Cooldowns) != 0 {
+		t.Errorf("期望 CooldownUntil 为 0 且 Cooldowns 清空，实际 CooldownUntil=%d, Cooldowns=%v", gotAcc.CooldownUntil, gotAcc.Cooldowns)
 	}
 }
 

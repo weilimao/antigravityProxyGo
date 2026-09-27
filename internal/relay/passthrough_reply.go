@@ -245,14 +245,15 @@ func (h *APICompatHandler) proxyPassthroughOpenAI(w http.ResponseWriter, resp *h
 			doneSent = true
 			continue
 		}
-		var chunk OpenAIChatStreamChunk
-		if json.Unmarshal([]byte(data), &chunk) != nil {
-			continue
-		}
-		if chunk.Usage != nil {
-			inUsage = chunk.Usage.PromptTokens
-			outUsage = chunk.Usage.CompletionTokens
-			cachedUsage = chunk.Usage.CachedTokens()
+		// 性能优化：99.9% 的 SSE Chunk 仅包含 content delta，不包含 usage
+		// 仅在包含 "usage" 字符串时才进行 json.Unmarshal 反序列化，彻底消除无谓的反射与堆内存分配
+		if strings.Contains(data, "\"usage\"") {
+			var chunk OpenAIChatStreamChunk
+			if json.Unmarshal([]byte(data), &chunk) == nil && chunk.Usage != nil {
+				inUsage = chunk.Usage.PromptTokens
+				outUsage = chunk.Usage.CompletionTokens
+				cachedUsage = chunk.Usage.CachedTokens()
+			}
 		}
 	}
 	if !doneSent {
@@ -372,8 +373,10 @@ func (h *APICompatHandler) proxyPassthroughAnthropic(w http.ResponseWriter, resp
 			doneSent = true
 			continue
 		}
-		// Anthropic SSE 事件:message_start.message.usage.input_tokens 为输入 token 权威来源,
-		// message_delta.usage 的累计 output_tokens 为输出权威;两者均嗅探。
+		// 性能优化：仅 message_start 与 message_delta 事件可能携带 usage，其余 content_block_delta 等高频事件直接跳过反序列化
+		if !strings.Contains(data, "\"message_start\"") && !strings.Contains(data, "\"message_delta\"") {
+			continue
+		}
 		var ev struct {
 			Type  string                  `json:"type"`
 			Delta json.RawMessage         `json:"delta,omitempty"`

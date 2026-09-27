@@ -195,31 +195,78 @@ func (a *App) handleAccountIPCWorkBuddy(channel string, args []interface{}) (str
 		})
 		return data, true, nil
 
+	case "workbuddy:import-all-local":
+		// 一键扫描并导入本机全部 WorkBuddy (国内版与国际版) 登录账号
+		imported, err := a.accountMgr.ImportAllWorkBuddyLocalAccounts()
+		if err != nil {
+			a.AddLog(fmt.Sprintf("❌ [WorkBuddy] 批量导入本地账号失败: %v", err))
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+			return data, true, nil
+		}
+		a.emitAccountsRes()
+		a.AddLog(fmt.Sprintf("🎉 [WorkBuddy] 成功批量导入/更新本机账号共 %d 个", len(imported)))
+		data, _ := marshalResponse(map[string]interface{}{
+			"success": true,
+			"count":   len(imported),
+		})
+		return data, true, nil
+
 	case "workbuddy:oauth-start":
 		mgr := a.getOrInitWorkBuddyOAuthMgr()
-		version := strAt(0)
-		if version == "" {
-			version = account.DefaultWorkBuddyAuthVersion
+		// 支持参数: [version?, noOpen?, edition?] 或 [edition?, version?, noOpen?]
+		arg0 := strAt(0)
+		arg1Bool := boolAt(1)
+		arg2 := strAt(2)
+
+		var edition, version string
+		var noOpen bool
+
+		if strings.EqualFold(arg0, "domestic") || strings.EqualFold(arg0, "cn") || strings.EqualFold(arg0, "international") || strings.EqualFold(arg0, "overseas") {
+			edition = arg0
+			version = strAt(1)
+			noOpen = boolAt(2)
+		} else {
+			version = arg0
+			noOpen = arg1Bool
+			edition = arg2
 		}
-		noOpen := boolAt(1)
-		sess, err := mgr.StartLogin(a.ctx, version)
+
+		if edition == "" {
+			edition = "domestic"
+		}
+		if version == "" {
+			if strings.EqualFold(edition, "domestic") || strings.EqualFold(edition, "cn") {
+				version = account.DefaultWorkBuddyDomesticVersion
+			} else {
+				version = account.DefaultWorkBuddyAuthVersion
+			}
+		}
+
+		sess, err := mgr.StartLoginWithEdition(a.ctx, edition, version)
 		if err != nil {
 			a.AddLog(fmt.Sprintf("❌ [WorkBuddy] 发起网页授权登录失败: %v", err))
 			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 			return data, true, nil
 		}
+
+		editionTag := "国内版"
+		if sess.Edition != "domestic" {
+			editionTag = "国际版"
+		}
+
 		if !noOpen {
 			// 自动拉起系统默认浏览器
 			wailsRuntime.BrowserOpenURL(a.ctx, sess.BrowserURL)
-			a.AddLog(fmt.Sprintf("🌐 [WorkBuddy] 发起网页授权登录，已拉起系统浏览器: %s", sess.BrowserURL))
+			a.AddLog(fmt.Sprintf("🌐 [WorkBuddy %s] 发起官方授权登录，已拉起系统浏览器: %s", editionTag, sess.BrowserURL))
 		} else {
-			a.AddLog(fmt.Sprintf("📋 [WorkBuddy] 发起网页授权登录（已生成链接并启动本地监听）: %s", sess.BrowserURL))
+			a.AddLog(fmt.Sprintf("📋 [WorkBuddy %s] 发起官方授权登录（已生成链接并启动后台监听）: %s", editionTag, sess.BrowserURL))
 		}
 		data, _ := marshalResponse(map[string]interface{}{
 			"success":    true,
 			"state":      sess.State,
 			"browserUrl": sess.BrowserURL,
 			"authUrl":    sess.AuthURL,
+			"edition":    sess.Edition,
 		})
 		return data, true, nil
 
@@ -240,6 +287,7 @@ func (a *App) handleAccountIPCWorkBuddy(channel string, args []interface{}) (str
 			"state":        sess.State,
 			"status":       sess.Status,
 			"errorMessage": sess.ErrorMessage,
+			"edition":      sess.Edition,
 		}
 		if sess.Account != nil {
 			resp["account"] = map[string]interface{}{

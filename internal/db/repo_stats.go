@@ -73,7 +73,9 @@ func InsertRequestLog(log *RequestLog) error {
 	LastInsertError = ""
 	id, _ := res.LastInsertId()
 	log.ID = id
-	_ = PruneGlobalRequestLogs(150)
+	// 性能优化：移出同步 PruneGlobalRequestLogs(150)。
+	// 避免在每次请求落库的热点路径上同步发起全表子查询 DELETE，消除高并发下 SQLite 库级排他写锁竞争。
+	// 全局旧日志清理完全交给后台定时维护协程 (bootstrap.go 中 10 分钟定时 ticker) 异步执行。
 	return nil
 }
 

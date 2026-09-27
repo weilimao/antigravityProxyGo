@@ -242,8 +242,8 @@ func TestAccountService_WorkBuddyAccountCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddAccount workbuddy 失败: %v", err)
 	}
-	if acc.BaseURL != "https://www.codebuddy.ai" {
-		t.Errorf("期望默认 BaseURL 为 https://www.codebuddy.ai，实际为 %s", acc.BaseURL)
+	if acc.BaseURL != "https://www.workbuddy.ai" {
+		t.Errorf("期望默认 BaseURL 为 https://www.workbuddy.ai，实际为 %s", acc.BaseURL)
 	}
 	if acc.Tier != "Free" {
 		t.Errorf("期望默认 Tier 为 Free，实际为 %s", acc.Tier)

@@ -46,6 +46,9 @@ var OpenCodeSupportedModels = []string{
 	"deepseek-v4-flash-free",
 	"mimo-v2.5-free",
 	"nemotron-3-ultra-free",
+	"nemotron-3.5-lightning-free",
+	"muse-spark-1.3-contributor-free",
+	"ling-3.0-flash-fin-free",
 }
 
 // OpenCodeAccountInput 是从前端/IPC 接收的 OpenCode 账号录入参数。

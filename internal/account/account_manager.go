@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -172,6 +173,15 @@ func (m *Manager) LoadAccounts() {
 	for _, acc := range m.accounts {
 		if acc.Provider == "nvidia" && acc.BaseURL == "" {
 			acc.BaseURL = DefaultNvidiaBaseURL
+		}
+	}
+
+	// 兜底修复：为从旧版 JSON 加载的 WorkBuddy 账号纠正失效的 codebuddy.ai 域名为官方 workbuddy.ai
+	for _, acc := range m.accounts {
+		if acc.Provider == "workbuddy" {
+			if acc.BaseURL == "" || strings.Contains(acc.BaseURL, "codebuddy.ai") {
+				acc.BaseURL = DefaultWorkBuddyBaseURL
+			}
 		}
 	}
 

@@ -81,9 +81,63 @@ func FetchChannelAvailableModels(accountMgr *account.Manager, channel string) ([
 
 	// 2. 如果是 WorkBuddy 号池
 	if ch == "workbuddy" || activeAcc.Provider == "workbuddy" {
-		models, err := fetchWorkBuddyModels(activeAcc)
+		var domAcc *account.Account
+		var intlAcc *account.Account
+
+		if accountMgr != nil {
+			for _, acc := range accountMgr.GetRawAccountsByProvider("all") {
+				if acc != nil && acc.Enabled && acc.Provider == "workbuddy" {
+					if acc.IsWorkBuddyDomestic() {
+						if domAcc == nil {
+							domAcc = acc
+						}
+					} else {
+						if intlAcc == nil {
+							intlAcc = acc
+						}
+					}
+				}
+			}
+		}
+
+		// 若同时存在国内版和国际版账号，双端采样拉取并合并去重
+		if domAcc != nil && intlAcc != nil {
+			domModels, domErr := fetchWorkBuddyModels(domAcc)
+			intlModels, intlErr := fetchWorkBuddyModels(intlAcc)
+
+			if domErr != nil && intlErr != nil {
+				return nil, fmt.Errorf("打 WorkBuddy 双端上游获取模型均失败: 国内版错误(%v), 国际版错误(%v)", domErr, intlErr)
+			}
+
+			seen := make(map[string]bool)
+			var merged []string
+			for _, m := range domModels {
+				if !seen[m] {
+					seen[m] = true
+					merged = append(merged, m)
+				}
+			}
+			for _, m := range intlModels {
+				if !seen[m] {
+					seen[m] = true
+					merged = append(merged, m)
+				}
+			}
+			if len(merged) > 0 {
+				return merged, nil
+			}
+		}
+
+		targetAcc := activeAcc
+		if domAcc != nil && intlAcc == nil {
+			targetAcc = domAcc
+		} else if intlAcc != nil && domAcc == nil {
+			targetAcc = intlAcc
+		}
+
+		models, err := fetchWorkBuddyModels(targetAcc)
 		if err != nil {
-			return nil, fmt.Errorf("打 WorkBuddy 上游获取模型失败 (账号 %s): %w", activeAcc.Email, err)
+			return nil, fmt.Errorf("打 WorkBuddy 上游获取模型失败 (账号 %s): %w", targetAcc.Email, err)
 		}
 		if len(models) == 0 {
 			return nil, fmt.Errorf("WorkBuddy 上游返回的模型列表为空")
@@ -206,8 +260,12 @@ func FetchOtherGroupModels(accountMgr *account.Manager, groupID string, directBa
 // fetchWorkBuddyModels 从 WorkBuddy 官方配置端点 /v3/config 拉取可用模型列表。
 func fetchWorkBuddyModels(acc *account.Account) ([]string, error) {
 	baseURL := strings.TrimSpace(acc.BaseURL)
-	if baseURL == "" {
-		baseURL = account.DefaultWorkBuddyBaseURL
+	if baseURL == "" || strings.Contains(baseURL, "codebuddy.ai") {
+		if acc.IsWorkBuddyDomestic() {
+			baseURL = account.DefaultWorkBuddyDomesticBaseURL
+		} else {
+			baseURL = account.DefaultWorkBuddyBaseURL
+		}
 	}
 
 	configURL := strings.TrimRight(baseURL, "/") + "/v3/config"
@@ -216,9 +274,9 @@ func fetchWorkBuddyModels(acc *account.Account) ([]string, error) {
 		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "WorkBuddy/5.5.2")
-	if token := acc.GetAccessToken(); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	headers := account.BuildWorkBuddyHeaders(acc)
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	client := &http.Client{Timeout: 15 * time.Second, Transport: netutil.NewTransport()}

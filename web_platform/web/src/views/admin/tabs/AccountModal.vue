@@ -261,7 +261,7 @@ function defaultBaseUrl(provider: string): string {
     case 'grok':
       return 'https://cli-chat-proxy.grok.com'
     case 'workbuddy':
-      return 'https://www.codebuddy.ai'
+      return 'https://www.workbuddy.ai'
     default:
       return ''
   }

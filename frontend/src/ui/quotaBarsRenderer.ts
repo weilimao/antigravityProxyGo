@@ -267,8 +267,8 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
             }
             return;
         }
-        // 若账号为国内邮箱注册账号，短路不发网络探活
-        if (isDomesticWorkBuddyAccount(accForProbe0)) {
+        // 若账号为国内邮箱注册账号且非手动强制刷新，短路不发网络探活
+        if (!force && isDomesticWorkBuddyAccount(accForProbe0)) {
             const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
             if (activeContainer) renderQuotaBars(activeContainer, [], accForProbe0.cooldowns || cooldowns);
             if (refreshBtn) {

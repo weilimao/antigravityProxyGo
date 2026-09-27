@@ -335,8 +335,11 @@ func (s *AccountService) AddAccount(req *model.AddAccountRequest) (*model.Accoun
 		} else if provider == "grok" {
 			newAcc.BaseURL = "https://cli-chat-proxy.grok.com"
 		} else if provider == "workbuddy" {
-			newAcc.BaseURL = "https://www.codebuddy.ai"
+			newAcc.BaseURL = "https://www.workbuddy.ai"
 		}
+	}
+	if provider == "workbuddy" && strings.Contains(newAcc.BaseURL, "codebuddy.ai") {
+		newAcc.BaseURL = "https://www.workbuddy.ai"
 	}
 
 	accounts = append([]*model.AccountDTO{newAcc}, accounts...)

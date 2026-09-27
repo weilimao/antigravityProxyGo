@@ -13,10 +13,14 @@ let workbuddyImportAlert: HTMLDivElement | null;
 
 // 官方网页登录 DOM 节点
 let workbuddyWebLoginSection: HTMLDivElement | null;
+let tabWorkBuddyDomestic: HTMLButtonElement | null;
+let tabWorkBuddyOverseas: HTMLButtonElement | null;
+let wbOAuthDescription: HTMLParagraphElement | null;
 let wbOAuthStateIdle: HTMLDivElement | null;
 let wbOAuthStateLogging: HTMLDivElement | null;
 let wbOAuthStateSuccess: HTMLDivElement | null;
 let btnWorkBuddyWebLogin: HTMLButtonElement | null;
+let btnWorkBuddyWebLoginText: HTMLSpanElement | null;
 let btnWorkBuddyIdleCopyUrl: HTMLButtonElement | null;
 let btnWorkBuddyIdleCopyUrlText: HTMLSpanElement | null;
 let wbOAuthLoggingTip: HTMLParagraphElement | null;
@@ -25,10 +29,45 @@ let btnWorkBuddyCopyLoginUrlText: HTMLSpanElement | null;
 let btnWorkBuddyCancelLogin: HTMLButtonElement | null;
 let wbOAuthSuccessName: HTMLSpanElement | null;
 
+let selectedOAuthEdition: 'domestic' | 'international' = 'domestic';
+
 let workbuddyEditId: string | null = null;
 let currentOAuthState: string | null = null;
 let currentOAuthBrowserUrl: string | null = null;
 let oauthPollTimer: ReturnType<typeof setInterval> | null = null;
+
+function switchOAuthEdition(edition: 'domestic' | 'international'): void {
+    selectedOAuthEdition = edition;
+    if (!tabWorkBuddyDomestic || !tabWorkBuddyOverseas) return;
+
+    if (edition === 'domestic') {
+        tabWorkBuddyDomestic.className = 'px-3 py-1 text-[12px] font-bold rounded-md transition-all flex items-center gap-1.5 cursor-pointer bg-blue-600 text-white shadow-sm';
+        tabWorkBuddyOverseas.className = 'px-3 py-1 text-[12px] font-medium rounded-md transition-all flex items-center gap-1.5 cursor-pointer text-slate-600 dark:text-slate-300 hover:text-blue-600';
+        if (wbOAuthDescription) {
+            wbOAuthDescription.innerHTML = '国内版官方授权登录，支持在浏览器中通过<strong>微信扫码</strong>或<strong>手机验证码</strong>一键登录并自动入库（免安装客户端）';
+        }
+        if (btnWorkBuddyWebLoginText) {
+            btnWorkBuddyWebLoginText.textContent = '微信扫码 / 官方网页授权';
+        }
+        const inputBaseUrl = document.getElementById('inputWorkBuddyBaseUrl') as HTMLInputElement | null;
+        if (inputBaseUrl && (!inputBaseUrl.value || inputBaseUrl.value === 'https://www.codebuddy.ai' || inputBaseUrl.value === 'https://www.workbuddy.ai')) {
+            inputBaseUrl.value = 'https://copilot.tencent.com';
+        }
+    } else {
+        tabWorkBuddyOverseas.className = 'px-3 py-1 text-[12px] font-bold rounded-md transition-all flex items-center gap-1.5 cursor-pointer bg-blue-600 text-white shadow-sm';
+        tabWorkBuddyDomestic.className = 'px-3 py-1 text-[12px] font-medium rounded-md transition-all flex items-center gap-1.5 cursor-pointer text-slate-600 dark:text-slate-300 hover:text-blue-600';
+        if (wbOAuthDescription) {
+            wbOAuthDescription.innerHTML = '国际版官方网页授权登录，支持在浏览器中通过 Google / GitHub / X 账号一键登录并自动入库';
+        }
+        if (btnWorkBuddyWebLoginText) {
+            btnWorkBuddyWebLoginText.textContent = '国际版官方网页一键授权';
+        }
+        const inputBaseUrl = document.getElementById('inputWorkBuddyBaseUrl') as HTMLInputElement | null;
+        if (inputBaseUrl && (!inputBaseUrl.value || inputBaseUrl.value === 'https://copilot.tencent.com' || inputBaseUrl.value === 'https://www.codebuddy.ai')) {
+            inputBaseUrl.value = 'https://www.workbuddy.ai';
+        }
+    }
+}
 
 function writeWorkBuddyModalError(msg: string | null): void {
     const el = document.getElementById('workbuddyModalError');
@@ -86,10 +125,14 @@ function reanchorWorkBuddyModalHandles(): void {
     workbuddyImportAlert = document.getElementById('workbuddyImportAlert') as HTMLDivElement | null;
 
     workbuddyWebLoginSection = document.getElementById('workbuddyWebLoginSection') as HTMLDivElement | null;
+    tabWorkBuddyDomestic = document.getElementById('tabWorkBuddyDomestic') as HTMLButtonElement | null;
+    tabWorkBuddyOverseas = document.getElementById('tabWorkBuddyOverseas') as HTMLButtonElement | null;
+    wbOAuthDescription = document.getElementById('wbOAuthDescription') as HTMLParagraphElement | null;
     wbOAuthStateIdle = document.getElementById('wbOAuthStateIdle') as HTMLDivElement | null;
     wbOAuthStateLogging = document.getElementById('wbOAuthStateLogging') as HTMLDivElement | null;
     wbOAuthStateSuccess = document.getElementById('wbOAuthStateSuccess') as HTMLDivElement | null;
     btnWorkBuddyWebLogin = document.getElementById('btnWorkBuddyWebLogin') as HTMLButtonElement | null;
+    btnWorkBuddyWebLoginText = document.getElementById('btnWorkBuddyWebLoginText') as HTMLSpanElement | null;
     btnWorkBuddyIdleCopyUrl = document.getElementById('btnWorkBuddyIdleCopyUrl') as HTMLButtonElement | null;
     btnWorkBuddyIdleCopyUrlText = document.getElementById('btnWorkBuddyIdleCopyUrlText') as HTMLSpanElement | null;
     wbOAuthLoggingTip = document.getElementById('wbOAuthLoggingTip') as HTMLParagraphElement | null;
@@ -97,6 +140,9 @@ function reanchorWorkBuddyModalHandles(): void {
     btnWorkBuddyCopyLoginUrlText = document.getElementById('btnWorkBuddyCopyLoginUrlText') as HTMLSpanElement | null;
     btnWorkBuddyCancelLogin = document.getElementById('btnWorkBuddyCancelLogin') as HTMLButtonElement | null;
     wbOAuthSuccessName = document.getElementById('wbOAuthSuccessName') as HTMLSpanElement | null;
+
+    if (tabWorkBuddyDomestic) tabWorkBuddyDomestic.onclick = () => switchOAuthEdition('domestic');
+    if (tabWorkBuddyOverseas) tabWorkBuddyOverseas.onclick = () => switchOAuthEdition('international');
 
     if (btnWorkBuddyModalClose) btnWorkBuddyModalClose.onclick = closeWorkBuddyAccountModal;
     if (btnWorkBuddyCancel) btnWorkBuddyCancel.onclick = closeWorkBuddyAccountModal;
@@ -122,6 +168,7 @@ export function openWorkBuddyAccountModal(): void {
     currentOAuthState = null;
     currentOAuthBrowserUrl = null;
     setOAuthUIState('idle');
+    switchOAuthEdition('domestic');
 
     if (workbuddyWebLoginSection) {
         workbuddyWebLoginSection.classList.remove('hidden');
@@ -135,16 +182,13 @@ export function openWorkBuddyAccountModal(): void {
     const inputToken = document.getElementById('inputWorkBuddyToken') as HTMLInputElement | null;
     const inputLabel = document.getElementById('inputWorkBuddyLabel') as HTMLInputElement | null;
 
-    if (inputBaseUrl) inputBaseUrl.value = 'https://www.codebuddy.ai';
+    if (inputBaseUrl) inputBaseUrl.value = 'https://copilot.tencent.com';
     if (inputToken) inputToken.value = '';
     if (inputLabel) inputLabel.value = '';
 
     writeWorkBuddyModalError(null);
     if (btnWorkBuddyIdleCopyUrlText) btnWorkBuddyIdleCopyUrlText.textContent = '复制授权链接';
     if (btnWorkBuddyCopyLoginUrlText) btnWorkBuddyCopyLoginUrlText.textContent = '复制登录链接';
-    if (wbOAuthLoggingTip) {
-        wbOAuthLoggingTip.textContent = '已自动为你唤起系统默认浏览器。若浏览器未自动打开，请复制链接在浏览器中完成登录：';
-    }
     if (workbuddyImportAlert) {
         workbuddyImportAlert.classList.add('hidden');
         workbuddyImportAlert.textContent = '';
@@ -175,7 +219,11 @@ export function openEditWorkBuddyAccount(acc: any): void {
     const inputToken = document.getElementById('inputWorkBuddyToken') as HTMLInputElement | null;
     const inputLabel = document.getElementById('inputWorkBuddyLabel') as HTMLInputElement | null;
 
-    if (inputBaseUrl) inputBaseUrl.value = acc.baseUrl || 'https://www.codebuddy.ai';
+    if (inputBaseUrl) {
+        let u = acc.baseUrl || 'https://www.workbuddy.ai';
+        if (u.includes('codebuddy.ai')) u = 'https://www.workbuddy.ai';
+        inputBaseUrl.value = u;
+    }
     if (inputToken) inputToken.value = acc.maskedKey || '';
     if (inputLabel) inputLabel.value = acc.email || '';
 
@@ -213,17 +261,19 @@ async function startWorkBuddyWebLogin(openBrowser: boolean = true): Promise<void
     writeWorkBuddyModalError(null);
     setOAuthUIState('logging');
 
+    const authMethodTip = selectedOAuthEdition === 'domestic' ? '微信扫码或短信验证码' : '官方网页授权';
     if (wbOAuthLoggingTip) {
         if (openBrowser) {
-            wbOAuthLoggingTip.textContent = '已自动为你唤起系统默认浏览器。若浏览器未自动打开，请复制链接在浏览器中完成登录：';
+            wbOAuthLoggingTip.textContent = `已自动为你唤起系统默认浏览器。若浏览器未自动打开，请复制链接在浏览器中完成${authMethodTip}：`;
         } else {
-            wbOAuthLoggingTip.textContent = '授权链接已复制到剪贴板！请在任意浏览器中粘贴打开并完成登录，完成后将自动入库：';
+            wbOAuthLoggingTip.textContent = `授权链接已复制到剪贴板！请在任意浏览器中粘贴打开并完成${authMethodTip}，完成后将自动入库：`;
         }
     }
 
     try {
         const noOpen = !openBrowser;
-        const res = safeParseIPC(await ipcRenderer.invoke('workbuddy:oauth-start', '5.5.2', noOpen));
+        const version = selectedOAuthEdition === 'domestic' ? '5.5.6' : '5.5.2';
+        const res = safeParseIPC(await ipcRenderer.invoke('workbuddy:oauth-start', version, noOpen, selectedOAuthEdition));
         if (!res.success) {
             writeWorkBuddyModalError(res.error || '发起官方登录失败');
             setOAuthUIState('idle');
@@ -261,7 +311,8 @@ async function startWorkBuddyWebLogin(openBrowser: boolean = true): Promise<void
                     setOAuthUIState('success');
                     if (wbOAuthSuccessName) {
                         const email = statusRes.account?.email || statusRes.account?.uid || '账号';
-                        wbOAuthSuccessName.textContent = `🎉 ${email} 登录成功！`;
+                        const editionTag = (statusRes.edition === 'domestic' || selectedOAuthEdition === 'domestic') ? '国内版' : '国际版';
+                        wbOAuthSuccessName.textContent = `🎉 ${email} (${editionTag}) 登录成功！`;
                     }
                     setTimeout(() => {
                         closeWorkBuddyAccountModal();
@@ -314,7 +365,10 @@ async function submitWorkBuddyAccount(): Promise<void> {
     const inputToken = document.getElementById('inputWorkBuddyToken') as HTMLInputElement | null;
     const inputLabel = document.getElementById('inputWorkBuddyLabel') as HTMLInputElement | null;
 
-    const baseUrl = inputBaseUrl?.value?.trim() || 'https://www.codebuddy.ai';
+    let baseUrl = inputBaseUrl?.value?.trim() || 'https://www.workbuddy.ai';
+    if (baseUrl.includes('codebuddy.ai')) {
+        baseUrl = 'https://www.workbuddy.ai';
+    }
     const token = inputToken?.value?.trim() || '';
     const label = inputLabel?.value?.trim() || '';
 
@@ -348,7 +402,11 @@ async function importLocalWorkBuddyAccount(): Promise<void> {
     btnWorkBuddyImportLocal.disabled = true;
 
     try {
-        const res = safeParseIPC(await ipcRenderer.invoke('workbuddy:import-local'));
+        let res = safeParseIPC(await ipcRenderer.invoke('workbuddy:import-all-local'));
+        if (!res.success) {
+            res = safeParseIPC(await ipcRenderer.invoke('workbuddy:import-local'));
+        }
+
         if (!res.success) {
             if (workbuddyImportAlert) {
                 workbuddyImportAlert.textContent = '导入失败: ' + (res.error || '未发现本地登录态文件');
@@ -360,8 +418,12 @@ async function importLocalWorkBuddyAccount(): Promise<void> {
         }
 
         if (workbuddyImportAlert) {
-            const acc = res.account || {};
-            workbuddyImportAlert.textContent = `✅ 成功导入本地账号: ${acc.email || ''} (UID: ${acc.uid || ''})`;
+            if (res.count && res.count > 0) {
+                workbuddyImportAlert.textContent = `✅ 成功同步本机 WorkBuddy 全部账号 (国内版/国际版共 ${res.count} 个)！`;
+            } else {
+                const acc = res.account || {};
+                workbuddyImportAlert.textContent = `✅ 成功导入本地账号: ${acc.email || ''} (UID: ${acc.uid || ''})`;
+            }
             workbuddyImportAlert.classList.remove('hidden', 'text-rose-600', 'border-rose-500/30', 'bg-rose-500/10');
             workbuddyImportAlert.classList.add('text-teal-700', 'border-teal-500/30', 'bg-teal-500/10');
         }

@@ -359,15 +359,29 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		// 注入 Canonical 请求头防封指纹
-		canonicalSession := translateToOpenCodeSession(sessionKey)
-		canonicalRequest := generateOpenCodeRequestID()
+		// 注入 Canonical 请求头防封指纹（优先透传客户端传入的合法会话头）
+		canonicalSession := strings.TrimSpace(r.Header.Get("x-opencode-session"))
+		if canonicalSession == "" || !opencodeSessionRe.MatchString(canonicalSession) {
+			canonicalSession = translateToOpenCodeSession(sessionKey)
+		}
+		canonicalRequest := strings.TrimSpace(r.Header.Get("x-opencode-request"))
+		if canonicalRequest == "" {
+			canonicalRequest = generateOpenCodeRequestID()
+		}
+		clientType := strings.TrimSpace(r.Header.Get("x-opencode-client"))
+		if clientType == "" {
+			clientType = "desktop"
+		}
+		projectID := strings.TrimSpace(r.Header.Get("x-opencode-project"))
+		if projectID == "" {
+			projectID = "global"
+		}
 
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Authorization", "Bearer "+poolAccount.GetAccessToken())
 		httpReq.Header.Set("User-Agent", defaultOpenCodeUA)
-		httpReq.Header.Set("x-opencode-client", "desktop")
-		httpReq.Header.Set("x-opencode-project", "global")
+		httpReq.Header.Set("x-opencode-client", clientType)
+		httpReq.Header.Set("x-opencode-project", projectID)
 		httpReq.Header.Set("x-opencode-session", canonicalSession)
 		httpReq.Header.Set("x-opencode-request", canonicalRequest)
 		if isStreaming {
@@ -406,13 +420,14 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 			_ = resp.Body.Close()
 			errStr := string(bodyErrBytes)
 			skippedAccounts[poolAccount.ID] = true
-			if strings.Contains(errStr, "CreditsError") || strings.Contains(errStr, "No payment method") || strings.Contains(errStr, "billing") {
-				h.log("⚠️ [OpenCode 中继] 账号欠费/无支付方式 (%s): %s", poolAccount.Email, errStr)
-				poolAccount.NoQuota = true
-			}
 			cooldownUntilMs := time.Now().UnixNano()/1e6 + 24*3600*1000
+			// 模型级细粒度隔离：仅针对当前模型打上冷却，不污染 poolAccount.NoQuota，保障免费与可用模型不被误杀
 			h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, cooldownUntilMs, opencodeChannel, inModel)
 			h.accountMgr.ReleaseAccount(poolAccount.ID)
+
+			if strings.Contains(errStr, "CreditsError") || strings.Contains(errStr, "No payment method") || strings.Contains(errStr, "billing") {
+				h.log("⚠️ [OpenCode 中继] 模型欠费/无支付方式 (%s, model=%s): %s", poolAccount.Email, inModel, errStr)
+			}
 			continue
 		}
 
@@ -426,8 +441,17 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 		if resp.StatusCode != http.StatusOK {
 			errBytes, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
-			h.log("❌ [OpenCode 中继] 上游返回异常状态码 %d (%s): %s", resp.StatusCode, poolAccount.Email, string(errBytes))
+			h.log("❌ [OpenCode 中继] 上游返回异常状态码 %d (%s, model=%s): %s", resp.StatusCode, poolAccount.Email, inModel, string(errBytes))
 			h.accountMgr.ReleaseAccount(poolAccount.ID)
+
+			errStr := string(errBytes)
+			if strings.Contains(errStr, "FreeTierError") || strings.Contains(errStr, "OpenCode's free tier") {
+				h.log("⛔ [OpenCode 中继] 上游拒绝 Free Tier 外部调用: OpenCode 官方已限制免费模型仅限官方客户端内部调用。建议使用 OpenCode 付费模型或在客户端直连。")
+			}
+			if strings.Contains(errStr, "Model is unavailable") {
+				h.log("⛔ [OpenCode 中继] 上游提示模型已下线 (%s)", inModel)
+			}
+
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(resp.StatusCode)
 			_, _ = w.Write(errBytes)

@@ -87,6 +87,9 @@ func (h *APIHandler) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 		username = strings.TrimSpace(q.Get("account"))
 	}
 	status := strings.TrimSpace(q.Get("status"))
+	if status == "all" {
+		status = ""
+	}
 	search := strings.TrimSpace(q.Get("search"))
 
 	page, _ := strconv.Atoi(q.Get("page"))
@@ -241,7 +244,7 @@ func (h *APIHandler) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 	// 若查询指定中继用户，且中继统计管理器中记录了该用户的权威生命周期请求与用量，在未做二次状态/搜索过滤时优先以其为准
 	if resolvedUser != nil && h.statsMgr != nil {
 		if uStats := h.statsMgr.GetUserStats(resolvedUser.ID); uStats != nil && uStats.TotalRequests > 0 {
-			if status == "" && search == "" {
+			if (status == "" || status == "all") && search == "" {
 				summary.TotalRequests = uStats.TotalRequests
 				summary.TotalInputTokens = int64(uStats.TotalInputTokens)
 				summary.TotalOutputTokens = int64(uStats.TotalOutputTokens)
@@ -254,7 +257,7 @@ func (h *APIHandler) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 				summary.TotalRequests = uStats.TotalRequests
 			}
 		}
-	} else if resolvedUser == nil && len(targetSessionIDs) == 0 && len(targetUserIDs) == 0 && h.statsMgr != nil && status == "" && search == "" {
+	} else if resolvedUser == nil && len(targetSessionIDs) == 0 && len(targetUserIDs) == 0 && h.statsMgr != nil && (status == "" || status == "all") && search == "" {
 		// 全平台概览且未做筛选时，聚合全局生命周期统计指标，防止因明细日志修剪而丢失请求总数与累计用量
 		gReqs, gIn, gOut, gCached, gCost := h.statsMgr.GetGlobalSummary()
 		if gReqs > 0 {

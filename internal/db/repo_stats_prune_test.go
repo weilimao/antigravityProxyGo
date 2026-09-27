@@ -34,6 +34,11 @@ func TestPruneUserRequestLogs_LimitTo150(t *testing.T) {
 		}
 	}
 
+	// 显式触发用户日志修剪 (对应后台维护清理或特定用户容量控制)
+	if err := PruneUserRequestLogs(userID, 150); err != nil {
+		t.Fatalf("PruneUserRequestLogs failed: %v", err)
+	}
+
 	// 验证表中只保留最新的 150 条
 	var count int
 	err := GlobalDB.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE user_id = ?`, userID).Scan(&count)
@@ -148,7 +153,12 @@ func TestPruneGlobalRequestLogs_Strict150Limit(t *testing.T) {
 		}
 	}
 
-	// 验证无论多少个用户，每次写入后全表总记录数均严格保持在 150 条以内
+	// 显式触发全局日志修剪 (对应后台定时维护协程执行的全局 FIFO 淘汰逻辑)
+	if err := PruneGlobalRequestLogs(150); err != nil {
+		t.Fatalf("PruneGlobalRequestLogs failed: %v", err)
+	}
+
+	// 验证无论多少个用户，修剪后全表总记录数均严格保持在 150 条以内
 	var totalCount int
 	err := GlobalDB.QueryRow(`SELECT COUNT(*) FROM request_logs`).Scan(&totalCount)
 	if err != nil {

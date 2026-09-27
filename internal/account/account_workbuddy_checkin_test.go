@@ -381,3 +381,84 @@ func TestManager_RunDailyCheckinForWorkBuddyPool(t *testing.T) {
 		t.Errorf("签到期望成功，实际: %s", results[0].Message)
 	}
 }
+
+func TestWorkBuddyCheckin_Domestic_FullFlow(t *testing.T) {
+	var capturedStatusHeaders http.Header
+	var capturedClaimHeaders http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v2/billing/meter/checkin-activity-status" {
+			capturedStatusHeaders = r.Header.Clone()
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code": 0,
+				"msg":  "OK",
+				"data": map[string]interface{}{
+					"active":           true,
+					"today_checked_in": false,
+					"streak_days":      1,
+					"daily_credit":     100,
+					"today_credit":     100,
+					"theme_name":       "Buddy加油站",
+					"season":           9,
+					"activity_name":    "加油站第9期",
+				},
+			})
+			return
+		}
+		if r.URL.Path == "/v2/billing/meter/daily-checkin" {
+			capturedClaimHeaders = r.Header.Clone()
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code": 0,
+				"msg":  "OK",
+				"data": map[string]interface{}{
+					"credit":      100,
+					"streak_days": 2,
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	acc := &Account{
+		ID:          "wb-domestic-test",
+		Email:       "会游的鱼 (国内版)",
+		Provider:    workbuddyProvider,
+		BaseURL:     server.URL,
+		AccessToken: "dom-token-xyz",
+		ProjectID:   "domestic-uid-9",
+		Enabled:     true,
+	}
+
+	// 1. 测试状态获取
+	status, err := FetchWorkBuddyCheckinStatus(acc)
+	if err != nil {
+		t.Fatalf("国内版 FetchWorkBuddyCheckinStatus 失败: %v", err)
+	}
+	if !status.Active || status.Season != 9 || status.DailyCredit != 100 {
+		t.Errorf("国内版活动状态数据解析异常: %+v", status)
+	}
+	if capturedStatusHeaders.Get("X-IDE-Type") != "WorkBuddy" {
+		t.Errorf("期望国内版 X-IDE-Type=WorkBuddy, 实际: %s", capturedStatusHeaders.Get("X-IDE-Type"))
+	}
+	if capturedStatusHeaders.Get("X-Domain") != "www.workbuddy.cn" {
+		t.Errorf("期望国内版 X-Domain=www.workbuddy.cn, 实际: %s", capturedStatusHeaders.Get("X-Domain"))
+	}
+	if capturedStatusHeaders.Get("User-Agent") != "WorkBuddy/5.5.6" {
+		t.Errorf("期望国内版 User-Agent=WorkBuddy/5.5.6, 实际: %s", capturedStatusHeaders.Get("User-Agent"))
+	}
+
+	// 2. 测试执行签到领取
+	res, err := ClaimWorkBuddyDailyCheckin(acc)
+	if err != nil {
+		t.Fatalf("国内版 ClaimWorkBuddyDailyCheckin 失败: %v", err)
+	}
+	if !res.Success || res.AddedCredit != 100 || res.StreakDays != 2 {
+		t.Errorf("国内版签到结果异常: %+v", res)
+	}
+	if capturedClaimHeaders.Get("X-Domain") != "www.workbuddy.cn" {
+		t.Errorf("期望签到请求携带 X-Domain=www.workbuddy.cn, 实际: %s", capturedClaimHeaders.Get("X-Domain"))
+	}
+}

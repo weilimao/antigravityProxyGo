@@ -15,14 +15,29 @@
     <div id="workbuddyWebLoginSection"
       class="p-5 rounded-xl bg-gradient-to-br from-blue-50/80 via-indigo-50/50 to-slate-50/90 dark:from-[#131b2e] dark:via-[#161f36] dark:to-[#101624] border border-blue-200/70 dark:border-blue-500/30 shadow-sm flex flex-col items-center text-center relative overflow-hidden transition-all">
       <!-- 官方品牌 Logo 与标题 -->
-      <div class="flex items-center gap-2.5 mb-1.5 z-10">
+      <div class="flex items-center gap-2.5 mb-2 z-10">
         <div class="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold shadow-md shadow-blue-500/20">
           <span class="material-symbols-outlined text-[20px]">smart_toy</span>
         </div>
         <span class="text-[17px] font-bold text-slate-800 dark:text-white tracking-wide">WorkBuddy，我帮你</span>
       </div>
-      <p class="text-[12px] text-slate-500 dark:text-slate-400 max-w-[400px] mb-4 z-10 leading-relaxed">
-        官方网页授权登录，支持在浏览器中通过 Google / GitHub / X 账号一键登录并自动入库
+
+      <!-- 版本选择 Tab: 国内版 vs 国际版 -->
+      <div class="flex items-center p-1 bg-white/80 dark:bg-[#1a2337] rounded-lg border border-slate-200 dark:border-slate-700/60 mb-2.5 z-10 shadow-inner">
+        <button type="button" id="tabWorkBuddyDomestic"
+          class="px-3 py-1 text-[12px] font-bold rounded-md transition-all flex items-center gap-1.5 cursor-pointer bg-blue-600 text-white shadow-sm">
+          <span>🇨🇳 国内版</span>
+          <span class="text-[10px] opacity-90">(微信扫码/手机号)</span>
+        </button>
+        <button type="button" id="tabWorkBuddyOverseas"
+          class="px-3 py-1 text-[12px] font-medium rounded-md transition-all flex items-center gap-1.5 cursor-pointer text-slate-600 dark:text-slate-300 hover:text-blue-600">
+          <span>🌐 国际版</span>
+          <span class="text-[10px] opacity-90">(Google/GitHub)</span>
+        </button>
+      </div>
+
+      <p id="wbOAuthDescription" class="text-[12px] text-slate-500 dark:text-slate-400 max-w-[440px] mb-4 z-10 leading-relaxed">
+        国内版官方授权登录，支持在浏览器中通过<strong>微信扫码</strong>或<strong>手机验证码</strong>一键登录并自动入库（免安装客户端）
       </p>
 
       <!-- 状态 1: 就绪态 (idle) -->
@@ -30,7 +45,7 @@
         <button type="button" id="btnWorkBuddyWebLogin"
           class="flex-1 py-2.5 px-4 rounded-lg text-[13px] font-bold text-white bg-blue-600 hover:bg-blue-700 active:scale-[0.99] transition-all shadow-md shadow-blue-500/25 flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap">
           <span class="material-symbols-outlined text-[18px]">open_in_browser</span>
-          <span>官方网页一键授权</span>
+          <span id="btnWorkBuddyWebLoginText">微信扫码 / 官方网页授权</span>
         </button>
         <button type="button" id="btnWorkBuddyIdleCopyUrl"
           class="py-2.5 px-4 rounded-lg text-[13px] font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-[#1f293d] hover:bg-slate-50 dark:hover:bg-[#27334d] border border-slate-300 dark:border-slate-700 shadow-sm active:scale-[0.99] transition-all flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap">
@@ -94,8 +109,8 @@
         <div class="flex flex-col gap-1.5">
           <label class="text-[12px] font-medium text-on-surface dark:text-white" data-i18n="workbuddyFieldBaseUrl">Base URL (上游端点)</label>
           <input type="text" id="inputWorkBuddyBaseUrl"
-            placeholder="https://www.codebuddy.ai"
-            value="https://www.codebuddy.ai"
+            placeholder="https://www.workbuddy.ai"
+            value="https://www.workbuddy.ai"
             class="px-3 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all" />
         </div>
 

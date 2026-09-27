@@ -402,10 +402,13 @@ func (s *GatewaySyncService) fetchUpstreamChannelModels(channel string) (map[str
 		} else if ch == "grok" {
 			targetBaseURL = "https://api.x.ai/v1"
 		} else if ch == "workbuddy" {
-			targetBaseURL = "https://www.codebuddy.ai"
+			targetBaseURL = "https://www.workbuddy.ai"
 		} else {
 			return nil, fmt.Errorf("号池 [%s] 账号未配置 BaseURL，无法请求上游模型列表", channel)
 		}
+	}
+	if ch == "workbuddy" && strings.Contains(targetBaseURL, "codebuddy.ai") {
+		targetBaseURL = "https://www.workbuddy.ai"
 	}
 
 	models, err := requestUpstreamModels(targetBaseURL, targetToken, false)
@@ -424,8 +427,8 @@ func (s *GatewaySyncService) fetchUpstreamChannelModels(channel string) (map[str
 // fetchWorkBuddyModelsDirect 直连 WorkBuddy 官方 /v3/config 端点获取可用模型全集
 func fetchWorkBuddyModelsDirect(baseURL, token string) ([]string, error) {
 	u := strings.TrimSpace(baseURL)
-	if u == "" {
-		u = "https://www.codebuddy.ai"
+	if u == "" || strings.Contains(u, "codebuddy.ai") {
+		u = "https://www.workbuddy.ai"
 	}
 	configURL := strings.TrimRight(u, "/") + "/v3/config"
 	req, err := http.NewRequest(http.MethodGet, configURL, nil)

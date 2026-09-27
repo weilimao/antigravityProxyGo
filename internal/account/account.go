@@ -106,6 +106,18 @@ func (a *Account) AccessTokenExp() int64 {
 	return jwtExpClaim(tok)
 }
 
+// IsWorkBuddyDomestic 判断当前账号是否属于 WorkBuddy 国内版（基于 BaseURL 或账号显示标识识别）。
+func (a *Account) IsWorkBuddyDomestic() bool {
+	if a == nil || a.Provider != "workbuddy" {
+		return false
+	}
+	u := strings.ToLower(a.BaseURL)
+	if strings.Contains(u, "copilot.tencent.com") || strings.Contains(u, "workbuddy.cn") {
+		return true
+	}
+	return strings.Contains(a.Email, "国内版")
+}
+
 // jwtExpClaim 解析 JWT(如 xAI/Google OAuth access_token)中段 payload 的 "exp" claim。
 // 非标准 JWT(无 3 段/非 base64url/无 exp) 统一返回 0,语义「无法判定过期,按原逻辑处理」。
 // 与 internal/quota/xai_oauth.go 的 parseJWTIdentity 同源思路,但不依赖 id_token——access_token

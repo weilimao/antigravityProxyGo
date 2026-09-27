@@ -528,7 +528,7 @@ export function renderAccounts(accounts: any[]) {
                 }
             };
 
-            // 解冻按钮:Grok / OpenCode 号池 + 当前处于冷却态时显示。点击经二次确认后 invoke clear-cooldown,
+            // 解冻按钮:Grok / OpenCode / WorkBuddy 号池 + 当前处于冷却态时显示。点击经二次确认后 invoke clear-cooldown,
             // 后端清冷却 + emitAccountsRes,前端卡片徽标即时翻绿。与编辑/导出/删除同级,置于最左以便冷却态显眼。
             const btnThaw = document.createElement('button');
             btnThaw.className = 'text-[11px] font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0';
@@ -538,7 +538,12 @@ export function renderAccounts(accounts: any[]) {
             btnThaw.onclick = async () => {
                 const msg = (dict.grokThawConfirmSingle || '确定要手动解冻账号 {email} 吗？该账号将立即恢复可承接请求。').replace('{email}', acc.email);
                 if (await $confirm(msg)) {
-                    const ch = acc.provider === 'opencode' ? 'opencode:clear-cooldown' : 'grok:clear-cooldown';
+                    let ch = 'grok:clear-cooldown';
+                    if (acc.provider === 'opencode') {
+                        ch = 'opencode:clear-cooldown';
+                    } else if (acc.provider === 'workbuddy') {
+                        ch = 'workbuddy:clear-cooldown';
+                    }
                     const res = await ipcRenderer.invoke(ch, acc.id);
                     if (!res || res.success !== true) {
                         alert((res && res.error) || (dict.grokThawFailed || '解冻失败'));
@@ -585,8 +590,8 @@ export function renderAccounts(accounts: any[]) {
             if (acc.provider === 'workbuddy') {
                 rightGroup.appendChild(btnWbCheckin);
             }
-            // 仅 Grok / OpenCode 号池且整体冷却中时插入解冻按钮(置于编辑之后、导出之前)。
-            if ((acc.provider === 'grok' || acc.provider === 'opencode') && isOverallCooling) {
+            // 仅 Grok / OpenCode / WorkBuddy 号池且整体冷却中时插入解冻按钮(置于编辑之后、导出之前)。
+            if ((acc.provider === 'grok' || acc.provider === 'opencode' || acc.provider === 'workbuddy') && isOverallCooling) {
                 rightGroup.appendChild(btnThaw);
             }
             rightGroup.appendChild(btnDownload);
@@ -655,9 +660,9 @@ export function renderAccounts(accounts: any[]) {
                 checkboxEl.checked = state.selectedAccountIds.includes(acc.id);
             }
 
-            // 4.5 Update thaw button visibility:Grok 卡片在冷却态切换时同步显隐「解冻」按钮,
+            // 4.5 Update thaw button visibility:Grok / OpenCode / WorkBuddy 卡片在冷却态切换时同步显隐「解冻」按钮,
             // 避免解冻后按钮残留(patch 分支不重建 DOM)。与 statusBadge 同据 isOverallCooling 联动。
-            if (acc.provider === 'grok') {
+            if (acc.provider === 'grok' || acc.provider === 'opencode' || acc.provider === 'workbuddy') {
                 const existingThaw = card.querySelector('[data-grok-thaw-btn]') as HTMLButtonElement | null;
                 if (isOverallCooling && !existingThaw) {
                     // 临时从冷却态切到冷却态但按钮缺失:补建。正常场景下按钮在 create 分支已建。

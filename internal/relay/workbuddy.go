@@ -324,6 +324,24 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// 根据模型版本亲和性过滤可用账号（国内专属模型 -> 国内网关/账号，国际专属模型 -> 国际网关/账号）
+	affinity := account.GetWorkBuddyModelAffinity(inModel)
+	if affinity == "domestic" || affinity == "international" {
+		var affinityFiltered []*account.Account
+		for _, acc := range available {
+			if affinity == "domestic" && acc.IsWorkBuddyDomestic() {
+				affinityFiltered = append(affinityFiltered, acc)
+			} else if affinity == "international" && !acc.IsWorkBuddyDomestic() {
+				affinityFiltered = append(affinityFiltered, acc)
+			}
+		}
+		if len(affinityFiltered) > 0 {
+			available = affinityFiltered
+		} else {
+			h.log("⚠️ [WorkBuddy 亲和性] 请求模型 %s 偏好 %s 网关，但号池中未找到匹配账号，降级使用全量号池", inModel, affinity)
+		}
+	}
+
 	sessionKey := h.stickyKeyOf(userSession)
 	lbMode := "round-robin"
 	if h.accountMgr != nil {
@@ -436,8 +454,12 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 
 		upstreamBytes, _ := json.Marshal(upstreamReq)
 		baseURL := strings.TrimRight(poolAccount.BaseURL, "/")
-		if baseURL == "" {
-			baseURL = account.DefaultWorkBuddyBaseURL
+		if baseURL == "" || strings.Contains(baseURL, "codebuddy.ai") {
+			if poolAccount.IsWorkBuddyDomestic() {
+				baseURL = account.DefaultWorkBuddyDomesticBaseURL
+			} else {
+				baseURL = account.DefaultWorkBuddyBaseURL
+			}
 		}
 		targetURL := baseURL + "/v2/chat/completions"
 
@@ -448,18 +470,17 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 			return
 		}
 
-		// 注入 WorkBuddy 必要 Headers
-		httpReq.Header.Set("Authorization", "Bearer "+poolAccount.AccessToken)
-		httpReq.Header.Set("Content-Type", "application/json")
+		// 注入 WorkBuddy 必要 Headers（自适应国内版与国际版）
+		wbHeaders := account.BuildWorkBuddyHeaders(poolAccount)
+		for k, v := range wbHeaders {
+			httpReq.Header.Set(k, v)
+		}
 		convID := sessionKey
 		if convID == "" {
 			convID = generateWorkBuddyUUID()
 		}
 		httpReq.Header.Set("X-Conversation-ID", convID)
 		httpReq.Header.Set("X-Request-ID", generateWorkBuddyUUID())
-		httpReq.Header.Set("X-IDE-Type", "CodeBuddy")
-		httpReq.Header.Set("X-IDE-Name", "WorkBuddy AI")
-		httpReq.Header.Set("X-IDE-Version", "5.5.2")
 		httpReq.Header.Set("Accept", "text/event-stream")
 
 		client := h.streamClient

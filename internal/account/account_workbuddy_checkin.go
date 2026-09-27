@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"antigravity-proxy/internal/netutil"
 )
 
 // account_workbuddy_checkin.go: WorkBuddy 每日活跃签到送积分业务逻辑。
@@ -56,16 +58,10 @@ type WorkBuddyCheckinResult struct {
 
 func buildWorkBuddyCheckinHeaders(acc *Account) http.Header {
 	headers := make(http.Header)
-	headers.Set("Content-Type", "application/json")
-	headers.Set("Authorization", "Bearer "+strings.TrimSpace(acc.AccessToken))
-	if strings.TrimSpace(acc.ProjectID) != "" {
-		headers.Set("X-User-Id", strings.TrimSpace(acc.ProjectID))
+	hMap := BuildWorkBuddyHeaders(acc)
+	for k, v := range hMap {
+		headers.Set(k, v)
 	}
-	headers.Set("User-Agent", "WorkBuddy/5.5.2")
-	headers.Set("X-IDE-Type", "WorkBuddy")
-	headers.Set("X-IDE-Name", "WorkBuddy")
-	headers.Set("X-IDE-Version", "5.5.2")
-	headers.Set("X-Product", "WorkBuddy")
 	headers.Set("Accept-Language", "zh")
 	return headers
 }
@@ -98,11 +94,15 @@ func FetchWorkBuddyCheckinStatus(acc *Account, customClient ...*http.Client) (*W
 	}
 
 	baseURL := strings.TrimSpace(acc.BaseURL)
-	if baseURL == "" {
-		baseURL = DefaultWorkBuddyBaseURL
+	if baseURL == "" || strings.Contains(baseURL, "codebuddy.ai") {
+		if acc.IsWorkBuddyDomestic() {
+			baseURL = DefaultWorkBuddyDomesticBaseURL
+		} else {
+			baseURL = DefaultWorkBuddyBaseURL
+		}
 	}
 
-	client := &http.Client{Timeout: defaultCheckinTimeout}
+	client := netutil.NewClient(defaultCheckinTimeout)
 	if len(customClient) > 0 && customClient[0] != nil {
 		client = customClient[0]
 	}
@@ -110,15 +110,18 @@ func FetchWorkBuddyCheckinStatus(acc *Account, customClient ...*http.Client) (*W
 	headers := buildWorkBuddyCheckinHeaders(acc)
 	ctx := context.Background()
 
-	// 优先请求 /v2/billing/meter/checkin-activity-status，404 时优雅降级 /billing/meter/checkin-activity-status
+	// 优先请求 /v2/billing/meter/checkin-activity-status，404 时优雅降级 /billing/meter/checkin-activity-status 与 /billing/meter/checkin-status
 	statusCode, body, err := postWorkBuddyEndpoint(ctx, client, baseURL, "/v2/billing/meter/checkin-activity-status", headers)
 	if err != nil {
 		return nil, fmt.Errorf("签到状态接口请求失败: %w", err)
 	}
 	if statusCode == http.StatusNotFound {
 		statusCode, body, err = postWorkBuddyEndpoint(ctx, client, baseURL, "/billing/meter/checkin-activity-status", headers)
-		if err != nil {
-			return nil, fmt.Errorf("降级请求签到状态失败: %w", err)
+		if err != nil || statusCode == http.StatusNotFound {
+			statusCode, body, err = postWorkBuddyEndpoint(ctx, client, baseURL, "/billing/meter/checkin-status", headers)
+			if err != nil {
+				return nil, fmt.Errorf("降级请求签到状态失败: %w", err)
+			}
 		}
 	}
 
@@ -182,11 +185,15 @@ func ClaimWorkBuddyDailyCheckin(acc *Account, customClient ...*http.Client) (*Wo
 	}
 
 	baseURL := strings.TrimSpace(acc.BaseURL)
-	if baseURL == "" {
-		baseURL = DefaultWorkBuddyBaseURL
+	if baseURL == "" || strings.Contains(baseURL, "codebuddy.ai") {
+		if acc.IsWorkBuddyDomestic() {
+			baseURL = DefaultWorkBuddyDomesticBaseURL
+		} else {
+			baseURL = DefaultWorkBuddyBaseURL
+		}
 	}
 
-	client := &http.Client{Timeout: defaultCheckinTimeout}
+	client := netutil.NewClient(defaultCheckinTimeout)
 	if len(customClient) > 0 && customClient[0] != nil {
 		client = customClient[0]
 	}

@@ -181,6 +181,22 @@ func TestAdminLogs_PermissionsAndFiltering(t *testing.T) {
 		}
 	}
 
+	// Test 2b: Admin queries with status=all (should normalize to empty status and retain full summary)
+	reqStatusAll := httptest.NewRequest(http.MethodGet, "/api/admin/logs?status=all", nil)
+	reqStatusAll.Header.Set("Authorization", "Bearer sk-ant-admin")
+	wStatusAll := httptest.NewRecorder()
+	handler.ServeHTTP(wStatusAll, reqStatusAll)
+	if wStatusAll.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for status=all, got %d", wStatusAll.Code)
+	}
+	var resStatusAll AdminLogsResponse
+	if err := json.NewDecoder(wStatusAll.Body).Decode(&resStatusAll); err != nil {
+		t.Fatalf("decode resStatusAll failed: %v", err)
+	}
+	if resStatusAll.Summary.TotalRequests != 4 {
+		t.Errorf("expected 4 total requests for status=all, got %d", resStatusAll.Summary.TotalRequests)
+	}
+
 	// Test 3: Filter by username="userA" (Account isolation)
 	reqA := httptest.NewRequest(http.MethodGet, "/api/admin/logs?username=userA", nil)
 	reqA.Header.Set("Authorization", "Bearer sk-ant-admin")

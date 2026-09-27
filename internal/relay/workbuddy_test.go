@@ -478,3 +478,203 @@ func TestWorkBuddy_SanitizeMessages(t *testing.T) {
 	}
 }
 
+func TestWorkBuddy_Domestic_EndToEnd(t *testing.T) {
+	tempDir := t.TempDir()
+	mgr := account.NewManager()
+	mgr.Init(tempDir)
+
+	var capturedHeaders http.Header
+	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"cmpl-dom\",\"choices\":[{\"delta\":{\"content\":\"国内版你好\"}}]}\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer mockUpstream.Close()
+
+	// 注册国内版账号 (BaseURL 指向 mockUpstream 并在内部带有 copilot.tencent.com 特征或设置 Domestic)
+	domAcc := &account.Account{
+		ID:          "wb-dom-1",
+		Email:       "会游的鱼 (国内版)",
+		Provider:    "workbuddy",
+		BaseURL:     mockUpstream.URL,
+		AccessToken: "token-dom-123",
+		ProjectID:   "domestic-uid-999",
+		Enabled:     true,
+	}
+	mgr.AddAccount(domAcc)
+
+	handler := NewAPICompatHandler(nil, mgr, nil, nil, nil, nil, nil)
+
+	reqBody := []byte(`{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}],"stream":false}`)
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.handleWorkBuddy(w, req, &RelaySession{UserID: "test_dom_user"})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("请求失败: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	if capturedHeaders.Get("X-IDE-Type") != "WorkBuddy" {
+		t.Errorf("期望上游收到 X-IDE-Type=WorkBuddy, 实际得到: %s", capturedHeaders.Get("X-IDE-Type"))
+	}
+	if capturedHeaders.Get("X-Domain") != "www.workbuddy.cn" {
+		t.Errorf("期望上游收到 X-Domain=www.workbuddy.cn, 实际得到: %s", capturedHeaders.Get("X-Domain"))
+	}
+	if capturedHeaders.Get("X-User-Id") != "domestic-uid-999" {
+		t.Errorf("期望上游收到 X-User-Id=domestic-uid-999, 实际得到: %s", capturedHeaders.Get("X-User-Id"))
+	}
+	if capturedHeaders.Get("User-Agent") != "WorkBuddy/5.5.6" {
+		t.Errorf("期望上游收到 User-Agent=WorkBuddy/5.5.6, 实际得到: %s", capturedHeaders.Get("User-Agent"))
+	}
+
+	var jsonResp OpenAIChatResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &jsonResp); err != nil {
+		t.Fatalf("响应反序列化失败: %v", err)
+	}
+	if len(jsonResp.Choices) == 0 || jsonResp.Choices[0].Message.Content != "国内版你好" {
+		t.Errorf("期望返回内容 '国内版你好', 实际: %+v", jsonResp.Choices)
+	}
+}
+
+func TestWorkBuddy_ModelAffinityRouting_EndToEnd(t *testing.T) {
+	var domHits, intlHits int
+	var lastDomModel, lastIntlModel string
+
+	mockDomestic := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		domHits++
+		var b OpenAIChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		lastDomModel = b.Model
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"cmpl-dom\",\"choices\":[{\"delta\":{\"content\":\"来自腾讯国内网关\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(mockDomestic.Close)
+
+	mockIntl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		intlHits++
+		var b OpenAIChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		lastIntlModel = b.Model
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"cmpl-intl\",\"choices\":[{\"delta\":{\"content\":\"来自海外国际网关\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(mockIntl.Close)
+
+	tmpDir := t.TempDir()
+	mgr := account.NewManager()
+	mgr.Init(tmpDir)
+
+	domAcc := &account.Account{
+		ID:          "wb-dom-aff",
+		Email:       "用户A (国内版)",
+		Provider:    "workbuddy",
+		BaseURL:     mockDomestic.URL,
+		AccessToken: "dom-token-123",
+		Enabled:     true,
+	}
+	mgr.AddAccount(domAcc)
+
+	intlAcc := &account.Account{
+		ID:          "wb-intl-aff",
+		Email:       "user@gmail.com",
+		Provider:    "workbuddy",
+		BaseURL:     mockIntl.URL,
+		AccessToken: "intl-token-123",
+		Enabled:     true,
+	}
+	mgr.AddAccount(intlAcc)
+
+	handler := NewAPICompatHandler(nil, mgr, nil, nil, nil, nil, nil)
+
+	// 1. 请求国内专属模型 hunyuan-2.0-instruct
+	{
+		reqBody := []byte(`{"model":"hunyuan-2.0-instruct","messages":[{"role":"user","content":"hi"}]}`)
+		req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/chat/completions", bytes.NewReader(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.handleWorkBuddy(w, req, &RelaySession{UserID: "test_user_affinity"})
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("hunyuan 请求失败: %d, body: %s", w.Code, w.Body.String())
+		}
+		if domHits != 1 || intlHits != 0 {
+			t.Fatalf("hunyuan 期望命中国内网关 1 次，国际网关 0 次，实际 domHits=%d, intlHits=%d", domHits, intlHits)
+		}
+		if lastDomModel != "hunyuan-2.0-instruct" {
+			t.Errorf("期望上游接收模型 hunyuan-2.0-instruct, 实际 %s", lastDomModel)
+		}
+	}
+
+	// 2. 请求国际专属模型 gpt-5.5
+	{
+		reqBody := []byte(`{"model":"workbuddy/gpt-5.5","messages":[{"role":"user","content":"hi"}]}`)
+		req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/chat/completions", bytes.NewReader(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.handleWorkBuddy(w, req, &RelaySession{UserID: "test_user_affinity"})
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("gpt-5.5 请求失败: %d, body: %s", w.Code, w.Body.String())
+		}
+		if domHits != 1 || intlHits != 1 {
+			t.Fatalf("gpt-5.5 期望命中国际网关 1 次，实际 domHits=%d, intlHits=%d", domHits, intlHits)
+		}
+		if lastIntlModel != "gpt-5.5" {
+			t.Errorf("期望上游接收模型 gpt-5.5, 实际 %s", lastIntlModel)
+		}
+	}
+
+	// 3. 显式指定国内前缀 workbuddy/domestic/deepseek-v4.1-flash
+	{
+		reqBody := []byte(`{"model":"workbuddy/domestic/deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}]}`)
+		req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/chat/completions", bytes.NewReader(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.handleWorkBuddy(w, req, &RelaySession{UserID: "test_user_affinity"})
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("domestic/deepseek 请求失败: %d, body: %s", w.Code, w.Body.String())
+		}
+		if domHits != 2 || intlHits != 1 {
+			t.Fatalf("domestic/deepseek 期望命中国内网关累计 2 次，实际 domHits=%d, intlHits=%d", domHits, intlHits)
+		}
+		if lastDomModel != "deepseek-v4.1-flash" {
+			t.Errorf("期望剥离前缀后上游接收模型 deepseek-v4.1-flash, 实际 %s", lastDomModel)
+		}
+	}
+
+	// 4. 显式指定国际前缀 workbuddy/intl/deepseek-v4.1-flash
+	{
+		reqBody := []byte(`{"model":"workbuddy/intl/deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}]}`)
+		req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/chat/completions", bytes.NewReader(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.handleWorkBuddy(w, req, &RelaySession{UserID: "test_user_affinity"})
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("intl/deepseek 请求失败: %d, body: %s", w.Code, w.Body.String())
+		}
+		if domHits != 2 || intlHits != 2 {
+			t.Fatalf("intl/deepseek 期望命中国际网关累计 2 次，实际 domHits=%d, intlHits=%d", domHits, intlHits)
+		}
+		if lastIntlModel != "deepseek-v4.1-flash" {
+			t.Errorf("期望剥离前缀后上游接收模型 deepseek-v4.1-flash, 实际 %s", lastIntlModel)
+		}
+	}
+}
+
+

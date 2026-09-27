@@ -686,8 +686,12 @@ func fetchGrokQuota(acc *account.Account) (*account.QuotaResult, error) {
 // 实时拉取并聚合各资源包的剩余积分（CycleRemainCapacity），返回真实积分余额与套餐版本。
 func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
 	baseURL := strings.TrimSpace(acc.BaseURL)
-	if baseURL == "" {
-		baseURL = account.DefaultWorkBuddyBaseURL
+	if baseURL == "" || strings.Contains(baseURL, "codebuddy.ai") {
+		if acc.IsWorkBuddyDomestic() {
+			baseURL = account.DefaultWorkBuddyDomesticBaseURL
+		} else {
+			baseURL = account.DefaultWorkBuddyBaseURL
+		}
 	}
 
 	token := strings.TrimSpace(acc.AccessToken)
@@ -701,13 +705,10 @@ func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
 		return nil, fmt.Errorf("创建配额探测请求失败: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "WorkBuddy/5.5.2")
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-IDE-Type", "WorkBuddy")
-	req.Header.Set("X-IDE-Name", "WorkBuddy")
-	req.Header.Set("X-IDE-Version", "5.5.2")
-	req.Header.Set("X-Product", "WorkBuddy")
+	headers := account.BuildWorkBuddyHeaders(acc)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	client := &http.Client{Timeout: 15 * time.Second, Transport: netutil.NewTransport()}
 	resp, err := client.Do(req)
@@ -761,35 +762,43 @@ func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
 		}, nil
 	}
 
-	totalRemain := int64(0)
-	totalCapacity := int64(0)
+	totalRemain := float64(0)
+	totalCapacity := float64(0)
 	for _, pkg := range respData.Data.Packages {
-		if val, err := strconv.ParseInt(strings.TrimSpace(pkg.CycleRemainCapacity), 10, 64); err == nil && val > 0 {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(pkg.CycleRemainCapacity), 64); err == nil && val > 0 {
 			totalRemain += val
 		}
-		if val, err := strconv.ParseInt(strings.TrimSpace(pkg.CycleTotalCapacity), 10, 64); err == nil && val > 0 {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(pkg.CycleTotalCapacity), 64); err == nil && val > 0 {
 			totalCapacity += val
 		}
 	}
+
+	// 探测成功，自愈可能存在的历史误标记免配额状态
+	acc.NoQuota = false
 
 	tier := "Free"
 	if respData.Data.IsPaidUser {
 		tier = "Pro"
 	}
 
-	modelID := fmt.Sprintf("积分余额: %d", totalRemain)
+	var modelID string
+	if totalRemain == float64(int64(totalRemain)) {
+		modelID = fmt.Sprintf("积分余额: %d", int64(totalRemain))
+	} else {
+		modelID = fmt.Sprintf("积分余额: %.2f", totalRemain)
+	}
 
 	remainPercent := 100
 	remainFraction := 1.0
 	if totalCapacity > 0 {
-		remainFraction = float64(totalRemain) / float64(totalCapacity)
+		remainFraction = totalRemain / totalCapacity
 		remainPercent = int(remainFraction * 100)
 		if remainPercent > 100 {
 			remainPercent = 100
 		}
 	}
 
-	credits := float64(totalRemain)
+	credits := totalRemain
 	return &account.QuotaResult{
 		Tier: tier,
 		Buckets: []account.QuotaBucket{
@@ -830,15 +839,9 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 		return fetchGrokQuota(acc)
 	}
 	// WorkBuddy 官方号池:
-	// - 国内邮箱注册账号（QQ/163 等）：无海外计量策略，按用户需求直接短路，不请求亦不显示配额积分；
-	// - 国外账号（Gmail/Outlook 等）：正常请求官方端点，返回真实积分额度并显示。
+	// 无论国内或国外注册账号，统一弹性探测官方端点。若账号拥有合法计量包（如 QQ 邮箱海外版）
+	// 则如实展示真实积分；若上游返回未开通策略（如 500/20017），在 fetchWorkBuddyQuota 中优雅降级为空桶不抛错。
 	if acc.Provider == "workbuddy" {
-		if account.IsWorkBuddyDomesticAccount(acc) {
-			return &account.QuotaResult{
-				Tier:    "Free",
-				Buckets: []account.QuotaBucket{},
-			}, nil
-		}
 		return fetchWorkBuddyQuota(acc)
 	}
 

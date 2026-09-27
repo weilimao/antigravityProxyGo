@@ -340,6 +340,8 @@ export function renderGrokAccountQuota(containerEl: HTMLElement, acc: any, isZH:
 // 国内邮箱账号在腾讯云官方缺少 CAM 海外计量策略，因此不请求也不显示积分配额。
 export function isDomesticWorkBuddyAccount(acc: any): boolean {
     if (!acc || acc.provider !== 'workbuddy') return false;
+    // 若账号已成功拉取到真实可用积分（如 373.74），绝不误判为免配额账号
+    if (typeof acc.credits === 'number' && acc.credits > 0) return false;
     if (acc.noQuota) return true;
     let email = (acc.email || '').toLowerCase().trim();
     if (!email.includes('@') && acc.access_token) {
@@ -363,6 +365,11 @@ export function isDomesticWorkBuddyAccount(acc: any): boolean {
         'aliyun.com', '139.com', '189.com', 'wo.cn', 'tom.com'
     ]);
     return domesticDomains.has(domain);
+}
+
+function formatCreditsNumber(val: number): string {
+    if (Number.isInteger(val)) return String(val);
+    return val.toFixed(2).replace(/\.?0+$/, '');
 }
 
 // renderWorkBuddyCardStatus 为 WorkBuddy 账号卡片渲染状态：
@@ -402,36 +409,9 @@ export function renderWorkBuddyAccountQuota(containerEl: HTMLElement, acc: any, 
         return;
     }
 
-    // 2. 国内邮箱注册账号：完全不请求亦不显示积分相关文案，只显示纯粹的“账号可用”
-    if (isDomesticWorkBuddyAccount(acc)) {
-        containerEl.innerHTML = `
-            <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
-                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400" data-i18n="workbuddyAccountAvailable">${isZH ? '账号可用' : (dict.workbuddyAccountAvailable || 'Account Available')}</span>
-            </div>
-        `;
-        return;
-    }
-
-    // 3. 国外账号：刷新失败红泡
-    const loadState = state.quotaLoadingState ? state.quotaLoadingState[acc.id] : undefined;
-    const errMsg = state.nvidiaQuotaError ? state.nvidiaQuotaError[acc.id] : '';
-    if (loadState === 'error' || errMsg) {
-        const reason = errMsg || (isZH ? '未知错误' : 'Unknown error');
-        containerEl.innerHTML = `
-            <div class="flex flex-col gap-1 bg-red-500/10 dark:bg-red-500/5 border border-red-500/20 rounded-lg p-2.5 mt-1">
-                <div class="flex items-center gap-1.5">
-                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                    <span class="text-[10px] font-bold text-red-600 dark:text-red-400" data-i18n="workbuddyQuotaFail">${isZH ? '配额请求失败' : (dict.workbuddyQuotaFail || 'Quota Probe Failed')}</span>
-                </div>
-                <span class="text-[9px] text-red-500/80 dark:text-red-400/70 truncate" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span>
-            </div>
-        `;
-        return;
-    }
-
-    // 4. 国外账号：刷新成功或已有积分缓存，显示积分胶囊
+    // 2. 优先展示真实积分胶囊（刷新成功或已有积分缓存）
     const buckets = state.quotaCache ? state.quotaCache[acc.id] : undefined;
+    const loadState = state.quotaLoadingState ? state.quotaLoadingState[acc.id] : undefined;
     if (loadState === 'success' && buckets && buckets.length > 0) {
         const desc = (typeof buckets[0].modelId === 'string' && buckets[0].modelId)
             ? buckets[0].modelId
@@ -445,13 +425,41 @@ export function renderWorkBuddyAccountQuota(containerEl: HTMLElement, acc: any, 
         `;
         return;
     }
-    if (typeof acc.credits === 'number') {
-        const desc = isZH ? `积分余额: ${acc.credits}` : `Credits: ${acc.credits}`;
+    if (typeof acc.credits === 'number' && acc.credits > 0) {
+        const formattedCredits = formatCreditsNumber(acc.credits);
+        const desc = isZH ? `积分余额: ${formattedCredits}` : `Credits: ${formattedCredits}`;
         containerEl.innerHTML = `
             <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
                 <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                 <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400" data-i18n="workbuddyAccountAvailable">${isZH ? '账号可用' : (dict.workbuddyAccountAvailable || 'Account Available')}</span>
                 <span class="text-[10px] font-bold text-teal-700 dark:text-teal-300 ml-auto bg-teal-500/10 dark:bg-teal-500/20 border border-teal-500/30 px-2 py-0.5 rounded-full">${escapeHtml(desc)}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 3. 国内邮箱未开通计量/无配额账号：只显示纯粹的“账号可用”
+    if (isDomesticWorkBuddyAccount(acc)) {
+        containerEl.innerHTML = `
+            <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400" data-i18n="workbuddyAccountAvailable">${isZH ? '账号可用' : (dict.workbuddyAccountAvailable || 'Account Available')}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 4. 刷新失败红泡
+    const errMsg = state.nvidiaQuotaError ? state.nvidiaQuotaError[acc.id] : '';
+    if (loadState === 'error' || errMsg) {
+        const reason = errMsg || (isZH ? '未知错误' : 'Unknown error');
+        containerEl.innerHTML = `
+            <div class="flex flex-col gap-1 bg-red-500/10 dark:bg-red-500/5 border border-red-500/20 rounded-lg p-2.5 mt-1">
+                <div class="flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                    <span class="text-[10px] font-bold text-red-600 dark:text-red-400" data-i18n="workbuddyQuotaFail">${isZH ? '配额请求失败' : (dict.workbuddyQuotaFail || 'Quota Probe Failed')}</span>
+                </div>
+                <span class="text-[9px] text-red-500/80 dark:text-red-400/70 truncate" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span>
             </div>
         `;
         return;

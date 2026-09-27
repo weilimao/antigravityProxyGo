@@ -119,3 +119,85 @@ func TestFetchChannelAvailableModels_NoAccount(t *testing.T) {
 		t.Fatalf("expected error when no account exists, got nil")
 	}
 }
+
+func TestFetchChannelAvailableModels_WorkBuddyDualVersion(t *testing.T) {
+	var domHeaderDomain, intlHeaderType string
+	domServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		domHeaderDomain = r.Header.Get("X-Domain")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 0,
+			"data": map[string]any{
+				"models": []map[string]any{
+					{"id": "hunyuan-2.0-instruct"},
+					{"id": "glm-5.1"},
+					{"id": "deepseek-v4.1-flash"},
+				},
+			},
+		})
+	}))
+	t.Cleanup(domServer.Close)
+
+	intlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		intlHeaderType = r.Header.Get("X-IDE-Type")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 0,
+			"data": map[string]any{
+				"models": []map[string]any{
+					{"id": "gpt-5.5"},
+					{"id": "gemini-3.5-flash"},
+					{"id": "deepseek-v4.1-flash"},
+				},
+			},
+		})
+	}))
+	t.Cleanup(intlServer.Close)
+
+	tmpDir := t.TempDir()
+	mgr := account.NewManager()
+	mgr.Init(tmpDir)
+
+	// 国内账号
+	domAcc := account.NewWorkBuddyAccount(account.WorkBuddyAccountInput{
+		Label:       "test@qq.com (国内版)",
+		AccessToken: "dom-token",
+		BaseURL:     domServer.URL,
+	})
+	mgr.AddAccount(domAcc)
+
+	// 国际账号
+	intlAcc := account.NewWorkBuddyAccount(account.WorkBuddyAccountInput{
+		Label:       "user@gmail.com",
+		AccessToken: "intl-token",
+		BaseURL:     intlServer.URL,
+	})
+	mgr.AddAccount(intlAcc)
+
+	models, err := FetchChannelAvailableModels(mgr, "workbuddy")
+	if err != nil {
+		t.Fatalf("FetchChannelAvailableModels failed: %v", err)
+	}
+
+	expectedModels := []string{"hunyuan-2.0-instruct", "glm-5.1", "deepseek-v4.1-flash", "gpt-5.5", "gemini-3.5-flash"}
+	if len(models) != len(expectedModels) {
+		t.Fatalf("expected %d models, got %d: %v", len(expectedModels), len(models), models)
+	}
+
+	modelMap := make(map[string]bool)
+	for _, m := range models {
+		modelMap[m] = true
+	}
+	for _, exp := range expectedModels {
+		if !modelMap[exp] {
+			t.Errorf("missing expected model: %s", exp)
+		}
+	}
+
+	if domHeaderDomain != "www.workbuddy.cn" {
+		t.Errorf("expected domestic header X-Domain to be www.workbuddy.cn, got %q", domHeaderDomain)
+	}
+	if intlHeaderType != "CodeBuddy" {
+		t.Errorf("expected intl header X-IDE-Type to be CodeBuddy, got %q", intlHeaderType)
+	}
+}

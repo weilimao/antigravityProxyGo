@@ -114,31 +114,34 @@ func openAIChatSSEToAnthropicSSEIntoPinned(ctx context.Context, reader io.Reader
 			break
 		}
 
-		type sseErrorChunk struct {
-			Error *struct {
-				Message string      `json:"message"`
-				Type    string      `json:"type"`
-				Code    interface{} `json:"code"`
-			} `json:"error"`
-		}
-		var errChunk sseErrorChunk
-		if json.Unmarshal([]byte(data), &errChunk) == nil && errChunk.Error != nil && errChunk.Error.Message != "" {
-			errMsg := fmt.Sprintf("upstream sse error: %s (code: %v)", errChunk.Error.Message, errChunk.Error.Code)
-			// 保住 err 供上层(writeNvidiaAnthropicStream 忽略返回值,但 watchCancel/日志可取)
-			// 仅在尚未被 ctx 取消语义占据时记录上游 error,避免覆盖既有 ctx 取消路径的语义。
-			if err == nil {
-				err = fmt.Errorf("%s", errMsg)
+		// 性能优化：仅在包含 "error" 键时才反序列化错误帧，避免常态每个 chunk 重复做双重 json.Unmarshal
+		if strings.Contains(data, "\"error\"") {
+			type sseErrorChunk struct {
+				Error *struct {
+					Message string      `json:"message"`
+					Type    string      `json:"type"`
+					Code    interface{} `json:"code"`
+				} `json:"error"`
 			}
-			if !blockStates.hasEmittedAnyBlock() {
-				// 历史缺口:此处曾直接 return,跳过循环外统一尾帧补发,
-				// 导致 CLI 仅收到 message_start 而无 message_stop → 卡等尾帧、
-				// 表现为"断了不干活"。现改为保底发一个文本块并 break,让控制流落到循环外
-				// 统一补 message_delta + message_stop,产出完整闭合的 SSE 流(空本轮)。
-				// 取舍:CLI 视为本轮正常结束(end_turn),不卡等、不触发重试风暴;
-				// 上游 error 原文已保存在 err 并由代理日志记录,便于事后排查。
-				blockStates.ensureAtLeastOneBlock(sink)
+			var errChunk sseErrorChunk
+			if json.Unmarshal([]byte(data), &errChunk) == nil && errChunk.Error != nil && errChunk.Error.Message != "" {
+				errMsg := fmt.Sprintf("upstream sse error: %s (code: %v)", errChunk.Error.Message, errChunk.Error.Code)
+				// 保住 err 供上层(writeNvidiaAnthropicStream 忽略返回值,但 watchCancel/日志可取)
+				// 仅在尚未被 ctx 取消语义占据时记录上游 error,避免覆盖既有 ctx 取消路径的语义。
+				if err == nil {
+					err = fmt.Errorf("%s", errMsg)
+				}
+				if !blockStates.hasEmittedAnyBlock() {
+					// 历史缺口:此处曾直接 return,跳过循环外统一尾帧补发,
+					// 导致 CLI 仅收到 message_start 而无 message_stop → 卡等尾帧、
+					// 表现为"断了不干活"。现改为保底发一个文本块并 break,让控制流落到循环外
+					// 统一补 message_delta + message_stop,产出完整闭合的 SSE 流(空本轮)。
+					// 取舍:CLI 视为本轮正常结束(end_turn),不卡等、不触发重试风暴;
+					// 上游 error 原文已保存在 err 并由代理日志记录,便于事后排查。
+					blockStates.ensureAtLeastOneBlock(sink)
+				}
+				break
 			}
-			break
 		}
 
 		var chunk OpenAIChatStreamChunk

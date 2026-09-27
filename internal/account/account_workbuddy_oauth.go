@@ -3,6 +3,7 @@ package account
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,9 +17,11 @@ import (
 
 // account_workbuddy_oauth.go: WorkBuddy 官方网页授权登录状态机与轮询调度。
 //
-// 官方协议：
+// 官方协议（国内版与国际版通用）：
 // 1. POST {Endpoint}/v2/plugin/auth/state?platform=workbuddy-ai
 //    获取 state (UUID) 及 authUrl。
+//    - 国内版 Endpoint: https://copilot.tencent.com (支持微信扫码、手机号验证码、腾讯云账号登录)
+//    - 国际版 Endpoint: https://www.workbuddy.ai (支持 Google / GitHub / X 登录)
 // 2. 拼接 &version={version} 后在系统默认浏览器中打开 authUrl。
 // 3. 后台 1s 轮询 GET {Endpoint}/v2/plugin/auth/token?state={state}：
 //    - 未完成返回 code: 11217 (11217:login ing...)，保持等待。
@@ -28,11 +31,13 @@ import (
 // 5. 自动构造并入库至 Manager 号池中。
 
 const (
-	DefaultWorkBuddyAuthURL     = "https://www.workbuddy.ai"
-	DefaultWorkBuddyAuthVersion = "5.5.2"
-	WorkBuddyRetryCode          = 11217
-	DefaultWorkBuddyTimeout     = 300 * time.Second
-	DefaultWorkBuddyPollPeriod  = 1 * time.Second
+	DefaultWorkBuddyAuthURL         = "https://www.workbuddy.ai"
+	DefaultWorkBuddyDomesticAuthURL = "https://copilot.tencent.com"
+	DefaultWorkBuddyAuthVersion     = "5.5.2"
+	DefaultWorkBuddyDomesticVersion = "5.5.6"
+	WorkBuddyRetryCode              = 11217
+	DefaultWorkBuddyTimeout         = 300 * time.Second
+	DefaultWorkBuddyPollPeriod      = 1 * time.Second
 )
 
 // WorkBuddyOAuthSession 代表一个活跃的官方网页登录会话。
@@ -44,30 +49,33 @@ type WorkBuddyOAuthSession struct {
 	ErrorMessage string             `json:"errorMessage,omitempty"`
 	CreatedAt    time.Time          `json:"createdAt"`
 	Account      *Account           `json:"account,omitempty"`
+	Edition      string             `json:"edition,omitempty"` // "domestic" 或 "international"
 	CancelFunc   context.CancelFunc `json:"-"`
 }
 
 // WorkBuddyOAuthManager 统一管理所有登录会话。
 type WorkBuddyOAuthManager struct {
-	mu           sync.RWMutex
-	sessions     map[string]*WorkBuddyOAuthSession
-	accountMgr   *Manager
-	client       *http.Client
-	authBaseURL  string
-	pollInterval time.Duration
-	timeout      time.Duration
-	onSuccess    func(acc *Account)
+	mu                  sync.RWMutex
+	sessions            map[string]*WorkBuddyOAuthSession
+	accountMgr          *Manager
+	client              *http.Client
+	authBaseURL         string
+	domesticAuthBaseURL string
+	pollInterval        time.Duration
+	timeout             time.Duration
+	onSuccess           func(acc *Account)
 }
 
 // NewWorkBuddyOAuthManager 实例化 WorkBuddyOAuthManager。
 func NewWorkBuddyOAuthManager(mgr *Manager, opts ...func(*WorkBuddyOAuthManager)) *WorkBuddyOAuthManager {
 	m := &WorkBuddyOAuthManager{
-		sessions:     make(map[string]*WorkBuddyOAuthSession),
-		accountMgr:   mgr,
-		client:       &http.Client{Timeout: 10 * time.Second},
-		authBaseURL:  DefaultWorkBuddyAuthURL,
-		pollInterval: DefaultWorkBuddyPollPeriod,
-		timeout:      DefaultWorkBuddyTimeout,
+		sessions:            make(map[string]*WorkBuddyOAuthSession),
+		accountMgr:          mgr,
+		client:              &http.Client{Timeout: 10 * time.Second},
+		authBaseURL:         DefaultWorkBuddyAuthURL,
+		domesticAuthBaseURL: DefaultWorkBuddyDomesticAuthURL,
+		pollInterval:        DefaultWorkBuddyPollPeriod,
+		timeout:             DefaultWorkBuddyTimeout,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -87,6 +95,16 @@ func (m *WorkBuddyOAuthManager) SetAuthBaseURL(urlStr string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.authBaseURL = strings.TrimRight(urlStr, "/")
+	if m.domesticAuthBaseURL == "" || m.domesticAuthBaseURL == DefaultWorkBuddyDomesticAuthURL {
+		m.domesticAuthBaseURL = m.authBaseURL
+	}
+}
+
+// SetDomesticAuthBaseURL 单独设置国内版认证基础 URL。
+func (m *WorkBuddyOAuthManager) SetDomesticAuthBaseURL(urlStr string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.domesticAuthBaseURL = strings.TrimRight(urlStr, "/")
 }
 
 // SetPollInterval 设置轮询频率（主要用于单测加速）。
@@ -138,8 +156,25 @@ type authAccountResponse struct {
 	} `json:"data"`
 }
 
-// StartLogin 发起新的 WorkBuddy 网页登录，返回生成的授权 Session。
+// StartLogin 发起新的 WorkBuddy 国际版网页登录（保持历史签名向后兼容）。
 func (m *WorkBuddyOAuthManager) StartLogin(parentCtx context.Context, version string) (*WorkBuddyOAuthSession, error) {
+	edition := "international"
+	if strings.EqualFold(version, "domestic") || strings.EqualFold(version, "cn") {
+		edition = "domestic"
+		version = ""
+	}
+	return m.StartLoginWithEdition(parentCtx, edition, version)
+}
+
+// StartLoginWithEdition 发起指定版本（domestic 国内版 / international 国际版）的 WorkBuddy 官方网页登录。
+func (m *WorkBuddyOAuthManager) StartLoginWithEdition(parentCtx context.Context, edition, version string) (*WorkBuddyOAuthSession, error) {
+	edition = strings.ToLower(strings.TrimSpace(edition))
+	isDomestic := edition == "domestic" || edition == "cn" || edition == "tencent" || edition == "zh"
+	normEdition := "international"
+	if isDomestic {
+		normEdition = "domestic"
+	}
+
 	m.mu.Lock()
 	// 取消之前仍在 pending 状态的所有历史会话，避免重复轮询
 	for _, old := range m.sessions {
@@ -148,13 +183,32 @@ func (m *WorkBuddyOAuthManager) StartLogin(parentCtx context.Context, version st
 			old.Status = "canceled"
 		}
 	}
-	baseURL := m.authBaseURL
+
+	var baseURL string
+	if isDomestic {
+		if m.domesticAuthBaseURL != "" {
+			baseURL = m.domesticAuthBaseURL
+		} else {
+			baseURL = DefaultWorkBuddyDomesticAuthURL
+		}
+	} else {
+		if m.authBaseURL != "" {
+			baseURL = m.authBaseURL
+		} else {
+			baseURL = DefaultWorkBuddyAuthURL
+		}
+	}
+
 	timeoutDur := m.timeout
 	pollDur := m.pollInterval
 	m.mu.Unlock()
 
 	if version == "" {
-		version = DefaultWorkBuddyAuthVersion
+		if isDomestic {
+			version = DefaultWorkBuddyDomesticVersion
+		} else {
+			version = DefaultWorkBuddyAuthVersion
+		}
 	}
 
 	stateURL := fmt.Sprintf("%s/v2/plugin/auth/state?platform=workbuddy-ai", baseURL)
@@ -163,7 +217,7 @@ func (m *WorkBuddyOAuthManager) StartLogin(parentCtx context.Context, version st
 		return nil, fmt.Errorf("创建 state 请求失败: %w", err)
 	}
 
-	m.applyOfficialHeaders(req, version)
+	m.applyOfficialHeaders(req, version, isDomestic)
 
 	resp, err := m.client.Do(req)
 	if err != nil {
@@ -212,6 +266,7 @@ func (m *WorkBuddyOAuthManager) StartLogin(parentCtx context.Context, version st
 		AuthURL:    stateResp.Data.AuthURL,
 		BrowserURL: browserURL,
 		Status:     "pending",
+		Edition:    normEdition,
 		CreatedAt:  time.Now(),
 		CancelFunc: cancel,
 	}
@@ -221,7 +276,7 @@ func (m *WorkBuddyOAuthManager) StartLogin(parentCtx context.Context, version st
 	m.mu.Unlock()
 
 	// 启动后台轮询 Goroutine
-	go m.pollLoop(ctx, session, baseURL, version, pollDur)
+	go m.pollLoop(ctx, session, baseURL, version, isDomestic, pollDur)
 
 	return session, nil
 }
@@ -250,17 +305,21 @@ func (m *WorkBuddyOAuthManager) GetSession(state string) *WorkBuddyOAuthSession 
 }
 
 // applyOfficialHeaders 附加 WorkBuddy 官方客户端协议头。
-func (m *WorkBuddyOAuthManager) applyOfficialHeaders(req *http.Request, version string) {
+func (m *WorkBuddyOAuthManager) applyOfficialHeaders(req *http.Request, version string, isDomestic bool) {
 	req.Header.Set("User-Agent", "WorkBuddy/"+version)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-No-Authorization", "true")
 	req.Header.Set("X-No-User-Id", "true")
 	req.Header.Set("X-No-Enterprise-Id", "true")
 	req.Header.Set("X-No-Department-Info", "true")
+	if isDomestic {
+		req.Header.Set("X-Domain", "www.workbuddy.cn")
+		req.Header.Set("X-IDE-Type", "WorkBuddy")
+	}
 }
 
 // pollLoop 轮询 Token 与用户信息，并在成功后入库号池。
-func (m *WorkBuddyOAuthManager) pollLoop(ctx context.Context, sess *WorkBuddyOAuthSession, baseURL, version string, pollInterval time.Duration) {
+func (m *WorkBuddyOAuthManager) pollLoop(ctx context.Context, sess *WorkBuddyOAuthSession, baseURL, version string, isDomestic bool, pollInterval time.Duration) {
 	tokenURL := fmt.Sprintf("%s/v2/plugin/auth/token?state=%s", baseURL, url.QueryEscape(sess.State))
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -286,7 +345,7 @@ func (m *WorkBuddyOAuthManager) pollLoop(ctx context.Context, sess *WorkBuddyOAu
 			if err != nil {
 				continue
 			}
-			m.applyOfficialHeaders(req, version)
+			m.applyOfficialHeaders(req, version, isDomestic)
 
 			resp, err := m.client.Do(req)
 			if err != nil {
@@ -315,7 +374,21 @@ func (m *WorkBuddyOAuthManager) pollLoop(ctx context.Context, sess *WorkBuddyOAu
 				refreshToken := tokenResp.Data.RefreshToken
 
 				// 尝试拉取用户信息
-				uid, nickname := m.fetchAccountDetails(ctx, baseURL, version, sess.State, accessToken)
+				uid, nickname := m.fetchAccountDetails(ctx, baseURL, version, sess.State, accessToken, isDomestic)
+				if uid == "" || nickname == "" {
+					jwtUID, jwtNick := extractUserFromJWT(accessToken)
+					if uid == "" {
+						uid = jwtUID
+					}
+					if nickname == "" {
+						nickname = jwtNick
+					}
+				}
+
+				accBaseURL := DefaultWorkBuddyBaseURL
+				if isDomestic {
+					accBaseURL = DefaultWorkBuddyDomesticBaseURL
+				}
 
 				label := nickname
 				if label == "" {
@@ -325,9 +398,12 @@ func (m *WorkBuddyOAuthManager) pollLoop(ctx context.Context, sess *WorkBuddyOAu
 						label = "WorkBuddy 账号"
 					}
 				}
+				if isDomestic && !strings.Contains(label, "国内版") {
+					label = label + " (国内版)"
+				}
 
 				in := WorkBuddyAccountInput{
-					BaseURL:      DefaultWorkBuddyBaseURL,
+					BaseURL:      accBaseURL,
 					AccessToken:  accessToken,
 					RefreshToken: refreshToken,
 					UID:          uid,
@@ -388,7 +464,7 @@ func (m *WorkBuddyOAuthManager) pollLoop(ctx context.Context, sess *WorkBuddyOAu
 }
 
 // fetchAccountDetails 携带 Bearer Token 获取用户的 UID 与昵称。
-func (m *WorkBuddyOAuthManager) fetchAccountDetails(ctx context.Context, baseURL, version, state, accessToken string) (string, string) {
+func (m *WorkBuddyOAuthManager) fetchAccountDetails(ctx context.Context, baseURL, version, state, accessToken string, isDomestic bool) (string, string) {
 	accURL := fmt.Sprintf("%s/v2/plugin/login/account?state=%s", baseURL, url.QueryEscape(state))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, accURL, nil)
 	if err != nil {
@@ -400,6 +476,10 @@ func (m *WorkBuddyOAuthManager) fetchAccountDetails(ctx context.Context, baseURL
 	req.Header.Set("X-No-User-Id", "true")
 	req.Header.Set("X-No-Enterprise-Id", "true")
 	req.Header.Set("X-No-Department-Info", "true")
+	if isDomestic {
+		req.Header.Set("X-Domain", "www.workbuddy.cn")
+		req.Header.Set("X-IDE-Type", "WorkBuddy")
+	}
 
 	resp, err := m.client.Do(req)
 	if err != nil {
@@ -418,4 +498,46 @@ func (m *WorkBuddyOAuthManager) fetchAccountDetails(ctx context.Context, baseURL
 	}
 
 	return strings.TrimSpace(accResp.Data.UID), strings.TrimSpace(accResp.Data.Nickname)
+}
+
+// extractUserFromJWT 尝试从 JWT Payload 中解析 uid 和 nickname/uin
+func extractUserFromJWT(tokenStr string) (string, string) {
+	parts := strings.Split(tokenStr, ".")
+	if len(parts) < 2 {
+		return "", ""
+	}
+	payloadSegment := parts[1]
+	if l := len(payloadSegment) % 4; l > 0 {
+		payloadSegment += strings.Repeat("=", 4-l)
+	}
+	data, err := base64.URLEncoding.DecodeString(payloadSegment)
+	if err != nil {
+		data, err = base64.StdEncoding.DecodeString(payloadSegment)
+		if err != nil {
+			return "", ""
+		}
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(data, &claims); err != nil {
+		return "", ""
+	}
+
+	var uid, nickname string
+	if v, ok := claims["uid"].(string); ok && v != "" {
+		uid = v
+	} else if v, ok := claims["uin"].(string); ok && v != "" {
+		uid = v
+	} else if v, ok := claims["sub"].(string); ok && v != "" {
+		uid = v
+	}
+	if v, ok := claims["nickname"].(string); ok && v != "" {
+		nickname = v
+	} else if v, ok := claims["name"].(string); ok && v != "" {
+		nickname = v
+	} else if v, ok := claims["phone"].(string); ok && v != "" {
+		nickname = v
+	} else if v, ok := claims["email"].(string); ok && v != "" {
+		nickname = v
+	}
+	return uid, nickname
 }

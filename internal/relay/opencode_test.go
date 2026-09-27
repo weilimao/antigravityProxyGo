@@ -231,3 +231,147 @@ func TestOpenCodeRelay_FailoverOn429(t *testing.T) {
 		t.Errorf("expected response from Key 2, got %s", w.Body.String())
 	}
 }
+
+func TestOpenCode_ModelLevelCooldown(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "opencode_model_cd_test_*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(tempDir)
+	})
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req OpenAIChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		if req.Model == "claude-sonnet-4-6" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"CreditsError","message":"No payment method. Add a payment method here: https://opencode.ai/billing"}}`))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":      "chatcmpl-free",
+			"choices": []map[string]interface{}{{"message": map[string]interface{}{"content": "Free model success"}}},
+			"usage":   map[string]interface{}{"total_tokens": 10},
+		})
+	}))
+	defer mockServer.Close()
+
+	mgr := account.NewManager()
+	mgr.Init(tempDir)
+
+	accID, err := mgr.AddOpenCodeAccount(account.OpenCodeAccountInput{
+		BaseURL:      mockServer.URL,
+		AccessToken:  "sk-test-key",
+		Label:        "SingleAccount",
+		DefaultModel: "claude-sonnet-4-6",
+	})
+	if err != nil {
+		t.Fatalf("AddOpenCodeAccount failed: %v", err)
+	}
+
+	h := &APICompatHandler{
+		accountMgr: mgr,
+		client:     mockServer.Client(),
+	}
+
+	// 1. 请求收费模型，预期 401 失败并进入该模型的冷却
+	paidReq := httptest.NewRequest(http.MethodPost, "/opencode/v1/chat/completions", bytes.NewReader([]byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}`)))
+	w1 := httptest.NewRecorder()
+	h.handleOpenCode(w1, paidReq, &RelaySession{Token: "sess-1"})
+
+	acc := mgr.GetAccountByID(accID)
+	if acc == nil {
+		t.Fatalf("account not found")
+	}
+	if acc.NoQuota {
+		t.Errorf("expected acc.NoQuota to remain false for model-level failure, got true")
+	}
+	if acc.Cooldowns["opencode:claude-sonnet-4-6"] == 0 {
+		t.Errorf("expected cooldown on opencode:claude-sonnet-4-6, got 0")
+	}
+
+	// 2. 请求免费模型，同一账号应仍然可用且成功响应
+	freeReq := httptest.NewRequest(http.MethodPost, "/opencode/v1/chat/completions", bytes.NewReader([]byte(`{"model":"muse-spark-1.3-contributor-free","messages":[{"role":"user","content":"hi"}]}`)))
+	w2 := httptest.NewRecorder()
+	h.handleOpenCode(w2, freeReq, &RelaySession{Token: "sess-2"})
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected free model request to succeed with 200, got %d: %s", w2.Code, w2.Body.String())
+	}
+	if !strings.Contains(w2.Body.String(), "Free model success") {
+		t.Errorf("expected Free model success, got %s", w2.Body.String())
+	}
+}
+
+func TestOpenCode_ClientHeadersPreserved(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "opencode_headers_test_*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(tempDir)
+	})
+
+	var gotSession, gotRequest, gotClient, gotProject string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSession = r.Header.Get("x-opencode-session")
+		gotRequest = r.Header.Get("x-opencode-request")
+		gotClient = r.Header.Get("x-opencode-client")
+		gotProject = r.Header.Get("x-opencode-project")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":      "chatcmpl-headers",
+			"choices": []map[string]interface{}{{"message": map[string]interface{}{"content": "ok"}}},
+			"usage":   map[string]interface{}{"total_tokens": 5},
+		})
+	}))
+	defer mockServer.Close()
+
+	mgr := account.NewManager()
+	mgr.Init(tempDir)
+
+	_, _ = mgr.AddOpenCodeAccount(account.OpenCodeAccountInput{
+		BaseURL:      mockServer.URL,
+		AccessToken:  "sk-test-key",
+		Label:        "HeaderAccount",
+		DefaultModel: "claude-sonnet-4-6",
+	})
+
+	h := &APICompatHandler{
+		accountMgr: mgr,
+		client:     mockServer.Client(),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/opencode/v1/chat/completions", bytes.NewReader([]byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}`)))
+	req.Header.Set("x-opencode-session", "ses_f42b98c78ffewlvAPaXLlNAbxm")
+	req.Header.Set("x-opencode-request", "msg_0bd8a6d4d001Z3I78J2D7IMyWp")
+	req.Header.Set("x-opencode-client", "cli")
+	req.Header.Set("x-opencode-project", "my-project")
+	w := httptest.NewRecorder()
+
+	h.handleOpenCode(w, req, &RelaySession{Token: "test"})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if gotSession != "ses_f42b98c78ffewlvAPaXLlNAbxm" {
+		t.Errorf("expected preserved session, got %s", gotSession)
+	}
+	if gotRequest != "msg_0bd8a6d4d001Z3I78J2D7IMyWp" {
+		t.Errorf("expected preserved request, got %s", gotRequest)
+	}
+	if gotClient != "cli" {
+		t.Errorf("expected preserved client 'cli', got %s", gotClient)
+	}
+	if gotProject != "my-project" {
+		t.Errorf("expected preserved project 'my-project', got %s", gotProject)
+	}
+}
+

@@ -24,8 +24,8 @@ func NewTransport() *http.Transport {
 	return &http.Transport{
 		Proxy:                 GetSystemProxy,
 		DialContext:           DialContext, // 绑定自定义的 DialContext，实现对 SOCKS5 专属代理的完美底层拨号支持
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   20,
+		MaxIdleConns:          500,
+		MaxIdleConnsPerHost:   100,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,

@@ -262,3 +262,74 @@ func TestOpenCodeLBAndConcurrency(t *testing.T) {
 		t.Errorf("expected 25, got %d", m.GetOpenCodeMaxConcurrency())
 	}
 }
+
+func TestOpenCodeModelCategoryAndCooldown(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "opencode_cat_test_*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(tmpDir)
+	})
+
+	m := NewManager()
+	m.Init(tmpDir)
+
+	// 1. Category tests
+	if cat := m.GetModelCategoryByProvider("opencode", "claude-sonnet-4-6"); cat != "opencode:claude-sonnet-4-6" {
+		t.Errorf("expected opencode:claude-sonnet-4-6, got %s", cat)
+	}
+	if cat := m.GetModelCategoryByProvider("opencode", "opencode/muse-spark-1.3-contributor-free"); cat != "opencode:muse-spark-1.3-contributor-free" {
+		t.Errorf("expected opencode:muse-spark-1.3-contributor-free, got %s", cat)
+	}
+	if cat := m.GetModelCategoryByProvider("opencode", ""); cat != "opencode" {
+		t.Errorf("expected opencode, got %s", cat)
+	}
+
+	// 2. Cooldown isolation tests
+	id, err := m.AddOpenCodeAccount(OpenCodeAccountInput{
+		BaseURL:      "https://opencode.ai/zen/v1",
+		AccessToken:  "sk-test-cooldown",
+		Label:        "CooldownTestAcc",
+		DefaultModel: "claude-sonnet-4-6",
+	})
+	if err != nil {
+		t.Fatalf("AddOpenCodeAccount failed: %v", err)
+	}
+
+	future := int64(9999999999999)
+	m.SetAccountCooldownForChannel(id, future, "opencode", "claude-sonnet-4-6")
+
+	// claude-sonnet-4-6 should be cooling down (no available accounts)
+	availPaid := m.GetAvailableAccountsForChannel("opencode", "claude-sonnet-4-6")
+	if len(availPaid) != 0 {
+		t.Errorf("expected claude-sonnet-4-6 to be cooled down, got %d accounts", len(availPaid))
+	}
+
+	// muse-spark-1.3-contributor-free should still be available!
+	availFree := m.GetAvailableAccountsForChannel("opencode", "muse-spark-1.3-contributor-free")
+	if len(availFree) != 1 {
+		t.Errorf("expected muse-spark-1.3-contributor-free to be available, got %d accounts", len(availFree))
+	}
+
+	// 3. ClearAccountCooldown resets cooldowns and NoQuota
+	acc := m.GetAccountByID(id)
+	acc.NoQuota = true
+	m.ClearAccountCooldown(id)
+	if acc.NoQuota {
+		t.Errorf("expected NoQuota to be reset to false after ClearAccountCooldown")
+	}
+	if len(acc.Cooldowns) != 0 {
+		t.Errorf("expected Cooldowns map to be empty, got %v", acc.Cooldowns)
+	}
+	if acc.CooldownUntil != 0 {
+		t.Errorf("expected CooldownUntil to be 0, got %d", acc.CooldownUntil)
+	}
+
+	// claude-sonnet-4-6 should be available again
+	availPaidAfter := m.GetAvailableAccountsForChannel("opencode", "claude-sonnet-4-6")
+	if len(availPaidAfter) != 1 {
+		t.Errorf("expected claude-sonnet-4-6 to be available after clear, got %d accounts", len(availPaidAfter))
+	}
+}
+
