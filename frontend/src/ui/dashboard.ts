@@ -851,13 +851,10 @@ export function renderModelsTable(stats: any) {
 }
 
 // initModelRangeFilter 绑定模型统计表的时间范围筛选按钮(全部/今日/近三日/近七天)。
-// 全部范围统一走 stats:model-range 后端聚合(request_logs 全量), 与今日/3d/7d 同源同口径,
-// 保证「全部 ⊇ 近七日 ⊇ 近三日 ⊇ 今日」恒成立。此前「全部」复用内存 statsData.models(stats.json
-// 累计) 会与 DB 范围口径漂移, 出现「全部 < 今日」的悖论(stats.json 重启/迁移可能丢量, 或 DB
-// 计重试而内存只计最终成功)。范围视图冻结到下次切换(聚合视图不需秒级实时, stats-updated tick
-// 不改写 filteredModelStats)。
-// 初始化时即按当前高亮范围(默认「全部」)自动拉取一次 DB 聚合, 使首屏口径与手动点击完全一致,
-// 避免「首屏展示内存累计、切走再切回全部变成 DB 全量」导致数字跳变。
+// 「全部」范围直连全局全量累积 statsData.models(由 statsTracker/stats.json 持久化, 涵盖所有历史模型与请求量),
+// 同时置空 filteredModelStats, 使后续实时请求能够通过 stats-updated 事件秒级驱动表格递增更新。
+// 「今日」/「近三日」/「近七天」范围走 stats:model-range 后端 SQLite request_logs 时间窗口切片聚合,
+// 聚合结果存入 filteredModelStats 并冻结视图, 保证窗口切片期间不受全量实时心跳干扰。
 export function initModelRangeFilter() {
     const sel = document.getElementById('modelRangeSelector');
     if (!sel) return;
@@ -870,20 +867,34 @@ export function initModelRangeFilter() {
         buttons.forEach((b: any) => {
             b.className = b.getAttribute('data-mrange') === range ? activeClass : inactiveClass;
         });
-        // 全部范围同样走后端 DB 聚合(since=""), 与今日/3d/7d 同源, 保证 全部 >= 今日。
+
+        // 选定「全部」范围：
+        // 直接使用全局全量 statsData(含全部 77+ 模型), 置空 filteredModelStats 允许实时刷新。
+        if (range === 'all') {
+            state.filteredModelStats = null;
+            if (state.statsData) {
+                renderModelsTable(state.statsData);
+                return;
+            }
+        }
+
+        // 选定时间切片范围(today/3d/7d)或全量未就绪时的兜底拉取:
         try {
             const resRaw = await ipcRenderer.invoke('stats:model-range', range);
-            // 竞态守卫: 拉取期间用户又切换了范围(含初始化自动拉取与手动点击交叠), 丢弃过期响应,
-            // 避免旧范围数据覆盖新选择(否则会出现"数据莫名变回上一个范围"的跳变)。
+            // 竞态守卫: 拉取期间用户又切换了范围, 丢弃过期响应, 避免旧范围数据覆盖新选择。
             if (state.currentModelRange !== range) return;
             const res = typeof resRaw === 'string' ? JSON.parse(resRaw) : resRaw;
             const stats = (res && res.stats) ? res.stats : res;
-            state.filteredModelStats = stats || { models: {} };
-            renderModelsTable(state.filteredModelStats);
+            if (range === 'all') {
+                state.filteredModelStats = null;
+                renderModelsTable(stats || { models: {} });
+            } else {
+                state.filteredModelStats = stats || { models: {} };
+                renderModelsTable(state.filteredModelStats);
+            }
         } catch (e) {
             console.error('[Dashboard] model range fetch failed', e);
             if (state.currentModelRange !== range) return;
-            // 拉取失败兜底: 用内存 statsData(对全部范围)或空, 不阻断展示。
             state.filteredModelStats = null;
             if (state.statsData) renderModelsTable(state.statsData);
         }
@@ -893,10 +904,15 @@ export function initModelRangeFilter() {
         btn.addEventListener('click', () => applyRange(btn.getAttribute('data-mrange') || 'all'));
     });
 
-    // 首屏统一走 DB 聚合口径: 高亮默认虽是「全部」, 但不自动拉取的话首次展示用的是内存
-    // statsData(实时累计), 与手动点击「全部」后拿到的 DB 全量口径不一致 —— 即用户切走范围
-    // 再切回「全部」时数字跳变的根因。这里启动即按当前范围拉取一次, 高亮与数据真正对齐。
-    if (state.filteredModelStats === null) {
+    // 首屏初始化：如果当前范围是 'all' 且已有实时 statsData，直接渲染全量；否则拉取一次
+    if (state.currentModelRange === 'all') {
+        state.filteredModelStats = null;
+        if (state.statsData) {
+            renderModelsTable(state.statsData);
+        } else {
+            applyRange('all');
+        }
+    } else if (state.filteredModelStats === null) {
         applyRange(state.currentModelRange || 'all');
     }
 }
@@ -955,12 +971,12 @@ export function renderActiveView() {
 
         // 3. Render sub-tabs table (only the active one!)
         if (state.activeTab === 'models') {
-            // 模型统计表: 初始化自动拉取或用户选过任一范围(含「全部」)后, filteredModelStats 已是
-            // 后端 DB 聚合快照, 复用它(范围视图冻结到下次切换); 仅当拉取失败(null)时兜底实时 statsData。
-            if (state.filteredModelStats) {
-                renderModelsTable(state.filteredModelStats);
-            } else {
+            // 模型统计表: 在「全部」范围(或尚未设置切片时)始终渲染全量实时的 stats(statsData),
+            // 支持新请求实时刷新; 在用户显式选定 'today' / '3d' / '7d' 时, 渲染固化的 DB 聚合快照。
+            if (state.currentModelRange === 'all' || !state.filteredModelStats) {
                 renderModelsTable(stats);
+            } else {
+                renderModelsTable(state.filteredModelStats);
             }
         } else if (state.activeTab === 'logs') {
             renderLogsTable();

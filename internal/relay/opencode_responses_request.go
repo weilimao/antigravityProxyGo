@@ -29,7 +29,7 @@ import (
 // 返回值: (转换后 body, 是否成功)。body 无法解析为 JSON 对象时返回 (nil, false)。
 
 // chatToResponsesBody 把 OpenAI Chat 请求体转换为 Responses API 请求体。
-func chatToResponsesBody(body []byte, model string) ([]byte, bool) {
+func chatToResponsesBody(body []byte, model string, promptCacheKey string) ([]byte, bool) {
 	var in map[string]json.RawMessage
 	if err := json.Unmarshal(body, &in); err != nil {
 		return nil, false
@@ -39,6 +39,16 @@ func chatToResponsesBody(body []byte, model string) ([]byte, bool) {
 	out["model"] = model
 
 	// messages → input, 同时抽出 system 作为 instructions
+	//
+	// 消息形态映射(实测 2026-09-27, 对 Zen /responses 逐个变体验证):
+	//   role=system/developer  → instructions(字符串, 多条换行拼接), 不进 input
+	//   role=user/assistant    → {role, content} 原样保留
+	//   assistant + tool_calls → 追加 {type:"function_call", call_id, name, arguments} 项
+	//   role=tool              → {type:"function_call_output", call_id, output}
+	//
+	// 关键: **不能**把 Chat 的 role=tool 直接塞进 input —— 实测该形态被上游拒绝,
+	// 报 `input[N] did not match any supported type`(HTTP 400)。必须转为
+	// function_call_output 类型项, 否则多轮工具调用场景必然失败。
 	if rawMsgs, ok := in["messages"]; ok {
 		var msgs []map[string]interface{}
 		if err := json.Unmarshal(rawMsgs, &msgs); err == nil {
@@ -46,29 +56,117 @@ func chatToResponsesBody(body []byte, model string) ([]byte, bool) {
 			var systemParts []string
 			for _, m := range msgs {
 				role, _ := m["role"].(string)
+
+				// system / developer → instructions
 				if role == "system" || role == "developer" {
 					if s, ok := m["content"].(string); ok && s != "" {
 						systemParts = append(systemParts, s)
 					}
 					continue
 				}
+
+				// tool 结果 → function_call_output(Responses 专有类型)
+				if role == "tool" {
+					callID, _ := m["tool_call_id"].(string)
+					out2 := map[string]interface{}{"type": "function_call_output"}
+					if callID != "" {
+						out2["call_id"] = callID
+					}
+					// output 必须是字符串; content 为数组时序列化保留信息。
+					switch c := m["content"].(type) {
+					case string:
+						out2["output"] = c
+					case nil:
+						out2["output"] = ""
+					default:
+						b, err := json.Marshal(c)
+						if err != nil {
+							out2["output"] = ""
+						} else {
+							out2["output"] = string(b)
+						}
+					}
+					inputs = append(inputs, out2)
+					continue
+				}
+
+				// assistant 的 tool_calls → 展开为 function_call 项(置于该消息之前)
+				if role == "assistant" {
+					if tcs, ok := m["tool_calls"].([]interface{}); ok {
+						for _, tci := range tcs {
+							tcm, ok := tci.(map[string]interface{})
+							if !ok {
+								continue
+							}
+							callID, _ := tcm["id"].(string)
+							fn, _ := tcm["function"].(map[string]interface{})
+							name, _ := fn["name"].(string)
+							args, _ := fn["arguments"].(string)
+							if name == "" {
+								continue
+							}
+							fc := map[string]interface{}{
+								"type": "function_call",
+								"name": name,
+							}
+							if callID != "" {
+								fc["call_id"] = callID
+							}
+							if args != "" {
+								fc["arguments"] = args
+							} else {
+								fc["arguments"] = "{}"
+							}
+							inputs = append(inputs, fc)
+						}
+					}
+				}
+
+				// 普通 user / assistant 消息
+				//
+				// 关键: assistant 仅携带 tool_calls 时 content 常为空串。此时若产出
+				// {role:"assistant"} 这种**无 content 的空壳项**, 上游会判非法并报
+				// `input[N] did not match any supported type`(实测 400)。而该消息的
+				// tool_calls 已在上方展开为 function_call 项, 信息未丢失,
+				// 故此处直接跳过空 content 的 assistant 消息。
+				hasContent := false
+				var contentVal interface{}
+				if c, ok := m["content"]; ok {
+					switch v := c.(type) {
+					case string:
+						if v != "" {
+							hasContent = true
+							contentVal = v
+						}
+					case nil:
+						// 无内容
+					default:
+						hasContent = true
+						contentVal = c
+					}
+				}
+				if !hasContent {
+					if role == "assistant" {
+						// 纯 tool_calls 消息: 已展开, 不产生空壳项
+						continue
+					}
+					// user 等角色无内容时给空串, 保持项存在(避免丢轮次)
+					contentVal = ""
+				}
+
 				item := map[string]interface{}{}
 				if role != "" {
 					item["role"] = role
 				}
-				if c, ok := m["content"]; ok {
-					item["content"] = c
-				}
-				// tool 结果消息: Responses 用 function_call_output 形态, 这里保守处理为
-				// 带 tool_call_id 的普通输入项, 保留信息不丢失。
-				if id, ok := m["tool_call_id"].(string); ok && id != "" {
-					item["tool_call_id"] = id
+				item["content"] = contentVal
+				// 非 assistant 的 tool_calls(罕见) 原样保留
+				if role != "assistant" {
+					if tc, ok := m["tool_calls"]; ok {
+						item["tool_calls"] = tc
+					}
 				}
 				if name, ok := m["name"].(string); ok && name != "" {
 					item["name"] = name
-				}
-				if tc, ok := m["tool_calls"]; ok {
-					item["tool_calls"] = tc
 				}
 				inputs = append(inputs, item)
 			}
@@ -154,8 +252,15 @@ func chatToResponsesBody(body []byte, model string) ([]byte, bool) {
 	if _, ok := out["store"]; !ok {
 		out["store"] = false
 	}
+	// prompt_cache_key: 优先透传入站已有值; 否则用 session 派生的稳定键。
+	//
+	// 必要性(2026-09-27 实测): 真实 opencode CLI 直连 Zen 时恒携带该字段。
+	// 缺失会导致上游缓存归属不明, 长流在数十秒后被提前切断(实测反代在 39-54 秒
+	// 中断, 直连可稳定跑满 123 秒并收到 response.completed)。
 	if raw, ok := in["prompt_cache_key"]; ok {
 		out["prompt_cache_key"] = raw
+	} else if promptCacheKey != "" {
+		out["prompt_cache_key"] = promptCacheKey
 	}
 
 	converted, err := json.Marshal(out)

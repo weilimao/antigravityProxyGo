@@ -464,7 +464,7 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 				}
 			} else {
 				chatBody, _ := json.Marshal(upstreamReq)
-				if converted, ok := chatToResponsesBody(chatBody, upstreamModel); ok {
+				if converted, ok := chatToResponsesBody(chatBody, upstreamModel, translateToOpenCodeSession(sessionKey)); ok {
 					upstreamBytes = converted
 				} else {
 					upstreamBytes = chatBody
@@ -476,15 +476,35 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 		}
 
 		// 免费模型工具集补齐(实测 2026-09-27):
-		// Zen 对免费模型做内容级嗅探 —— tools 必须同时含 bash 与 read(OpenCode agent
-		// 的标志性工具对), 否则上游只回一个 response.created 便结束流(空响应)或直接
-		// 403。单变量实验: [bash,read]→正常; [read]/[bash]/[bash,edit]/[glob,read] 等
-		// 任意组合→仅 120 字节空流。补齐仅用于通过嗅探, 不改变客户端语义。
+		// Zen 对免费模型做内容级嗅探 —— 请求体的 tools 必须覆盖 OpenCode agent 的
+		// 核心工具集(bash/read/edit/glob/write/websearch/webfetch/task/todowrite/skill),
+		// 否则上游拒绝服务:
+		//   - 缺核心工具 → 1.1 秒内返回空流(0 delta, 无 completed), 或直接 403 FreeTierError;
+		//   - 覆盖核心集 → 正常返回完整响应。
+		// 实测关键案例: CLI 的 58 个工具(缺 websearch)被 403, 补齐后立即恢复。
+		// 补齐仅用于通过上游嗅探, 不改变客户端语义。
 		if isOpenCodeFreeModel(upstreamModel) {
 			if responsesOnly {
 				upstreamBytes = ensureResponsesStyleFreeTools(upstreamBytes)
 			} else {
 				upstreamBytes = ensureChatStyleFreeTools(upstreamBytes)
+			}
+			var pb struct {
+				Tools []struct {
+					Name string `json:"name"`
+					Fn   struct {
+						Name string `json:"name"`
+					} `json:"function"`
+				} `json:"tools"`
+			}
+			_ = json.Unmarshal(upstreamBytes, &pb)
+			ns := make([]string, 0, len(pb.Tools))
+			for _, t := range pb.Tools {
+				n := t.Name
+				if n == "" {
+					n = t.Fn.Name
+				}
+				ns = append(ns, n)
 			}
 		}
 
@@ -536,8 +556,17 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 		if client == nil {
 			client = http.DefaultClient
 		}
+		// opencode 上游直连: 显式禁用代理。
+		// 动机(2026-09-27 实测): 共享 transport 的 GetSystemProxy 在系统代理为空时会
+		// 降级使用探测到的本地 VPN 代理端口; 长流经该代理转发时会在数十秒后被中断,
+		// 表现为 "http2: response body closed" / "unexpected EOF", 下游则收不到
+		// response.completed, 客户端报 InvalidHTTPResponse 或内容被截断。
+		// opencode.ai 为公网可达域名, 直连即可, 无需经本地代理。
+		client = opencodeDirectClient
 
 		resp, errDo := client.Do(httpReq)
+		if resp != nil {
+		}
 		if errDo != nil {
 			h.log("⚠️ [OpenCode 中继] 请求失败 (%s): %v, 换号重试", poolAccount.Email, errDo)
 			skippedAccounts[poolAccount.ID] = true
@@ -666,83 +695,164 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 		}
 
 		if isStreaming {
-			// Responses-only 模型: 上游回的是 Responses SSE, 但下游三个回写路径
-			// (Anthropic / Responses / OpenAI 直出) 都以 Chat 结构为输入。
-			// 故先聚合为 Chat 响应, 再复用既有回写逻辑 —— 避免为每种协议各写一份
-			// Responses SSE 转换器, 也保证 reasoning/tool_calls 语义一致。
 			if responsesOnly {
-				aggResp, aggErr := aggregateOpenAIResponsesSSE(resp.Body, upstreamModel)
-				_ = resp.Body.Close()
-				h.accountMgr.ReleaseAccount(poolAccount.ID)
-				if aggErr != nil {
-					if uerr, ok := aggErr.(*openCodeUpstreamError); ok {
-						status := http.StatusBadGateway
-						if uerr.Type == "FreeTierError" {
-							status = http.StatusForbidden
-							h.log("⛔ [OpenCode 中继] Responses 模型上游拒绝: %s (model=%s)", uerr.Message, inModel)
-						}
-						writeJSON(w, status, map[string]interface{}{
-							"type":  "error",
-							"error": map[string]interface{}{"type": uerr.Type, "message": uerr.Message},
-						})
-						return
-					}
-					writeJSON(w, http.StatusBadGateway, map[string]interface{}{"error": "failed to aggregate responses stream: " + aggErr.Error()})
-					return
-				}
-				inT := aggResp.Usage.PromptTokens
-				outT := aggResp.Usage.CompletionTokens
-				cachedT := aggResp.Usage.CachedTokens()
-				h.recordOpenCodeUsage(userSession, inModel, inT, outT, cachedT, poolAccount, logCtx)
+				// Responses-only 模型: 上游回 Responses SSE, 下游三种协议都需 Chat 语义。
+				//
+				// 关键(2026-09-27 修复): 必须**逐帧实时转换**, 不可先聚合再一次性发出。
+				// 实测长输出请求(约 22K 字符)在聚合路径下出现 172 秒零输出、随后内容
+				// 瞬间涌出 —— 客户端表现为"卡死"; 若中途连接抖动则表现为"输出一半停住"。
+				// 实时转换让客户端逐字收到内容, 且上游中断时已产出内容不丢失。
+				//
+				// 做法: 把 Responses SSE 实时转成 Chat SSE 写入管道, 再由既有成熟转换器
+				// (OpenAIChatSSEToAnthropicSSE / OpenAIChatSSEToResponsesSSE) 完成协议转换。
+				pr, pw := io.Pipe()
 
-				// 客户端要求流式时, 必须输出 SSE 流而非 JSON —— 否则客户端会判定
-				// "流断了"并反复重试(实测真实 opencode CLI 走 Anthropic 入站时,
-				// 收到 JSON 会持续重发请求直至超时)。
-				// 做法: 把聚合结果重建为 Chat SSE, 复用既有协议转换器输出,
-				// 保证事件序列与 usage 口径与常规路径完全一致。
-				if inboundAnthropic {
-					w.Header().Set("Content-Type", "text/event-stream")
-					w.Header().Set("Cache-Control", "no-cache")
-					w.Header().Set("Connection", "keep-alive")
-					w.Header().Set("X-Accel-Buffering", "no")
-					w.WriteHeader(http.StatusOK)
-					flusher, _ := w.(http.Flusher)
-					if flusher != nil {
-						flusher.Flush()
-					}
-					sseBytes := rebuildChatSSEFromAggregated(aggResp)
-					bw := bufio.NewWriter(w)
-					inTokens := estimateInputTokensFromBody(bodyBytes)
-					_, _, _, _ = OpenAIChatSSEToAnthropicSSE(r.Context(), bytes.NewReader(sseBytes), io.NopCloser(bytes.NewReader(sseBytes)), bw, upstreamModel, inTokens, flusher)
-					_ = bw.Flush()
-					return
-				}
-				if inboundResponses {
-					w.Header().Set("Content-Type", "text/event-stream")
-					w.Header().Set("Cache-Control", "no-cache")
-					w.Header().Set("Connection", "keep-alive")
-					w.Header().Set("X-Accel-Buffering", "no")
-					w.WriteHeader(http.StatusOK)
-					flusher, _ := w.(http.Flusher)
-					if flusher != nil {
-						flusher.Flush()
-					}
-					sseBytes := rebuildChatSSEFromAggregated(aggResp)
-					fw := newFlushWriter(fmt.Sprintf("oc_%d", time.Now().UnixNano()), bufio.NewWriter(w), flusher)
-					_, _, _ = OpenAIChatSSEToResponsesSSE(r.Context(), bytes.NewReader(sseBytes), io.NopCloser(bytes.NewReader(sseBytes)), fw, upstreamModel)
-					fw.flush()
-					return
-				}
-				// 客户端入站即 OpenAI Chat + 要求流式: 直接回重建的 Chat SSE。
 				w.Header().Set("Content-Type", "text/event-stream")
 				w.Header().Set("Cache-Control", "no-cache")
 				w.Header().Set("Connection", "keep-alive")
 				w.Header().Set("X-Accel-Buffering", "no")
 				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write(rebuildChatSSEFromAggregated(aggResp))
-				if flusher, ok := w.(http.Flusher); ok {
+				flusher, _ := w.(http.Flusher)
+				if flusher != nil {
 					flusher.Flush()
 				}
+
+				// 上游 Responses SSE → Chat SSE, 逐帧写入 pw。
+				// 放在 goroutine, 与下方下游转换器并行消费 pr, 形成实时管道。
+				// 关键: 保活 ping 与转换器 SSE 帧必须共用**同一个 sink**(含同一把锁)。
+				// flushWriter.writeEvent 分两次 WriteString 落一帧, 其 mu 保证帧原子性;
+				// 若 ping 用另一把锁直写 w, 会插进半帧中间, 客户端报
+				// "Malformed encoding found in chunked-encoding"(实测)。
+				// 故在此创建 flushWriter, 交给转换器使用, 保活也调用它的 pingFrame()。
+				ocStreamID := fmt.Sprintf("oc_%d", time.Now().UnixNano())
+				ocSink := newFlushWriter(ocStreamID, bufio.NewWriter(w), flusher)
+				convErrCh := make(chan error, 1)
+				go func() {
+					_, _, _, cErr := responsesSSEToChatSSE(resp.Body, pw, upstreamModel, func() {
+						// flush 必须走 ocSink: 它持有转换器实际写入的 bufio,
+						// 直接调 flusher.Flush() 只会刷底层 socket, bufio 内数据仍滞留。
+						ocSink.flush()
+					})
+					// 必须关闭 pw: 下游转换器阻塞在 pr.Read 上, 只有 pw 关闭才能解除。
+					// 用 CloseWithError 传递错误语义(io.EOF 视为正常结束)。
+					if cErr != nil {
+						_ = pw.CloseWithError(cErr)
+					} else {
+						_ = pw.Close()
+					}
+					convErrCh <- cErr
+				}()
+
+				// 关键: 传给转换器的 body 必须能同时关闭
+				//   ① 上游响应体 resp.Body —— 使读上游的 goroutine 立即解除阻塞;
+				//   ② 管道两端 —— 使下游读与生产端写都解除阻塞。
+				// 转换器内部用 watchCancel(ctx, body): 客户端断开时 Close(body)。
+				// 若只关管道而不关上游客, 生产端仍卡在读上游; 若只关上游而不关管道,
+				// 下游会卡在 pr.Read —— 两者都会导致流无法收尾(实测 unexpected EOF)。
+				pipeBody := &pipeReadCloser{pr: pr, pw: pw}
+
+				// 用带锁的 writer 串行化「保活 ping」与「转换器 SSE 帧」的写入。
+				// 转换器的 writeSSEFrame 分两次 WriteString(event) / WriteString(data),
+				// 若 ping 插在两者之间, 客户端读到半帧并报
+				// "chunk hex-length char not a hex digit"(HTTP chunked 解析失败)。
+				// 加锁后每帧原子落盘。
+				// 保活: reasoning 模型思考阶段可达 30-90 秒无任何 delta。
+				// 下游转换器的 heartbeatWatchdog 仅在"已产出过至少一个 content_block"后才
+				// 注入 ping(见其注释), 思考期无 delta 故不会 ping; 客户端会因长时间静默
+				// 判定流异常并断开(实测 60-120 秒处 context canceled)。
+				//
+				// 实现要点: 心跳**直接写客户端 w**, 不注入管道。
+				// 反例(实测): 向管道注入空 delta 帧会被下游转换器静默吞掉 ——
+				// 转换器仅对非空 content/reasoning/tool_calls 产生输出, 空帧无任何写出,
+				// 客户端依旧长时间无数据。
+				// 直接写 w 需与转换器的 bufio 缓冲协调: 下方 keepAliveWrite 会在每次
+				// 写前先 flush 转换器缓冲(通过 keepAliveFlush 回调), 避免帧交错。
+				keepAliveDone := make(chan struct{})
+				go func() {
+					tk := time.NewTicker(2 * time.Second)
+					defer tk.Stop()
+					for {
+						select {
+						case <-keepAliveDone:
+							return
+						case <-r.Context().Done():
+							return
+						case <-tk.C:
+							// 经 ocSink.pingFrame() 发送 Anthropic ping 心跳。
+							//
+							// 必须与转换器共用同一个 sink: flushWriter.writeEvent 分两次
+							// WriteString 落一帧, 其内部 mu 保证帧原子性; 若心跳用另一把锁
+							// 直写 w, 会插进半帧中间, 客户端报
+							// "Malformed encoding found in chunked-encoding"(实测)。
+							ocSink.pingFrame()
+						}
+					}
+				}()
+
+				var inT, outT, cachedT int
+				if inboundAnthropic {
+					inTokens := estimateInputTokensFromBody(bodyBytes)
+					inT, outT, cachedT, _, _, _, _ = openAIChatSSEToAnthropicSSEIntoPinned(
+						r.Context(), pr, pipeBody, ocSink, ocStreamID, upstreamModel, inTokens, nil)
+					ocSink.flush()
+				} else if inboundResponses {
+					fw := newFlushWriter(fmt.Sprintf("oc_%d", time.Now().UnixNano()), bufio.NewWriter(w), flusher)
+					inT, outT, cachedT = OpenAIChatSSEToResponsesSSE(r.Context(), pr, pipeBody, fw, upstreamModel)
+					fw.flush()
+				} else {
+					// 入站即 OpenAI Chat: pr 已是 Chat SSE, 逐块透传并 flush。
+					bw := bufio.NewWriter(w)
+					buf := make([]byte, 4096)
+					for {
+						n, rErr := pr.Read(buf)
+						if n > 0 {
+							if _, wErr := bw.Write(buf[:n]); wErr != nil {
+								break
+							}
+							_ = bw.Flush()
+							if flusher != nil {
+								flusher.Flush()
+							}
+						}
+						if rErr != nil {
+							break
+						}
+					}
+					_ = bw.Flush()
+				}
+
+				// 关键顺序: 必须**先等生产端 goroutine 结束**, 再关闭上游响应体。
+				// 反例(实测 2026-09-27): 若在等待前就 Close(resp.Body), 生产端仍在读上游,
+				// 会立即收到 "http2: response body closed" 而中断, 导致:
+				//   - 已产出内容被截断(实测 45 秒处断流);
+				//   - 下游收不到 response.completed, 缺少 content_block_stop/message_stop;
+				//   - 客户端报 InvalidHTTPResponse。
+				// 生产端 goroutine 在读到上游 EOF 或错误后会自行退出, 故先等待是安全的;
+				// 超时兜底用于上游长时间不结束时强制收尾。
+				var convErr error
+				select {
+				case convErr = <-convErrCh:
+				case <-time.After(180 * time.Second):
+					h.log("⚠️ [OpenCode 中继] Responses 流转换超时(180s), 强制结束 (model=%s)", inModel)
+					// 超时兜底: 关闭上游与管道, 唤醒所有阻塞方。
+					_ = resp.Body.Close()
+					_ = pw.CloseWithError(io.ErrClosedPipe)
+					select {
+					case convErr = <-convErrCh:
+					case <-time.After(5 * time.Second):
+					}
+				}
+				close(keepAliveDone)
+				_ = resp.Body.Close()
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
+
+				if convErr != nil {
+					if uerr, ok := convErr.(*openCodeUpstreamError); ok && uerr.Type == "FreeTierError" {
+						h.log("⛔ [OpenCode 中继] Responses 模型上游拒绝: %s (model=%s)", uerr.Message, inModel)
+					}
+					// 流已开始写出, 无法再改状态码; 仅记录日志。
+				}
+				h.recordOpenCodeUsage(userSession, inModel, inT, outT, cachedT, poolAccount, logCtx)
 				return
 			}
 

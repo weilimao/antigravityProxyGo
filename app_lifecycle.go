@@ -152,10 +152,11 @@ func (a *App) startup(ctx context.Context) {
 
 	a.accountMgr.OnQuotaUpdated = func(accountId string, res *account.QuotaResult) {
 		wailsRuntime.EventsEmit(a.ctx, "quota-updated", map[string]interface{}{
-			"accountId": accountId,
-			"buckets":   res.Buckets,
-			"tier":      res.Tier,
-			"credits":   res.Credits,
+			"accountId":     accountId,
+			"buckets":       res.Buckets,
+			"tier":          res.Tier,
+			"credits":       res.Credits,
+			"validationUrl": res.ValidationURL,
 		})
 	}
 

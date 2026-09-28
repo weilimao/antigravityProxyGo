@@ -134,7 +134,7 @@
           </button>
           <button
             class="flex items-center gap-1 text-[12px] font-medium text-primary hover:text-primary/80 transition-colors cursor-pointer px-2 py-1 rounded bg-primary/10"
-            @click="mm.addModelMapping()"
+            @click="onAddModelMapping()"
           >
             <span class="material-symbols-outlined text-[16px]">add</span>
             <span>添加映射模型</span>
@@ -142,68 +142,83 @@
         </div>
       </div>
 
-      <div class="overflow-x-auto max-h-[360px] overflow-y-auto pr-1">
-        <table class="w-full text-left text-[12px]">
-          <thead>
-            <tr class="border-b border-outline-variant/25 text-outline/80">
-              <th class="py-2.5 font-bold pl-2">客户端请求模型 (Client Model)</th>
-              <th class="py-2.5 font-bold pl-2">真实目标模型 (Target Model)</th>
-              <th v-if="mm.isNvidiaTab.value" class="py-2.5 font-bold text-center w-[160px]">注入 Template Kwargs</th>
-              <th class="py-2.5 font-bold text-center w-[140px]">多模态</th>
-              <th class="py-2.5 font-bold text-center w-[120px]">是否公开 (Expose)</th>
-              <th class="py-2.5 font-bold text-center w-[80px]">操作</th>
+      <!-- 虚拟滚动表格容器 -->
+      <div
+        ref="vl.containerRef"
+        class="overflow-x-auto max-h-[460px] overflow-y-auto pr-1 border border-outline-variant/15 rounded-lg select-text"
+        @scroll.passive="vl.handleScroll"
+      >
+        <table class="w-full text-left text-[12px] table-fixed">
+          <thead class="sticky top-0 z-10 bg-slate-100 dark:bg-[#1a1f30] border-b border-outline-variant/25 text-outline/80 shadow-xs">
+            <tr>
+              <th class="py-2.5 font-bold pl-2 w-[30%]">客户端请求模型 (Client Model)</th>
+              <th class="py-2.5 font-bold pl-2 w-[35%]">真实目标模型 (Target Model)</th>
+              <th v-if="mm.isNvidiaTab.value" class="py-2.5 font-bold text-center w-[150px]">注入 Template Kwargs</th>
+              <th class="py-2.5 font-bold text-center w-[130px]">多模态</th>
+              <th class="py-2.5 font-bold text-center w-[110px]">是否公开 (Expose)</th>
+              <th class="py-2.5 font-bold text-center w-[70px]">操作</th>
             </tr>
           </thead>
           <tbody>
             <template v-if="mm.filteredMappings.value.length === 0">
               <tr class="border-b border-outline-variant/10 text-outline/60 text-center">
-                <td :colspan="mm.isNvidiaTab.value ? 6 : 5" class="py-8 text-[12px]">
+                <td :colspan="mm.isNvidiaTab.value ? 6 : 5" class="py-12 text-[12px]">
                   <template v-if="mm.currentTabMappings.value.length === 0">暂无模型映射，点击上方「添加映射模型」或「获取号池模型」</template>
                   <template v-else>未找到匹配「<span class="text-primary font-bold">{{ mm.searchQuery.value }}</span>」的模型映射</template>
                 </td>
               </tr>
             </template>
-            <ModelMappingRow
-              v-for="item in mm.pagedMappings.value"
-              :key="item._rowKey"
-              :item="item"
-              :row-models="mm.getRowModels(item)"
-              :show-inject-kwargs="mm.isNvidiaTab.value"
-              :is-stale="mm.isStaleItem(item)"
-              :is-new="mm.isNewItem(item)"
-              @update:client-model="(val) => item.clientModel = val"
-              @update:target-model="(val) => mm.onTargetModelChange(item, val)"
-              @update:expose="(val) => item.expose = val"
-              @update:inject-kwargs="(val) => item.injectChatTemplateKwargs = val"
-              @update:multimodal="(val) => item.multimodal = val"
-              @delete="mm.deleteMapping(item)"
-            />
+            <template v-else>
+              <!-- 顶部虚拟滚动占位行 -->
+              <tr v-if="vl.topSpacerHeight.value > 0" :style="{ height: `${vl.topSpacerHeight.value}px` }">
+                <td :colspan="mm.isNvidiaTab.value ? 6 : 5" style="padding: 0; border: none; height: inherit;"></td>
+              </tr>
+
+              <!-- 可视区域渲染行 -->
+              <ModelMappingRow
+                v-for="item in vl.visibleItems.value"
+                :key="item._rowKey"
+                :item="item"
+                :row-models="mm.getRowModels(item)"
+                :show-inject-kwargs="mm.isNvidiaTab.value"
+                :is-stale="mm.isStaleItem(item)"
+                :is-new="mm.isNewItem(item)"
+                @update:client-model="(val) => item.clientModel = val"
+                @update:target-model="(val) => mm.onTargetModelChange(item, val)"
+                @update:expose="(val) => item.expose = val"
+                @update:inject-kwargs="(val) => item.injectChatTemplateKwargs = val"
+                @update:multimodal="(val) => item.multimodal = val"
+                @delete="mm.deleteMapping(item)"
+              />
+
+              <!-- 底部虚拟滚动占位行 -->
+              <tr v-if="vl.bottomSpacerHeight.value > 0" :style="{ height: `${vl.bottomSpacerHeight.value}px` }">
+                <td :colspan="mm.isNvidiaTab.value ? 6 : 5" style="padding: 0; border: none; height: inherit;"></td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>
 
-      <!-- 分页:映射条目多时避免整表平铺渲染卡顿,每页仅渲染 pageSize 行 -->
-      <div class="flex items-center justify-between border-t border-outline-variant/20 pt-3 mt-4">
-        <span class="text-[11px] text-outline">
-          共 {{ mm.filteredMappings.value.length }} 条映射{{ mm.searchQuery.value ? ` (筛选自 ${mm.currentTabMappings.value.length} 条)` : '' }} · 第 {{ mm.currentPage.value }} / {{ mm.totalPages.value }} 页
-        </span>
-        <div class="flex items-center gap-1">
+      <!-- 虚拟列表状态摘要栏: 替代旧分页控制器, 提示映射条目数并提供快速回到顶部 -->
+      <div class="flex items-center justify-between border-t border-outline-variant/20 pt-3 mt-4 text-[12px]">
+        <div class="flex items-center gap-2">
+          <span class="text-outline">
+            共 <span class="font-bold text-on-surface dark:text-white">{{ mm.filteredMappings.value.length }}</span> 条映射{{ mm.searchQuery.value ? ` (筛选自 ${mm.currentTabMappings.value.length} 条)` : '' }}
+          </span>
+          <span class="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/10 text-slate-500 dark:text-slate-400">
+            虚拟滚动已启用
+          </span>
+        </div>
+        <div class="flex items-center gap-2">
           <button
-            class="px-2.5 py-1 text-[11px] font-medium border border-outline-variant/30 rounded-md hover:bg-slate-50 dark:hover:bg-white/5 text-on-surface dark:text-white disabled:opacity-50 disabled:pointer-events-none flex items-center gap-0.5 cursor-pointer"
-            :disabled="mm.currentPage.value <= 1"
-            @click="mm.gotoPage(mm.currentPage.value - 1)"
+            v-if="mm.filteredMappings.value.length > 15"
+            class="text-[11px] text-primary hover:underline cursor-pointer flex items-center gap-0.5 px-2 py-1 rounded hover:bg-primary/5 transition-colors"
+            @click="vl.scrollToTop(true)"
+            title="回到列表顶部"
           >
-            <span class="material-symbols-outlined text-[14px]">chevron_left</span>
-            <span>上一页</span>
-          </button>
-          <span class="text-[11px] px-2 text-on-surface dark:text-white font-bold">{{ mm.currentPage.value }}</span>
-          <button
-            class="px-2.5 py-1 text-[11px] font-medium border border-outline-variant/30 rounded-md hover:bg-slate-50 dark:hover:bg-white/5 text-on-surface dark:text-white disabled:opacity-50 disabled:pointer-events-none flex items-center gap-0.5 cursor-pointer"
-            :disabled="mm.currentPage.value >= mm.totalPages.value"
-            @click="mm.gotoPage(mm.currentPage.value + 1)"
-          >
-            <span>下一页</span>
-            <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+            <span class="material-symbols-outlined text-[14px]">vertical_align_top</span>
+            <span>回到顶部</span>
           </button>
         </div>
       </div>
@@ -226,12 +241,32 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { useModelMapping } from '../../../ui/useModelMapping';
+import { useVirtualList } from '../../../ui/useVirtualList';
 import AutoModelConfigCard from './AutoModelConfigCard.vue';
 import ModelMappingRow from './ModelMappingRow.vue';
 
 const mm = useModelMapping();
+
+const vl = useVirtualList({
+  items: mm.filteredMappings,
+  itemHeight: 48,
+  buffer: 6,
+  defaultViewportHeight: 460,
+});
+
+function onAddModelMapping() {
+  mm.addModelMapping();
+  nextTick(() => {
+    vl.scrollToTop(true);
+  });
+}
+
+// 切换 Tab 或搜索关键词变更时重置虚拟滚动条至顶部
+watch([mm.activeTabId, mm.searchQuery], () => {
+  vl.resetScroll();
+});
 
 const customProviderInput = ref('');
 const showCustomProviderInput = ref(false);

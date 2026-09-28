@@ -26,6 +26,7 @@ export interface DashboardState {
     quotaCache: { [accountId: string]: any[] };
     quotaLoadingState: { [accountId: string]: 'loading' | 'success' | 'error' };
     nvidiaQuotaError: { [accountId: string]: string };
+    accountValidationUrls: { [accountId: string]: string };
     currentAccountsList: any[];
     currentActiveChannel: string;
     lastBackendData: any;
@@ -34,14 +35,12 @@ export interface DashboardState {
     maxMemoryHistoryPoints: number;
     activeView: string;
     statsData: any | null;
-    // currentModelRange: 模型统计表的时间范围筛选。'all' = 全部(request_logs 全量聚合,
-    // 与 'today'/'3d'/'7d' 同源同口径, 保证「全部 ⊇ 近七日 ⊇ 近三日 ⊇ 今日」恒成立, 不再复用
-    // statsData.models 内存累计, 避免与 DB 口径漂移)。切范围时前端 invoke stats:model-range
-    // 取 filteredModelStats 喂给 renderModelsTable; 初始化时也会自动拉取一次当前范围。
+    // currentModelRange: 模型统计表的时间范围筛选。'all' = 全部(采用全局权威全量 statsData.models,
+    // 涵盖全部 77+ 模型与数十万次历史累计, 并支持 stats-updated 实时增量更新); 'today'/'3d'/'7d'
+    // 为时间窗口切片筛选(经 stats:model-range 从 SQLite request_logs 聚合)。
     currentModelRange: 'all' | 'today' | '3d' | '7d';
-    // filteredModelStats: 范围筛选模式下的 per-model 聚合结果缓存({models:{...}} 形状)。
-    // 初始化自动拉取或用户切范围后写入; stats-updated tick 不改写本字段, 故范围视图冻结到
-    // 下次切换(聚合视图不需秒级实时)。null 表示尚未拉到(初始拉取失败兜底用实时 statsData)。
+    // filteredModelStats: 窗口切片筛选模式(today/3d/7d)下的 per-model 聚合结果缓存({models:{...}} 形状)。
+    // 切范围后写入并冻结视图, 避免受全量实时 tick 干扰; 当切回 'all' 时重置为 null 并直连 statsData。
     filteredModelStats: any | null;
     usageData: any | null;
     // benchmarkData: 模型测速(首帧/耗时)卡片的最新载荷({config, results, lastRun, running}),
@@ -120,6 +119,7 @@ const state: DashboardState = {
     quotaCache: {},
     quotaLoadingState: {},
     nvidiaQuotaError: {},
+    accountValidationUrls: {},
     currentAccountsList: [],
     currentActiveChannel: 'antigravity',
     lastBackendData: null,

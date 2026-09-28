@@ -62,6 +62,8 @@ type Account struct {
 	// 中继转发层据此决定上游端点(/v1/chat/completions 或 /v1/messages)与协议转译方向。
 	// 非 Other 号池账号该字段空。
 	Formats []string `json:"formats,omitempty"`
+	// ValidationURL 记录 Google 账号触发风控人机验证(VALIDATION_REQUIRED)时的直达验证 URL
+	ValidationURL string `json:"validationUrl,omitempty"`
 }
 
 // GetAccessToken safely reads the access token under read lock.
@@ -168,10 +170,21 @@ type QuotaBucket struct {
 }
 
 type QuotaResult struct {
-	Buckets []QuotaBucket `json:"buckets"`
-	Tier    string        `json:"tier"`
-	Credits *float64      `json:"credits,omitempty"`
-	Error   string        `json:"error,omitempty"`
+	Buckets       []QuotaBucket `json:"buckets"`
+	Tier          string        `json:"tier"`
+	Credits       *float64      `json:"credits,omitempty"`
+	Error         string        `json:"error,omitempty"`
+	ValidationURL string        `json:"validationUrl,omitempty"`
+}
+
+// AccountValidationError 表示账号触发人机验证/安全核验(VALIDATION_REQUIRED)的错误
+type AccountValidationError struct {
+	Message       string `json:"message"`
+	ValidationURL string `json:"validationUrl"`
+}
+
+func (e *AccountValidationError) Error() string {
+	return e.Message
 }
 
 type AccountsData struct {

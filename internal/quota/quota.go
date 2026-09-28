@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -257,6 +258,68 @@ type LoadCodeAssistResponse struct {
 	} `json:"error"`
 }
 
+// ExtractValidationURL 从 Google 错误响应体中解析人机验证直达 URL (validation_url)
+func ExtractValidationURL(resBytes []byte) string {
+	if len(resBytes) == 0 {
+		return ""
+	}
+
+	// 1. 结构化反序列化 Google RPC Error 格式
+	var rpcErr struct {
+		Error *struct {
+			Details []struct {
+				Type     string            `json:"@type"`
+				Reason   string            `json:"reason"`
+				Domain   string            `json:"domain"`
+				Metadata map[string]string `json:"metadata"`
+				Links    []struct {
+					Description string `json:"description"`
+					URL         string `json:"url"`
+				} `json:"links"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal(resBytes, &rpcErr); err == nil && rpcErr.Error != nil {
+		for _, d := range rpcErr.Error.Details {
+			if d.Metadata != nil {
+				if u, ok := d.Metadata["validation_url"]; ok && u != "" {
+					return u
+				}
+				if u, ok := d.Metadata["validationUrl"]; ok && u != "" {
+					return u
+				}
+			}
+			for _, l := range d.Links {
+				if strings.Contains(l.URL, "accounts.google.com/signin/continue") ||
+					strings.Contains(l.URL, "continue=") {
+					return l.URL
+				}
+			}
+		}
+	}
+
+	// 2. 正则兜底解析，并反转义 JSON 字符串
+	re := regexp.MustCompile(`"validation_url"\s*:\s*"([^"]+)"`)
+	matches := re.FindSubmatch(resBytes)
+	if len(matches) > 1 {
+		var decoded string
+		if err := json.Unmarshal([]byte(`"`+string(matches[1])+`"`), &decoded); err == nil && decoded != "" {
+			return decoded
+		}
+		return string(matches[1])
+	}
+
+	// 3. 次级正则: 从 links 中匹配 accounts.google.com/signin/continue
+	reLink := regexp.MustCompile(`https://accounts\.google\.com/signin/continue[^\s"'\\]+`)
+	mLink := reLink.Find(resBytes)
+	if len(mLink) > 0 {
+		return string(mLink)
+	}
+
+	return ""
+}
+
 func loadCodeAssist(accessToken string, isAntigravity bool) (string, string, *float64, error) {
 	headers := map[string]string{
 		"Authorization": "Bearer " + accessToken,
@@ -287,6 +350,13 @@ func loadCodeAssist(accessToken string, isAntigravity bool) (string, string, *fl
 	}
 
 	if status != 200 {
+		valURL := ExtractValidationURL(resBytes)
+		if valURL != "" {
+			return "", "", nil, &account.AccountValidationError{
+				Message:       fmt.Sprintf("loadCodeAssist HTTP %d: Verify your account to continue.", status),
+				ValidationURL: valURL,
+			}
+		}
 		return "", "", nil, fmt.Errorf("loadCodeAssist HTTP %d", status)
 	}
 
@@ -296,6 +366,13 @@ func loadCodeAssist(accessToken string, isAntigravity bool) (string, string, *fl
 	}
 
 	if resp.Error != nil {
+		valURL := ExtractValidationURL(resBytes)
+		if valURL != "" || strings.Contains(resp.Error.Message, "Verify your account") {
+			return "", "", nil, &account.AccountValidationError{
+				Message:       resp.Error.Message,
+				ValidationURL: valURL,
+			}
+		}
 		return "", "", nil, errors.New(resp.Error.Message)
 	}
 
@@ -468,16 +545,27 @@ func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]accou
 	}
 	_ = json.Unmarshal(resBytes, &errJson)
 
+	var validationURL string
+	if errJson.Error != nil {
+		validationURL = ExtractValidationURL(resBytes)
+	}
+
 	if errJson.Error != nil && (strings.Contains(errJson.Error.Message, "scalar field") || strings.Contains(errJson.Error.Message, "Invalid value") || strings.Contains(errJson.Error.Message, "required")) {
 		// Retry with empty payload
 		status, resBytes, err = postJson(endpointUrl, map[string]interface{}{}, headers)
 		_ = json.Unmarshal(resBytes, &errJson)
+		if errJson.Error != nil && validationURL == "" {
+			validationURL = ExtractValidationURL(resBytes)
+		}
 	}
 
 	if errJson.Error != nil && project != "" {
 		// Try fallback retrieveUserQuota
 		status, resBytes, err = postJson("https://"+host+"/v1internal:retrieveUserQuota", map[string]interface{}{"project": project}, headers)
 		_ = json.Unmarshal(resBytes, &errJson)
+		if errJson.Error != nil && validationURL == "" {
+			validationURL = ExtractValidationURL(resBytes)
+		}
 	}
 
 	if errJson.Error != nil {
@@ -498,10 +586,23 @@ func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]accou
 				{ModelID: "API Error (429 Rate Limited)", Group: "All Models", RemainingFraction: 0, RemainPercent: 0},
 			}, nil
 		}
+		if validationURL != "" || strings.Contains(errJson.Error.Message, "Verify your account") {
+			return nil, &account.AccountValidationError{
+				Message:       errJson.Error.Message,
+				ValidationURL: validationURL,
+			}
+		}
 		return nil, errors.New(errJson.Error.Message)
 	}
 
 	if status != 200 {
+		validationURL = ExtractValidationURL(resBytes)
+		if validationURL != "" {
+			return nil, &account.AccountValidationError{
+				Message:       fmt.Sprintf("retrieveUserQuota HTTP %d: Verify your account to continue.", status),
+				ValidationURL: validationURL,
+			}
+		}
 		return nil, fmt.Errorf("retrieveUserQuota HTTP %d", status)
 	}
 
@@ -855,20 +956,30 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 
 	project, tier, credits, err = loadCodeAssist(token, isAntigravity)
 	if err != nil && acc.RefreshToken != "" && refreshCallback != nil {
-		fmt.Printf("[QuotaService] loadCodeAssist failed for %s, trying token refresh...\n", acc.Email)
-		newToken, refreshErr := refreshCallback(acc)
-		if refreshErr == nil {
-			token = newToken
-			if updateTokenCallback != nil {
-				updateTokenCallback(acc.ID, newToken)
+		var vErr *account.AccountValidationError
+		if !errors.As(err, &vErr) {
+			fmt.Printf("[QuotaService] loadCodeAssist failed for %s, trying token refresh...\n", acc.Email)
+			newToken, refreshErr := refreshCallback(acc)
+			if refreshErr == nil {
+				token = newToken
+				if updateTokenCallback != nil {
+					updateTokenCallback(acc.ID, newToken)
+				}
+				project, tier, credits, err = loadCodeAssist(token, isAntigravity)
+			} else {
+				return nil, fmt.Errorf("Token refresh failed: %v", refreshErr)
 			}
-			project, tier, credits, err = loadCodeAssist(token, isAntigravity)
-		} else {
-			return nil, fmt.Errorf("Token refresh failed: %v", refreshErr)
 		}
 	}
 
 	if err != nil {
+		var vErr *account.AccountValidationError
+		if errors.As(err, &vErr) {
+			return nil, &account.AccountValidationError{
+				Message:       fmt.Sprintf("GCP loadCodeAssist failed: %v", vErr.Message),
+				ValidationURL: vErr.ValidationURL,
+			}
+		}
 		return nil, fmt.Errorf("GCP loadCodeAssist failed: %v", err)
 	}
 
@@ -892,6 +1003,13 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 	// Step 2: retrieveUserQuota
 	buckets, err := retrieveUserQuota(token, project, isAntigravity)
 	if err != nil {
+		var vErr *account.AccountValidationError
+		if errors.As(err, &vErr) {
+			return nil, &account.AccountValidationError{
+				Message:       fmt.Sprintf("GCP retrieveUserQuota failed: %v", vErr.Message),
+				ValidationURL: vErr.ValidationURL,
+			}
+		}
 		return nil, fmt.Errorf("GCP retrieveUserQuota failed: %v", err)
 	}
 

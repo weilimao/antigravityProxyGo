@@ -141,10 +141,10 @@ func (a *App) handleIOInvokeIPC(channel string, args []interface{}) (string, boo
 		return marshalResponse(true)
 
 	case "stats:model-range":
-		// 模型统计表按时间范围筛选(全部/今日/近三日/近七天), 统一从 request_logs DB 聚合,
-		// 保证「全部 ⊇ 近七日 ⊇ 近三日 ⊇ 今日」恒成立(此前「全部」走内存 statsData.models 会与
-		// DB 范围口径漂移, 出现「全部 < 今日」悖论)。从 request_logs 按 timestamp(RFC3339) >= sinceISO
-		// + GROUP BY model_name 聚合。返回形状镜像 getStatsPayload 的 stats.models, 前端复用 renderModelsTable。
+		// 模型统计表按时间范围筛选(全部/今日/近三日/近七天)。
+		// 修复核心根因: 'all' 范围属于全量历史累计, 数据源必须采用 statsTracker 内存/stats.json 全量快照;
+		// 绝对不能从定期剪枝(FIFO)的 SQLite request_logs 聚合, 否则会导致 99% 的历史模型与请求量丢失。
+		// 今日/近三日/近七天范围继续走 request_logs DB 聚合按时间窗口切片。
 		rangeKey := getStringArg(0)
 		now := time.Now()
 		var since string
@@ -156,7 +156,16 @@ func (a *App) handleIOInvokeIPC(channel string, args []interface{}) (string, boo
 		case "7d":
 			since = now.Add(-7 * 24 * time.Hour).Format(time.RFC3339)
 		case "all", "":
-			since = ""
+			var models interface{}
+			if a.statsTracker != nil {
+				models = a.statsTracker.GetModelStatsCopy()
+			} else {
+				models = db.QueryModelStatsSince("")
+			}
+			return marshalResponse(map[string]interface{}{
+				"range": rangeKey,
+				"stats": map[string]interface{}{"models": models},
+			})
 		default:
 			return "", false, nil // 未识别 range, 交后续 handler fall-through
 		}

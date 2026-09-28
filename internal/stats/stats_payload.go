@@ -139,3 +139,23 @@ func (t *Tracker) GetRequestDetails(id string) (interface{}, interface{}) {
 	}
 	return nil, nil
 }
+
+// GetModelStatsCopy 返回当前全局所有模型的累计统计快照深拷贝(按 modelName 索引)。
+// 供 IPC stats:model-range 在 'all' 范围下直接拉取全量历史数据，避免受 SQLite request_logs 剪枝影响。
+func (t *Tracker) GetModelStatsCopy() map[string]*ModelStats {
+	t.RLock()
+	defer t.RUnlock()
+
+	modelsCopy := make(map[string]*ModelStats, len(t.stats.Models))
+	for k, v := range t.stats.Models {
+		modelsCopy[k] = &ModelStats{
+			Reqs:         v.Reqs,
+			InTokens:     v.InTokens,
+			OutTokens:    v.OutTokens,
+			CachedTokens: v.CachedTokens,
+			Cost:         v.Cost,
+		}
+	}
+	return modelsCopy
+}
+

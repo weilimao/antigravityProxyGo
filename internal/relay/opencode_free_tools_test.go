@@ -94,14 +94,21 @@ func TestEnsureChatStyleFreeTools(t *testing.T) {
 			if gotRead != c.wantRead {
 				t.Errorf("read 存在=%v, want %v", gotRead, c.wantRead)
 			}
-			// 验证不重复注入
+			// 验证核心工具集全覆盖, 且已有的不重复注入
 			if !c.wantInject {
 				var names []string
+				seen := map[string]int{}
 				for _, tl := range obj.Tools {
 					names = append(names, tl.Function.Name)
+					seen[tl.Function.Name]++
 				}
-				if len(names) != 2 {
-					t.Errorf("已有 bash+read 时不应追加, 实际 tools=%v", names)
+				for _, want := range opencodeCoreToolNames {
+					if seen[want] == 0 {
+						t.Errorf("核心工具 %s 缺失, 实际 tools=%v", want, names)
+					}
+					if seen[want] > 1 {
+						t.Errorf("核心工具 %s 重复注入 %d 次", want, seen[want])
+					}
 				}
 			}
 		})
@@ -148,9 +155,15 @@ func TestEnsureResponsesStyleFreeTools(t *testing.T) {
 	}
 }
 
-// TestEnsureResponsesStyleFreeTools_AlreadyHas 验证已有 bash+read 时不改动。
+// TestEnsureResponsesStyleFreeTools_AlreadyHas 验证核心工具集已全覆盖时不改动。
 func TestEnsureResponsesStyleFreeTools_AlreadyHas(t *testing.T) {
-	body := []byte(`{"model":"m","tools":[{"type":"function","name":"bash","parameters":{}},{"type":"function","name":"read","parameters":{}}]}`)
+	// 构造一个已含全部核心工具的请求体
+	var parts []string
+	for _, n := range opencodeCoreToolNames {
+		parts = append(parts, `{"type":"function","name":"`+n+`","parameters":{}}`)
+	}
+	body := []byte(`{"model":"m","tools":[` + strings.Join(parts, ",") + `]}`)
+
 	out := ensureResponsesStyleFreeTools(body)
 
 	var obj struct {
@@ -159,8 +172,8 @@ func TestEnsureResponsesStyleFreeTools_AlreadyHas(t *testing.T) {
 	if err := json.Unmarshal(out, &obj); err != nil {
 		t.Fatalf("非法 JSON: %v", err)
 	}
-	if len(obj.Tools) != 2 {
-		t.Errorf("已有 bash+read 时不应追加, tools 数=%d", len(obj.Tools))
+	if len(obj.Tools) != len(opencodeCoreToolNames) {
+		t.Errorf("核心工具集已全覆盖时不应追加, want %d got %d", len(opencodeCoreToolNames), len(obj.Tools))
 	}
 }
 

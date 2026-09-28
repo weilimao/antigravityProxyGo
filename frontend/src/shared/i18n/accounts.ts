@@ -127,6 +127,13 @@ export const accountsZh: Record<string, string> = {
     colLastActive: "最后活跃时间",
     editAccountTitle: "编辑该账号参数",
     manageKeys: "管理 Key",
+    accountNeedsVerification: "账号需人机/安全验证",
+    accountNeedsVerificationDesc: "Google 要求授权验证后方可恢复配额",
+    btnGoVerify: "点击去验证",
+    btnRecheckQuota: "已验证，重新检测",
+    btnRefreshVerifyLink: "重新获取链接",
+    verifyOpenedToast: "已在系统默认浏览器中打开 Google 验证页面。请登录并完成人机验证后，返回点击【已验证，重新检测】。",
+    verifyBadge: "需验证",
 };
 
 export const accountsEn: Record<string, string> = {
@@ -254,4 +261,11 @@ export const accountsEn: Record<string, string> = {
     colLastActive: "Last Active",
     editAccountTitle: "Edit account parameters",
     manageKeys: "Manage Keys",
+    accountNeedsVerification: "Verification Required",
+    accountNeedsVerificationDesc: "Google requires account verification to restore quota",
+    btnGoVerify: "Verify Now",
+    btnRecheckQuota: "Recheck Status",
+    btnRefreshVerifyLink: "Refresh Link",
+    verifyOpenedToast: "Google verification page opened in default browser. Click [Recheck Status] after completing verification.",
+    verifyBadge: "Verify Needed",
 };

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base32"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -197,8 +198,16 @@ func (a *App) handleAccountsInvokeIPC(channel string, args []interface{}) (strin
 		res, err := a.accountMgr.FetchQuota(acc)
 		if err != nil {
 			a.AddLog(fmt.Sprintf("❌ [配额刷新] 账号 %s 刷新配额失败: %v", acc.Email, err))
-			return marshalResponse(map[string]interface{}{"error": err.Error(), "buckets": []interface{}{}})
+			resp := map[string]interface{}{"error": err.Error(), "buckets": []interface{}{}}
+			var valErr *account.AccountValidationError
+			if errors.As(err, &valErr) && valErr.ValidationURL != "" {
+				resp["validationUrl"] = valErr.ValidationURL
+				a.accountMgr.UpdateAccountValidationURL(accId, valErr.ValidationURL)
+				a.AddLog(fmt.Sprintf("⚠️ [人机验证] 账号 %s 触发 Google 人机验证，已提取验证直达链接", acc.Email))
+			}
+			return marshalResponse(resp)
 		}
+		a.accountMgr.UpdateAccountValidationURL(accId, "")
 		a.accountMgr.UpdateAccountQuota(accId, res)
 		a.AddLog(fmt.Sprintf("✅ [配额刷新] 账号 %s 配额及积分刷新成功！(Tier: %s)", acc.Email, res.Tier))
 		return marshalResponse(res)

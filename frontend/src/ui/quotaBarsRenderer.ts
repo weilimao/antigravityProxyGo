@@ -8,7 +8,7 @@
  * getRelativeResetTime / formatCooldownTime,以及 aggregateQuotaUI 的 updateAggregateQuotaUI
  * (配额刷新后聚合面板联动重算)。岗位 hub:accountsRenderer,triggerTestModal 经 hub re-export 调 loadAccountQuota。
  */
-import { ipcRenderer } from '../shared/ipc';
+import { ipcRenderer, shell } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
 import { renderNvidiaAccountQuota, renderGrokAccountQuota, renderWorkBuddyAccountQuota, renderOpenCodeAccountQuota, isDomesticWorkBuddyAccount, getRelativeResetTime, formatCooldownTime } from './accountCardHelpers';
@@ -64,6 +64,11 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
     }
 
     if (!buckets || buckets.length === 0) {
+        const valUrl = acc?.validationUrl || (state.accountValidationUrls && state.accountValidationUrls[accountId]);
+        if (valUrl) {
+            renderVerificationUI(containerEl, accountId, valUrl, isZH, dict);
+            return;
+        }
         containerEl.innerHTML = `<span class="text-[10px] text-outline/50 italic">${dict.noQuotaData || '暂无配额数据'}</span>`;
         return;
     }
@@ -181,9 +186,100 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
     }
 }
 
+// Render Google human verification UI card when VALIDATION_REQUIRED occurs
+export function renderVerificationUI(
+    containerEl: HTMLElement | null,
+    accountId: string,
+    validationUrl: string,
+    isZH: boolean,
+    dict: any
+) {
+    if (!containerEl) return;
+    containerEl.innerHTML = '';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'flex flex-col gap-2 bg-amber-500/10 dark:bg-amber-500/5 border border-amber-500/30 rounded-lg p-2.5 mt-1';
+
+    const header = document.createElement('div');
+    header.className = 'flex items-start gap-1.5';
+    header.innerHTML = `
+        <span class="material-symbols-outlined text-amber-500 text-[14px] flex-shrink-0 mt-0.5">security</span>
+        <div class="flex flex-col flex-1 min-w-0">
+            <span class="text-[11px] font-bold text-amber-600 dark:text-amber-400 leading-tight">
+                ${dict.accountNeedsVerification || (isZH ? '账号需人机/安全验证' : 'Verification Required')}
+            </span>
+            <span class="text-[9px] text-outline dark:text-outline-variant leading-tight mt-0.5">
+                ${dict.accountNeedsVerificationDesc || (isZH ? 'Google 要求授权验证后方可恢复配额' : 'Google requires verification to restore quota')}
+            </span>
+        </div>
+    `;
+    wrap.appendChild(header);
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'flex items-center gap-2 mt-0.5';
+
+    // 1. 去验证按钮
+    const btnVerify = document.createElement('button');
+    btnVerify.className = 'flex items-center gap-1 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white text-[10px] font-medium px-2.5 py-1 rounded shadow-sm transition-colors cursor-pointer flex-shrink-0';
+    btnVerify.innerHTML = `<span class="material-symbols-outlined text-[13px]">open_in_new</span> ${dict.btnGoVerify || (isZH ? '点击去验证' : 'Verify Now')}`;
+    btnVerify.title = isZH ? '在系统默认浏览器中打开 Google 授权人机验证页面' : 'Open Google verification page in default browser';
+    btnVerify.onclick = async () => {
+        let targetUrl = validationUrl;
+        if (!targetUrl) {
+            targetUrl = state.accountValidationUrls?.[accountId] || '';
+        }
+        if (!targetUrl) {
+            btnVerify.disabled = true;
+            btnVerify.innerHTML = `<span class="material-symbols-outlined text-[13px] animate-spin">refresh</span> ${isZH ? '获取中...' : 'Fetching...'}`;
+            try {
+                const res = await ipcRenderer.invoke('quota:fetch', accountId);
+                if (res && res.validationUrl) {
+                    targetUrl = res.validationUrl;
+                    if (!state.accountValidationUrls) state.accountValidationUrls = {};
+                    state.accountValidationUrls[accountId] = targetUrl;
+                }
+            } catch (err) {
+                console.error('Failed to fetch verification url:', err);
+            } finally {
+                btnVerify.disabled = false;
+                btnVerify.innerHTML = `<span class="material-symbols-outlined text-[13px]">open_in_new</span> ${dict.btnGoVerify || (isZH ? '点击去验证' : 'Verify Now')}`;
+            }
+        }
+
+        if (targetUrl) {
+            shell.openExternal(targetUrl);
+            alert(dict.verifyOpenedToast || (isZH
+                ? '已在系统默认浏览器中打开 Google 验证页面。请登录并完成人机验证后，返回点击【已验证，重新检测】。'
+                : 'Google verification page opened in browser. Click [Recheck Status] after completing verification.'));
+        } else {
+            shell.openExternal('https://myaccount.google.com/security');
+            alert(isZH
+                ? '未提取到直达验证链接，已为您打开 Google 账号安全中心，请检查账号安全通知或在官方客户端验证。'
+                : 'Opening Google account security checkup.');
+        }
+    };
+    btnRow.appendChild(btnVerify);
+
+    // 2. 重新检测按钮
+    const btnRecheck = document.createElement('button');
+    btnRecheck.className = 'flex items-center gap-1 border border-outline-variant/30 hover:border-outline text-outline hover:text-on-surface dark:text-outline-variant dark:hover:text-white text-[10px] font-medium px-2 py-1 rounded transition-colors cursor-pointer flex-shrink-0';
+    btnRecheck.innerHTML = `<span class="material-symbols-outlined text-[13px]">refresh</span> ${dict.btnRecheckQuota || (isZH ? '已验证，重新检测' : 'Recheck Status')}`;
+    btnRecheck.title = isZH ? '重新检测账号配额状态（验证完成后点击恢复）' : 'Recheck quota status after verification';
+    btnRecheck.onclick = () => {
+        const currentCard = document.querySelector(`[data-account-id="${accountId}"]`);
+        const currentRefreshBtn = currentCard?.querySelector('[data-quota-refresh-btn]') as HTMLElement | null;
+        loadAccountQuota(accountId, containerEl, currentRefreshBtn, true);
+    };
+    btnRow.appendChild(btnRecheck);
+
+    wrap.appendChild(btnRow);
+    containerEl.appendChild(wrap);
+}
+
 // Fetch and load individual account quota
 export async function loadAccountQuota(accountId: string, containerEl: HTMLElement | null, refreshBtn: HTMLElement | null, force: boolean = false, cooldowns: any = {}) {
     const isZH = state.currentLanguage === 'zh';
+    const dict = i18n[state.currentLanguage] || i18n.zh;
     if (!state.quotaLoadingState) {
         state.quotaLoadingState = {};
     }
@@ -325,13 +421,51 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
                 state.nvidiaQuotaError[accountId] = String(result.error);
                 renderQuotaBars(activeContainer, [], cooldowns);
             } else {
-                if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">${result.error}</span>`;
+                const isVerificationRequired = !!(
+                    result.validationUrl ||
+                    (result.error && (
+                        String(result.error).includes('Verify your account') ||
+                        String(result.error).includes('VALIDATION_REQUIRED')
+                    ))
+                );
+
+                if (isVerificationRequired) {
+                    const vUrl = result.validationUrl || state.accountValidationUrls?.[accountId] || accForProbe?.validationUrl || '';
+                    if (vUrl) {
+                        if (!state.accountValidationUrls) state.accountValidationUrls = {};
+                        state.accountValidationUrls[accountId] = vUrl;
+                    }
+                    renderVerificationUI(activeContainer, accountId, vUrl, isZH, dict);
+                    // 同步更新卡片状态徽标为“需验证”
+                    const currentCard = document.querySelector(`[data-account-id="${accountId}"]`);
+                    const statusBadge = currentCard?.querySelector('.acc-status-badge') as HTMLElement | null;
+                    if (statusBadge) {
+                        statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
+                        statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">security</span> ${dict.verifyBadge || '需验证'}`;
+                    }
+                } else {
+                    if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">${result.error}</span>`;
+                }
             }
         } else {
             state.quotaLoadingState[accountId] = 'success';
+            if (state.accountValidationUrls && state.accountValidationUrls[accountId]) {
+                delete state.accountValidationUrls[accountId];
+            }
+            if (accForProbe && accForProbe.validationUrl) {
+                delete accForProbe.validationUrl;
+            }
             state.quotaCache[accountId] = result.buckets;
             renderQuotaBars(activeContainer, result.buckets, cooldowns);
             updateAggregateQuotaUI();
+
+            // 成功恢复后，若之前显示需验证，更新卡片徽标恢复为有效
+            const currentCard = document.querySelector(`[data-account-id="${accountId}"]`);
+            const statusBadge = currentCard?.querySelector('.acc-status-badge') as HTMLElement | null;
+            if (statusBadge) {
+                statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
+                statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">check_circle</span> ${dict.statusActive || '有效'}`;
+            }
         }
     } catch (e) {
         state.quotaLoadingState[accountId] = 'error';

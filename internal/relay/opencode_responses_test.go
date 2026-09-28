@@ -212,7 +212,7 @@ func TestChatToResponsesBody(t *testing.T) {
 		"stream_options":{"include_usage":true}
 	}`)
 
-	out, ok := chatToResponsesBody(chat, "muse-spark-1.3-contributor-free")
+	out, ok := chatToResponsesBody(chat, "muse-spark-1.3-contributor-free", "")
 	if !ok {
 		t.Fatal("chatToResponsesBody returned ok=false")
 	}
@@ -250,7 +250,7 @@ func TestChatToResponsesBody(t *testing.T) {
 
 // TestChatToResponsesBody_InvalidJSON 验证非法 JSON 返回 false。
 func TestChatToResponsesBody_InvalidJSON(t *testing.T) {
-	if _, ok := chatToResponsesBody([]byte(`nope`), "m"); ok {
+	if _, ok := chatToResponsesBody([]byte(`nope`), "m", ""); ok {
 		t.Error("非法 JSON 应返回 ok=false")
 	}
 }
@@ -258,7 +258,7 @@ func TestChatToResponsesBody_InvalidJSON(t *testing.T) {
 // TestChatToResponsesBody_NoSystem 验证无 system 消息时不产生 instructions 字段。
 func TestChatToResponsesBody_NoSystem(t *testing.T) {
 	chat := []byte(`{"messages":[{"role":"user","content":"hi"}]}`)
-	out, ok := chatToResponsesBody(chat, "m")
+	out, ok := chatToResponsesBody(chat, "m", "")
 	if !ok {
 		t.Fatal("ok=false")
 	}
@@ -322,7 +322,7 @@ func TestChatToResponsesBody_TokenFloor(t *testing.T) {
 		{`{"messages":[],"max_completion_tokens":50}`, 4096},
 	}
 	for _, c := range cases {
-		out, ok := chatToResponsesBody([]byte(c.in), "m")
+		out, ok := chatToResponsesBody([]byte(c.in), "m", "")
 		if !ok {
 			t.Fatalf("转换失败: %s", c.in)
 		}
@@ -342,7 +342,7 @@ func TestChatToResponsesBody_TokenFloor(t *testing.T) {
 //
 // reasoning 模型必须声明 include:["reasoning.encrypted_content"], 否则流可能提前终止。
 func TestChatToResponsesBody_IncludesReasoningField(t *testing.T) {
-	out, ok := chatToResponsesBody([]byte(`{"messages":[{"role":"user","content":"hi"}]}`), "m")
+	out, ok := chatToResponsesBody([]byte(`{"messages":[{"role":"user","content":"hi"}]}`), "m", "")
 	if !ok {
 		t.Fatal("转换失败")
 	}
@@ -351,5 +351,100 @@ func TestChatToResponsesBody_IncludesReasoningField(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"store":false`) {
 		t.Errorf("应自动补入 store=false: %s", out)
+	}
+}
+
+// TestChatToResponsesBody_ToolRoundTrip 验证工具往返消息的形态转换。
+//
+// 背景(2026-09-27 实测): Chat 的 role="tool" 直接塞进 Responses 的 input 会被上游拒绝,
+// 报 `input[N] did not match any supported type`(HTTP 400)。必须转为
+// {type:"function_call_output", call_id, output}; assistant 的 tool_calls 需展开为
+// {type:"function_call", call_id, name, arguments} 独立项。
+func TestChatToResponsesBody_ToolRoundTrip(t *testing.T) {
+	chat := []byte(`{
+		"messages":[
+			{"role":"system","content":"sys"},
+			{"role":"user","content":"列出文件"},
+			{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]},
+			{"role":"tool","tool_call_id":"call_1","content":"file1.txt"},
+			{"role":"user","content":"几个文件"}
+		],
+		"max_tokens":4096
+	}`)
+
+	out, ok := chatToResponsesBody(chat, "muse-spark-1.3", "")
+	if !ok {
+		t.Fatal("转换失败")
+	}
+
+	var obj struct {
+		Input []map[string]interface{} `json:"input"`
+	}
+	if err := json.Unmarshal(out, &obj); err != nil {
+		t.Fatalf("非法 JSON: %v", err)
+	}
+
+	// 不应出现任何 role="tool" 项
+	for i, it := range obj.Input {
+		if it["role"] == "tool" {
+			t.Errorf("input[%d] 仍是 role=tool, 上游会拒绝: %v", i, it)
+		}
+	}
+
+	// 应含 function_call 与 function_call_output
+	var hasCall, hasOutput bool
+	for _, it := range obj.Input {
+		switch it["type"] {
+		case "function_call":
+			hasCall = true
+			if it["name"] != "bash" {
+				t.Errorf("function_call name=%v, want bash", it["name"])
+			}
+			if it["call_id"] != "call_1" {
+				t.Errorf("function_call call_id=%v, want call_1", it["call_id"])
+			}
+		case "function_call_output":
+			hasOutput = true
+			if it["call_id"] != "call_1" {
+				t.Errorf("function_call_output call_id=%v, want call_1", it["call_id"])
+			}
+			if it["output"] != "file1.txt" {
+				t.Errorf("function_call_output output=%v, want file1.txt", it["output"])
+			}
+		}
+	}
+	if !hasCall {
+		t.Error("缺少 function_call 项")
+	}
+	if !hasOutput {
+		t.Error("缺少 function_call_output 项")
+	}
+	// system 应进 instructions
+	if !strings.Contains(string(out), `"instructions":"sys"`) {
+		t.Errorf("system 未映射为 instructions: %s", out)
+	}
+}
+
+// TestChatToResponsesBody_ToolOutputArrayContent 验证 tool 消息 content 为数组时被序列化。
+func TestChatToResponsesBody_ToolOutputArrayContent(t *testing.T) {
+	chat := []byte(`{"messages":[{"role":"tool","tool_call_id":"c1","content":[{"type":"text","text":"result"}]}]}`)
+	out, ok := chatToResponsesBody(chat, "m", "")
+	if !ok {
+		t.Fatal("转换失败")
+	}
+	var obj struct {
+		Input []map[string]interface{} `json:"input"`
+	}
+	if err := json.Unmarshal(out, &obj); err != nil {
+		t.Fatalf("非法 JSON: %v", err)
+	}
+	if len(obj.Input) != 1 {
+		t.Fatalf("input 项数=%d, want 1", len(obj.Input))
+	}
+	if obj.Input[0]["type"] != "function_call_output" {
+		t.Errorf("type=%v, want function_call_output", obj.Input[0]["type"])
+	}
+	if s, _ := obj.Input[0]["output"].(string); !strings.Contains(s, "result") {
+		t.Errorf("output 未保留数组内容: %v", obj.Input[0]["output"])
 	}
 }

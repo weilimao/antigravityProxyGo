@@ -1,5 +1,5 @@
 <template>
-  <tr class="border-b border-outline-variant/15 hover:bg-slate-50 dark:hover:bg-white/5">
+  <tr class="border-b border-outline-variant/15 hover:bg-slate-50 dark:hover:bg-white/5 h-[48px]">
     <td class="py-2 px-1">
       <input
         type="text"

@@ -442,6 +442,7 @@ func (m *Manager) GetAccounts() []*Account {
 			GroupID:          a.GroupID,
 			GroupName:        a.GroupName,
 			Formats:          a.Formats,
+			ValidationURL:    a.ValidationURL,
 		})
 	}
 	return list
@@ -526,6 +527,28 @@ func (m *Manager) UpdateAccountRefreshToken(id, newRefresh string) {
 
 	if target != nil {
 		target.SetRefreshToken(newRefresh)
+		_ = m.SaveAccountsFor(true, provider)
+	}
+}
+
+// UpdateAccountValidationURL 更新账号的人机验证 URL (内存态与定向落盘)。
+func (m *Manager) UpdateAccountValidationURL(id, valURL string) {
+	m.RLock()
+	var target *Account
+	for _, a := range m.accounts {
+		if a.ID == id {
+			target = a
+			break
+		}
+	}
+	provider := ""
+	if target != nil {
+		provider = target.Provider
+	}
+	m.RUnlock()
+
+	if target != nil {
+		target.ValidationURL = valURL
 		_ = m.SaveAccountsFor(true, provider)
 	}
 }
