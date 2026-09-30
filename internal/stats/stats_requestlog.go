@@ -2,6 +2,7 @@ package stats
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -13,14 +14,21 @@ import (
 // 请求日志入库簇：AddRequestLog / AddRequestLogForFamily / AddRequestLogInMemoryOnly / ClearRetriesOrErrors。
 
 // requestBodyToDBString 将(已截断的)报文序列化为 JSON 文本写入 DB TEXT 列; nil → ""。
+// 增加严格硬上限(8KB)，杜绝特大报文写入 SQLite request_logs 导致数据库膨胀及 Go 堆碎片。
 func requestBodyToDBString(v interface{}) string {
 	if v == nil {
 		return ""
 	}
 	if s, ok := v.(string); ok {
+		if len(s) > 8192 {
+			return s[:2500] + fmt.Sprintf("\n... [报文过大已截断入库，原字符数: %d] ...\n", len(s)) + s[len(s)-800:]
+		}
 		return s
 	}
 	if b, err := json.Marshal(v); err == nil {
+		if len(b) > 8192 {
+			return string(b[:2500]) + fmt.Sprintf("\n... [报文过大已截断入库，原字节数: %d] ...\n", len(b))
+		}
 		return string(b)
 	}
 	return ""

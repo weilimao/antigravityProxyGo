@@ -26,7 +26,7 @@ const tokenRefreshMaxConcurrent = 3
 // tick 的刷新,避免对有效 token 无谓打刷新端点。reserved 10 分钟≈一个补刷窗口,临近再刷即可。
 const tokenRefreshSkewSec = 10 * 60
 
-// ============ 冷却监控(2 分钟 tick) ============
+// ============ 冷却监控(5 分钟 tick) ============
 
 func (m *Manager) StartCooldownMonitor() {
 	m.Lock()
@@ -34,7 +34,7 @@ func (m *Manager) StartCooldownMonitor() {
 		m.Unlock()
 		return
 	}
-	m.cooldownTicker = time.NewTicker(2 * time.Minute)
+	m.cooldownTicker = time.NewTicker(5 * time.Minute)
 	m.cooldownStop = make(chan struct{})
 	// 捕获为局部变量供 goroutine 闭包引用,而非每轮 select 重新读 m.cooldownTicker / m.cooldownStop。
 	// 背景:StopCooldownMonitor 会先 m.cooldownTicker.Stop() 再 m.cooldownTicker=nil 再 close(stop),
@@ -106,12 +106,10 @@ func (m *Manager) CheckCooldownAccounts() {
 			fmt.Printf("[CooldownMonitor] Verifying quota for cooled account: %s\n", a.Email)
 			res, err := m.FetchQuota(a)
 			if err != nil {
-				// 刷新失败，冷静期往后延长 5 分钟
+				// 刷新失败，冷静期在内存中顺延 5 分钟
 				m.Lock()
 				targetAcc := m.getAccountByIDLocked(a.ID)
-				cooldownProvider := ""
 				if targetAcc != nil {
-					cooldownProvider = targetAcc.Provider
 					nextCooldown := time.Now().UnixNano()/int64(time.Millisecond) + 5*60*1000
 					targetAcc.CooldownUntil = nextCooldown
 					if targetAcc.Cooldowns != nil {
@@ -121,13 +119,9 @@ func (m *Manager) CheckCooldownAccounts() {
 					}
 				}
 				m.Unlock()
-				// 定向落盘:只重写该账号所属 provider 分区,不触碰其它号池大文件。
-				// 空 provider 兜底走全量(targetAcc 非空时 provider 必非空,此处为防御)。
-				if cooldownProvider != "" {
-					_ = m.SaveAccountsFor(true, cooldownProvider)
-				} else {
-					_ = m.SaveAccounts(true)
-				}
+				// 优化：此处跳过全量 SaveAccountsFor 磁盘落盘。
+				// 账号原本已在磁盘上处于冷静期标记，后台定时探测失败无需对 70KB+ 号池大文件进行重复并发重写与 .bak 覆盖，
+				// 避免在高频探针下产生大量无效磁盘 I/O 抖动。当后续配额恢复或用户手动修改时会正常持久化。
 				return
 			}
 
