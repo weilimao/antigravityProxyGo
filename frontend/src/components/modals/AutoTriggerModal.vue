@@ -6,7 +6,7 @@
     title="自动化触发任务管理"
     titleI18n="autoTriggerModalTitle"
     icon="timer"
-    maxWidth="w-[800px] max-w-[95vw]"
+    maxWidth="w-[860px] max-w-[95vw]"
     maxHeight="max-h-[85vh]"
     bodyClass="p-0 overflow-hidden flex flex-col flex-grow"
   >
@@ -33,12 +33,12 @@
         <table class="w-full text-left border-collapse table-fixed text-[11.5px]">
           <thead>
             <tr class="bg-slate-50 dark:bg-[#1a1f30] text-outline border-b border-outline-variant/30 sticky top-0 z-10">
-              <th class="p-3 font-bold w-[25%]" data-i18n="thTaskName">任务名称</th>
-              <th class="p-3 font-bold w-[20%]" data-i18n="thTriggerType">触发方式</th>
-              <th class="p-3 font-bold w-[12%]" data-i18n="thAccountCount">账号数</th>
-              <th class="p-3 font-bold w-[12%]" data-i18n="thModelCount">模型数</th>
-              <th class="p-3 font-bold text-center w-[15%]" data-i18n="thEnabledStatus">启用状态</th>
-              <th class="p-3 font-bold text-center w-[16%]" data-i18n="thAction">操作</th>
+              <th class="p-3 font-bold w-[24%]" data-i18n="thTaskName">任务名称</th>
+              <th class="p-3 font-bold w-[18%]" data-i18n="thTriggerType">触发方式</th>
+              <th class="p-3 font-bold w-[10%]" data-i18n="thAccountCount">账号数</th>
+              <th class="p-3 font-bold w-[10%]" data-i18n="thModelCount">模型数</th>
+              <th class="p-3 font-bold text-center w-[12%]" data-i18n="thEnabledStatus">启用状态</th>
+              <th class="p-3 font-bold text-center w-[26%]" data-i18n="thAction">操作</th>
             </tr>
           </thead>
           <tbody id="autoTriggerTasksTableBody" class="divide-y divide-outline-variant/10 text-on-surface dark:text-slate-200">
@@ -156,6 +156,11 @@
         <div class="flex items-center justify-between mb-1.5">
           <label class="block text-[11px] font-bold text-outline dark:text-outline-variant" data-i18n="labelSelectModels">选择触发测试模型</label>
           <div class="flex items-center gap-2 text-[10px]">
+            <button type="button" id="btnEditFetchModels" class="flex items-center gap-0.5 text-primary hover:underline font-medium cursor-pointer" title="点击调用接口获取最新可用模型">
+              <span class="material-symbols-outlined text-[13px]" id="iconEditFetchModels">sync</span>
+              <span id="textEditFetchModels">获取最新模型</span>
+            </button>
+            <span class="text-outline/30">|</span>
             <button type="button" id="btnEditSelectAllModels" class="text-primary dark:text-primary-fixed-dim hover:underline font-medium cursor-pointer" data-i18n="btnSelectAll">全选</button>
             <span class="text-outline/30">|</span>
             <button type="button" id="btnEditClearAllModels" class="text-outline hover:text-primary hover:underline font-medium cursor-pointer" data-i18n="btnClearAll">清空</button>
@@ -182,6 +187,7 @@
             </div>
           </div>
         </div>
+        <div id="editModelsStatusMsg" class="text-[10.5px] text-outline dark:text-outline-variant mt-1.5 hidden flex items-center gap-1"></div>
       </div>
     </div>
 

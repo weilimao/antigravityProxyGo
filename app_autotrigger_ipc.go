@@ -137,6 +137,32 @@ func (a *App) handleAutoTriggerIPC(channel string, args []interface{}) (string, 
 		data, _ := marshalResponse(map[string]interface{}{"success": true})
 		return data, true, nil
 
+	case "autotrigger:run":
+		var payload struct {
+			ID int64 `json:"id"`
+		}
+		if len(args) > 0 {
+			bytesPayload, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(bytesPayload, &payload)
+		}
+
+		if payload.ID == 0 {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "无效的任务 ID"})
+			return data, true, nil
+		}
+		if a.autoTriggerScheduler == nil {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "任务调度器未启动"})
+			return data, true, nil
+		}
+
+		if err := a.autoTriggerScheduler.TriggerTaskNow(payload.ID); err != nil {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
+			return data, true, nil
+		}
+
+		data, _ := marshalResponse(map[string]interface{}{"success": true})
+		return data, true, nil
+
 	case "autotrigger:history:list":
 		var payload struct {
 			Page     int `json:"page"`

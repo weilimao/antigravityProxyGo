@@ -28,9 +28,10 @@ const (
 
 // 包级预编译正则：避免每次请求重复编译，消除 GC 压力
 var (
-	reSessionID   = regexp.MustCompile(`"sessionId"\s*:\s*"?([a-fA-F0-9-]+|-?\d+)"?`)
-	reConvID      = regexp.MustCompile(`"conversationId"\s*:\s*"([a-fA-F0-9-]+)"`)
-	reAgentReqID  = regexp.MustCompile(`"requestId"\s*:\s*"(?:agent|trajectory|flow)\/([a-fA-F0-9-]+)`)
+	reAgentReqID = regexp.MustCompile(`"requestId"\s*:\s*"(?:agent|trajectory|flow)[\\/]+([a-fA-F0-9-]+)`)
+	reConvID     = regexp.MustCompile(`"conversationId"\s*:\s*"([a-fA-F0-9-]+)"`)
+	reBrainPath  = regexp.MustCompile(`(?:brain|artifacts)[\\/]+([a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})?)`)
+	reSessionID  = regexp.MustCompile(`"sessionId"\s*:\s*"?([a-fA-F0-9-]+|-?\d+)"?`)
 )
 
 type SessionEntry struct {
@@ -127,44 +128,55 @@ func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 	if len(reqBody) > 0 {
 		bodyStr := string(reqBody)
 
-		// 1. 优先提取显式会话 sessionId (支持带或不带双引号的 UUID 或大整数 ID)
-		matchSession := reSessionID.FindStringSubmatch(bodyStr)
-		if len(matchSession) > 1 {
-			val := strings.ReplaceAll(matchSession[1], "-", "")
-			if len(val) >= 8 {
-				return baseKey + ":" + val[:8]
-			}
-			return baseKey + ":" + val
-		}
-
-		// 2. 次优先提取 conversationId 会话 ID
-		matchConv := reConvID.FindStringSubmatch(bodyStr)
-		if len(matchConv) > 1 {
-			val := strings.ReplaceAll(matchConv[1], "-", "")
-			if len(val) >= 8 {
-				return baseKey + ":" + val[:8]
-			}
-			return baseKey + ":" + val
-		}
-
-		// 3. 仅在含有特定前缀 (agent/ 或 trajectory/ 或 flow/) 时，才提取轨迹级稳定的 requestId
+		// 1. 最高优先级：提取显式业务会话/轨迹/智能体 ID (Antigravity/Gemini-CLI 原生规范: agent/<conv-id>/...)
 		matchAgent := reAgentReqID.FindStringSubmatch(bodyStr)
-		if len(matchAgent) > 1 {
-			val := strings.ReplaceAll(matchAgent[1], "-", "")
-			if len(val) >= 8 {
-				return baseKey + ":" + val[:8]
-			}
-			return baseKey + ":" + val
+		if len(matchAgent) > 1 && !isNumericID(matchAgent[1]) {
+			return baseKey + ":" + formatSessionSuffix(matchAgent[1])
 		}
 
-		// 4. 后备 JSON 反序列化解析双保险机制 (仅对稳定会话特征作提取，安全丢弃单次随机的临时 requestId)
+		// 2. 次优先提取显式 conversationId
+		matchConv := reConvID.FindStringSubmatch(bodyStr)
+		if len(matchConv) > 1 && !isNumericID(matchConv[1]) {
+			return baseKey + ":" + formatSessionSuffix(matchConv[1])
+		}
+
+		// 3. 第三优先：提取本地工作区 brain / artifacts 路径中的会话 UUID (Antigravity 本地工作区特征)
+		matchBrain := reBrainPath.FindStringSubmatch(bodyStr)
+		if len(matchBrain) > 1 && !isNumericID(matchBrain[1]) {
+			return baseKey + ":" + formatSessionSuffix(matchBrain[1])
+		}
+
+		// 4. 第四优先：提取显式会话 sessionId (严格过滤客户端全局长整数/负数遥测编号，如 -3750763034362895579)
+		matchSession := reSessionID.FindStringSubmatch(bodyStr)
+		if len(matchSession) > 1 && !isNumericID(matchSession[1]) {
+			return baseKey + ":" + formatSessionSuffix(matchSession[1])
+		}
+
+		// 5. 后备 JSON 反序列化解析双保险机制 (仅对稳定会话特征作提取，安全丢弃单次随机的临时 requestId)
 		var temp struct {
 			SessionID      interface{} `json:"sessionId"`
 			ConversationID string      `json:"conversationId"`
 			RequestID      string      `json:"requestId"`
 		}
 		if err := json.Unmarshal(reqBody, &temp); err == nil {
-			// (a) 解析并转换 sessionId
+			// (a) 优先解析并过滤带有前缀的轨迹级 requestId
+			if temp.RequestID != "" {
+				for _, prefix := range []string{"agent/", "trajectory/", "flow/"} {
+					if strings.HasPrefix(temp.RequestID, prefix) {
+						subParts := strings.Split(temp.RequestID, "/")
+						if len(subParts) > 1 && !isNumericID(subParts[1]) {
+							return baseKey + ":" + formatSessionSuffix(subParts[1])
+						}
+					}
+				}
+			}
+
+			// (b) 其次解析 conversationId
+			if temp.ConversationID != "" && !isNumericID(temp.ConversationID) {
+				return baseKey + ":" + formatSessionSuffix(temp.ConversationID)
+			}
+
+			// (c) 最后解析并转换 sessionId (同样过滤纯数字/静态长整数)
 			if temp.SessionID != nil {
 				var valStr string
 				switch v := temp.SessionID.(type) {
@@ -175,44 +187,43 @@ func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 				case int64:
 					valStr = fmt.Sprintf("%d", v)
 				}
-				if valStr != "" {
-					val := strings.ReplaceAll(valStr, "-", "")
-					if len(val) >= 8 {
-						return baseKey + ":" + val[:8]
-					}
-					return baseKey + ":" + val
-				}
-			}
-
-			// (b) 解析 conversationId
-			if temp.ConversationID != "" {
-				val := strings.ReplaceAll(temp.ConversationID, "-", "")
-				if len(val) >= 8 {
-					return baseKey + ":" + val[:8]
-				}
-				return baseKey + ":" + val
-			}
-
-			// (c) 解析并过滤带有前缀的轨迹级 requestId
-			if temp.RequestID != "" {
-				for _, prefix := range []string{"agent/", "trajectory/", "flow/"} {
-					if strings.HasPrefix(temp.RequestID, prefix) {
-						subParts := strings.Split(temp.RequestID, "/")
-						if len(subParts) > 1 {
-							uuid := subParts[1]
-							val := strings.ReplaceAll(uuid, "-", "")
-							if len(val) >= 8 {
-								return baseKey + ":" + val[:8]
-							}
-							return baseKey + ":" + val
-						}
-					}
+				if valStr != "" && !isNumericID(valStr) {
+					return baseKey + ":" + formatSessionSuffix(valStr)
 				}
 			}
 		}
 	}
 
 	return baseKey
+}
+
+// formatSessionSuffix 格式化会话特征后缀（去除连字符并截取前 8 位）
+func formatSessionSuffix(raw string) string {
+	val := strings.ReplaceAll(raw, "-", "")
+	if len(val) >= 8 {
+		return val[:8]
+	}
+	return val
+}
+
+// isNumericID 检测标识串是否为纯数字/长整数(含正负号)，用于识别与过滤 Google 静态客户端级遥测 ID
+func isNumericID(s string) bool {
+	if s == "" {
+		return false
+	}
+	start := 0
+	if s[0] == '-' || s[0] == '+' {
+		start = 1
+	}
+	if start >= len(s) {
+		return false
+	}
+	for i := start; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ExtractClientSessionHeader 从入站请求头识别「客户端原生会话标识」,供全链路四号池统一

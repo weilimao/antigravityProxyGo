@@ -159,6 +159,9 @@ func (s *Scheduler) runTask(task db.AutoTriggerTask, filterAccountID string) {
 
 	var wg sync.WaitGroup
 	for _, accID := range targetAccountIDs {
+		if s.accountMgr == nil {
+			continue
+		}
 		acc := s.accountMgr.GetAccountByID(accID)
 		if acc == nil {
 			continue
@@ -213,3 +216,37 @@ func (s *Scheduler) runTask(task db.AutoTriggerTask, filterAccountID string) {
 	wg.Wait()
 	s.addLog(fmt.Sprintf("🏁 [自动测试] 任务 [%s] 自动化测试批处理执行完毕！", task.Name))
 }
+
+// TriggerTaskNow 立即手动触发指定的自动化任务包（异步非阻塞执行）
+func (s *Scheduler) TriggerTaskNow(taskID int64) error {
+	task, err := db.GetAutoTriggerTask(taskID)
+	if err != nil {
+		return err
+	}
+	if task == nil {
+		return fmt.Errorf("task not found")
+	}
+
+	s.runningMu.Lock()
+	if s.runningJobs[task.ID] {
+		s.runningMu.Unlock()
+		return fmt.Errorf("task is already running")
+	}
+	s.runningJobs[task.ID] = true
+	s.runningMu.Unlock()
+
+	s.addLog(fmt.Sprintf("⚡ [手动测试] 用户发起手动触发任务 [%s]...", task.Name))
+
+	go func(t db.AutoTriggerTask) {
+		defer func() {
+			s.runningMu.Lock()
+			delete(s.runningJobs, t.ID)
+			s.runningMu.Unlock()
+		}()
+
+		s.runTask(t, "")
+	}(*task)
+
+	return nil
+}
+

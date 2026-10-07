@@ -11,6 +11,11 @@ import { ipcRenderer } from '../shared/ipc';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
 import { loadAccountQuota } from './accountsRenderer';
+import {
+    fetchChannelModels,
+    getCachedModels,
+    renderCategorizedCheckboxes,
+} from './channelModelFetcher';
 
 // updateBatchActionBarUI 仍在 accountsController(本模块的"父"协调器)内定义,直接 import 会
 // 形成循环(accountsController → triggerTestModal → accountsController)。改由 controller 在
@@ -36,6 +41,13 @@ let triggerLogsArea: HTMLDivElement | null;
 let triggerResultsContainer: HTMLDivElement | null;
 let triggerResultsTableBody: HTMLTableSectionElement | null;
 let triggerModalAccountCount: HTMLSpanElement | null;
+let triggerModelsGemini: HTMLDivElement | null;
+let triggerModelsClaude: HTMLDivElement | null;
+let triggerModelsOthers: HTMLDivElement | null;
+let btnTriggerFetchModels: HTMLButtonElement | null;
+let iconTriggerFetchModels: HTMLElement | null;
+let textTriggerFetchModels: HTMLSpanElement | null;
+let triggerModelsStatusMsg: HTMLDivElement | null;
 
 // 句柄赋值 + 事件绑定（由 accountsController.initAccountsEvents 委托调用）
 export function initTriggerTestModalEvents(): void {
@@ -59,12 +71,24 @@ export function initTriggerTestModalEvents(): void {
     triggerResultsContainer = document.getElementById('triggerResultsContainer') as HTMLDivElement | null;
     triggerResultsTableBody = document.getElementById('triggerResultsTableBody') as HTMLTableSectionElement | null;
     triggerModalAccountCount = document.getElementById('triggerModalAccountCount') as HTMLSpanElement | null;
+    triggerModelsGemini = document.getElementById('triggerModelsGemini') as HTMLDivElement | null;
+    triggerModelsClaude = document.getElementById('triggerModelsClaude') as HTMLDivElement | null;
+    triggerModelsOthers = document.getElementById('triggerModelsOthers') as HTMLDivElement | null;
+    btnTriggerFetchModels = document.getElementById('btnTriggerFetchModels') as HTMLButtonElement | null;
+    iconTriggerFetchModels = document.getElementById('iconTriggerFetchModels');
+    textTriggerFetchModels = document.getElementById('textTriggerFetchModels') as HTMLSpanElement | null;
+    triggerModelsStatusMsg = document.getElementById('triggerModelsStatusMsg') as HTMLDivElement | null;
 
     if (btnTriggerModalClose) {
         btnTriggerModalClose.addEventListener('click', hideTriggerTestModal);
     }
     if (btnTriggerModalCancel) {
         btnTriggerModalCancel.addEventListener('click', hideTriggerTestModal);
+    }
+    if (btnTriggerFetchModels) {
+        btnTriggerFetchModels.addEventListener('click', () => {
+            loadAndRenderTriggerTestModels(true);
+        });
     }
     if (btnTriggerModalSelectAll) {
         btnTriggerModalSelectAll.addEventListener('click', () => {
@@ -89,6 +113,85 @@ function triggerTestResponse() {
         return;
     }
     showTriggerTestModal();
+}
+
+function getTriggerChannel(): string {
+    if (state.selectedAccountIds.length > 0) {
+        const firstAcc = (state.currentAccountsList || []).find((a: any) => a.id === state.selectedAccountIds[0]);
+        if (firstAcc && firstAcc.provider) {
+            return firstAcc.provider;
+        }
+    }
+    return state.currentViewTab || 'google';
+}
+
+function renderTriggerModelGroups(models: string[], selectedSet: Set<string>) {
+    if (selectedSet.size === 0 && models.length > 0) {
+        const defaultMod = models.find(m => m.toLowerCase().includes('gemini')) || models[0];
+        if (defaultMod) selectedSet.add(defaultMod);
+    }
+
+    renderCategorizedCheckboxes(models, selectedSet, {
+        geminiContainer: triggerModelsGemini,
+        claudeContainer: triggerModelsClaude,
+        othersContainer: triggerModelsOthers,
+        checkboxClass: 'trigger-model-checkbox',
+        checkboxName: 'triggerModel',
+        idPrefix: 'trg_chk',
+        emptyTexts: {
+            gemini: state.currentLanguage === 'zh' ? '暂无 Gemini 模型' : 'No Gemini models',
+            claude: state.currentLanguage === 'zh' ? '暂无 Claude 模型' : 'No Claude models',
+            others: state.currentLanguage === 'zh' ? '暂无其它模型' : 'No other models',
+        },
+    });
+}
+
+async function loadAndRenderTriggerTestModels(forceRefresh: boolean = false) {
+    if (!triggerModelsGemini || !triggerModelsClaude || !triggerModelsOthers) return;
+
+    const checkedBoxes = document.querySelectorAll('.trigger-model-checkbox:checked') as NodeListOf<HTMLInputElement>;
+    const selectedSet = new Set<string>();
+    checkedBoxes.forEach(cb => selectedSet.add(cb.value));
+
+    const channel = getTriggerChannel();
+
+    if (iconTriggerFetchModels) iconTriggerFetchModels.classList.add('animate-spin');
+    if (btnTriggerFetchModels) btnTriggerFetchModels.disabled = true;
+    if (textTriggerFetchModels) textTriggerFetchModels.textContent = state.currentLanguage === 'zh' ? '获取中...' : 'Fetching...';
+
+    if (triggerModelsStatusMsg) {
+        triggerModelsStatusMsg.classList.remove('hidden');
+        triggerModelsStatusMsg.className = 'text-[10.5px] text-primary mt-1.5 flex items-center gap-1 animate-pulse';
+        triggerModelsStatusMsg.innerHTML = `<span class="material-symbols-outlined text-[13px] animate-spin">sync</span><span>${state.currentLanguage === 'zh' ? '正在连接上游获取最新模型...' : 'Fetching latest models...'}</span>`;
+    }
+
+    const cached = getCachedModels(channel);
+    if (cached && !forceRefresh) {
+        renderTriggerModelGroups(cached, selectedSet);
+    }
+
+    try {
+        const res = await fetchChannelModels(channel);
+        renderTriggerModelGroups(res.models, selectedSet);
+
+        if (triggerModelsStatusMsg) {
+            if (res.success) {
+                triggerModelsStatusMsg.className = 'text-[10.5px] text-emerald-600 dark:text-emerald-400 mt-1.5 flex items-center gap-1';
+                triggerModelsStatusMsg.textContent = state.currentLanguage === 'zh'
+                    ? `✅ 已获取 ${res.models.length} 个最新模型`
+                    : `✅ Fetched ${res.models.length} models`;
+            } else {
+                triggerModelsStatusMsg.className = 'text-[10.5px] text-amber-500 dark:text-amber-400 mt-1.5 flex items-center gap-1';
+                triggerModelsStatusMsg.textContent = state.currentLanguage === 'zh'
+                    ? `⚠️ 获取模型失败 (${res.error})，使用本地可用模型`
+                    : `⚠️ Failed to fetch models (${res.error}), using fallback`;
+            }
+        }
+    } finally {
+        if (iconTriggerFetchModels) iconTriggerFetchModels.classList.remove('animate-spin');
+        if (btnTriggerFetchModels) btnTriggerFetchModels.disabled = false;
+        if (textTriggerFetchModels) textTriggerFetchModels.textContent = state.currentLanguage === 'zh' ? '获取最新模型' : 'Fetch Models';
+    }
 }
 
 // 全局 log 事件转发：由 accountsController.initAccountsGlobalEvents 中的 ipcRenderer.on('log')
@@ -137,11 +240,7 @@ function showTriggerTestModal() {
         inputTriggerPrompt.disabled = false;
     }
 
-    const checkboxes = document.querySelectorAll('.trigger-model-checkbox') as NodeListOf<HTMLInputElement>;
-    checkboxes.forEach(cb => {
-        cb.disabled = false;
-        cb.checked = (cb.value === 'gemini-3.5-flash');
-    });
+    loadAndRenderTriggerTestModels(false);
 
     if (triggerLogsArea) {
         triggerLogsArea.innerHTML = '<div class="text-outline dark:text-outline-variant italic">等待配置并开始触发...</div>';

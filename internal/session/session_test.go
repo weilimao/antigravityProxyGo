@@ -266,3 +266,63 @@ func TestExtractSessionKey_CredentialHeaders(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractSessionKey_AntigravityAndFilter(t *testing.T) {
+	r := NewRouter()
+	const bearer = "bearer-test-token-123456"
+	wantBase := "auth:" + authHashHex(t, bearer)
+
+	mkReq := func() *http.Request {
+		req, _ := http.NewRequest("POST", "http://example.com/v1internal:streamGenerateContent", nil)
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		return req
+	}
+
+	t.Run("Antigravity原生请求: 同时含静态长整型sessionId与真实agent/uuid, 优先提取agent/uuid", func(t *testing.T) {
+		reqBody := []byte(`{
+			"model": "gemini-3.8-flash-high",
+			"project": "favorite-synapse-37587653",
+			"sessionId": "-3750763034362895579",
+			"requestId": "agent/1c4fb43a-7893-4ded-9360-e3c559eb66a2/1791304784640/cbc95a4f-8f0a-4596-9772-ac8eaf84dc1c/154"
+		}`)
+		got := r.ExtractSessionKey(mkReq(), reqBody)
+		want := wantBase + ":1c4fb43a"
+		if got != want {
+			t.Fatalf("expected %q, got %q (不能被 -37507630 截胡)", want, got)
+		}
+	})
+
+	t.Run("本地Brain工作区路径: 缺少requestId但请求体包含brain/uuid, 精确提取会话UUID", func(t *testing.T) {
+		reqBody := []byte(`{
+			"model": "gemini-3.8-flash-high",
+			"systemInstruction": "Workspace path: C:/Users/user/.gemini/antigravity/brain/44e60633-1a26-4685-8581-e4fd22efed1d/scratch"
+		}`)
+		got := r.ExtractSessionKey(mkReq(), reqBody)
+		want := wantBase + ":44e60633"
+		if got != want {
+			t.Fatalf("expected %q, got %q", want, got)
+		}
+	})
+
+	t.Run("纯数字静态遥测sessionId: 过滤忽略, 回退baseKey, 避免误聚合全局会话", func(t *testing.T) {
+		reqBody := []byte(`{
+			"sessionId": "-3750763034362895579"
+		}`)
+		got := r.ExtractSessionKey(mkReq(), reqBody)
+		if got != wantBase {
+			t.Fatalf("expected base key %q, got %q", wantBase, got)
+		}
+	})
+
+	t.Run("第三方合法UUID格式sessionId: 正常提取前8位", func(t *testing.T) {
+		reqBody := []byte(`{
+			"sessionId": "b47ac10b-58cc-4372-a567-0e02b2c3d479"
+		}`)
+		got := r.ExtractSessionKey(mkReq(), reqBody)
+		want := wantBase + ":b47ac10b"
+		if got != want {
+			t.Fatalf("expected %q, got %q", want, got)
+		}
+	})
+}
+

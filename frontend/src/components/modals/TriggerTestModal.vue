@@ -24,6 +24,11 @@
         <div class="flex items-center justify-between mb-1.5">
           <label class="block text-[12px] font-bold text-outline dark:text-outline-variant" data-i18n="labelTriggerModels">2. 选择测试模型</label>
           <div class="flex items-center gap-2 text-[11px]">
+            <button type="button" id="btnTriggerFetchModels" class="flex items-center gap-0.5 text-primary hover:underline font-medium cursor-pointer" title="点击调用接口获取最新可用模型">
+              <span class="material-symbols-outlined text-[13px]" id="iconTriggerFetchModels">sync</span>
+              <span id="textTriggerFetchModels">获取最新模型</span>
+            </button>
+            <span class="text-outline/30">|</span>
             <button type="button" id="btnTriggerModalSelectAll" class="text-primary dark:text-primary-fixed-dim hover:underline font-medium cursor-pointer" data-i18n="btnSelectAll">全选</button>
             <span class="text-outline/30">|</span>
             <button type="button" id="btnTriggerModalClearAll" class="text-outline hover:text-primary hover:underline font-medium cursor-pointer" data-i18n="btnClearAll">清空</button>
@@ -35,92 +40,22 @@
           <!-- Gemini Models -->
           <div class="space-y-1">
             <div class="font-bold text-[10.5px] text-outline uppercase tracking-wider pb-1 border-b border-outline-variant/10">Gemini Models</div>
-            <div class="space-y-0.5 mt-1">
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-3.5-flash" checked class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">gemini-3.5-flash</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-3.5-flash-low" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">gemini-3.5-flash-low</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-3.5-flash-extra-low" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">3.5-flash-extra-low</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-3.1-flash-lite" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">gemini-3.1-flash-lite</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-3.1-pro-low" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">gemini-3.1-pro-low</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-3.1-pro-preview" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">3.1-pro-preview</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-3-flash" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">gemini-3-flash</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-3-flash-preview" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">3-flash-preview</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-3-flash-agent" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">3-flash-agent</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-pro-agent" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">gemini-pro-agent</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-2.5-flash" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">gemini-2.5-flash</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gemini-2.5-flash-lite" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">gemini-2.5-flash-lite</span>
-              </label>
-            </div>
+            <div class="space-y-0.5 mt-1" id="triggerModelsGemini"></div>
           </div>
 
           <!-- Claude Models -->
           <div class="space-y-1">
             <div class="font-bold text-[10.5px] text-outline uppercase tracking-wider pb-1 border-b border-outline-variant/10">Claude Models</div>
-            <div class="space-y-0.5 mt-1">
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="claude-sonnet-4-6" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">claude-sonnet-4-6</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="claude-opus-4-6-thinking" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">opus-4-6-thinking</span>
-              </label>
-            </div>
+            <div class="space-y-0.5 mt-1" id="triggerModelsClaude"></div>
           </div>
 
           <!-- Others -->
           <div class="space-y-1">
             <div class="font-bold text-[10.5px] text-outline uppercase tracking-wider pb-1 border-b border-outline-variant/10">Others</div>
-            <div class="space-y-0.5 mt-1">
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="gpt-oss-120b-medium" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">gpt-oss-120b-medium</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="tab_flash_lite_preview" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">tab_flash_lite_preview</span>
-              </label>
-              <label class="flex items-center gap-1.5 hover:bg-outline-variant/10 p-0.5 rounded cursor-pointer transition-colors select-none">
-                <input type="checkbox" name="triggerModel" value="tab_jump_flash_lite_preview" class="trigger-model-checkbox w-3.5 h-3.5 rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" />
-                <span class="truncate">jump_flash_lite_prev</span>
-              </label>
-            </div>
+            <div class="space-y-0.5 mt-1" id="triggerModelsOthers"></div>
           </div>
         </div>
+        <div id="triggerModelsStatusMsg" class="text-[10.5px] text-outline dark:text-outline-variant mt-1.5 hidden flex items-center gap-1"></div>
       </div>
     </div>
 

@@ -159,3 +159,47 @@ func ToggleAutoTriggerTask(id int64, enabled bool) error {
 	_, err := GlobalDB.Exec("UPDATE auto_trigger_tasks SET enabled = ? WHERE id = ?", enabledInt, id)
 	return err
 }
+
+// GetAutoTriggerTask gets a single task by ID
+func GetAutoTriggerTask(id int64) (*AutoTriggerTask, error) {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	if GlobalDB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	row := GlobalDB.QueryRow("SELECT id, name, account_ids, model_names, prompt, trigger_type, interval_seconds, next_trigger_time, enabled, created_at FROM auto_trigger_tasks WHERE id = ?", id)
+
+	var task AutoTriggerTask
+	var accIDsStr, modNamesStr, createdAtStr string
+	var nextTimeStr sql.NullString
+	var enabledInt int
+
+	err := row.Scan(&task.ID, &task.Name, &accIDsStr, &modNamesStr, &task.Prompt, &task.TriggerType, &task.IntervalSeconds, &nextTimeStr, &enabledInt, &createdAtStr)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	_ = json.Unmarshal([]byte(accIDsStr), &task.AccountIDs)
+	_ = json.Unmarshal([]byte(modNamesStr), &task.ModelNames)
+	task.Enabled = enabledInt == 1
+
+	if nextTimeStr.Valid && nextTimeStr.String != "" {
+		if t, err := time.Parse(time.RFC3339, nextTimeStr.String); err == nil {
+			task.NextTriggerTime = &t
+		}
+	}
+
+	if t, err := time.Parse("2006-01-02 15:04:05", createdAtStr); err == nil {
+		task.CreatedAt = t
+	} else if t, err := time.Parse(time.RFC3339, createdAtStr); err == nil {
+		task.CreatedAt = t
+	}
+
+	return &task, nil
+}
+
