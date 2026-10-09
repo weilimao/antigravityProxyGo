@@ -145,7 +145,8 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 		}
 
 		// Rewrite project and model fields in JSON payload
-		if len(sc.bodyBytes) > 0 && strings.Contains(customHeaders.Get("Content-Type"), "json") {
+		// 仅对 18444 第三方平台调用 (sc.relayUserID != "") 执行 project/model 覆写与思维链注入；原生 Antigravity 客户端保持原始请求体透传
+		if sc.relayUserID != "" && len(sc.bodyBytes) > 0 && strings.Contains(customHeaders.Get("Content-Type"), "json") {
 			var bodyMap map[string]interface{}
 			if json.Unmarshal(sc.bodyBytes, &bodyMap) == nil {
 				bodyChanged := false
@@ -344,150 +345,159 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 			}
 		} else {
 			// 对于 Antigravity 个人通道网页账户：
-			isV1Internal := strings.Contains(localTargetPath, "v1internal") && isRealModelRequest(localTargetPath)
+			// 仅对 18444 端口第三方平台调用 (sc.relayUserID != "") 执行无项目降级翻译或 generativelanguage 包装；
+			// 原生 Antigravity 客户端调用保留原始 Host、Path 与请求体，只做透传。
+			if sc.relayUserID != "" {
+				isV1Internal := strings.Contains(localTargetPath, "v1internal") && isRealModelRequest(localTargetPath)
 
-			hasCustomProject := poolAccount.ProjectID != ""
-			if !hasCustomProject && sc.h.getStoredProject != nil {
-				hasCustomProject = sc.h.getStoredProject(poolAccount.Email) != ""
-			}
-
-			if isV1Internal && !hasCustomProject {
-				// 核心大招：如果这是一个 v1internal 请求，且当前账号没有任何捕获的专属项目 ID，
-				// 我们直接将其反向翻译并降级为标准的 generativelanguage 接口发送，彻底规避 IAM 权限 403 限制！
-				localTargetHost = "generativelanguage.googleapis.com"
-				customHeaders.Set("Host", localTargetHost)
-
-				action := "generateContent"
-				if strings.Contains(localTargetPath, "streamGenerateContent") {
-					action = "streamGenerateContent"
-				}
-				isStreaming := action == "streamGenerateContent" || strings.Contains(localTargetPath, "alt=sse")
-				if isStreaming && !strings.Contains(action, "streamGenerateContent") {
-					action = "streamGenerateContent"
-				}
-				queryStr := ""
-				if isStreaming {
-					queryStr = "?alt=sse"
+				hasCustomProject := poolAccount.ProjectID != ""
+				if !hasCustomProject && sc.h.getStoredProject != nil {
+					hasCustomProject = sc.h.getStoredProject(poolAccount.Email) != ""
 				}
 
-				modelName := targetModel
-				if modelName == "" {
-					modelName = sc.currentModel
-				}
-				if modelName == "" || modelName == "unknown" || modelName == "antigravity-core" {
-					modelName = "gemini-1.5-flash" // 默认好用且免费的模型
-				}
-
-				localTargetPath = fmt.Sprintf("/v1beta/models/%s:%s%s", modelName, action, queryStr)
-
-				// 剥离外层 v1internal 包体，提取内层标准的 request 字段
-				var v1internalReq map[string]interface{}
-				if err := json.Unmarshal(finalReqBody, &v1internalReq); err == nil {
-					if innerReqRaw, exists := v1internalReq["request"]; exists {
-						if innerReq, ok := innerReqRaw.(map[string]interface{}); ok {
-							// 核心修复：codex cli 的 v1internal 可能把 tools, systemInstruction 等丢在外层
-							// 降级为官方接口时，必须将这些外层配置合入 innerReq 避免工具约束丢失导致模型幻觉
-							for _, key := range []string{"tools", "systemInstruction", "generationConfig", "toolConfig"} {
-								if val, hasKey := v1internalReq[key]; hasKey {
-									if _, alreadyInInner := innerReq[key]; !alreadyInInner {
-										innerReq[key] = val
-									}
-								}
-							}
-
-							// 降级翻译后执行完整的 Gemini 兼容性清洗：
-							// 1. 清除 thoughtSignature（标准 API 不支持，会触发 MALFORMED_FUNCTION_CALL）
-							// 2. 清洗工具声明中的 JSON Schema（移除 Gemini 不支持的 $schema/additionalProperties/format 等字段）
-							// 3. 注入宽松 toolConfig
-							// 这是修复 Codex CLI 频繁断连的核心手段，参考 Antigravity-Manager 的 clean_json_schema 实现
-							cleanAndPrepareGeminiRequest(innerReq)
-
-							if innerBytes, errMar := json.Marshal(innerReq); errMar == nil {
-								finalReqBody = innerBytes
-								customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
-							}
-						}
-					}
-				}
-
-				if attemptIndex == 0 {
-					sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 降级翻译] v1internal 无项目权限账号降级为官方通用接口: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
-				}
-			} else if localTargetHost == "generativelanguage.googleapis.com" && isRealModelRequest(localTargetPath) {
-				// 如果原本就是 generativelanguage 且有专属项目，则按原逻辑伪装升级
-				if hasCustomProject {
-					localTargetHost = "daily-cloudcode-pa.googleapis.com"
+				if isV1Internal && !hasCustomProject {
+					// 核心大招：如果这是一个 v1internal 请求，且当前账号没有任何捕获的专属项目 ID，
+					// 我们直接将其反向翻译并降级为标准的 generativelanguage 接口发送，彻底规避 IAM 权限 403 限制！
+					localTargetHost = "generativelanguage.googleapis.com"
 					customHeaders.Set("Host", localTargetHost)
 
 					action := "generateContent"
-					queryStr := ""
-					if strings.Contains(localTargetPath, "streamGenerateContent") || strings.Contains(sc.r.URL.RawQuery, "alt=sse") {
+					if strings.Contains(localTargetPath, "streamGenerateContent") {
 						action = "streamGenerateContent"
+					}
+					isStreaming := action == "streamGenerateContent" || strings.Contains(localTargetPath, "alt=sse")
+					if isStreaming && !strings.Contains(action, "streamGenerateContent") {
+						action = "streamGenerateContent"
+					}
+					queryStr := ""
+					if isStreaming {
 						queryStr = "?alt=sse"
 					}
-					localTargetPath = fmt.Sprintf("/v1internal:%s%s", action, queryStr)
 
-					var standardReq map[string]interface{}
-					if err := json.Unmarshal(finalReqBody, &standardReq); err == nil {
-						modelName := targetModel
-						if modelName == "" {
-							modelName = sc.currentModel
-						}
+					modelName := targetModel
+					if modelName == "" {
+						modelName = sc.currentModel
+					}
+					if modelName == "" || modelName == "unknown" || modelName == "antigravity-core" {
+						modelName = "gemini-1.5-flash" // 默认好用且免费的模型
+					}
 
-						if sc.rawSessionKey != "" {
-							hasher := sha256.New()
-							hasher.Write([]byte(sc.rawSessionKey))
-							standardReq["sessionId"] = "-" + hex.EncodeToString(hasher.Sum(nil))[:16]
-						} else {
-							standardReq["sessionId"] = fmt.Sprintf("-%d", time.Now().UnixNano()/1e6)
-						}
+					localTargetPath = fmt.Sprintf("/v1beta/models/%s:%s%s", modelName, action, queryStr)
 
-						actualProjectId := poolAccount.ProjectID
-						if actualProjectId == "" && sc.h.getStoredProject != nil {
-							actualProjectId = sc.h.getStoredProject(poolAccount.Email)
-						}
-						if actualProjectId == "" {
-							actualProjectId = sc.h.getStoredProject("default")
-						}
-						if actualProjectId == "" {
-							actualProjectId = "favorable-synapse-ttvcb" // 最终兜底
-						}
+					// 剥离外层 v1internal 包体，提取内层标准的 request 字段
+					var v1internalReq map[string]interface{}
+					if err := json.Unmarshal(finalReqBody, &v1internalReq); err == nil {
+						if innerReqRaw, exists := v1internalReq["request"]; exists {
+							if innerReq, ok := innerReqRaw.(map[string]interface{}); ok {
+								// 核心修复：codex cli 的 v1internal 可能把 tools, systemInstruction 等丢在外层
+								// 降级为官方接口时，必须将这些外层配置合入 innerReq 避免工具约束丢失导致模型幻觉
+								for _, key := range []string{"tools", "systemInstruction", "generationConfig", "toolConfig"} {
+									if val, hasKey := v1internalReq[key]; hasKey {
+										if _, alreadyInInner := innerReq[key]; !alreadyInInner {
+											innerReq[key] = val
+										}
+									}
+								}
 
-						wrappedReq := map[string]interface{}{
-							"project":            actualProjectId,
-							"requestId":          fmt.Sprintf("agent/%d-%d", time.Now().Unix(), rand.Intn(1000000)),
-							"request":            standardReq,
-							"model":              modelName,
-							"userAgent":          "antigravity",
-							"requestType":        "agent",
-							"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
-						}
+								// 降级翻译后执行完整的 Gemini 兼容性清洗：
+								// 1. 清除 thoughtSignature（标准 API 不支持，会触发 MALFORMED_FUNCTION_CALL）
+								// 2. 清洗工具声明中的 JSON Schema（移除 Gemini 不支持的 $schema/additionalProperties/format 等字段）
+								// 3. 注入宽松 toolConfig
+								// 这是修复 Codex CLI 频繁断连的核心手段，参考 Antigravity-Manager 的 clean_json_schema 实现
+								cleanAndPrepareGeminiRequest(innerReq)
 
-						// 注入缓存的 thoughtSignature 到 functionCall parts，替换 skip_thought_signature_validator 哨兵值
-						// 保证 v1internal API 思考链连续性，参考 Antigravity-Manager 的 SignatureCache 实现
-						if innerReq, ok := wrappedReq["request"].(map[string]interface{}); ok {
-							InjectCachedSignatures(innerReq, sc.rawSessionKey, modelName)
-						}
-
-						if wrappedBytes, err := json.Marshal(wrappedReq); err == nil {
-							finalReqBody = wrappedBytes
-							customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
-							if sc.h.accountMgr != nil {
-								customHeaders.Set("User-Agent", sc.h.accountMgr.GetAntigravityUserAgent())
-							} else {
-								customHeaders.Set("User-Agent", account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion))
+								if innerBytes, errMar := json.Marshal(innerReq); errMar == nil {
+									finalReqBody = innerBytes
+									customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
+								}
 							}
 						}
 					}
 
 					if attemptIndex == 0 {
-						sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 网页路由] 重写并封装专有载荷: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
+						sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 降级翻译] v1internal 无项目权限账号降级为官方通用接口: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
 					}
-				} else {
-					// 否则（无项目且直接调用 generativelanguage），保留原样发送
-					if attemptIndex == 0 {
-						sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 通用路由] 保留官方通用接口访问: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
+				} else if localTargetHost == "generativelanguage.googleapis.com" && isRealModelRequest(localTargetPath) {
+					// 如果原本就是 generativelanguage 且有专属项目，则按原逻辑伪装升级
+					if hasCustomProject {
+						localTargetHost = "daily-cloudcode-pa.googleapis.com"
+						customHeaders.Set("Host", localTargetHost)
+
+						action := "generateContent"
+						queryStr := ""
+						if strings.Contains(localTargetPath, "streamGenerateContent") || strings.Contains(sc.r.URL.RawQuery, "alt=sse") {
+							action = "streamGenerateContent"
+							queryStr = "?alt=sse"
+						}
+						localTargetPath = fmt.Sprintf("/v1internal:%s%s", action, queryStr)
+
+						var standardReq map[string]interface{}
+						if err := json.Unmarshal(finalReqBody, &standardReq); err == nil {
+							modelName := targetModel
+							if modelName == "" {
+								modelName = sc.currentModel
+							}
+
+							if sc.rawSessionKey != "" {
+								hasher := sha256.New()
+								hasher.Write([]byte(sc.rawSessionKey))
+								standardReq["sessionId"] = "-" + hex.EncodeToString(hasher.Sum(nil))[:16]
+							} else {
+								standardReq["sessionId"] = fmt.Sprintf("-%d", time.Now().UnixNano()/1e6)
+							}
+
+							actualProjectId := poolAccount.ProjectID
+							if actualProjectId == "" && sc.h.getStoredProject != nil {
+								actualProjectId = sc.h.getStoredProject(poolAccount.Email)
+							}
+							if actualProjectId == "" {
+								actualProjectId = sc.h.getStoredProject("default")
+							}
+							if actualProjectId == "" {
+								actualProjectId = "favorable-synapse-ttvcb" // 最终兜底
+							}
+
+							wrappedReq := map[string]interface{}{
+								"project":            actualProjectId,
+								"requestId":          fmt.Sprintf("agent/%d-%d", time.Now().Unix(), rand.Intn(1000000)),
+								"request":            standardReq,
+								"model":              modelName,
+								"userAgent":          "antigravity",
+								"requestType":        "agent",
+								"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
+							}
+
+							// 注入缓存的 thoughtSignature 到 functionCall parts，替换 skip_thought_signature_validator 哨兵值
+							// 保证 v1internal API 思考链连续性，参考 Antigravity-Manager 的 SignatureCache 实现
+							if innerReq, ok := wrappedReq["request"].(map[string]interface{}); ok {
+								InjectCachedSignatures(innerReq, sc.rawSessionKey, modelName)
+							}
+
+							if wrappedBytes, err := json.Marshal(wrappedReq); err == nil {
+								finalReqBody = wrappedBytes
+								customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
+								if sc.h.accountMgr != nil {
+									customHeaders.Set("User-Agent", sc.h.accountMgr.GetAntigravityUserAgent())
+								} else {
+									customHeaders.Set("User-Agent", account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion))
+								}
+							}
+						}
+
+						if attemptIndex == 0 {
+							sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 网页路由] 重写并封装专有载荷: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
+						}
+					} else {
+						// 否则（无项目且直接调用 generativelanguage），保留原样发送
+						if attemptIndex == 0 {
+							sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 通用路由] 保留官方通用接口访问: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
+						}
 					}
+				}
+			} else {
+				// 原生 Antigravity 客户端调用，保留原生请求头与请求体无损透传
+				if attemptIndex == 0 {
+					sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 原生透传] 保持原始请求头与载荷无损透传: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
 				}
 			}
 		}

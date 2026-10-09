@@ -118,8 +118,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
-	// 仅对流式接口注入自定义提示词前缀
-	if h.SettingsMgr != nil && len(bodyBytes) > 0 && isRealModelRequest(r.URL.Path) {
+	// 仅对来自 18444 第三方平台调用的流式接口注入自定义提示词前缀 (原生 Antigravity 客户端保持原始载荷透传)
+	if relayUserID != "" && h.SettingsMgr != nil && len(bodyBytes) > 0 && isRealModelRequest(r.URL.Path) {
 		isStreaming := strings.Contains(r.URL.Path, "streamGenerateContent") || strings.Contains(r.URL.RawQuery, "alt=sse")
 		if isStreaming {
 			prefix := h.SettingsMgr.GetPromptPrefix()
@@ -129,10 +129,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 全局工具声明清洗：对所有模型请求（无论 v1internal 还是 generativelanguage），
-	// 清洗 tools 中的 JSON Schema 以符合 Gemini API 要求，防止 MALFORMED_FUNCTION_CALL。
-	// 这是参考 Antigravity-Manager 的 clean_json_schema 实现的核心防护。
-	if len(bodyBytes) > 0 && isRealModelRequest(r.URL.Path) {
+	// 工具声明清洗：仅对来自 18444 第三方平台调用的模型请求清洗 tools 中的 JSON Schema，
+	// 防止第三方客户端的工具参数触发 MALFORMED_FUNCTION_CALL。原生 Antigravity 客户端保持原始请求体透传。
+	if relayUserID != "" && len(bodyBytes) > 0 && isRealModelRequest(r.URL.Path) {
 		bodyBytes = cleanToolDeclarationsInBody(bodyBytes)
 	}
 
@@ -482,8 +481,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 代理侧主动会话优化与压缩核心 (当请求直接打到 18443 时)
-	if h.SettingsMgr != nil && len(bodyBytes) > 0 && strings.Contains(strings.ToLower(targetPath), "generatecontent") {
+	// 代理侧主动会话优化与压缩核心 (仅针对 18444 第三方平台调用打到 18443 时生效，原生 Antigravity 客户端保持原始请求体透传)
+	if relayUserID != "" && h.SettingsMgr != nil && len(bodyBytes) > 0 && strings.Contains(strings.ToLower(targetPath), "generatecontent") {
 		if h.logFn != nil {
 			h.logFn(fmt.Sprintf("🔍 [18443 劫持诊断] 收到模型请求 | sessionKey: %s | targetPath: %s", sessionKey, targetPath))
 		}
