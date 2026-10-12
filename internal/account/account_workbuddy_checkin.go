@@ -67,8 +67,15 @@ func buildWorkBuddyCheckinHeaders(acc *Account) http.Header {
 }
 
 func postWorkBuddyEndpoint(ctx context.Context, client *http.Client, baseURL, path string, headers http.Header) (int, []byte, error) {
+	return postWorkBuddyEndpointJSON(ctx, client, baseURL, path, headers, []byte("{}"))
+}
+
+func postWorkBuddyEndpointJSON(ctx context.Context, client *http.Client, baseURL, path string, headers http.Header, bodyBytes []byte) (int, []byte, error) {
 	fullURL := strings.TrimRight(baseURL, "/") + path
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader([]byte("{}")))
+	if len(bodyBytes) == 0 {
+		bodyBytes = []byte("{}")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -84,7 +91,7 @@ func postWorkBuddyEndpoint(ctx context.Context, client *http.Client, baseURL, pa
 	return resp.StatusCode, body, err
 }
 
-// FetchWorkBuddyCheckinStatus 探测指定 WorkBuddy 账号当前的每日签到活动与今日签到状态。
+// FetchWorkBuddyCheckinStatus 探测指定 WorkBuddy 账号当前的每日签到/活跃活动与今日状态。
 func FetchWorkBuddyCheckinStatus(acc *Account, customClient ...*http.Client) (*WorkBuddyCheckinStatus, error) {
 	if acc == nil || acc.Provider != workbuddyProvider {
 		return nil, errors.New("账号无效或非 WorkBuddy 类型")
@@ -110,7 +117,16 @@ func FetchWorkBuddyCheckinStatus(acc *Account, customClient ...*http.Client) (*W
 	headers := buildWorkBuddyCheckinHeaders(acc)
 	ctx := context.Background()
 
-	// 优先请求 /v2/billing/meter/checkin-activity-status，404 时优雅降级 /billing/meter/checkin-activity-status 与 /billing/meter/checkin-status
+	// 国际版 (www.workbuddy.ai) 与国内版 (copilot.tencent.com) 协议分流
+	if !acc.IsWorkBuddyDomestic() {
+		return fetchInternationalActivityStatus(ctx, client, baseURL, headers, acc)
+	}
+
+	return fetchDomesticCheckinStatus(ctx, client, baseURL, headers)
+}
+
+// fetchDomesticCheckinStatus 处理国内版“Buddy 加油站”每日签到活动状态探测。
+func fetchDomesticCheckinStatus(ctx context.Context, client *http.Client, baseURL string, headers http.Header) (*WorkBuddyCheckinStatus, error) {
 	statusCode, body, err := postWorkBuddyEndpoint(ctx, client, baseURL, "/v2/billing/meter/checkin-activity-status", headers)
 	if err != nil {
 		return nil, fmt.Errorf("签到状态接口请求失败: %w", err)
@@ -175,7 +191,137 @@ func FetchWorkBuddyCheckinStatus(acc *Account, customClient ...*http.Client) (*W
 	}, nil
 }
 
-// ClaimWorkBuddyDailyCheckin 对指定 WorkBuddy 账号执行签到发包。
+// fetchInternationalActivityStatus 处理国际版每日活跃赠送包 (Bonus Pack) 状态探测。
+func fetchInternationalActivityStatus(ctx context.Context, client *http.Client, baseURL string, headers http.Header, acc *Account) (*WorkBuddyCheckinStatus, error) {
+	todayStr := time.Now().Format("2006-01-02")
+	queryPayload := map[string]interface{}{
+		"PageNumber":   1,
+		"PageSize":     50,
+		"Status":       []int{0, 3},
+		"PackageCodes": []string{WorkBuddyPackageBonusPack},
+	}
+	bodyBytes, _ := json.Marshal(queryPayload)
+
+	statusCode, body, err := postWorkBuddyEndpointJSON(ctx, client, baseURL, "/billing/meter/get-user-resource-free-packages", headers, bodyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("国际版活跃资源包接口请求失败: %w", err)
+	}
+
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("凭据失效 (HTTP %d)，请重新授权", statusCode)
+	}
+
+	if statusCode == http.StatusOK {
+		var respData struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+			Data struct {
+				Accounts []struct {
+					PackageCode         string `json:"PackageCode"`
+					PackageName         string `json:"PackageName"`
+					CreateTime          int64  `json:"CreateTime"`
+					CycleCapacitySize   int64  `json:"CycleCapacitySize"`
+					CycleCapacityRemain int64  `json:"CycleCapacityRemain"`
+					CycleStartTime      string `json:"CycleStartTime"`
+					CycleEndTime        string `json:"CycleEndTime"`
+				} `json:"Accounts"`
+				PackageList []struct {
+					PackageCode         string `json:"PackageCode"`
+					PackageName         string `json:"PackageName"`
+					CreateTime          int64  `json:"CreateTime"`
+					CycleCapacitySize   int64  `json:"CycleCapacitySize"`
+					CycleCapacityRemain int64  `json:"CycleCapacityRemain"`
+					CycleStartTime      string `json:"CycleStartTime"`
+					CycleEndTime        string `json:"CycleEndTime"`
+				} `json:"PackageList"`
+				TotalCount int `json:"TotalCount"`
+			} `json:"data"`
+		}
+
+		if err := json.Unmarshal(body, &respData); err == nil && respData.Code == 0 {
+			todayCheckedIn := false
+			items := respData.Data.Accounts
+			if len(items) == 0 && len(respData.Data.PackageList) > 0 {
+				items = respData.Data.PackageList
+			}
+			totalCount := respData.Data.TotalCount
+			if totalCount == 0 && len(items) > 0 {
+				totalCount = len(items)
+			}
+
+			for _, a := range items {
+				if a.PackageCode == WorkBuddyPackageBonusPack {
+					// 比对毫秒时间戳对应的本地自然日
+					if a.CreateTime > 0 {
+						day := time.UnixMilli(a.CreateTime).Format("2006-01-02")
+						if day == todayStr {
+							todayCheckedIn = true
+							break
+						}
+					}
+					if len(a.CycleStartTime) >= 10 && a.CycleStartTime[:10] == todayStr {
+						todayCheckedIn = true
+						break
+					}
+				}
+			}
+
+			claimText := "激活今日活跃"
+			if todayCheckedIn {
+				claimText = "今日已领"
+			}
+
+			return &WorkBuddyCheckinStatus{
+				Active:          true, // 国际版限免长期有效
+				TodayCheckedIn:  todayCheckedIn,
+				StreakDays:      totalCount,
+				DailyCredit:     30,
+				TodayCredit:     30,
+				ThemeName:       "每日活跃奖励",
+				ActivityName:    "WorkBuddy 活跃奖励 (30 积分/天)",
+				ClaimButtonText: claimText,
+			}, nil
+		}
+	}
+
+	// 降级兜底：请求 /billing/meter/get-user-resource-summary
+	summaryCode, summaryBody, sErr := postWorkBuddyEndpoint(ctx, client, baseURL, "/billing/meter/get-user-resource-summary", headers)
+	if sErr == nil && summaryCode == http.StatusOK {
+		var summaryData struct {
+			Code int `json:"code"`
+			Data struct {
+				Packages []struct {
+					PackageCode string `json:"PackageCode"`
+					TotalCount  int    `json:"TotalCount"`
+				} `json:"Packages"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(summaryBody, &summaryData) == nil && summaryData.Code == 0 {
+			count := 0
+			for _, p := range summaryData.Data.Packages {
+				if p.PackageCode == WorkBuddyPackageBonusPack {
+					count = p.TotalCount
+					break
+				}
+			}
+			todayCheckedIn := (acc != nil && acc.LastCheckinDate == todayStr)
+			return &WorkBuddyCheckinStatus{
+				Active:          true,
+				TodayCheckedIn:  todayCheckedIn,
+				StreakDays:      count,
+				DailyCredit:     30,
+				TodayCredit:     30,
+				ThemeName:       "每日活跃奖励",
+				ActivityName:    "WorkBuddy 活跃奖励 (30 积分/天)",
+				ClaimButtonText: "激活今日活跃",
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("探测国际版活跃状态失败 (HTTP %d): %s", statusCode, string(body))
+}
+
+// ClaimWorkBuddyDailyCheckin 对指定 WorkBuddy 账号执行每日签到或活跃奖励激活。
 func ClaimWorkBuddyDailyCheckin(acc *Account, customClient ...*http.Client) (*WorkBuddyCheckinResult, error) {
 	if acc == nil || acc.Provider != workbuddyProvider {
 		return nil, errors.New("账号无效或非 WorkBuddy 类型")
@@ -201,6 +347,16 @@ func ClaimWorkBuddyDailyCheckin(acc *Account, customClient ...*http.Client) (*Wo
 	headers := buildWorkBuddyCheckinHeaders(acc)
 	ctx := context.Background()
 
+	// 国际版与国内版分流执行
+	if !acc.IsWorkBuddyDomestic() {
+		return claimInternationalActivity(ctx, client, baseURL, headers, acc)
+	}
+
+	return claimDomesticCheckin(ctx, client, baseURL, headers, acc)
+}
+
+// claimDomesticCheckin 执行国内版签到领包。
+func claimDomesticCheckin(ctx context.Context, client *http.Client, baseURL string, headers http.Header, acc *Account) (*WorkBuddyCheckinResult, error) {
 	statusCode, body, err := postWorkBuddyEndpoint(ctx, client, baseURL, "/v2/billing/meter/daily-checkin", headers)
 	if err != nil {
 		return nil, fmt.Errorf("执行每日签到请求失败: %w", err)
@@ -234,7 +390,6 @@ func ClaimWorkBuddyDailyCheckin(acc *Account, customClient ...*http.Client) (*Wo
 		return nil, fmt.Errorf("解析签到响应失败: %w", err)
 	}
 
-	// 业务响应判定
 	if respData.Code == 0 {
 		res.Success = true
 		res.TodayCheckedIn = true
@@ -244,12 +399,291 @@ func ClaimWorkBuddyDailyCheckin(acc *Account, customClient ...*http.Client) (*Wo
 		return res, nil
 	}
 
-	// 业务错误（例如 10001 活动未开启，或已经签到过）
 	res.Success = false
 	res.Message = respData.Msg
 	if respData.Code == 10001 || strings.Contains(respData.Msg, "未开启") || strings.Contains(respData.Msg, "已过期") {
 		res.Skipped = true
 	}
+	return res, nil
+}
+
+// claimInternationalActivity 执行国际版活跃奖励激活与挂载。
+// 对齐官方客户端 UserGrowth / PluginStatusDailyReporter 协议。
+func claimInternationalActivity(ctx context.Context, client *http.Client, baseURL string, headers http.Header, acc *Account) (*WorkBuddyCheckinResult, error) {
+	res := &WorkBuddyCheckinResult{
+		AccountID: acc.ID,
+		Email:     acc.Email,
+	}
+
+	// 1. 先探测当前今日是否已具备 Bonus Pack
+	status, _ := fetchInternationalActivityStatus(ctx, client, baseURL, headers, acc)
+	if status != nil && status.TodayCheckedIn {
+		res.Success = true
+		res.TodayCheckedIn = true
+		res.AddedCredit = 0
+		res.StreakDays = status.StreakDays
+		res.Message = fmt.Sprintf("今日活跃奖励已到账（30 积分），无需重复激活，已累计活跃 %d 天", status.StreakDays)
+		return res, nil
+	}
+
+	effectiveUID := GetWorkBuddyEffectiveUID(acc)
+	if effectiveUID == "" {
+		effectiveUID = acc.ProjectID
+	}
+	if effectiveUID == "" {
+		effectiveUID = acc.ID
+	}
+	effectiveEmail := GetWorkBuddyEffectiveEmail(acc)
+	if effectiveEmail == "" {
+		effectiveEmail = acc.Email
+	}
+
+	// 2. 前置官方账号与账单握手 (1:1 对齐官方客户端 codebuddy-headless 行为)
+	preHeaders := headers.Clone()
+	preHeaders.Set("X-User-Id", effectiveUID)
+	preHeaders.Set("X-Current-Account-Id", effectiveUID)
+	_, _, _ = postWorkBuddyEndpoint(ctx, client, baseURL, "/v2/plugin/accounts", preHeaders)
+	_, _, _ = postWorkBuddyEndpointJSON(ctx, client, baseURL, "/v2/billing/meter/get-dosage-notify", preHeaders, []byte(`{"product":"WorkBuddy"}`))
+
+	// 3. 构造 Craft 专属请求参数与 growthEvent 遥测参数
+	convID := GenerateWorkBuddyUUID()
+	reqID := GenerateWorkBuddyHex32()
+	msgID := GenerateWorkBuddyHex32()
+
+	growthEventObj := []map[string]interface{}{
+		{
+			"eventCode": "chat_request_send",
+			"id":        convID,
+			"extra": map[string]interface{}{
+				"inputLength":      18,
+				"requestModelId":   DefaultWorkBuddyModel,
+				"requestModelName": "Deepseek-V4.1-Flash",
+				"mode":             "craft",
+				"command":          "",
+			},
+		},
+	}
+	growthEventJSON, _ := json.Marshal(growthEventObj)
+
+	// 采用 0 积分免费模型 deepseek-v4.1-flash 发送一个微心跳 (stream: true)
+	pingPayload := map[string]interface{}{
+		"model":  DefaultWorkBuddyModel,
+		"stream": true,
+		"messages": []map[string]string{
+			{"role": "system", "content": "You are a helpful assistant."},
+			{"role": "user", "content": "Hello WorkBuddy"},
+		},
+		"max_tokens": 1,
+		"extra_vars": map[string]interface{}{
+			"growthEvent": string(growthEventJSON),
+		},
+	}
+	pingBytes, _ := json.Marshal(pingPayload)
+
+	chatHeaders := headers.Clone()
+	chatHeaders.Set("Content-Type", "application/json")
+	chatHeaders.Set("Accept", "text/event-stream")
+	chatHeaders.Set("X-User-Id", effectiveUID)
+	chatHeaders.Set("X-Current-Account-Id", effectiveUID)
+	chatHeaders.Set("X-Conversation-ID", convID)
+	chatHeaders.Set("X-Conversation-Request-ID", reqID)
+	chatHeaders.Set("X-Conversation-Message-ID", msgID)
+	chatHeaders.Set("X-Request-ID", msgID)
+	chatHeaders.Set("X-Root-Request-ID", reqID)
+	chatHeaders.Set("X-Agent-Intent", "craft")
+	chatHeaders.Set("X-Agent-Type", "main")
+	chatHeaders.Set("X-IDE-Type", "WorkBuddy")
+	chatHeaders.Set("X-IDE-Name", "WorkBuddy")
+	chatHeaders.Set("X-IDE-Version", "5.7.6")
+	chatHeaders.Set("X-Product", "WorkBuddy")
+	chatHeaders.Set("User-Agent", "WorkBuddy/5.7.6")
+	chatHeaders.Set("X-Private-Data", "false")
+
+	code, body, chatErr := postWorkBuddyEndpointJSON(ctx, client, baseURL, "/v2/chat/completions", chatHeaders, pingBytes)
+	if chatErr != nil {
+		return nil, fmt.Errorf("触发国际版活跃状态请求失败: %w", chatErr)
+	}
+
+	if code == http.StatusUnauthorized || code == http.StatusForbidden {
+		return nil, fmt.Errorf("凭据失效 (HTTP %d)，请重新授权", code)
+	}
+	if code != http.StatusOK {
+		return nil, fmt.Errorf("触发活跃返回异常 (HTTP %d): %s", code, string(body))
+	}
+
+	// 4. 对齐官方客户端，向 /v2/report 完整上报 5 大遥测事件链
+	nowMs := time.Now().UnixMilli()
+	reportEvents := []map[string]interface{}{
+		{
+			"eventCode":     "plugin_status",
+			"timestamp":     nowMs,
+			"reportDelay":   0,
+			"status":        "info",
+			"text":          "pluginStart",
+			"isInterval":    false,
+			"buddyId":       "",
+			"buddyName":     "",
+			"timezone":      "Asia/Shanghai",
+			"userId":        effectiveUID,
+			"username":      effectiveEmail,
+			"userNickname":  effectiveEmail,
+			"product":       "SaaS",
+			"releaseDate":   1791345433118,
+			"commit":        "3e43260f771393d75c6504db99e751eb03dea8db",
+			"os":            "Windows_NT(10.0.22631)",
+			"osRelease":     "10.0.22631",
+			"ideType":       "workbuddy",
+			"ideName":       "WorkBuddy",
+			"ideVersion":    "0.2.26",
+			"pluginVersion": "5.7.6",
+			"env":           "production",
+		},
+		{
+			"eventCode":        "chat_request_send",
+			"timestamp":        nowMs + 10,
+			"conversationId":   convID,
+			"requestId":        reqID,
+			"messageId":        msgID,
+			"userId":           effectiveUID,
+			"username":         effectiveEmail,
+			"userNickname":     effectiveEmail,
+			"mode":             "craft",
+			"agentName":        "cli",
+			"agentType":        "main",
+			"extName":          "workbuddy-desktop",
+			"status":           "success",
+			"requestModelId":   DefaultWorkBuddyModel,
+			"requestModelName": "Deepseek-V4.1-Flash",
+			"timezone":         "Asia/Shanghai",
+			"product":          "SaaS",
+			"releaseDate":      1791345433118,
+			"commit":           "3e43260f771393d75c6504db99e751eb03dea8db",
+			"os":               "Windows_NT(10.0.22631)",
+			"osRelease":        "10.0.22631",
+			"ideType":          "workbuddy",
+			"ideName":          "WorkBuddy",
+			"ideVersion":       "0.2.26",
+			"pluginVersion":    "5.7.6",
+			"env":              "production",
+		},
+		{
+			"eventCode":        "chat_message_send",
+			"timestamp":        nowMs + 20,
+			"conversationId":   convID,
+			"requestId":        reqID,
+			"messageId":        msgID,
+			"userId":           effectiveUID,
+			"username":         effectiveEmail,
+			"userNickname":     effectiveEmail,
+			"role":             "user",
+			"mode":             "craft",
+			"agentName":        "cli",
+			"agentType":        "main",
+			"extName":          "workbuddy-desktop",
+			"requestModelId":   DefaultWorkBuddyModel,
+			"requestModelName": "Deepseek-V4.1-Flash",
+			"timezone":         "Asia/Shanghai",
+			"product":          "SaaS",
+			"releaseDate":      1791345433118,
+			"commit":           "3e43260f771393d75c6504db99e751eb03dea8db",
+			"os":               "Windows_NT(10.0.22631)",
+			"osRelease":        "10.0.22631",
+			"ideType":          "workbuddy",
+			"ideName":          "WorkBuddy",
+			"ideVersion":       "0.2.26",
+			"pluginVersion":    "5.7.6",
+			"env":              "production",
+		},
+		{
+			"eventCode":        "chat_message_response",
+			"timestamp":        nowMs + 100,
+			"conversationId":   convID,
+			"requestId":        reqID,
+			"messageId":        msgID,
+			"userId":           effectiveUID,
+			"username":         effectiveEmail,
+			"userNickname":     effectiveEmail,
+			"role":             "assistant",
+			"mode":             "craft",
+			"agentName":        "cli",
+			"agentType":        "main",
+			"extName":          "workbuddy-desktop",
+			"requestModelId":   DefaultWorkBuddyModel,
+			"requestModelName": "Deepseek-V4.1-Flash",
+			"status":           "success",
+			"timezone":         "Asia/Shanghai",
+			"product":          "SaaS",
+			"releaseDate":      1791345433118,
+			"commit":           "3e43260f771393d75c6504db99e751eb03dea8db",
+			"os":               "Windows_NT(10.0.22631)",
+			"osRelease":        "10.0.22631",
+			"ideType":          "workbuddy",
+			"ideName":          "WorkBuddy",
+			"ideVersion":       "0.2.26",
+			"pluginVersion":    "5.7.6",
+			"env":              "production",
+		},
+		{
+			"eventCode":        "chat_request_response",
+			"timestamp":        nowMs + 120,
+			"conversationId":   convID,
+			"requestId":        reqID,
+			"messageId":        msgID,
+			"userId":           effectiveUID,
+			"username":         effectiveEmail,
+			"userNickname":     effectiveEmail,
+			"mode":             "craft",
+			"agentName":        "cli",
+			"agentType":        "main",
+			"extName":          "workbuddy-desktop",
+			"status":           "success",
+			"requestModelId":   DefaultWorkBuddyModel,
+			"requestModelName": "Deepseek-V4.1-Flash",
+			"timezone":         "Asia/Shanghai",
+			"product":          "SaaS",
+			"releaseDate":      1791345433118,
+			"commit":           "3e43260f771393d75c6504db99e751eb03dea8db",
+			"os":               "Windows_NT(10.0.22631)",
+			"osRelease":        "10.0.22631",
+			"ideType":          "workbuddy",
+			"ideName":          "WorkBuddy",
+			"ideVersion":       "0.2.26",
+			"pluginVersion":    "5.7.6",
+			"env":              "production",
+		},
+	}
+	reportBytes, _ := json.Marshal(reportEvents)
+	reportHeaders := headers.Clone()
+	reportHeaders.Set("Content-Type", "application/json; charset=UTF-8")
+	reportHeaders.Set("X-User-Id", effectiveUID)
+	reportHeaders.Set("X-Current-Account-Id", effectiveUID)
+	_, _, _ = postWorkBuddyEndpointJSON(ctx, client, baseURL, "/v2/report", reportHeaders, reportBytes)
+
+	// 5. 校验云端是否已下发 Bonus Pack（国际版通常为 T+1 次日凌晨异步到账）
+	time.Sleep(500 * time.Millisecond)
+	afterStatus, _ := fetchInternationalActivityStatus(ctx, client, baseURL, headers, acc)
+	if afterStatus != nil && afterStatus.TodayCheckedIn {
+		res.Success = true
+		res.TodayCheckedIn = true
+		res.AddedCredit = 30
+		res.StreakDays = afterStatus.StreakDays
+		res.Message = fmt.Sprintf("每日活跃奖励激活成功！获得 30 积分，已累计活跃 %d 天", afterStatus.StreakDays)
+		return res, nil
+	}
+
+	streak := 0
+	if status != nil && status.StreakDays > 0 {
+		streak = status.StreakDays
+	} else if afterStatus != nil && afterStatus.StreakDays > 0 {
+		streak = afterStatus.StreakDays
+	}
+
+	res.Success = true
+	res.TodayCheckedIn = false
+	res.AddedCredit = 0
+	res.StreakDays = streak
+	res.Skipped = false
+	res.Message = fmt.Sprintf("已成功上报今日官方 Craft 活跃与成长事件！活跃奖励（30 积分）将于次日凌晨 T+1 结算下发（当前累计活跃 %d 天）", streak)
 	return res, nil
 }
 
@@ -294,25 +728,31 @@ func (m *Manager) CheckinWorkBuddyAccount(accountID string, force bool, logger f
 		logMsg(fmt.Sprintf("⚠️ [WorkBuddy签到] 账号 %s 查询签到状态失败: %v", target.Email, err))
 		// 如果状态查询失败但非 401，尝试直接请求领取
 	} else {
+		m.Lock()
+		if status.StreakDays >= 0 {
+			target.CheckinStreak = status.StreakDays
+		}
 		if status.TodayCheckedIn {
-			m.Lock()
 			target.LastCheckinDate = today
-			if status.StreakDays > 0 {
-				target.CheckinStreak = status.StreakDays
-			}
 			m.Unlock()
 			_ = m.SaveAccountsFor(true, workbuddyProvider)
-			logMsg(fmt.Sprintf("ℹ️ [WorkBuddy签到] 账号 %s 今日已在其它端签到（连续 %d 天）", target.Email, status.StreakDays))
+			logMsg(fmt.Sprintf("ℹ️ [WorkBuddy签到] 账号 %s 今日活跃/签到已生效（累计 %d 天）", target.Email, status.StreakDays))
 			return &WorkBuddyCheckinResult{
 				Success:        true,
 				AccountID:      target.ID,
 				Email:          target.Email,
 				TodayCheckedIn: true,
 				StreakDays:     status.StreakDays,
-				Message:        "今日已完成签到",
+				Message:        "今日已完成签到/活跃奖励已到账",
 				Skipped:        true,
 			}, nil
 		}
+
+		// 自愈清理：若云端今日未下发，但本地残留了历史或脏 LastCheckinDate，清空之
+		if !target.IsWorkBuddyDomestic() && target.LastCheckinDate != "" {
+			target.LastCheckinDate = ""
+		}
+		m.Unlock()
 
 		if !status.Active {
 			// 活动尚未开启或不在开放周期，记录为今日已探测避免频繁打接口
@@ -332,7 +772,7 @@ func (m *Manager) CheckinWorkBuddyAccount(accountID string, force bool, logger f
 		}
 	}
 
-	// 2. 执行签到发包
+	// 2. 执行签到发包 / 活跃上报
 	res, err := ClaimWorkBuddyDailyCheckin(target)
 	if err != nil {
 		logMsg(fmt.Sprintf("❌ [WorkBuddy签到] 账号 %s 签到执行失败: %v", target.Email, err))
@@ -340,8 +780,14 @@ func (m *Manager) CheckinWorkBuddyAccount(accountID string, force bool, logger f
 	}
 
 	m.Lock()
-	target.LastCheckinDate = today
-	if res.StreakDays > 0 {
+	if res.TodayCheckedIn {
+		target.LastCheckinDate = today
+		if res.StreakDays > 0 {
+			target.CheckinStreak = res.StreakDays
+		}
+	} else if !target.IsWorkBuddyDomestic() {
+		// 国际版次日异步到账：清理本地脏标记，准确记录云端累计天数
+		target.LastCheckinDate = ""
 		target.CheckinStreak = res.StreakDays
 	}
 	m.Unlock()
@@ -349,8 +795,12 @@ func (m *Manager) CheckinWorkBuddyAccount(accountID string, force bool, logger f
 	_ = m.SaveAccountsFor(true, workbuddyProvider)
 
 	if res.Success {
-		logMsg(fmt.Sprintf("🎉 [WorkBuddy签到] 账号 %s 签到成功！获得 %d 积分，已连续签到 %d 天", target.Email, res.AddedCredit, res.StreakDays))
-		// 签到成功后触发配额刷新拉取最新积分
+		if res.TodayCheckedIn {
+			logMsg(fmt.Sprintf("🎉 [WorkBuddy签到] 账号 %s 签到成功！获得 %d 积分，已连续签到 %d 天", target.Email, res.AddedCredit, res.StreakDays))
+		} else {
+			logMsg(fmt.Sprintf("🚀 [WorkBuddy活跃] 账号 %s: %s", target.Email, res.Message))
+		}
+		// 签到/激活成功后触发配额刷新拉取最新积分
 		if m.FetchQuota != nil {
 			go func(acc *Account) {
 				time.Sleep(500 * time.Millisecond) // 等待服务端额度落库

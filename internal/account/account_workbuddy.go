@@ -1,7 +1,9 @@
 package account
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +29,10 @@ const (
 	DefaultWorkBuddyBaseURL         = "https://www.workbuddy.ai"
 	DefaultWorkBuddyDomesticBaseURL = "https://copilot.tencent.com"
 	DefaultWorkBuddyModel           = "deepseek-v4.1-flash"
+
+	// 官方套餐与资源包常量编码
+	WorkBuddyPackageBonusPack    = "TCACA_code_007_nzdH5h4Nl0" // 活跃奖励包 (Bonus Pack / 成长计划, 30积分/天)
+	WorkBuddyPackageFreePlanIntl = "TCACA_code_035_ArVxJcGDsm" // 国际版免费套餐月度基础包 (100积分)
 )
 
 // WorkBuddySupportedModels 列出 WorkBuddy 原生支持的免费模型集合。
@@ -389,7 +395,10 @@ func BuildWorkBuddyHeaders(acc *Account) map[string]string {
 	if tok := acc.GetAccessToken(); tok != "" {
 		headers["Authorization"] = "Bearer " + tok
 	}
-	if acc.ProjectID != "" {
+	uid := GetWorkBuddyEffectiveUID(acc)
+	if uid != "" {
+		headers["X-User-Id"] = uid
+	} else if acc.ProjectID != "" {
 		headers["X-User-Id"] = acc.ProjectID
 	}
 
@@ -553,4 +562,50 @@ func IsWorkBuddyDomesticAccount(acc *Account) bool {
 	effectiveEmail := GetWorkBuddyEffectiveEmail(acc)
 	return IsDomesticEmail(effectiveEmail)
 }
+
+// GetWorkBuddyEffectiveUID 获取账号在腾讯云官方平台的有效 UID (即 ProjectID，对应 JWT sub)。
+// 优先使用 ProjectID，若为空则从 AccessToken(JWT) 解析 sub claim。
+func GetWorkBuddyEffectiveUID(acc *Account) string {
+	if acc == nil {
+		return ""
+	}
+	if strings.TrimSpace(acc.ProjectID) != "" {
+		return strings.TrimSpace(acc.ProjectID)
+	}
+	token := acc.GetAccessToken()
+	parts := strings.Split(token, ".")
+	if len(parts) >= 2 {
+		payload := parts[1]
+		payload += strings.Repeat("=", (4-len(payload)%4)%4)
+		if raw, err := base64.URLEncoding.DecodeString(payload); err == nil {
+			var claims map[string]any
+			if err := json.Unmarshal(raw, &claims); err == nil {
+				if sub, ok := claims["sub"].(string); ok && strings.TrimSpace(sub) != "" {
+					return strings.TrimSpace(sub)
+				}
+				if uid, ok := claims["uid"].(string); ok && strings.TrimSpace(uid) != "" {
+					return strings.TrimSpace(uid)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// GenerateWorkBuddyUUID 生成符合 RFC 4122 v4 规范的标准 UUID。
+func GenerateWorkBuddyUUID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// GenerateWorkBuddyHex32 生成 32 位随机 Hex 字符串 (用于 Request-ID / Message-ID)。
+func GenerateWorkBuddyHex32() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
 

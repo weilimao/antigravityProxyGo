@@ -23,7 +23,7 @@ func TestFetchWorkBuddyCheckinStatus_Success(t *testing.T) {
 		if r.Header.Get("X-User-Id") != "uid-12345" {
 			t.Errorf("X-User-Id 头错误: %s", r.Header.Get("X-User-Id"))
 		}
-		if r.Header.Get("User-Agent") != "WorkBuddy/5.5.2" {
+		if r.Header.Get("User-Agent") != "WorkBuddy/5.5.6" {
 			t.Errorf("User-Agent 头错误: %s", r.Header.Get("User-Agent"))
 		}
 
@@ -47,6 +47,7 @@ func TestFetchWorkBuddyCheckinStatus_Success(t *testing.T) {
 
 	acc := &Account{
 		ID:          "wb-test-1",
+		Email:       "wb-dom-1 (国内版)",
 		Provider:    workbuddyProvider,
 		BaseURL:     server.URL,
 		AccessToken: "test-wb-token",
@@ -98,6 +99,7 @@ func TestFetchWorkBuddyCheckinStatus_FallbackV1(t *testing.T) {
 
 	acc := &Account{
 		ID:          "wb-test-v1",
+		Email:       "wb-dom-v1 (国内版)",
 		Provider:    workbuddyProvider,
 		BaseURL:     server.URL,
 		AccessToken: "test-wb-token",
@@ -136,6 +138,7 @@ func TestClaimWorkBuddyDailyCheckin_Success(t *testing.T) {
 
 	acc := &Account{
 		ID:          "wb-test-claim",
+		Email:       "wb-dom-claim (国内版)",
 		Provider:    workbuddyProvider,
 		BaseURL:     server.URL,
 		AccessToken: "test-wb-token",
@@ -169,6 +172,7 @@ func TestClaimWorkBuddyDailyCheckin_InactiveOrExpired(t *testing.T) {
 
 	acc := &Account{
 		ID:          "wb-test-expired",
+		Email:       "wb-dom-expired (国内版)",
 		Provider:    workbuddyProvider,
 		BaseURL:     server.URL,
 		AccessToken: "test-wb-token",
@@ -262,7 +266,7 @@ func TestManager_CheckinWorkBuddyAccount_FullFlow(t *testing.T) {
 
 	acc := &Account{
 		ID:          "wb-full-flow",
-		Email:       "checkin@workbuddy.ai",
+		Email:       "checkin@workbuddy.cn (国内版)",
 		Provider:    workbuddyProvider,
 		BaseURL:     server.URL,
 		AccessToken: "valid-token",
@@ -343,7 +347,7 @@ func TestManager_RunDailyCheckinForWorkBuddyPool(t *testing.T) {
 
 	acc1 := &Account{
 		ID:          "wb-pool-1",
-		Email:       "wb1@test.ai",
+		Email:       "wb1@test.ai (国内版)",
 		Provider:    workbuddyProvider,
 		BaseURL:     server.URL,
 		AccessToken: "token-1",

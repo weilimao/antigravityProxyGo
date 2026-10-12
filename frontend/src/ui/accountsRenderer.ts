@@ -557,7 +557,8 @@ export function renderAccounts(accounts: any[]) {
 
             // WorkBuddy 每日签到按钮
             const btnWbCheckin = document.createElement('button');
-            const todayStr = new Date().toISOString().split('T')[0];
+            const d = new Date();
+            const todayStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
             const isWbCheckedIn = acc.lastCheckinDate === todayStr;
             btnWbCheckin.className = isWbCheckedIn
                 ? 'text-[11px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0 cursor-pointer'
@@ -683,7 +684,8 @@ export function renderAccounts(accounts: any[]) {
             if (acc.provider === 'workbuddy') {
                 const existingWbBtn = card.querySelector('[data-wb-checkin-btn]') as HTMLButtonElement | null;
                 if (existingWbBtn) {
-                    const todayStr = new Date().toISOString().split('T')[0];
+                    const d = new Date();
+                    const todayStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
                     const isWbCheckedIn = acc.lastCheckinDate === todayStr;
                     existingWbBtn.className = isWbCheckedIn
                         ? 'text-[11px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1 rounded transition-colors flex items-center gap-1 z-10 whitespace-nowrap flex-shrink-0 cursor-pointer'

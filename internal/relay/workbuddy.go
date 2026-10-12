@@ -3,7 +3,6 @@ package relay
 import (
 	"bufio"
 	"bytes"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,11 +37,7 @@ const (
 
 // generateWorkBuddyUUID 生成符合 RFC 4122 v4 规范的唯一 UUID。
 func generateWorkBuddyUUID() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	return account.GenerateWorkBuddyUUID()
 }
 
 // ensureWorkBuddySystemPrompt 确保请求 messages 首条为 system prompt。
@@ -477,10 +472,18 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 		}
 		convID := sessionKey
 		if convID == "" {
-			convID = generateWorkBuddyUUID()
+			convID = account.GenerateWorkBuddyUUID()
 		}
+		reqID := account.GenerateWorkBuddyHex32()
+		msgID := account.GenerateWorkBuddyHex32()
 		httpReq.Header.Set("X-Conversation-ID", convID)
-		httpReq.Header.Set("X-Request-ID", generateWorkBuddyUUID())
+		httpReq.Header.Set("X-Conversation-Request-ID", reqID)
+		httpReq.Header.Set("X-Conversation-Message-ID", msgID)
+		httpReq.Header.Set("X-Request-ID", msgID)
+		httpReq.Header.Set("X-Root-Request-ID", reqID)
+		httpReq.Header.Set("X-Agent-Intent", "craft")
+		httpReq.Header.Set("X-Agent-Type", "main")
+		httpReq.Header.Set("X-Private-Data", "false")
 		httpReq.Header.Set("Accept", "text/event-stream")
 
 		client := h.streamClient

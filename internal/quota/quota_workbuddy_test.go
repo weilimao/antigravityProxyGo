@@ -395,3 +395,57 @@ func TestWorkBuddyQuota_NoQuotaSelfHealing(t *testing.T) {
 	}
 }
 
+// TestWorkBuddyQuota_BonusPackBreakout 验证国际版账号含有 Bonus Pack 时的细化展示 (基础积分 + 活跃奖励)
+func TestWorkBuddyQuota_BonusPackBreakout(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"code": 0,
+			"msg": "ok",
+			"data": {
+				"Packages": [
+					{
+						"PackageCode": "` + account.WorkBuddyPackageFreePlanIntl + `",
+						"CycleTotalCapacity": "100",
+						"CycleRemainCapacity": "100",
+						"CapacityUnit": "credit"
+					},
+					{
+						"PackageCode": "` + account.WorkBuddyPackageBonusPack + `",
+						"CycleTotalCapacity": "240",
+						"CycleRemainCapacity": "240",
+						"CapacityUnit": "credit"
+					}
+				],
+				"IsPaidUser": false
+			}
+		}`))
+	}))
+	defer ts.Close() // Teardown
+
+	q := NewQuotaService()
+	acc := &account.Account{
+		ID:          "acc-wb-bonus",
+		Provider:    "workbuddy",
+		BaseURL:     ts.URL,
+		AccessToken: "token-bonus",
+		Email:       "weilimao0714@gmail.com",
+	}
+
+	res, err := q.FetchQuota(acc, nil, nil)
+	if err != nil {
+		t.Fatalf("探测配额失败: %v", err)
+	}
+	if len(res.Buckets) != 1 {
+		t.Fatalf("Buckets 长度期望为 1, 实际为 %d", len(res.Buckets))
+	}
+	expectedModelID := "积分余额: 340 (基础 100 + 活跃奖励 240)"
+	if res.Buckets[0].ModelID != expectedModelID {
+		t.Errorf("ModelID 期望 '%s', 实际得到 '%s'", expectedModelID, res.Buckets[0].ModelID)
+	}
+	if res.Credits == nil || *res.Credits != 340 {
+		t.Errorf("Credits 期望 340, 实际得到 %v", res.Credits)
+	}
+}
+
