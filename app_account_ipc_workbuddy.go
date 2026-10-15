@@ -235,7 +235,9 @@ func (a *App) handleAccountIPCWorkBuddy(channel string, args []interface{}) (str
 			edition = "domestic"
 		}
 		if version == "" {
-			if strings.EqualFold(edition, "domestic") || strings.EqualFold(edition, "cn") {
+			if a.accountMgr != nil && a.accountMgr.GetWorkBuddyCliVersion() != "" {
+				version = a.accountMgr.GetWorkBuddyCliVersion()
+			} else if strings.EqualFold(edition, "domestic") || strings.EqualFold(edition, "cn") {
 				version = account.DefaultWorkBuddyDomesticVersion
 			} else {
 				version = account.DefaultWorkBuddyAuthVersion
@@ -359,6 +361,15 @@ func (a *App) handleAccountIPCWorkBuddy(channel string, args []interface{}) (str
 			return data, true, nil
 		}
 		data, _ := marshalResponse(map[string]interface{}{"success": true, "status": status})
+		return data, true, nil
+
+	case "workbuddy:fetch-latest-version":
+		ver := account.DetectWorkBuddyLatestVersion()
+		a.AddLog("🔍 [WorkBuddy] 探测到最新可用客户端版本: " + ver)
+		data, _ := marshalResponse(map[string]interface{}{
+			"success": true,
+			"version": ver,
+		})
 		return data, true, nil
 
 	default:

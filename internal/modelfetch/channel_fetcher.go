@@ -81,68 +81,11 @@ func FetchChannelAvailableModels(accountMgr *account.Manager, channel string) ([
 
 	// 2. 如果是 WorkBuddy 号池
 	if ch == "workbuddy" || activeAcc.Provider == "workbuddy" {
-		var domAcc *account.Account
-		var intlAcc *account.Account
-
-		if accountMgr != nil {
-			for _, acc := range accountMgr.GetRawAccountsByProvider("all") {
-				if acc != nil && acc.Enabled && acc.Provider == "workbuddy" {
-					if acc.IsWorkBuddyDomestic() {
-						if domAcc == nil {
-							domAcc = acc
-						}
-					} else {
-						if intlAcc == nil {
-							intlAcc = acc
-						}
-					}
-				}
-			}
-		}
-
-		// 若同时存在国内版和国际版账号，双端采样拉取并合并去重
-		if domAcc != nil && intlAcc != nil {
-			domModels, domErr := fetchWorkBuddyModels(domAcc)
-			intlModels, intlErr := fetchWorkBuddyModels(intlAcc)
-
-			if domErr != nil && intlErr != nil {
-				return nil, fmt.Errorf("打 WorkBuddy 双端上游获取模型均失败: 国内版错误(%v), 国际版错误(%v)", domErr, intlErr)
-			}
-
-			seen := make(map[string]bool)
-			var merged []string
-			for _, m := range domModels {
-				if !seen[m] {
-					seen[m] = true
-					merged = append(merged, m)
-				}
-			}
-			for _, m := range intlModels {
-				if !seen[m] {
-					seen[m] = true
-					merged = append(merged, m)
-				}
-			}
-			if len(merged) > 0 {
-				return merged, nil
-			}
-		}
-
-		targetAcc := activeAcc
-		if domAcc != nil && intlAcc == nil {
-			targetAcc = domAcc
-		} else if intlAcc != nil && domAcc == nil {
-			targetAcc = intlAcc
-		}
-
-		models, err := fetchWorkBuddyModels(targetAcc)
+		details, err := FetchWorkBuddyAvailableModelsDetailed(accountMgr)
 		if err != nil {
-			return nil, fmt.Errorf("打 WorkBuddy 上游获取模型失败 (账号 %s): %w", targetAcc.Email, err)
+			return nil, err
 		}
-		if len(models) == 0 {
-			return nil, fmt.Errorf("WorkBuddy 上游返回的模型列表为空")
-		}
-		return models, nil
+		return details.AllModels, nil
 	}
 
 	// 3. 如果是 OpenCode 号池
@@ -344,5 +287,86 @@ func fetchOpenCodeModels(acc *account.Account) ([]string, error) {
 
 	return nil, fmt.Errorf("OpenCode 上游返回的模型列表为空")
 }
+
+// WorkBuddyFetchDetails 封装 WorkBuddy 渠道的模型双端探测结果。
+type WorkBuddyFetchDetails struct {
+	AllModels   []string `json:"allModels"`
+	DomModels   []string `json:"domModels"`
+	IntlModels  []string `json:"intlModels"`
+	HasDomestic bool     `json:"hasDomestic"`
+	HasIntl     bool     `json:"hasIntl"`
+}
+
+// FetchWorkBuddyAvailableModelsDetailed 分别探测 WorkBuddy 国内端与国际端可用模型并汇总。
+func FetchWorkBuddyAvailableModelsDetailed(accountMgr *account.Manager) (*WorkBuddyFetchDetails, error) {
+	var domAcc *account.Account
+	var intlAcc *account.Account
+
+	if accountMgr != nil {
+		for _, acc := range accountMgr.GetRawAccountsByProvider("all") {
+			if acc != nil && acc.Enabled && acc.Provider == "workbuddy" {
+				if acc.IsWorkBuddyDomestic() {
+					if domAcc == nil {
+						domAcc = acc
+					}
+				} else {
+					if intlAcc == nil {
+						intlAcc = acc
+					}
+				}
+			}
+		}
+	}
+
+	if domAcc == nil && intlAcc == nil {
+		return nil, fmt.Errorf("号池 [workbuddy] 下暂无已启用的有效账号，请先在【账号池】中添加该号池账号")
+	}
+
+	res := &WorkBuddyFetchDetails{
+		HasDomestic: domAcc != nil,
+		HasIntl:     intlAcc != nil,
+		DomModels:   []string{},
+		IntlModels:  []string{},
+		AllModels:   []string{},
+	}
+
+	var domErr, intlErr error
+	if domAcc != nil {
+		res.DomModels, domErr = fetchWorkBuddyModels(domAcc)
+	}
+	if intlAcc != nil {
+		res.IntlModels, intlErr = fetchWorkBuddyModels(intlAcc)
+	}
+
+	if domAcc != nil && intlAcc != nil && domErr != nil && intlErr != nil {
+		return nil, fmt.Errorf("打 WorkBuddy 双端上游获取模型均失败: 国内版错误(%v), 国际版错误(%v)", domErr, intlErr)
+	} else if domAcc != nil && intlAcc == nil && domErr != nil {
+		return nil, fmt.Errorf("打 WorkBuddy 国内版上游获取模型失败 (账号 %s): %w", domAcc.Email, domErr)
+	} else if intlAcc != nil && domAcc == nil && intlErr != nil {
+		return nil, fmt.Errorf("打 WorkBuddy 国际版上游获取模型失败 (账号 %s): %w", intlAcc.Email, intlErr)
+	}
+
+	seen := make(map[string]bool)
+	var merged []string
+	for _, m := range res.DomModels {
+		if !seen[m] {
+			seen[m] = true
+			merged = append(merged, m)
+		}
+	}
+	for _, m := range res.IntlModels {
+		if !seen[m] {
+			seen[m] = true
+			merged = append(merged, m)
+		}
+	}
+
+	if len(merged) == 0 {
+		merged = account.WorkBuddySupportedModels
+	}
+	res.AllModels = merged
+	return res, nil
+}
+
 
 

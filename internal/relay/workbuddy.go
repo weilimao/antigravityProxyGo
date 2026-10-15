@@ -466,7 +466,11 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 		}
 
 		// 注入 WorkBuddy 必要 Headers（自适应国内版与国际版）
-		wbHeaders := account.BuildWorkBuddyHeaders(poolAccount)
+		cliVer := ""
+		if h.accountMgr != nil {
+			cliVer = h.accountMgr.GetWorkBuddyCliVersion()
+		}
+		wbHeaders := account.BuildWorkBuddyHeaders(poolAccount, cliVer)
 		for k, v := range wbHeaders {
 			httpReq.Header.Set(k, v)
 		}

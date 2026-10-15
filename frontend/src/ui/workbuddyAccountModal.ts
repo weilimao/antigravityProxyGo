@@ -28,6 +28,7 @@ let btnWorkBuddyCopyLoginUrl: HTMLButtonElement | null;
 let btnWorkBuddyCopyLoginUrlText: HTMLSpanElement | null;
 let btnWorkBuddyCancelLogin: HTMLButtonElement | null;
 let wbOAuthSuccessName: HTMLSpanElement | null;
+let wbSimulatedVersionBadge: HTMLSpanElement | null;
 
 let selectedOAuthEdition: 'domestic' | 'international' = 'domestic';
 
@@ -35,6 +36,18 @@ let workbuddyEditId: string | null = null;
 let currentOAuthState: string | null = null;
 let currentOAuthBrowserUrl: string | null = null;
 let oauthPollTimer: ReturnType<typeof setInterval> | null = null;
+
+function getEffectiveWorkBuddyVersion(): string {
+    const inputVer = (document.getElementById('workbuddyCliVersion') as HTMLInputElement | null)?.value?.trim();
+    if (inputVer) return inputVer;
+    return selectedOAuthEdition === 'domestic' ? '5.7.7' : '5.7.6';
+}
+
+function updateVersionBadge(): void {
+    if (wbSimulatedVersionBadge) {
+        wbSimulatedVersionBadge.textContent = '模拟客户端 v' + getEffectiveWorkBuddyVersion();
+    }
+}
 
 function switchOAuthEdition(edition: 'domestic' | 'international'): void {
     selectedOAuthEdition = edition;
@@ -67,6 +80,7 @@ function switchOAuthEdition(edition: 'domestic' | 'international'): void {
             inputBaseUrl.value = 'https://www.workbuddy.ai';
         }
     }
+    updateVersionBadge();
 }
 
 function writeWorkBuddyModalError(msg: string | null): void {
@@ -140,6 +154,7 @@ function reanchorWorkBuddyModalHandles(): void {
     btnWorkBuddyCopyLoginUrlText = document.getElementById('btnWorkBuddyCopyLoginUrlText') as HTMLSpanElement | null;
     btnWorkBuddyCancelLogin = document.getElementById('btnWorkBuddyCancelLogin') as HTMLButtonElement | null;
     wbOAuthSuccessName = document.getElementById('wbOAuthSuccessName') as HTMLSpanElement | null;
+    wbSimulatedVersionBadge = document.getElementById('wbSimulatedVersionBadge') as HTMLSpanElement | null;
 
     if (tabWorkBuddyDomestic) tabWorkBuddyDomestic.onclick = () => switchOAuthEdition('domestic');
     if (tabWorkBuddyOverseas) tabWorkBuddyOverseas.onclick = () => switchOAuthEdition('international');
@@ -272,7 +287,7 @@ async function startWorkBuddyWebLogin(openBrowser: boolean = true): Promise<void
 
     try {
         const noOpen = !openBrowser;
-        const version = selectedOAuthEdition === 'domestic' ? '5.5.6' : '5.5.2';
+        const version = getEffectiveWorkBuddyVersion();
         const res = safeParseIPC(await ipcRenderer.invoke('workbuddy:oauth-start', version, noOpen, selectedOAuthEdition));
         if (!res.success) {
             writeWorkBuddyModalError(res.error || '发起官方登录失败');

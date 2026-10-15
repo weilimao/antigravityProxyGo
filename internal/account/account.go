@@ -231,6 +231,9 @@ type AccountsData struct {
 	WorkBuddyLBMode string `json:"workbuddyLbMode,omitempty"`
 	// WorkBuddyMaxConcurrency 持久化 WorkBuddy 号池单账号在途并发上限(单池单值,与 NvidiaMaxConcurrency 同口径)。
 	WorkBuddyMaxConcurrency int `json:"workbuddyMaxConcurrency,omitempty"`
+	// WorkBuddyCliVersion 持久化 WorkBuddy 号池全局客户端模拟版本号(号池单值,对仗 GrokCliVersion)。
+	// 用于发往 WorkBuddy 上游和网页授权登录时的客户端版本。空串=未配置, GetWorkBuddyCliVersion 回退默认 DefaultWorkBuddyDomesticVersion("5.7.7")。
+	WorkBuddyCliVersion string `json:"workbuddyCliVersion,omitempty"`
 	// OpenCodeLBMode 持久化 OpenCode 号池 LB 算法(与 WorkBuddyLBMode 同构单池单值)。
 	OpenCodeLBMode string `json:"opencodeLbMode,omitempty"`
 	// OpenCodeMaxConcurrency 持久化 OpenCode 号池单账号在途并发上限(单池单值)。
@@ -285,6 +288,9 @@ type Manager struct {
 	// workbuddyMaxConcurrency 是 WorkBuddy 号池单账号在途并发上限(单池单值,与 nvidiaMaxConcurrency 同口径);
 	// 0/负数=未配置,Get 时回退默认 10。
 	workbuddyMaxConcurrency int
+	// workbuddyCliVersion 持久化 WorkBuddy 号池全局客户端模拟版本号(单池单值,对仗 grokCliVersion);
+	// 空串=未配置, GetWorkBuddyCliVersion 回退默认 DefaultWorkBuddyDomesticVersion("5.7.7")。
+	workbuddyCliVersion string
 	// opencodeMaxConcurrency 是 OpenCode 号池单账号在途并发上限(单池单值);
 	// 0/负数=未配置,Get 时回退默认 10。
 	opencodeMaxConcurrency int

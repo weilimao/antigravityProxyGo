@@ -115,6 +115,7 @@ type poolConfigOnDisk struct {
 	GrokQuotaCooldownHours   int             `json:"grokQuotaCooldownHours,omitempty"`
 	WorkBuddyLBMode           string          `json:"workbuddyLbMode,omitempty"`
 	WorkBuddyMaxConcurrency   int             `json:"workbuddyMaxConcurrency,omitempty"`
+	WorkBuddyCliVersion       string          `json:"workbuddyCliVersion,omitempty"`
 	OpenCodeLBMode            string          `json:"opencodeLbMode,omitempty"`
 	OpenCodeMaxConcurrency    int             `json:"opencodeMaxConcurrency,omitempty"`
 }
@@ -247,6 +248,7 @@ func (m *Manager) marshalPoolConfig() ([]byte, error) {
 		GrokQuotaCooldownHours:   m.grokQuotaCooldownHours,
 		WorkBuddyLBMode:           m.workbuddyLBMode,
 		WorkBuddyMaxConcurrency:   m.workbuddyMaxConcurrency,
+		WorkBuddyCliVersion:       m.workbuddyCliVersion,
 		OpenCodeLBMode:            m.opencodeLBMode,
 		OpenCodeMaxConcurrency:    m.opencodeMaxConcurrency,
 	}
@@ -342,6 +344,7 @@ func (m *Manager) loadPoolConfigIntoMemory() {
 	m.nvidiaMaxConcurrency = cfg.NvidiaMaxConcurrency
 	m.grokMaxConcurrency = cfg.GrokMaxConcurrency
 	m.workbuddyMaxConcurrency = cfg.WorkBuddyMaxConcurrency
+	m.workbuddyCliVersion = strings.TrimSpace(cfg.WorkBuddyCliVersion)
 	m.opencodeMaxConcurrency = cfg.OpenCodeMaxConcurrency
 	m.grokCliVersion = strings.TrimSpace(cfg.GrokCliVersion)
 	m.grokQuotaCooldownHours = cfg.GrokQuotaCooldownHours
@@ -522,6 +525,7 @@ func (m *Manager) migrateLegacyFile() error {
 		GrokQuotaCooldownHours:   parsed.GrokQuotaCooldownHours,
 		WorkBuddyLBMode:           parsed.WorkBuddyLBMode,
 		WorkBuddyMaxConcurrency:   parsed.WorkBuddyMaxConcurrency,
+		WorkBuddyCliVersion:       parsed.WorkBuddyCliVersion,
 		OpenCodeLBMode:            parsed.OpenCodeLBMode,
 		OpenCodeMaxConcurrency:    parsed.OpenCodeMaxConcurrency,
 	}

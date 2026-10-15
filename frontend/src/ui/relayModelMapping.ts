@@ -891,32 +891,79 @@ export function initRelayModelMapping() {
                     }
                 }
                 const newEntries: any[] = [];
-                for (const modelRaw of res.models) {
-                    const model = (modelRaw || '').trim();
-                    if (!model) continue;
-                    if (existingTargetSet.has(model.toLowerCase())) continue; // 同 Tab 已有该上游模型,跳过
-                    const isGoogle = isGoogleProviderKind(provider);
-                    if (isGoogle) {
-                        // ① 裸名条目(供 /v1/* 裸名直连)。
-                        if (!existingClientSet.has(model.toLowerCase())) {
-                            newEntries.push(makeMappingEntry(model, model, provider, true));
-                            existingClientSet.add(model.toLowerCase());
+                const isWorkBuddy = provider === 'workbuddy';
+                const hasWbDetails = isWorkBuddy && (Array.isArray(res.domModels) || Array.isArray(res.intlModels));
+
+                if (hasWbDetails) {
+                    const domList: string[] = Array.isArray(res.domModels) ? res.domModels : [];
+                    const intlList: string[] = Array.isArray(res.intlModels) ? res.intlModels : [];
+                    const hasDom = Boolean(res.hasDomestic);
+                    const hasIntl = Boolean(res.hasIntl);
+
+                    // 1. 国内版账号支持的模型：自动拼接 workbuddy/cn/{model}
+                    if (hasDom && domList.length > 0) {
+                        for (const modelRaw of domList) {
+                            const model = (modelRaw || '').trim();
+                            if (!model) continue;
+                            const prefixed = `workbuddy/cn/${model}`;
+                            if (!existingClientSet.has(prefixed.toLowerCase())) {
+                                newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+                                existingClientSet.add(prefixed.toLowerCase());
+                            }
                         }
-                        // ② 带前缀条目(供 /route 精准路由)。
-                        const prefixed = `${provider}/${model}`;
-                        if (!existingClientSet.has(prefixed.toLowerCase())) {
-                            newEntries.push(makeMappingEntry(prefixed, model, provider, true));
-                            existingClientSet.add(prefixed.toLowerCase());
+                    }
+
+                    // 2. 国际版账号支持的模型：自动拼接 workbuddy/intl/{model}
+                    if (hasIntl && intlList.length > 0) {
+                        for (const modelRaw of intlList) {
+                            const model = (modelRaw || '').trim();
+                            if (!model) continue;
+                            const prefixed = `workbuddy/intl/${model}`;
+                            if (!existingClientSet.has(prefixed.toLowerCase())) {
+                                newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+                                existingClientSet.add(prefixed.toLowerCase());
+                            }
                         }
-                    } else {
-                        // 非 Google 族:仅带前缀单条。
-                        const prefixed = `${provider}/${model}`;
+                    }
+
+                    // 3. 通用默认条目 (workbuddy/{model})
+                    for (const modelRaw of res.models) {
+                        const model = (modelRaw || '').trim();
+                        if (!model) continue;
+                        const prefixed = `workbuddy/${model}`;
                         if (!existingClientSet.has(prefixed.toLowerCase())) {
                             newEntries.push(makeMappingEntry(prefixed, model, provider, true));
                             existingClientSet.add(prefixed.toLowerCase());
                         }
                     }
-                    existingTargetSet.add(model.toLowerCase());
+                } else {
+                    for (const modelRaw of res.models) {
+                        const model = (modelRaw || '').trim();
+                        if (!model) continue;
+                        if (existingTargetSet.has(model.toLowerCase())) continue; // 同 Tab 已有该上游模型,跳过
+                        const isGoogle = isGoogleProviderKind(provider);
+                        if (isGoogle) {
+                            // ① 裸名条目(供 /v1/* 裸名直连)。
+                            if (!existingClientSet.has(model.toLowerCase())) {
+                                newEntries.push(makeMappingEntry(model, model, provider, true));
+                                existingClientSet.add(model.toLowerCase());
+                            }
+                            // ② 带前缀条目(供 /route 精准路由)。
+                            const prefixed = `${provider}/${model}`;
+                            if (!existingClientSet.has(prefixed.toLowerCase())) {
+                                newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+                                existingClientSet.add(prefixed.toLowerCase());
+                            }
+                        } else {
+                            // 非 Google 族:仅带前缀单条。
+                            const prefixed = `${provider}/${model}`;
+                            if (!existingClientSet.has(prefixed.toLowerCase())) {
+                                newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+                                existingClientSet.add(prefixed.toLowerCase());
+                            }
+                        }
+                        existingTargetSet.add(model.toLowerCase());
+                    }
                 }
                 if (newEntries.length > 0) {
                     // 对该 Tab 新增的映射,归类 ownedBy 用 TabId(与 getMappingTab/save 逻辑一致)。

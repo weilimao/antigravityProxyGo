@@ -33,8 +33,8 @@ import (
 const (
 	DefaultWorkBuddyAuthURL         = "https://www.workbuddy.ai"
 	DefaultWorkBuddyDomesticAuthURL = "https://copilot.tencent.com"
-	DefaultWorkBuddyAuthVersion     = "5.5.2"
-	DefaultWorkBuddyDomesticVersion = "5.5.6"
+	DefaultWorkBuddyAuthVersion     = "5.7.6"
+	DefaultWorkBuddyDomesticVersion = "5.7.7"
 	WorkBuddyRetryCode              = 11217
 	DefaultWorkBuddyTimeout         = 300 * time.Second
 	DefaultWorkBuddyPollPeriod      = 1 * time.Second
@@ -204,7 +204,9 @@ func (m *WorkBuddyOAuthManager) StartLoginWithEdition(parentCtx context.Context,
 	m.mu.Unlock()
 
 	if version == "" {
-		if isDomestic {
+		if m.accountMgr != nil && m.accountMgr.GetWorkBuddyCliVersion() != "" {
+			version = m.accountMgr.GetWorkBuddyCliVersion()
+		} else if isDomestic {
 			version = DefaultWorkBuddyDomesticVersion
 		} else {
 			version = DefaultWorkBuddyAuthVersion

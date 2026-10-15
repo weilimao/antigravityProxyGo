@@ -195,6 +195,15 @@ func TestWorkBuddyAccount_ResolveModel(t *testing.T) {
 	if m := ResolveWorkBuddyModel("workbuddy/overseas/kimi-k3", acc); m != "kimi-k3" {
 		t.Errorf("期望剥离 overseas 前缀后得到 kimi-k3, 得到 %s", m)
 	}
+	if m := ResolveWorkBuddyModel("workbuddy-cn/deepseek-v4.1-flash", acc); m != "deepseek-v4.1-flash" {
+		t.Errorf("期望剥离 workbuddy-cn 前缀后得到 deepseek-v4.1-flash, 得到 %s", m)
+	}
+	if m := ResolveWorkBuddyModel("cn/deepseek-v4.1-flash", acc); m != "deepseek-v4.1-flash" {
+		t.Errorf("期望剥离 cn 前缀后得到 deepseek-v4.1-flash, 得到 %s", m)
+	}
+	if m := ResolveWorkBuddyModel("workbuddy-intl/gpt-5.5", acc); m != "gpt-5.5" {
+		t.Errorf("期望剥离 workbuddy-intl 前缀后得到 gpt-5.5, 得到 %s", m)
+	}
 	if m := ResolveWorkBuddyModel("hy3[1M]", acc); m != "hy3" {
 		t.Errorf("期望剥离上下文后缀后得到 hy3, 得到 %s", m)
 	}
@@ -211,8 +220,14 @@ func TestWorkBuddy_ModelAffinity(t *testing.T) {
 		// 显式前缀
 		{"workbuddy/domestic/hunyuan-chat", "domestic"},
 		{"workbuddy/cn/deepseek-v4.1-flash", "domestic"},
+		{"workbuddy-cn/deepseek-v4.1-flash", "domestic"},
+		{"cn/deepseek-v4.1-flash", "domestic"},
+		{"domestic/deepseek-v4.1-flash", "domestic"},
 		{"workbuddy/intl/gpt-5.5", "international"},
 		{"workbuddy/overseas/kimi-k3", "international"},
+		{"workbuddy-intl/gpt-5.5", "international"},
+		{"intl/gpt-5.5", "international"},
+		{"overseas/kimi-k3", "international"},
 		// 国内特征
 		{"hunyuan-2.0-instruct", "domestic"},
 		{"workbuddy/hunyuan-chat", "domestic"},

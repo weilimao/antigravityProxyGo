@@ -21,8 +21,8 @@ func TestFetchWorkBuddyCheckinStatus_International_TodayNotClaimed(t *testing.T)
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if r.Header.Get("User-Agent") != "WorkBuddy/5.5.2" {
-			t.Errorf("国际版 User-Agent 期望 WorkBuddy/5.5.2, 实际: %s", r.Header.Get("User-Agent"))
+		if r.Header.Get("User-Agent") != "WorkBuddy/5.7.6" {
+			t.Errorf("国际版 User-Agent 期望 WorkBuddy/5.7.6, 实际: %s", r.Header.Get("User-Agent"))
 		}
 
 		// 模拟历史上有 8 个 Bonus Pack，但今天尚未产生

@@ -17,8 +17,8 @@ func TestWorkBuddyQuota_RealPoints(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("请求方法期望 POST, 得到 %s", r.Method)
 		}
-		if r.Header.Get("User-Agent") != "WorkBuddy/5.5.2" {
-			t.Errorf("User-Agent 期望 WorkBuddy/5.5.2, 得到 %s", r.Header.Get("User-Agent"))
+		if r.Header.Get("User-Agent") != "WorkBuddy/5.7.6" {
+			t.Errorf("User-Agent 期望 WorkBuddy/5.7.6, 得到 %s", r.Header.Get("User-Agent"))
 		}
 		if r.Header.Get("Authorization") != "Bearer valid-token" {
 			t.Errorf("Authorization 期望 Bearer valid-token, 得到 %s", r.Header.Get("Authorization"))

@@ -196,10 +196,12 @@ func GetWorkBuddyModelAffinity(modelName string) string {
 	}
 
 	// 1. 显式前缀判定
-	if strings.HasPrefix(m, "workbuddy/domestic/") || strings.HasPrefix(m, "workbuddy/cn/") {
+	if strings.HasPrefix(m, "workbuddy/domestic/") || strings.HasPrefix(m, "workbuddy/cn/") ||
+		strings.HasPrefix(m, "workbuddy-cn/") || strings.HasPrefix(m, "domestic/") || strings.HasPrefix(m, "cn/") {
 		return "domestic"
 	}
-	if strings.HasPrefix(m, "workbuddy/intl/") || strings.HasPrefix(m, "workbuddy/overseas/") {
+	if strings.HasPrefix(m, "workbuddy/intl/") || strings.HasPrefix(m, "workbuddy/overseas/") ||
+		strings.HasPrefix(m, "workbuddy-intl/") || strings.HasPrefix(m, "intl/") || strings.HasPrefix(m, "overseas/") {
 		return "international"
 	}
 	if strings.HasPrefix(m, "workbuddy/") {
@@ -247,7 +249,13 @@ func ResolveWorkBuddyModel(inModel string, acc *Account) string {
 		"workbuddy/cn/",
 		"workbuddy/intl/",
 		"workbuddy/overseas/",
+		"workbuddy-cn/",
+		"workbuddy-intl/",
 		"workbuddy/",
+		"domestic/",
+		"overseas/",
+		"intl/",
+		"cn/",
 	} {
 		if strings.HasPrefix(strings.ToLower(name), pfx) {
 			name = name[len(pfx):]
@@ -384,7 +392,7 @@ func ParseWorkBuddyAuthInfo(content []byte) (*WorkBuddyAccountInput, error) {
 }
 
 // BuildWorkBuddyHeaders 根据账号版本（国内版 vs 国际版）构造上游请求所需的请求头集合。
-func BuildWorkBuddyHeaders(acc *Account) map[string]string {
+func BuildWorkBuddyHeaders(acc *Account, customVersion ...string) map[string]string {
 	headers := map[string]string{
 		"Accept":       "application/json",
 		"Content-Type": "application/json",
@@ -402,19 +410,32 @@ func BuildWorkBuddyHeaders(acc *Account) map[string]string {
 		headers["X-User-Id"] = acc.ProjectID
 	}
 
+	cliVer := ""
+	if len(customVersion) > 0 {
+		cliVer = strings.TrimSpace(customVersion[0])
+	}
+
 	if acc.IsWorkBuddyDomestic() {
+		ver := DefaultWorkBuddyDomesticVersion
+		if cliVer != "" {
+			ver = cliVer
+		}
 		headers["X-IDE-Type"] = "WorkBuddy"
 		headers["X-IDE-Name"] = "WorkBuddy"
-		headers["X-IDE-Version"] = "5.5.6"
+		headers["X-IDE-Version"] = ver
 		headers["X-Product"] = "WorkBuddy"
-		headers["User-Agent"] = "WorkBuddy/5.5.6"
+		headers["User-Agent"] = "WorkBuddy/" + ver
 		headers["X-Domain"] = "www.workbuddy.cn"
 	} else {
+		ver := DefaultWorkBuddyAuthVersion
+		if cliVer != "" {
+			ver = cliVer
+		}
 		headers["X-IDE-Type"] = "CodeBuddy"
 		headers["X-IDE-Name"] = "WorkBuddy"
-		headers["X-IDE-Version"] = "5.5.2"
+		headers["X-IDE-Version"] = ver
 		headers["X-Product"] = "WorkBuddy"
-		headers["User-Agent"] = "WorkBuddy/5.5.2"
+		headers["User-Agent"] = "WorkBuddy/" + ver
 	}
 	return headers
 }

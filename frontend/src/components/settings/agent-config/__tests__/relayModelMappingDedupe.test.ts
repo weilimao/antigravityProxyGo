@@ -48,7 +48,8 @@ function makeMappingEntry(clientModel: string, targetModel: string, provider: st
 function simulateFetchChannelModelsDedupe(
     currentTab: { id: string; targetProvider: string },
     allMappings: MappingEntry[],
-    remoteModels: string[]
+    remoteModels: string[],
+    wbDetails?: { domModels?: string[]; intlModels?: string[]; hasDomestic?: boolean; hasIntl?: boolean }
 ): MappingEntry[] {
     const provider = (currentTab.targetProvider || currentTab.id || '').trim();
     const tabId = currentTab.id;
@@ -69,30 +70,77 @@ function simulateFetchChannelModelsDedupe(
     }
 
     const newEntries: MappingEntry[] = [];
-    for (const modelRaw of remoteModels) {
-        const model = (modelRaw || '').trim();
-        if (!model) continue;
-        if (existingTargetSet.has(model.toLowerCase())) continue;
+    const isWorkBuddy = provider === 'workbuddy';
+    const hasWbDetails = isWorkBuddy && wbDetails && (Array.isArray(wbDetails.domModels) || Array.isArray(wbDetails.intlModels));
 
-        const isGoogle = isGoogleProviderKind(provider);
-        if (isGoogle) {
-            if (!existingClientSet.has(model.toLowerCase())) {
-                newEntries.push(makeMappingEntry(model, model, provider, true));
-                existingClientSet.add(model.toLowerCase());
+    if (hasWbDetails) {
+        const domList = wbDetails.domModels || [];
+        const intlList = wbDetails.intlModels || [];
+        const hasDom = Boolean(wbDetails.hasDomestic);
+        const hasIntl = Boolean(wbDetails.hasIntl);
+
+        // 1. 国内版账号支持的模型：自动拼接 workbuddy/cn/{model}
+        if (hasDom && domList.length > 0) {
+            for (const modelRaw of domList) {
+                const model = (modelRaw || '').trim();
+                if (!model) continue;
+                const prefixed = `workbuddy/cn/${model}`;
+                if (!existingClientSet.has(prefixed.toLowerCase())) {
+                    newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+                    existingClientSet.add(prefixed.toLowerCase());
+                }
             }
-            const prefixed = `${provider}/${model}`;
-            if (!existingClientSet.has(prefixed.toLowerCase())) {
-                newEntries.push(makeMappingEntry(prefixed, model, provider, true));
-                existingClientSet.add(prefixed.toLowerCase());
+        }
+
+        // 2. 国际版账号支持的模型：自动拼接 workbuddy/intl/{model}
+        if (hasIntl && intlList.length > 0) {
+            for (const modelRaw of intlList) {
+                const model = (modelRaw || '').trim();
+                if (!model) continue;
+                const prefixed = `workbuddy/intl/${model}`;
+                if (!existingClientSet.has(prefixed.toLowerCase())) {
+                    newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+                    existingClientSet.add(prefixed.toLowerCase());
+                }
             }
-        } else {
-            const prefixed = `${provider}/${model}`;
+        }
+
+        // 3. 通用默认条目 (workbuddy/{model})
+        for (const modelRaw of remoteModels) {
+            const model = (modelRaw || '').trim();
+            if (!model) continue;
+            const prefixed = `workbuddy/${model}`;
             if (!existingClientSet.has(prefixed.toLowerCase())) {
                 newEntries.push(makeMappingEntry(prefixed, model, provider, true));
                 existingClientSet.add(prefixed.toLowerCase());
             }
         }
-        existingTargetSet.add(model.toLowerCase());
+    } else {
+        for (const modelRaw of remoteModels) {
+            const model = (modelRaw || '').trim();
+            if (!model) continue;
+            if (existingTargetSet.has(model.toLowerCase())) continue;
+
+            const isGoogle = isGoogleProviderKind(provider);
+            if (isGoogle) {
+                if (!existingClientSet.has(model.toLowerCase())) {
+                    newEntries.push(makeMappingEntry(model, model, provider, true));
+                    existingClientSet.add(model.toLowerCase());
+                }
+                const prefixed = `${provider}/${model}`;
+                if (!existingClientSet.has(prefixed.toLowerCase())) {
+                    newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+                    existingClientSet.add(prefixed.toLowerCase());
+                }
+            } else {
+                const prefixed = `${provider}/${model}`;
+                if (!existingClientSet.has(prefixed.toLowerCase())) {
+                    newEntries.push(makeMappingEntry(prefixed, model, provider, true));
+                    existingClientSet.add(prefixed.toLowerCase());
+                }
+            }
+            existingTargetSet.add(model.toLowerCase());
+        }
     }
 
     for (const ne of newEntries) {
@@ -165,6 +213,37 @@ try {
     console.log('测试 4: Teardown 沙箱隔离验证...');
     assert.strictEqual(initialMappings.length, 2, '测试执行不污染原数据结构');
     console.log('✓ 测试 4 通过\n');
+
+    // 测试 5: WorkBuddy 国内国际双端模型自动拼接与同名模型共存
+    console.log('测试 5: WorkBuddy 国内国际双端模型自动拼接与同名模型共存...');
+    const wbTab = { id: 'workbuddy', targetProvider: 'workbuddy' };
+    const wbDetails = {
+        hasDomestic: true,
+        hasIntl: true,
+        domModels: ['deepseek-v4.1-flash', 'hunyuan-2.0-instruct'],
+        intlModels: ['deepseek-v4.1-flash', 'gpt-5.5'],
+    };
+    const wbRemote = ['deepseek-v4.1-flash', 'hunyuan-2.0-instruct', 'gpt-5.5'];
+
+    const wbAdded = simulateFetchChannelModelsDedupe(wbTab, [], wbRemote, wbDetails);
+    // 预期包含:
+    // 1. 国内版: workbuddy/cn/deepseek-v4.1-flash -> deepseek-v4.1-flash
+    // 2. 国内版: workbuddy/cn/hunyuan-2.0-instruct -> hunyuan-2.0-instruct
+    // 3. 国际版: workbuddy/intl/deepseek-v4.1-flash -> deepseek-v4.1-flash
+    // 4. 国际版: workbuddy/intl/gpt-5.5 -> gpt-5.5
+    // 5. 通用默认: workbuddy/deepseek-v4.1-flash, workbuddy/hunyuan-2.0-instruct, workbuddy/gpt-5.5
+    const cnDs = wbAdded.find(m => m.clientModel === 'workbuddy/cn/deepseek-v4.1-flash');
+    assert.ok(cnDs, '必须成功生成国内版 workbuddy/cn/deepseek-v4.1-flash');
+    assert.strictEqual(cnDs.targetModel, 'deepseek-v4.1-flash', '国内版目标模型必须为 deepseek-v4.1-flash');
+
+    const intlDs = wbAdded.find(m => m.clientModel === 'workbuddy/intl/deepseek-v4.1-flash');
+    assert.ok(intlDs, '必须成功生成国际版 workbuddy/intl/deepseek-v4.1-flash');
+    assert.strictEqual(intlDs.targetModel, 'deepseek-v4.1-flash', '国际版目标模型必须为 deepseek-v4.1-flash');
+
+    // 二次拉取去重验证
+    const wbSecondFetch = simulateFetchChannelModelsDedupe(wbTab, wbAdded, wbRemote, wbDetails);
+    assert.strictEqual(wbSecondFetch.length, 0, '二次获取时全部模型均已存在，不应重复追加');
+    console.log('✓ 测试 5 通过\n');
 
     console.log('>>> relayModelMappingDedupe 单元测试全部通过！ <<<');
 } catch (err) {

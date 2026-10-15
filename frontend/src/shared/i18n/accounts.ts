@@ -22,6 +22,9 @@ export const accountsZh: Record<string, string> = {
     poolLoadBalance: "账号负载均衡",
     antigravityCliVersionLabel: "Hub版本",
     antigravityCliVersionTip: "Antigravity Hub 版本号(发往 Google 上游的 User-Agent 伪装版本);默认 2.3.1,留空回退默认",
+    workbuddyCliVersionLabel: "模拟版本",
+    workbuddyCliVersionTip: "WorkBuddy 客户端模拟版本号(发往上游身份头与网页授权登录参数);默认 5.7.7,留空回退默认",
+    workbuddyFetchVersionTip: "自动探测并获取 WorkBuddy 最新版本号",
     // Antigravity 池 Cloudflare Worker 出口代理(号池单值,工具栏内嵌,与 grokWorkerProxyLabel 同义,跨命名空间不冲突)。
     antigravityWorkerProxyLabel: "Worker出口",
     antigravityWorkerProxyUrlPlaceholder: "https://your-worker.workers.dev",
@@ -156,6 +159,9 @@ export const accountsEn: Record<string, string> = {
     poolLoadBalance: "Account Load Balancing",
     antigravityCliVersionLabel: "Hub Ver",
     antigravityCliVersionTip: "Antigravity Hub version (User-Agent header sent to Google upstream); default 2.3.1, blank falls back to default",
+    workbuddyCliVersionLabel: "Client Ver",
+    workbuddyCliVersionTip: "WorkBuddy simulated client version (sent in upstream headers and OAuth URL); default 5.7.7, blank falls back to default",
+    workbuddyFetchVersionTip: "Detect and fetch latest WorkBuddy client version",
     // Antigravity pool Cloudflare Worker egress proxy (per-pool value, embedded in toolbar).
     antigravityWorkerProxyLabel: "Worker",
     antigravityWorkerProxyUrlPlaceholder: "https://your-worker.workers.dev",

@@ -23,7 +23,7 @@ func TestFetchWorkBuddyCheckinStatus_Success(t *testing.T) {
 		if r.Header.Get("X-User-Id") != "uid-12345" {
 			t.Errorf("X-User-Id 头错误: %s", r.Header.Get("X-User-Id"))
 		}
-		if r.Header.Get("User-Agent") != "WorkBuddy/5.5.6" {
+		if r.Header.Get("User-Agent") != "WorkBuddy/5.7.7" {
 			t.Errorf("User-Agent 头错误: %s", r.Header.Get("User-Agent"))
 		}
 
@@ -450,8 +450,8 @@ func TestWorkBuddyCheckin_Domestic_FullFlow(t *testing.T) {
 	if capturedStatusHeaders.Get("X-Domain") != "www.workbuddy.cn" {
 		t.Errorf("期望国内版 X-Domain=www.workbuddy.cn, 实际: %s", capturedStatusHeaders.Get("X-Domain"))
 	}
-	if capturedStatusHeaders.Get("User-Agent") != "WorkBuddy/5.5.6" {
-		t.Errorf("期望国内版 User-Agent=WorkBuddy/5.5.6, 实际: %s", capturedStatusHeaders.Get("User-Agent"))
+	if capturedStatusHeaders.Get("User-Agent") != "WorkBuddy/5.7.7" {
+		t.Errorf("期望国内版 User-Agent=WorkBuddy/5.7.7, 实际: %s", capturedStatusHeaders.Get("User-Agent"))
 	}
 
 	// 2. 测试执行签到领取

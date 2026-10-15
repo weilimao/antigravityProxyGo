@@ -20,6 +20,7 @@
           <span class="material-symbols-outlined text-[20px]">smart_toy</span>
         </div>
         <span class="text-[17px] font-bold text-slate-800 dark:text-white tracking-wide">WorkBuddy，我帮你</span>
+        <span id="wbSimulatedVersionBadge" class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 border border-blue-200/50 dark:border-blue-700/50">模拟客户端 v5.7.7</span>
       </div>
 
       <!-- 版本选择 Tab: 国内版 vs 国际版 -->

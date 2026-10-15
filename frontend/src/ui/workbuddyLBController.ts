@@ -10,7 +10,10 @@ import { ipcRenderer } from '../shared/ipc';
 let workbuddyLBModeContainer: HTMLDivElement | null = null;
 let workbuddyLBModeSelect: HTMLSelectElement | null = null;
 let workbuddyMaxConcurrency: HTMLInputElement | null = null;
+let workbuddyCliVersion: HTMLInputElement | null = null;
+let btnWorkBuddyFetchVersion: HTMLButtonElement | null = null;
 let wbConcurrencyDebounce: ReturnType<typeof setTimeout> | null = null;
+let wbVersionDebounce: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * 初始化 DOM 句柄与事件监听。由 accountsController.initAccountsEvents 委托调用。
@@ -19,6 +22,8 @@ export function initWorkBuddyLBEvents(): void {
     workbuddyLBModeContainer = document.getElementById('workbuddyLBModeContainer') as HTMLDivElement | null;
     workbuddyLBModeSelect = document.getElementById('workbuddyLBModeSelect') as HTMLSelectElement | null;
     workbuddyMaxConcurrency = document.getElementById('workbuddyMaxConcurrency') as HTMLInputElement | null;
+    workbuddyCliVersion = document.getElementById('workbuddyCliVersion') as HTMLInputElement | null;
+    btnWorkBuddyFetchVersion = document.getElementById('btnWorkBuddyFetchVersion') as HTMLButtonElement | null;
 
     if (workbuddyLBModeSelect) {
         workbuddyLBModeSelect.addEventListener('change', (e: any) => {
@@ -34,6 +39,44 @@ export function initWorkBuddyLBEvents(): void {
             wbConcurrencyDebounce = setTimeout(() => {
                 ipcRenderer.send('workbuddy:set-max-concurrency', v);
             }, 300);
+        });
+    }
+
+    if (workbuddyCliVersion) {
+        const handleVersionChange = (e: any) => {
+            const v = (e.target.value || '').trim();
+            if (wbVersionDebounce) clearTimeout(wbVersionDebounce);
+            wbVersionDebounce = setTimeout(() => {
+                ipcRenderer.send('workbuddy:set-cli-version', v);
+            }, 300);
+        };
+        workbuddyCliVersion.addEventListener('input', handleVersionChange);
+        workbuddyCliVersion.addEventListener('change', handleVersionChange);
+    }
+
+    if (btnWorkBuddyFetchVersion) {
+        btnWorkBuddyFetchVersion.addEventListener('click', async () => {
+            const icon = document.getElementById('iconWbFetchVersion');
+            if (icon) icon.classList.add('animate-spin');
+            btnWorkBuddyFetchVersion!.disabled = true;
+
+            try {
+                const resRaw = await ipcRenderer.invoke('workbuddy:fetch-latest-version');
+                const res = typeof resRaw === 'string' ? JSON.parse(resRaw) : resRaw;
+                if (res && res.success && res.version) {
+                    if (workbuddyCliVersion) {
+                        workbuddyCliVersion.value = res.version;
+                    }
+                    ipcRenderer.send('workbuddy:set-cli-version', res.version);
+                }
+            } catch (e: any) {
+                console.error('[WorkBuddy] Fetch latest version error:', e);
+            } finally {
+                setTimeout(() => {
+                    if (icon) icon.classList.remove('animate-spin');
+                    if (btnWorkBuddyFetchVersion) btnWorkBuddyFetchVersion.disabled = false;
+                }, 800);
+            }
         });
     }
 
@@ -88,11 +131,17 @@ export function updateWorkBuddyLBUI(lastBackendData: any): void {
     if (!workbuddyMaxConcurrency) {
         workbuddyMaxConcurrency = document.getElementById('workbuddyMaxConcurrency') as HTMLInputElement | null;
     }
+    if (!workbuddyCliVersion) {
+        workbuddyCliVersion = document.getElementById('workbuddyCliVersion') as HTMLInputElement | null;
+    }
 
     if (workbuddyLBModeSelect) {
         workbuddyLBModeSelect.value = lastBackendData.workbuddyLBMode || 'round-robin';
     }
     if (workbuddyMaxConcurrency) {
         workbuddyMaxConcurrency.value = String(lastBackendData.workbuddyMaxConcurrency ?? 10);
+    }
+    if (workbuddyCliVersion) {
+        workbuddyCliVersion.value = lastBackendData.workbuddyCliVersion || '5.7.7';
     }
 }

@@ -201,3 +201,66 @@ func TestFetchChannelAvailableModels_WorkBuddyDualVersion(t *testing.T) {
 		t.Errorf("expected intl header X-IDE-Type to be CodeBuddy, got %q", intlHeaderType)
 	}
 }
+
+func TestFetchWorkBuddyAvailableModelsDetailed(t *testing.T) {
+	domServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 0,
+			"data": map[string]any{
+				"models": []map[string]any{
+					{"id": "hunyuan-2.0-instruct"},
+					{"id": "deepseek-v4.1-flash"},
+				},
+			},
+		})
+	}))
+	t.Cleanup(domServer.Close)
+
+	intlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 0,
+			"data": map[string]any{
+				"models": []map[string]any{
+					{"id": "gpt-5.5"},
+					{"id": "deepseek-v4.1-flash"},
+				},
+			},
+		})
+	}))
+	t.Cleanup(intlServer.Close)
+
+	tmpDir := t.TempDir()
+	mgr := account.NewManager()
+	mgr.Init(tmpDir)
+
+	domAcc := account.NewWorkBuddyAccount(account.WorkBuddyAccountInput{
+		Label:       "wb@qq.com (国内版)",
+		AccessToken: "dom-token-xyz",
+		BaseURL:     domServer.URL,
+	})
+	mgr.AddAccount(domAcc)
+
+	intlAcc := account.NewWorkBuddyAccount(account.WorkBuddyAccountInput{
+		Label:       "wb@gmail.com",
+		AccessToken: "intl-token-xyz",
+		BaseURL:     intlServer.URL,
+	})
+	mgr.AddAccount(intlAcc)
+
+	details, err := FetchWorkBuddyAvailableModelsDetailed(mgr)
+	if err != nil {
+		t.Fatalf("FetchWorkBuddyAvailableModelsDetailed 失败: %v", err)
+	}
+	if !details.HasDomestic || !details.HasIntl {
+		t.Fatalf("期望 HasDomestic 与 HasIntl 均为 true, 实际: dom=%v, intl=%v", details.HasDomestic, details.HasIntl)
+	}
+	if len(details.DomModels) != 2 || len(details.IntlModels) != 2 {
+		t.Fatalf("期望双端各有 2 个模型, 实际: dom=%d, intl=%d", len(details.DomModels), len(details.IntlModels))
+	}
+	if len(details.AllModels) != 3 {
+		t.Fatalf("期望聚合去重后共 3 个模型, 实际: %d (%v)", len(details.AllModels), details.AllModels)
+	}
+}
+

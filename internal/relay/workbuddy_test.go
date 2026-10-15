@@ -533,8 +533,8 @@ func TestWorkBuddy_Domestic_EndToEnd(t *testing.T) {
 	if capturedHeaders.Get("X-User-Id") != "domestic-uid-999" {
 		t.Errorf("期望上游收到 X-User-Id=domestic-uid-999, 实际得到: %s", capturedHeaders.Get("X-User-Id"))
 	}
-	if capturedHeaders.Get("User-Agent") != "WorkBuddy/5.5.6" {
-		t.Errorf("期望上游收到 User-Agent=WorkBuddy/5.5.6, 实际得到: %s", capturedHeaders.Get("User-Agent"))
+	if capturedHeaders.Get("User-Agent") != "WorkBuddy/5.7.7" {
+		t.Errorf("期望上游收到 User-Agent=WorkBuddy/5.7.7, 实际得到: %s", capturedHeaders.Get("User-Agent"))
 	}
 
 	var jsonResp OpenAIChatResponse

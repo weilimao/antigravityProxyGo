@@ -295,6 +295,16 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		a.emitAccountsRes()
 		return true
 
+	case "workbuddy:set-cli-version":
+		// WorkBuddy 号池全局客户端模拟版本号(单池单值,对仗 grok:set-cli-version)。
+		// 用于发往 WorkBuddy 上游和网页授权登录时的客户端版本。
+		// 空串=未配置,GetWorkBuddyCliVersion 回退默认 DefaultWorkBuddyDomesticVersion("5.7.7")。
+		v := getStringArg(0)
+		a.accountMgr.SetWorkBuddyCliVersion(v)
+		a.AddLog("🔄 WorkBuddy Simulated Version → " + a.accountMgr.GetWorkBuddyCliVersion())
+		a.emitAccountsRes()
+		return true
+
 	case "opencode:set-lb-mode":
 		// args: [mode]。OpenCode 单池单值 LB 算法(与 workbuddy:set-lb-mode 同构)。
 		mode := getStringArg(0)

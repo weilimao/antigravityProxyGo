@@ -136,6 +136,16 @@
                     <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="maxConcurrencyLabel">并发上限</span>
                     <input type="number" min="0" max="1000" id="workbuddyMaxConcurrency" class="w-14 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="maxConcurrencyTip" title="0=未配置(默认10);超过自动换号" />
                 </div>
+                <!-- WorkBuddy 客户端模拟版本号(号池单值,对仗 Grok CLI 版本):用于发往 WorkBuddy 上游和网页授权登录时的客户端版本。留空回退默认 5.7.7。 -->
+                <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20">
+                    <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="workbuddyCliVersionLabel">模拟版本</span>
+                    <div class="flex items-center gap-1">
+                        <input type="text" id="workbuddyCliVersion" placeholder="5.7.7" class="w-16 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="workbuddyCliVersionTip" title="WorkBuddy 客户端模拟版本号;默认 5.7.7,留空回退默认" />
+                        <button type="button" id="btnWorkBuddyFetchVersion" class="flex items-center justify-center p-0.5 text-slate-400 hover:text-primary transition-colors cursor-pointer rounded" data-i18n-title="workbuddyFetchVersionTip" title="获取最新版本号">
+                            <span class="material-symbols-outlined text-[15px]" id="iconWbFetchVersion">sync</span>
+                        </button>
+                    </div>
+                </div>
                 <!-- WorkBuddy 一键签到按钮 -->
                 <button type="button" id="btnWorkBuddyCheckinAll" class="flex items-center gap-1 px-2 py-0.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 rounded text-[12px] font-medium cursor-pointer transition-colors whitespace-nowrap ml-1" title="对 WorkBuddy 号池所有可用账号执行每日签到并刷新积分">
                     <span class="material-symbols-outlined text-[15px]" id="iconWbCheckin">event_available</span>
