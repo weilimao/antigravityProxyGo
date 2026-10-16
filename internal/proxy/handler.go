@@ -324,6 +324,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					r.URL.Path = strings.Replace(r.URL.Path, "/models/"+oldModel, "/models/"+overrideID, 1)
 				}
 				currentModel = overrideID
+				if newBytes, modified := RewriteModelInPayload(bodyBytes, overrideID); modified {
+					bodyBytes = newBytes
+				}
 				if h.logFn != nil {
 					h.logFn(fmt.Sprintf("🔄 [全局覆写] 无论客户端请求何种模型，强制覆写: %s -> %s", oldModel, overrideID))
 				}

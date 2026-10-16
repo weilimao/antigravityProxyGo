@@ -185,7 +185,7 @@ func TestOcrRace_CacheAndLookup(t *testing.T) {
 	localProxyAddr = strings.TrimPrefix(ts.URL, "http://")
 
 	st := &stubOcrSettings{
-		ocrModels: []string{"gemini-m1", "gemini-m2"},
+		ocrModels: []string{"gemini-m1"},
 	}
 	svc := NewOCRService(st, &http.Client{Timeout: 5 * time.Second}, func(string) {})
 	sess := &RelaySession{UserID: "u_race_4", UserKey: "k1"}

@@ -21,6 +21,11 @@ import (
 	"antigravity-proxy/internal/netutil"
 )
 
+const (
+	// AntigravityIDEUserAgent 与官方 Antigravity IDE (language_server) 与上游通信的标头保持一致
+	AntigravityIDEUserAgent = "antigravity/ide/2.5.5 (aidev_client; os_type=windows; arch=amd64)"
+)
+
 type QuotaService struct {
 	sync.RWMutex
 	dataDir    string
@@ -324,12 +329,11 @@ func loadCodeAssist(accessToken string, isAntigravity bool) (string, string, *fl
 	}
 	var body map[string]interface{}
 	if isAntigravity {
-		headers["User-Agent"] = "antigravity/1.21.9 darwin/arm64 google-api-nodejs-client/10.3.0"
-		headers["X-Goog-Api-Client"] = "gl-node/22.21.1"
+		headers["User-Agent"] = AntigravityIDEUserAgent
 		body = map[string]interface{}{
 			"metadata": map[string]interface{}{
 				"ideType":    "ANTIGRAVITY",
-				"ideVersion": "1.22.4",
+				"ideVersion": "2.5.5",
 				"ideName":    "antigravity",
 			},
 		}
@@ -510,8 +514,7 @@ func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]accou
 		"Authorization": "Bearer " + accessToken,
 	}
 	if isAntigravity {
-		headers["User-Agent"] = "antigravity/1.21.9 darwin/arm64 google-api-nodejs-client/10.3.0"
-		headers["X-Goog-Api-Client"] = "gl-node/22.21.1"
+		headers["User-Agent"] = AntigravityIDEUserAgent
 	}
 
 	host := "cloudcode-pa.googleapis.com"
@@ -606,32 +609,41 @@ func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]accou
 
 	var allBuckets []account.QuotaBucket
 
-	// Parse retrieveUserQuotaSummary
-	var summaryResp RetrieveUserQuotaSummaryResponse
-	if json.Unmarshal(resBytes, &summaryResp) == nil && len(summaryResp.Groups) > 0 {
-		for _, g := range summaryResp.Groups {
-			for _, b := range g.Buckets {
-				name := b.DisplayName
-				if name == "" {
-					name = b.BucketID
+	// Antigravity 渠道：先解析 retrieveUserQuotaSummary
+	if isAntigravity {
+		summaryBuckets := ParseUserQuotaSummary(resBytes)
+		if len(summaryBuckets) > 0 {
+			// 若上游已直接包含 Gemini Models（历史格式或未来恢复），直接返回
+			if HasGeminiGroup(summaryBuckets) {
+				return summaryBuckets, nil
+			}
+
+			// 当前上游 Summary 仅返回 Claude and GPT models，缺少 Gemini Models。
+			// 补充请求 retrieveUserQuota 接口，提取 Gemini 系列模型的真实实时配额与 5 小时滚动重置时间
+			detailEndpoint := "https://" + host + "/v1internal:retrieveUserQuota"
+			statusDetail, detailBytes, errDetail := postJson(detailEndpoint, quotaBody, headers)
+			if errDetail == nil && statusDetail == 200 {
+				merged := MergeQuotaBuckets(summaryBuckets, detailBytes)
+				if len(merged) > 0 {
+					return merged, nil
 				}
-				remFraction := b.RemainingFraction
-				allBuckets = append(allBuckets, account.QuotaBucket{
-					ModelID:           name,
-					Group:             g.DisplayName,
-					RemainingFraction: remFraction,
-					RemainPercent:     int(math.Round(remFraction * 100)),
-					ResetTime:         b.ResetTime,
-				})
+			}
+			// 若补充请求异常，回退返回已提取的 Summary 配额桶
+			return summaryBuckets, nil
+		}
+
+		// 若 Summary 解析为空，尝试通过 retrieveUserQuota 提取所有模型配额
+		detailEndpoint := "https://" + host + "/v1internal:retrieveUserQuota"
+		statusDetail, detailBytes, errDetail := postJson(detailEndpoint, quotaBody, headers)
+		if errDetail == nil && statusDetail == 200 {
+			merged := MergeQuotaBuckets(nil, detailBytes)
+			if len(merged) > 0 {
+				return merged, nil
 			}
 		}
 	}
 
-	if len(allBuckets) > 0 {
-		return allBuckets, nil
-	}
-
-	// Parse retrieveUserQuota
+	// 通用 / gemini-cli 渠道解析 retrieveUserQuota
 	var normalResp struct {
 		QuotaSummaries []struct {
 			Model        string  `json:"model"`
@@ -674,9 +686,20 @@ func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]accou
 			}
 		} else if len(normalResp.Buckets) > 0 {
 			for _, b := range normalResp.Buckets {
+				group := b.Group
+				if group == "" {
+					lowerModel := strings.ToLower(b.ModelID)
+					if strings.Contains(lowerModel, "gemini") {
+						group = "Gemini Models"
+					} else if strings.Contains(lowerModel, "claude") || strings.HasPrefix(lowerModel, "gpt") {
+						group = "Claude and GPT models"
+					} else {
+						group = "All Models"
+					}
+				}
 				allBuckets = append(allBuckets, account.QuotaBucket{
 					ModelID:           b.ModelID,
-					Group:             b.Group,
+					Group:             group,
 					RemainingFraction: b.RemainingFraction,
 					RemainPercent:     int(math.Round(b.RemainingFraction * 100)),
 					ResetTime:         b.ResetTime,
