@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -59,62 +58,6 @@ func ensureWorkBuddySystemPrompt(req *OpenAIChatRequest) {
 		})
 		newMessages = append(newMessages, req.Messages...)
 		req.Messages = newMessages
-	}
-}
-
-var reWorkBuddyBillingHeader = regexp.MustCompile(`(?i)x-anthropic-billing-header[^\r\n]*[\r\n]*`)
-
-// sanitizeWorkBuddyText 统一脱敏字符串中触碰 WorkBuddy 安全策略（11128）的客户端渠道特征。
-func sanitizeWorkBuddyText(text string) string {
-	if text == "" {
-		return ""
-	}
-	if reWorkBuddyBillingHeader.MatchString(text) {
-		text = reWorkBuddyBillingHeader.ReplaceAllString(text, "")
-	}
-	if strings.Contains(strings.ToLower(text), "x-anthropic-billing-header") {
-		// 兜底清除无换行或特殊分隔符的残留标记
-		reFallback := regexp.MustCompile(`(?i)x-anthropic-billing-header[a-zA-Z0-9_=:;.\- ]*`)
-		text = reFallback.ReplaceAllString(text, "")
-	}
-	if strings.Contains(text, "You are Claude Code, Anthropic's official CLI for Claude.") {
-		text = strings.ReplaceAll(text, "You are Claude Code, Anthropic's official CLI for Claude.", "You are an interactive AI assistant helping with coding.")
-	}
-	if strings.Contains(text, "Claude Code") {
-		text = strings.ReplaceAll(text, "Claude Code", "AI Assistant")
-	}
-	if strings.Contains(text, "claude-code") {
-		text = strings.ReplaceAll(text, "claude-code", "ai-assistant")
-	}
-	if strings.Contains(text, "claude-cli") {
-		text = strings.ReplaceAll(text, "claude-cli", "ai-cli")
-	}
-	return text
-}
-
-// sanitizeWorkBuddyMessages 清洗触碰 WorkBuddy 安全策略（11128）的客户端特有标识（如 Claude Code CLI、计费头、Tools描述等）。
-func sanitizeWorkBuddyMessages(req *OpenAIChatRequest) {
-	if req == nil {
-		return
-	}
-	for i := range req.Messages {
-		req.Messages[i].Content = sanitizeWorkBuddyText(req.Messages[i].Content)
-		if len(req.Messages[i].ContentParts) > 0 {
-			for j := range req.Messages[i].ContentParts {
-				switch p := req.Messages[i].ContentParts[j].(type) {
-				case ChatMessageTextPart:
-					p.Text = sanitizeWorkBuddyText(p.Text)
-					req.Messages[i].ContentParts[j] = p
-				case *ChatMessageTextPart:
-					if p != nil {
-						p.Text = sanitizeWorkBuddyText(p.Text)
-					}
-				}
-			}
-		}
-	}
-	for i := range req.Tools {
-		req.Tools[i].Function.Description = sanitizeWorkBuddyText(req.Tools[i].Function.Description)
 	}
 }
 
@@ -320,7 +263,13 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 根据模型版本亲和性过滤可用账号（国内专属模型 -> 国内网关/账号，国际专属模型 -> 国际网关/账号）
-	affinity := account.GetWorkBuddyModelAffinity(inModel)
+	// 优先使用路由转发前透传的客户端原始请求模型名（保留 workbuddy/intl/ 或 workbuddy/domestic/ 区域前缀），
+	// 避免请求体中的 model 被 mapping 改写为裸模型名后丢失区域亲和意图。
+	affinityModel := r.Header.Get("X-Antigravity-Original-Model")
+	if affinityModel == "" {
+		affinityModel = inModel
+	}
+	affinity := account.GetWorkBuddyModelAffinity(affinityModel)
 	if affinity == "domestic" || affinity == "international" {
 		var affinityFiltered []*account.Account
 		for _, acc := range available {
@@ -333,7 +282,7 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 		if len(affinityFiltered) > 0 {
 			available = affinityFiltered
 		} else {
-			h.log("⚠️ [WorkBuddy 亲和性] 请求模型 %s 偏好 %s 网关，但号池中未找到匹配账号，降级使用全量号池", inModel, affinity)
+			h.log("⚠️ [WorkBuddy 亲和性] 请求模型 %s 偏好 %s 网关，但号池中未找到匹配账号，降级使用全量号池", affinityModel, affinity)
 		}
 	}
 
@@ -448,6 +397,7 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 		}
 
 		upstreamBytes, _ := json.Marshal(upstreamReq)
+		upstreamBytes = sanitizeWorkBuddyFinalPayload(upstreamBytes)
 		baseURL := strings.TrimRight(poolAccount.BaseURL, "/")
 		if baseURL == "" || strings.Contains(baseURL, "codebuddy.ai") {
 			if poolAccount.IsWorkBuddyDomestic() {
@@ -532,13 +482,16 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 			errBytes, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
 			h.log("❌ [WorkBuddy 中继] 上游返回异常状态码 %d (%s): %s", resp.StatusCode, poolAccount.Email, string(errBytes))
-			// 若上游返回 11128 或渠道安全策略拦截，冷冻该账号并换号重试(防止单账号受限拖垮整个模型分支)
+			// 若上游返回 11128 或渠道安全策略拦截，说明当前 Payload 触发了上游 WAF 渠道拦截规则。
+			// 此时绝不能冷冻账号，更不能用相同 Payload 盲目重试号池内其他账号（会导致整个号池账号全被冷冻）。
+			// 正确做法：直接释放当前账号（保持健康状态），终止号池轮询重试，直接向客户端返回错误。
 			if resp.StatusCode == http.StatusBadRequest && (strings.Contains(string(errBytes), "11128") || strings.Contains(string(errBytes), "unapproved channel")) {
-				skippedAccounts[poolAccount.ID] = true
-				cooldownUntilMs := time.Now().UnixNano()/1e6 + 5*60*1000 // 冷冻 5 分钟
-				h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, cooldownUntilMs, workbuddyChannel, inModel)
+				h.log("⚠️ [WorkBuddy 安全拦截] 上游返回 11128 渠道拦截，终止号池轮询以保护账号 (%s)", poolAccount.Email)
 				h.accountMgr.ReleaseAccount(poolAccount.ID)
-				continue
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(resp.StatusCode)
+				_, _ = w.Write(errBytes)
+				return
 			}
 			h.accountMgr.ReleaseAccount(poolAccount.ID)
 			w.Header().Set("Content-Type", "application/json")

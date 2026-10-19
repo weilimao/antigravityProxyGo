@@ -225,6 +225,9 @@ func (h *APICompatHandler) executeForwardModel(
 		newBody := patchRoutedBodyModel(bodyBytes, upstreamModel)
 		r.Body = io.NopCloser(strings.NewReader(newBody))
 		r.ContentLength = int64(len(newBody))
+		if inModel != "" {
+			r.Header.Set("X-Antigravity-Original-Model", inModel)
+		}
 		h.handleWorkBuddy(w, r, userSession)
 		return
 	}

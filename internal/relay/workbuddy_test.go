@@ -16,6 +16,7 @@ import (
 
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/pricing"
+	"antigravity-proxy/internal/session"
 	"antigravity-proxy/internal/stats"
 )
 
@@ -676,5 +677,152 @@ func TestWorkBuddy_ModelAffinityRouting_EndToEnd(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkBuddy_11128_NoCooldownAndNoPoolExhaustion(t *testing.T) {
+	var callCount int
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"code":11128,"msg":"Illegal API invocation from an unapproved channel"}`)
+	}))
+	t.Cleanup(mockServer.Close)
+
+	tmpDir := t.TempDir()
+	mgr := account.NewManager()
+	mgr.Init(tmpDir)
+
+	acc1 := &account.Account{
+		ID:          "wb-acc-1",
+		Email:       "acc1@test.com",
+		Provider:    "workbuddy",
+		BaseURL:     mockServer.URL,
+		AccessToken: "token-1",
+		Enabled:     true,
+	}
+	acc2 := &account.Account{
+		ID:          "wb-acc-2",
+		Email:       "acc2@test.com",
+		Provider:    "workbuddy",
+		BaseURL:     mockServer.URL,
+		AccessToken: "token-2",
+		Enabled:     true,
+	}
+	mgr.AddAccount(acc1)
+	mgr.AddAccount(acc2)
+
+	handler := NewAPICompatHandler(nil, mgr, nil, nil, nil, nil, nil)
+	handler.client = mockServer.Client()
+	handler.streamClient = mockServer.Client()
+
+	reqBody := []byte(`{"model":"workbuddy/deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.handleWorkBuddy(w, req, &RelaySession{UserID: "test_user"})
+
+	// 1. 响应状态码应为 400
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("期望状态码 400, 实际得到: %d, body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "11128") {
+		t.Errorf("响应体应包含 11128 错误码, 实际: %s", w.Body.String())
+	}
+
+	// 2. 上游应该只被调用 1 次，严禁轮询重试号池其他账号
+	if callCount != 1 {
+		t.Errorf("期望仅调用 1 次以保护号池，实际调用了 %d 次", callCount)
+	}
+
+	// 3. 两个账号都不应该进入冷冻状态
+	nowMs := time.Now().UnixNano() / 1e6
+	a1 := mgr.GetAccountByID("wb-acc-1")
+	if a1 == nil || a1.CooldownUntil > nowMs || len(a1.Cooldowns) > 0 {
+		t.Errorf("wb-acc-1 不应被设置冷冻状态: %+v", a1)
+	}
+	a2 := mgr.GetAccountByID("wb-acc-2")
+	if a2 == nil || a2.CooldownUntil > nowMs || len(a2.Cooldowns) > 0 {
+		t.Errorf("wb-acc-2 不应被设置冷冻状态: %+v", a2)
+	}
+}
+
+func TestWorkBuddy_IntlPrefix_Overrides_StickyDomesticAccount(t *testing.T) {
+	var domHits, intlHits int
+
+	mockDomestic := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		domHits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"cmpl-dom\",\"choices\":[{\"delta\":{\"content\":\"来自国内网关\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(mockDomestic.Close)
+
+	mockIntl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		intlHits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"cmpl-intl\",\"choices\":[{\"delta\":{\"content\":\"来自国际网关\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(mockIntl.Close)
+
+	tmpDir := t.TempDir()
+	mgr := account.NewManager()
+	mgr.Init(tmpDir)
+
+	domAcc := &account.Account{
+		ID:          "wb-dom",
+		Email:       "用户A (国内版)",
+		Provider:    "workbuddy",
+		BaseURL:     mockDomestic.URL,
+		AccessToken: "dom-token",
+		Enabled:     true,
+	}
+	intlAcc := &account.Account{
+		ID:          "wb-intl",
+		Email:       "user@gmail.com",
+		Provider:    "workbuddy",
+		BaseURL:     mockIntl.URL,
+		AccessToken: "intl-token",
+		Enabled:     true,
+	}
+	mgr.AddAccount(domAcc)
+	mgr.AddAccount(intlAcc)
+
+	sessionRouter := session.NewRouter()
+
+	handler := NewAPICompatHandler(nil, mgr, sessionRouter, nil, nil, nil, nil)
+	handler.client = mockIntl.Client()
+	handler.streamClient = mockIntl.Client()
+
+	// 1. 先让粘性会话绑定到国内版账号
+	sessionKey := "test_session_affinity_override"
+	_ = sessionRouter.GetOrAssignAccount(sessionKey, []*account.Account{domAcc}, nil)
+
+	// 2. 发起请求：model 虽被 mapping 改写为裸名 deepseek-v4.1-flash，但 Header 传递了原始模型 workbuddy/intl/deepseek-v4.1-flash
+	reqBody := []byte(`{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Antigravity-Original-Model", "workbuddy/intl/deepseek-v4.1-flash")
+	w := httptest.NewRecorder()
+
+	handler.handleWorkBuddy(w, req, &RelaySession{UserID: sessionKey})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("请求失败: %d, body: %s", w.Code, w.Body.String())
+	}
+	if domHits != 0 {
+		t.Errorf("期望国内网关被亲和性排除(0次)，实际被命中 %d 次", domHits)
+	}
+	if intlHits != 1 {
+		t.Errorf("期望国际网关命中 1 次，实际命中 %d 次", intlHits)
+	}
+	if !strings.Contains(w.Body.String(), "来自国际网关") {
+		t.Errorf("期望响应来自国际网关，实际内容: %s", w.Body.String())
+	}
+}
+
+
 
 
