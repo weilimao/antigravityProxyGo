@@ -129,6 +129,7 @@
     </header>
 
     <main class="flex-grow px-container-padding py-6 pb-[50px] w-full flex flex-col gap-6 overflow-y-auto relative">
+      <AdCarousel :lang="currentLang" />
       <Dashboard v-show="$route.path === '/' || $route.path === '/dashboard'" />
       <Accounts v-if="visited.accounts" v-show="$route.path === '/accounts'" />
       <UsageDetails v-if="visited.usage" v-show="$route.path === '/usage'" />
@@ -180,6 +181,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import AdCarousel from './components/AdCarousel.vue';
 import Dashboard from './views/Dashboard.vue';
 import Accounts from './views/Accounts.vue';
 import UsageDetails from './views/UsageDetails.vue';
