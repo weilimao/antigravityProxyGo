@@ -330,7 +330,8 @@ export function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
     // 状态与 HTTP 码
     let statusClass = 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-500/20';
     let statusLabel = dict.statusMiss || 'MISS';
-    if (log.cacheStatus === 'HIT') {
+    const isCacheHit = log.cacheStatus === 'HIT' || (typeof log.cachedTokens === 'number' && log.cachedTokens > 0);
+    if (isCacheHit) {
         statusClass = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/25';
         statusLabel = dict.statusHit || 'HIT';
     } else if (log.cacheStatus === 'NONE') {

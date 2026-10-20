@@ -47,6 +47,63 @@ func requestBodyFromDBString(s string) interface{} {
 	return s
 }
 
+// HasRequest 判断指定 reqID 是否已经在内存请求日志队列中存在
+func (t *Tracker) HasRequest(reqID string) bool {
+	if reqID == "" {
+		return false
+	}
+	t.RLock()
+	defer t.RUnlock()
+	for _, req := range t.requests {
+		if req != nil && req.ID == reqID {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeOrPrependLocked 将 reqLog 幂等地记入 t.requests。
+// 若发现同 ID 记录已存在，则用更详实的新元数据（如非空 Account/CacheStatus/SessionID）更新已有项，
+// 防止同一请求被多次推入造成列表重影与条数虚高。返回 isNew。
+func (t *Tracker) mergeOrPrependLocked(reqLog *RequestLog) bool {
+	if reqLog.ID != "" {
+		for _, existing := range t.requests {
+			if existing != nil && existing.ID == reqLog.ID {
+				if existing.Account == "" && reqLog.Account != "" {
+					existing.Account = reqLog.Account
+				}
+				if (existing.CacheStatus == "" || existing.CacheStatus == "NONE" || existing.CacheStatus == "MISS") && (reqLog.CacheStatus == "HIT" || reqLog.CachedTokens > 0) {
+					existing.CacheStatus = reqLog.CacheStatus
+					if existing.CacheStatus == "" {
+						existing.CacheStatus = "HIT"
+					}
+				}
+				if (existing.SessionID == "" || existing.SessionID == "remote_session") && reqLog.SessionID != "" && reqLog.SessionID != "remote_session" {
+					existing.SessionID = reqLog.SessionID
+				}
+				if existing.InTokens <= 0 && reqLog.InTokens > 0 {
+					existing.InTokens = reqLog.InTokens
+					existing.OutTokens = reqLog.OutTokens
+					existing.CachedTokens = reqLog.CachedTokens
+					existing.Cost = reqLog.Cost
+				}
+				if existing.DurationMs <= 0 && reqLog.DurationMs > 0 {
+					existing.DurationMs = reqLog.DurationMs
+				}
+				if existing.FirstByteMs <= 0 && reqLog.FirstByteMs > 0 {
+					existing.FirstByteMs = reqLog.FirstByteMs
+				}
+				return false
+			}
+		}
+	}
+	t.requests = append([]*RequestLog{reqLog}, t.requests...)
+	if len(t.requests) > MaxRequestLogs {
+		t.requests = t.requests[:MaxRequestLogs]
+	}
+	return true
+}
+
 func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 	// 只保留真正的模型对话/发送请求（即包含 generatecontent 或 predict 的 API 调用）
 	p := strings.ToLower(reqLog.Path)
@@ -63,11 +120,13 @@ func (t *Tracker) AddRequestLog(reqLog *RequestLog) {
 	reqLog.Cost = t.pricingMgr.CalculateCost(reqLog.Model, reqLog.InTokens, reqLog.OutTokens, reqLog.CachedTokens)
 	reqLog.RequestBody = TruncateRequestBody(reqLog.RequestBody)
 
-	t.requests = append([]*RequestLog{reqLog}, t.requests...)
-	if len(t.requests) > MaxRequestLogs {
-		t.requests = t.requests[:MaxRequestLogs]
-	}
+	isNew := t.mergeOrPrependLocked(reqLog)
 	t.Unlock()
+
+	if !isNew {
+		t.scheduleSave()
+		return
+	}
 
 	go func(rl *RequestLog, prMgr *pricing.Manager) {
 		timestamp := time.Now().Format(time.RFC3339)
@@ -203,10 +262,7 @@ func (t *Tracker) AddRequestLogInMemoryOnly(reqLog *RequestLog) {
 	reqLog.Cost = t.pricingMgr.CalculateCost(reqLog.Model, reqLog.InTokens, reqLog.OutTokens, reqLog.CachedTokens)
 	reqLog.RequestBody = TruncateRequestBody(reqLog.RequestBody)
 
-	t.requests = append([]*RequestLog{reqLog}, t.requests...)
-	if len(t.requests) > MaxRequestLogs {
-		t.requests = t.requests[:MaxRequestLogs]
-	}
+	t.mergeOrPrependLocked(reqLog)
 	t.Unlock()
 
 	t.scheduleSave()

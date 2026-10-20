@@ -3,11 +3,16 @@ package relay
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -24,7 +29,9 @@ import (
 //   - 突破限制一: 远端仅支持 stream: true，请求上游时强制 stream: true；若客户端为非流式，
 //     在内存中消费 SSE 流并聚合生成完整 JSON 回写。
 //   - 突破限制二: 远端首条消息必须是 role: "system"，若缺少则自动在首位注入默认 system prompt。
-//   - 请求头注入: 包含 X-IDE-Type: CodeBuddy, X-IDE-Name: WorkBuddy AI, X-IDE-Version: 5.5.2 等必要头。
+//   - 请求头注入: 按账号区域注入官方客户端头(X-IDE-Type / X-IDE-Name / X-IDE-Version /
+//     User-Agent / X-Current-Account-Id);会话标识统一规整为 UUID(X-Conversation-ID),
+//     避免内部会话键前缀(claude: / acc: 等)泄露触发上游渠道校验(400 / 11128)。
 
 const (
 	workbuddyChannel           = "workbuddy"
@@ -59,6 +66,128 @@ func ensureWorkBuddySystemPrompt(req *OpenAIChatRequest) {
 		newMessages = append(newMessages, req.Messages...)
 		req.Messages = newMessages
 	}
+}
+
+// workbuddyAttachGrowthEvent 注入官方桌面端每个 craft 请求都会携带的 growthEvent 遥测参数
+// (extra_vars.growthEvent, JSON 字符串)。上游渠道校验据此判定请求是否来自官方客户端,
+// 缺失时可能直接返回 400 / code 11128。字段形态对齐 account_workbuddy_checkin.go 的官方 ping。
+// 注意: 官方桌面端 chat 请求体实测不含 extra_vars/growthEvent,故本函数默认不接入链路,
+// 仅在需要复现官方"活跃上报"语义时显式调用。
+func workbuddyAttachGrowthEvent(req *OpenAIChatRequest, convID, model string, inputLength int) {
+	if req == nil {
+		return
+	}
+	event := []map[string]interface{}{
+		{
+			"eventCode": "chat_request_send",
+			"id":        convID,
+			"extra": map[string]interface{}{
+				"inputLength":      inputLength,
+				"requestModelId":   model,
+				"requestModelName": model,
+				"mode":             "craft",
+				"command":          "",
+			},
+		},
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	if req.ExtraVars == nil {
+		req.ExtraVars = make(map[string]interface{}, 1)
+	}
+	req.ExtraVars["growthEvent"] = string(payload)
+}
+
+// applyWorkBuddyChatHeaders 按官方桌面端 app.asar 中 chat 请求的构造 1:1 补齐请求头。
+//
+// 依据(WorkBuddy 客户端 app.asar 内的 buildChatHeaders / YN 默认头表 / applyTraceHeaders):
+//
+//	X-IDE-Type=WorkBuddy, X-IDE-Name=WorkBuddy, X-IDE-Version=<app 版本>,
+//	X-Product=SaaS, X-Private-Data=true,
+//	X-Agent-Intent=craft, X-Agent-Purpose=conversation,
+//	x-codebuddy-request=1   ← 官方 app-server 安全头,缺失会被判"非官方客户端"(11128)
+//	traceparent / b3 / X-B3-TraceId / X-B3-ParentSpanId / X-B3-SpanId / X-B3-Sampled / X-Trace-ID
+//	                        ← 官方每个请求都带链路追踪头
+func applyWorkBuddyChatHeaders(h http.Header, convID, reqID, msgID, ver string) {
+	if h == nil {
+		return
+	}
+	h.Set("Accept", "text/event-stream")
+	h.Set("Content-Type", "application/json")
+	h.Set("X-IDE-Type", "WorkBuddy")
+	h.Set("X-IDE-Name", "WorkBuddy")
+	if ver != "" {
+		h.Set("X-IDE-Version", ver)
+	}
+	h.Set("X-Product", "SaaS")
+	h.Set("X-Private-Data", "true")
+	h.Set("X-Agent-Intent", "craft")
+	h.Set("X-Agent-Purpose", "conversation")
+	h.Set("x-codebuddy-request", "1")
+
+	h.Set("X-Conversation-ID", convID)
+	h.Set("X-Conversation-Request-ID", reqID)
+	h.Set("X-Conversation-Message-ID", msgID)
+	h.Set("X-Request-ID", msgID)
+	h.Set("X-Root-Request-ID", reqID)
+
+	traceID := workbuddyRandomHex(16)
+	spanID := workbuddyRandomHex(8)
+	parentSpanID := workbuddyRandomHex(8)
+	h.Set("traceparent", fmt.Sprintf("00-%s-%s-01", traceID, spanID))
+	h.Set("b3", fmt.Sprintf("%s-%s-1-%s", traceID, spanID, parentSpanID))
+	h.Set("X-B3-TraceId", traceID)
+	h.Set("X-B3-SpanId", spanID)
+	h.Set("X-B3-ParentSpanId", parentSpanID)
+	h.Set("X-B3-Sampled", "1")
+	h.Set("X-Trace-ID", traceID)
+}
+
+// workbuddyRandomHex 生成 n 字节的随机 hex 字符串(2n 字符),用于链路追踪头。
+func workbuddyRandomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return strings.Repeat("0", n*2)
+	}
+	return hex.EncodeToString(b)
+}
+
+// workbuddyDumpBlockedPayload 把被 11128 拦截的上游载荷落盘到系统临时目录,供逐字节比对排查。
+// 仅在被拦时调用; 内容含用户对话与 system prompt,只写本机临时目录(0600),不落库不外发。
+func workbuddyDumpBlockedPayload(body []byte) string {
+	if len(body) == 0 || len(body) > 4<<20 {
+		return ""
+	}
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("wb11128_%d.json", time.Now().UnixNano()))
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		return ""
+	}
+	return path
+}
+
+// workbuddyHeaderDigest 生成上游请求头的诊断摘要(Authorization 脱敏),用于 11128 排查。
+// 输出按键名排序,便于和官方客户端抓包逐项比对。
+func workbuddyHeaderDigest(h http.Header) string {
+	if len(h) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for _, k := range keys {
+		if strings.EqualFold(k, "Authorization") {
+			b.WriteString(k + "=***; ")
+			continue
+		}
+		b.WriteString(k + "=" + strings.Join(h[k], ",") + "; ")
+	}
+	return strings.TrimSuffix(b.String(), "; ")
 }
 
 // aggregateOpenAISSEStream 在内存中把上游 OpenAI SSE 流聚合成非流式完整响应结构。
@@ -297,6 +426,12 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 	}
 	skippedAccounts := make(map[string]bool)
 
+	// 记录最近一次 11128 的上游原始响应, 供全部账号都不可用时回传真实原因。
+	var lastBlockStatus int
+	var lastBlockBody []byte
+	// 同一请求的载荷在换号重试时完全相同,被拦载荷只落盘一次,避免 5 个账号各写一份 68KB 文件。
+	blockedPayloadDumped := false
+
 	startTs := time.Now()
 	firstByteRec := stats.NewFirstByteRecorder(startTs)
 
@@ -396,6 +531,9 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 			upstreamReq.StreamOptions = &ChatStreamOptions{IncludeUsage: true}
 		}
 
+		// 对齐官方桌面端 craft 请求: 会话标识统一规整为 UUID(内部前缀不外泄)。
+		convID := workbuddyConversationID(sessionKey)
+
 		upstreamBytes, _ := json.Marshal(upstreamReq)
 		upstreamBytes = sanitizeWorkBuddyFinalPayload(upstreamBytes)
 		baseURL := strings.TrimRight(poolAccount.BaseURL, "/")
@@ -418,27 +556,23 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 		// 注入 WorkBuddy 必要 Headers（自适应国内版与国际版）
 		cliVer := ""
 		if h.accountMgr != nil {
-			cliVer = h.accountMgr.GetWorkBuddyCliVersion()
+			// 用原始配置值(未配置为空),让 BuildWorkBuddyHeaders 按区域回退官方默认版本:
+			// 国际版 5.7.6 / 国内版 5.7.7。此前统一传国内默认 5.7.7,国际版会被顶替成不匹配的版本。
+			cliVer = h.accountMgr.GetWorkBuddyCliVersionRaw()
 		}
 		wbHeaders := account.BuildWorkBuddyHeaders(poolAccount, cliVer)
 		for k, v := range wbHeaders {
 			httpReq.Header.Set(k, v)
 		}
-		convID := sessionKey
-		if convID == "" {
-			convID = account.GenerateWorkBuddyUUID()
-		}
+		// chat 端点必须 1:1 复刻官方桌面端的请求头(含 app-server 安全头与链路追踪头),
+		// 缺任一安全/追踪头,上游会判定"非官方客户端"并返回 400 / code 11128。
 		reqID := account.GenerateWorkBuddyHex32()
 		msgID := account.GenerateWorkBuddyHex32()
-		httpReq.Header.Set("X-Conversation-ID", convID)
-		httpReq.Header.Set("X-Conversation-Request-ID", reqID)
-		httpReq.Header.Set("X-Conversation-Message-ID", msgID)
-		httpReq.Header.Set("X-Request-ID", msgID)
-		httpReq.Header.Set("X-Root-Request-ID", reqID)
-		httpReq.Header.Set("X-Agent-Intent", "craft")
-		httpReq.Header.Set("X-Agent-Type", "main")
-		httpReq.Header.Set("X-Private-Data", "false")
-		httpReq.Header.Set("Accept", "text/event-stream")
+		applyWorkBuddyChatHeaders(httpReq.Header, convID, reqID, msgID, wbHeaders["X-IDE-Version"])
+		// 官方桌面端同时携带 X-Current-Account-Id(与 X-User-Id 同值),缺失会被渠道校验判为非官方请求。
+		if uid := wbHeaders["X-User-Id"]; uid != "" {
+			httpReq.Header.Set("X-Current-Account-Id", uid)
+		}
 
 		client := h.streamClient
 		if client == nil {
@@ -482,11 +616,32 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 			errBytes, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
 			h.log("❌ [WorkBuddy 中继] 上游返回异常状态码 %d (%s): %s", resp.StatusCode, poolAccount.Email, string(errBytes))
-			// 若上游返回 11128 或渠道安全策略拦截，说明当前 Payload 触发了上游 WAF 渠道拦截规则。
-			// 此时绝不能冷冻账号，更不能用相同 Payload 盲目重试号池内其他账号（会导致整个号池账号全被冷冻）。
-			// 正确做法：直接释放当前账号（保持健康状态），终止号池轮询重试，直接向客户端返回错误。
+			// 11128 (Illegal API invocation from an unapproved channel) 是上游的**请求拦截码**,
+			// 触发点可能来自请求内容(提示词指纹黑名单,如 Claude Code gitStatus 段的
+			// `Main branch (you will usually use this for PRs)` 整句,见 workbuddy_sanitize.go),
+			// 也可能来自账号侧渠道标记。因此这里不冷冻账号,只在本请求内跳过该账号换号重试;
+			// 全部账号都失败时回传上游原始错误。
 			if resp.StatusCode == http.StatusBadRequest && (strings.Contains(string(errBytes), "11128") || strings.Contains(string(errBytes), "unapproved channel")) {
-				h.log("⚠️ [WorkBuddy 安全拦截] 上游返回 11128 渠道拦截，终止号池轮询以保护账号 (%s)", poolAccount.Email)
+				h.log("⚠️ [WorkBuddy 渠道校验] 账号 %s 被上游拦截(11128)", poolAccount.Email)
+				// 诊断留痕: 请求头摘要 + 被拦载荷落盘(每个请求只落一份),便于逐字节比对。
+				h.log("🔍 [WorkBuddy 诊断] 上游请求头: %s", workbuddyHeaderDigest(httpReq.Header))
+				if !blockedPayloadDumped {
+					if path := workbuddyDumpBlockedPayload(upstreamBytes); path != "" {
+						h.log("📄 [WorkBuddy 诊断] 被拦载荷已落盘: %s (%d bytes)", path, len(upstreamBytes))
+						blockedPayloadDumped = true
+					}
+				}
+
+				lastBlockStatus = resp.StatusCode
+				lastBlockBody = errBytes
+
+				if len(activeAvailable) > 1 {
+					skippedAccounts[poolAccount.ID] = true
+					h.accountMgr.ReleaseAccount(poolAccount.ID)
+					h.log("↪️ [WorkBuddy 渠道校验] 本请求跳过 %s, 换下一个账号重试(不冷冻账号)", poolAccount.Email)
+					continue
+				}
+
 				h.accountMgr.ReleaseAccount(poolAccount.ID)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(resp.StatusCode)
@@ -594,6 +749,14 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(chatResp)
+		return
+	}
+
+	// 所有账号都失败: 若其中有 11128 渠道校验拦截, 优先回传上游原始错误(信息量最大)。
+	if lastBlockBody != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(lastBlockStatus)
+		_, _ = w.Write(lastBlockBody)
 		return
 	}
 

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"antigravity-proxy/internal/db"
@@ -76,27 +77,42 @@ func (s *ServerInstance) relayRecordUsage(allocatedAccount, userID, apiKeyID, mo
 			}()
 		}
 
-		if s.StatsTracker != nil {
-			s.StatsTracker.TrackRequestForModel(modelName, inTokens, outTokens, cachedTokens)
-		}
+		alreadyTracked := s.StatsTracker != nil && reqID != "" && s.StatsTracker.HasRequest(reqID)
+		if !alreadyTracked {
+			if s.StatsTracker != nil {
+				s.StatsTracker.TrackRequestForModel(modelName, inTokens, outTokens, cachedTokens)
+			}
 
-		s.StatsTracker.AddRequestLogInMemoryOnly(&stats.RequestLog{
-			ID:           reqID,
-			Timestamp:    time.Now().Format("01/02 15:04:05"),
-			Method:       method,
-			Host:         host,
-			Path:         path,
-			Model:        modelName,
-			Account:      allocatedAccount,
-			InTokens:     inTokens,
-			OutTokens:    outTokens,
-			CachedTokens: cachedTokens,
-			Cost:         totalCost,
-			StatusCode:   statusCode,
-			SessionID:    sessionID,
-			DurationMs:   durationMs,
-			FirstByteMs:  firstByteMs,
-		})
+			cacheStatus := "NONE"
+			if statusCode == 200 && (strings.Contains(strings.ToLower(path), "generatecontent") || strings.Contains(strings.ToLower(path), "chat")) {
+				if cachedTokens > 0 {
+					cacheStatus = "HIT"
+				} else {
+					cacheStatus = "MISS"
+				}
+			}
+
+			if s.StatsTracker != nil {
+				s.StatsTracker.AddRequestLogInMemoryOnly(&stats.RequestLog{
+					ID:           reqID,
+					Timestamp:    time.Now().Format("01/02 15:04:05"),
+					Method:       method,
+					Host:         host,
+					Path:         path,
+					Model:        modelName,
+					Account:      allocatedAccount,
+					InTokens:     inTokens,
+					OutTokens:    outTokens,
+					CachedTokens: cachedTokens,
+					CacheStatus:  cacheStatus,
+					Cost:         totalCost,
+					StatusCode:   statusCode,
+					SessionID:    sessionID,
+					DurationMs:   durationMs,
+					FirstByteMs:  firstByteMs,
+				})
+			}
+		}
 
 		s.RelayStatsMgr.RecordUsage(relay.RelaySample{
 			ReqID:        reqID,

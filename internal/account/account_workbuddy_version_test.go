@@ -54,6 +54,30 @@ func TestManager_WorkBuddyCliVersion_Persistence(t *testing.T) {
 	}
 }
 
+func TestManager_WorkBuddyCliVersionRaw(t *testing.T) {
+	m := NewManager()
+	// 未配置时返回空串(不回退默认值),便于中继按账号区域选择官方默认版本
+	if got := m.GetWorkBuddyCliVersionRaw(); got != "" {
+		t.Errorf("未配置时应返回空串, 实际 %q", got)
+	}
+
+	var nilMgr *Manager
+	if got := nilMgr.GetWorkBuddyCliVersionRaw(); got != "" {
+		t.Errorf("nil manager 应返回空串, 实际 %q", got)
+	}
+
+	m.SetWorkBuddyCliVersion("  5.8.2  ")
+	if got := m.GetWorkBuddyCliVersionRaw(); got != "5.8.2" {
+		t.Errorf("设置后应返回 TrimSpace 后的原文, 实际 %q", got)
+	}
+
+	// 空白配置等同未配置
+	m.SetWorkBuddyCliVersion("   ")
+	if got := m.GetWorkBuddyCliVersionRaw(); got != "" {
+		t.Errorf("空白配置应返回空串, 实际 %q", got)
+	}
+}
+
 func TestCompareSemver(t *testing.T) {
 	tests := []struct {
 		v1   string

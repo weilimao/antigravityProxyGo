@@ -10,6 +10,8 @@ import (
 //
 // 典型拦截场景：
 //   - Claude Code CLI 发起请求时携带的 system prompt、身份描述、x-anthropic-billing-header 等。
+//   - 提示词指纹黑名单: 上游对第三方客户端系统提示里的固定句式做字面匹配,命中即 400 / 11128
+//     (已实测: `Main branch (you will usually use this for PRs)` 单句即可触发,与账号/请求头无关)。
 //   - Tools 声明（包含 Function Description 以及 Function Parameters JSON Schema 内部属性）。
 //   - 历史消息中的 ToolCalls、ToolCallID、Arguments。
 //   - 序列化后的最终 JSON 载荷中可能漏网的敏感模式。
@@ -24,6 +26,20 @@ var (
 	reWorkBuddyByteCCVer     = regexp.MustCompile(`(?i)cc_version=[a-zA-Z0-9_.\-]+[;,\s]*`)
 	reWorkBuddyByteCCEntry   = regexp.MustCompile(`(?i)cc_entrypoint=[a-zA-Z0-9_.\-]+[;,\s]*`)
 	reWorkBuddyByteClaudeCLI = regexp.MustCompile(`(?i)claude-cli`)
+
+	// 残留身份兜底:黑名单替换难免漏网(新版本措辞、大小写变体、URL 片段),
+	// system 消息里只要还出现这两个词,就足以被上游判定为非官方客户端。
+	reWorkBuddyResidualClaude    = regexp.MustCompile(`(?i)\bclaude\b`)
+	reWorkBuddyResidualAnthropic = regexp.MustCompile(`(?i)\banthropic\b`)
+
+	// Claude Code 系统提示中 gitStatus 段的固定句式指纹。
+	// 实测(直连上游 workbuddy.ai/v2/chat/completions,同一 token、同一套官方头):
+	// 只要载荷里出现 `Main branch (you will usually use this for PRs)` 这一整句,
+	// 无论 system 只有 60 字符还是整段 8KB、无论哪个账号,上游都稳定返回 400 / code 11128;
+	// 把括号部分去掉("Main branch: main")立刻 200。对照组 "Current branch: main"、
+	// "gitStatus: ..."、"Status:\nM"、"Recent commits:" 单独出现均不拦 —— 说明这是
+	// 上游维护的**客户端提示词指纹黑名单**(字面整句匹配),不是渠道/账号/请求头问题。
+	reWorkBuddyGitStatusPRPhrase = regexp.MustCompile(`(?i)main branch\s*\(\s*you will usually use this for prs\s*\)`)
 )
 
 // sanitizeWorkBuddyText 统一脱敏字符串中触碰 WorkBuddy 安全策略（11128）的客户端渠道特征。
@@ -77,6 +93,34 @@ func sanitizeWorkBuddyText(text string) string {
 		text = strings.ReplaceAll(text, "claude cli", "ai cli")
 	}
 
+	// 4. 客户端文档地址与 SDK 包名(Claude Code 系统提示中的固定引用)
+	if strings.Contains(text, "claude.ai/code") {
+		text = strings.ReplaceAll(text, "claude.ai/code", "assistant.local")
+	}
+	if strings.Contains(text, "@anthropic-ai/") {
+		text = strings.ReplaceAll(text, "@anthropic-ai/", "@assistant-sdk/")
+	}
+
+	// 5. 抹掉 Claude Code gitStatus 段句式指纹(实测单句即可触发 11128)。
+	//    只去掉括号注释,保留 "Main branch: <分支名>" 语义,模型侧信息不丢。
+	if reWorkBuddyGitStatusPRPhrase.MatchString(text) {
+		text = reWorkBuddyGitStatusPRPhrase.ReplaceAllString(text, "Main branch")
+	}
+
+	return text
+}
+
+// sanitizeWorkBuddySystemText 在通用清洗之上,对 system 消息再做一次残留身份泛化。
+// system 是客户端身份的主载体(Claude Code 整段系统提示),黑名单式替换天然滞后于客户端版本,
+// 只要残留 claude / anthropic 字样,上游就有充分理由判定"非官方客户端"。
+// 仅作用于 system 消息,不污染用户与助手正文。
+func sanitizeWorkBuddySystemText(text string) string {
+	text = sanitizeWorkBuddyText(text)
+	if text == "" {
+		return ""
+	}
+	text = reWorkBuddyResidualClaude.ReplaceAllString(text, "the assistant")
+	text = reWorkBuddyResidualAnthropic.ReplaceAllString(text, "the provider")
 	return text
 }
 
@@ -129,7 +173,11 @@ func sanitizeWorkBuddyMessages(req *OpenAIChatRequest) {
 	}
 
 	for i := range req.Messages {
-		req.Messages[i].Content = sanitizeWorkBuddyText(req.Messages[i].Content)
+		if strings.EqualFold(req.Messages[i].Role, "system") {
+			req.Messages[i].Content = sanitizeWorkBuddySystemText(req.Messages[i].Content)
+		} else {
+			req.Messages[i].Content = sanitizeWorkBuddyText(req.Messages[i].Content)
+		}
 		if len(req.Messages[i].ContentParts) > 0 {
 			for j := range req.Messages[i].ContentParts {
 				switch p := req.Messages[i].ContentParts[j].(type) {
@@ -200,6 +248,12 @@ func sanitizeWorkBuddyFinalPayload(b []byte) []byte {
 	}
 	if bytes.Contains(b, []byte("claude cli")) {
 		b = bytes.ReplaceAll(b, []byte("claude cli"), []byte("ai cli"))
+	}
+
+	// 3. 抹掉 Claude Code gitStatus 句式指纹(实测单句触发 11128)。
+	//    结构体层已清洗过,这里对序列化后的字节再做一次兜底(防 ContentParts / 工具参数等漏网)。
+	if bytes.Contains(b, []byte("Main branch")) || bytes.Contains(b, []byte("main branch")) {
+		b = reWorkBuddyGitStatusPRPhrase.ReplaceAll(b, []byte("Main branch"))
 	}
 
 	return b

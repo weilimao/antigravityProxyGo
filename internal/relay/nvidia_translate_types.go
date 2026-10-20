@@ -259,6 +259,10 @@ type OpenAIChatRequest struct {
 	// buildPassthroughUpstreamReq 的 Unmarshal→Marshal 路径靠此字段保留客户端原发的 reasoning_effort,
 	// 否则 OpenAIChatRequest 无该字段会导致 Other openai 组透传时静默丢弃思考等级。
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// ExtraVars 承载 WorkBuddy craft 请求的遥测参数(extra_vars.growthEvent)。
+	// 官方桌面端每个 chat 请求都会携带,缺失会被上游渠道校验判为非官方客户端(400 / 11128)。
+	// 仅 workbuddy 链路写入,其它上游 omitempty 不出现。
+	ExtraVars map[string]interface{} `json:"extra_vars,omitempty"`
 }
 
 // OpenAIChatResponse 是 NVIDIA 上游返回的 OpenAI Chat Completions 非流式响应。

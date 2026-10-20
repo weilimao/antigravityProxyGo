@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"antigravity-proxy/internal/db"
@@ -84,27 +85,45 @@ func (a *App) relayRecordUsage(allocatedAccount, userID, apiKeyID, modelName str
 		}
 
 		// 方案 B: 将远程中继请求同步计入主仪表盘全局指标与综合趋势桶 trends
-		if a.statsTracker != nil {
-			a.statsTracker.TrackRequestForModel(modelName, inTokens, outTokens, cachedTokens)
-		}
+		// 注意: 若该请求已由 proxyHandler (classifyResponse / helpers) 完整记录到 statsTracker，
+		// 严禁在此处重复执行累加与插入，否则会导致请求量翻倍与成对重复行；
+		// 仅当 statsTracker 中尚未存在该请求时(如纯 Headless 测试或外部独立中继路径)，才执行补充记账。
+		alreadyTracked := a.statsTracker != nil && reqID != "" && a.statsTracker.HasRequest(reqID)
+		if !alreadyTracked {
+			if a.statsTracker != nil {
+				a.statsTracker.TrackRequestForModel(modelName, inTokens, outTokens, cachedTokens)
+			}
 
-		a.statsTracker.AddRequestLogInMemoryOnly(&stats.RequestLog{
-			ID:           reqID,
-			Timestamp:    time.Now().Format("01/02 15:04:05"),
-			Method:       method,
-			Host:         host,
-			Path:         path,
-			Model:        modelName,
-			Account:      allocatedAccount,
-			InTokens:     inTokens,
-			OutTokens:    outTokens,
-			CachedTokens: cachedTokens,
-			Cost:         totalCost,
-			StatusCode:   statusCode,
-			SessionID:    sessionID,
-			DurationMs:   durationMs,
-			FirstByteMs:  firstByteMs,
-		})
+			cacheStatus := "NONE"
+			if statusCode == 200 && (strings.Contains(strings.ToLower(path), "generatecontent") || strings.Contains(strings.ToLower(path), "chat")) {
+				if cachedTokens > 0 {
+					cacheStatus = "HIT"
+				} else {
+					cacheStatus = "MISS"
+				}
+			}
+
+			if a.statsTracker != nil {
+				a.statsTracker.AddRequestLogInMemoryOnly(&stats.RequestLog{
+					ID:           reqID,
+					Timestamp:    time.Now().Format("01/02 15:04:05"),
+					Method:       method,
+					Host:         host,
+					Path:         path,
+					Model:        modelName,
+					Account:      allocatedAccount,
+					InTokens:     inTokens,
+					OutTokens:    outTokens,
+					CachedTokens: cachedTokens,
+					CacheStatus:  cacheStatus,
+					Cost:         totalCost,
+					StatusCode:   statusCode,
+					SessionID:    sessionID,
+					DurationMs:   durationMs,
+					FirstByteMs:  firstByteMs,
+				})
+			}
+		}
 
 		a.relayStatsMgr.RecordUsage(relay.RelaySample{
 			ReqID:        reqID,

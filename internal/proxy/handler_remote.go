@@ -235,9 +235,26 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 		if p := r.Header.Get("X-Antigravity-Original-Path"); p != "" {
 			logPath = p
 		}
+		cacheStatus := "NONE"
+		if resp.StatusCode == 200 && strings.Contains(strings.ToLower(targetPath), "generatecontent") {
+			if cachedTokens > 0 {
+				cacheStatus = "HIT"
+			} else {
+				cacheStatus = "MISS"
+			}
+		} else if strings.Contains(strings.ToLower(targetPath), "generatecontent") {
+			cacheStatus = "MISS"
+		}
+
 		sessionID := "remote_session"
 		if p := r.Header.Get("X-Antigravity-Original-Path"); p != "" {
 			sessionID = "compat-api"
+		} else if sk := r.Header.Get("X-Antigravity-Client-Session"); sk != "" {
+			sessionID = sk
+		} else if h.sessionRouter != nil {
+			if rawKey := h.sessionRouter.ExtractSessionKey(r, bodyBytes); rawKey != "" {
+				sessionID = rawKey
+			}
 		}
 
 		end := time.Now()
@@ -259,6 +276,7 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			InTokens:     inTokens,
 			OutTokens:    outTokens,
 			CachedTokens: cachedTokens,
+			CacheStatus:  cacheStatus,
 			Cost:         totalCost,
 			InputCost:    inputCost,
 			OutputCost:   outputCost,
@@ -289,8 +307,8 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			}
 		}
 
-		// Record locally in memory tracker so it shows up on the client dashboard
-		h.statsTracker.AddRequestLog(&stats.RequestLog{
+		// 仅写入内存追踪器供前端实时展示，避免在 AddRequestLog 内再次异步写入 mode="local" 重复记录
+		h.statsTracker.AddRequestLogInMemoryOnly(&stats.RequestLog{
 			ID:             reqID,
 			Timestamp:      time.Now().Format("01/02 15:04:05"),
 			Method:         logMethod,
@@ -301,6 +319,7 @@ func (h *ProxyHandler) forwardThroughRemote(w http.ResponseWriter, r *http.Reque
 			InTokens:       inTokens,
 			OutTokens:      outTokens,
 			CachedTokens:   cachedTokens,
+			CacheStatus:    cacheStatus,
 			Cost:           totalCost,
 			StatusCode:     resp.StatusCode,
 			RequestBody:    reqBodyParsed,

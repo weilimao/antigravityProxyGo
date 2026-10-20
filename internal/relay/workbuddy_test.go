@@ -113,12 +113,26 @@ func TestWorkBuddy_EndToEndMock(t *testing.T) {
 	// 启动 Mock 上游 WorkBuddy 服务器
 	var receivedAuthHeader string
 	var receivedIDEType string
+	var receivedConvID string
+	var receivedCurrentAccountID string
+	var receivedCodeBuddyHeader string
+	var receivedAgentPurpose string
+	var receivedPrivateData string
+	var receivedProduct string
+	var receivedTraceparent string
 	var receivedStream bool
 	var receivedFirstRole string
 
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedAuthHeader = r.Header.Get("Authorization")
 		receivedIDEType = r.Header.Get("X-IDE-Type")
+		receivedConvID = r.Header.Get("X-Conversation-ID")
+		receivedCurrentAccountID = r.Header.Get("X-Current-Account-Id")
+		receivedCodeBuddyHeader = r.Header.Get("x-codebuddy-request")
+		receivedAgentPurpose = r.Header.Get("X-Agent-Purpose")
+		receivedPrivateData = r.Header.Get("X-Private-Data")
+		receivedProduct = r.Header.Get("X-Product")
+		receivedTraceparent = r.Header.Get("traceparent")
 
 		var payload struct {
 			Stream   bool                `json:"stream"`
@@ -149,6 +163,7 @@ func TestWorkBuddy_EndToEndMock(t *testing.T) {
 		BaseURL:     mockServer.URL,
 		AccessToken: "mock-jwt-token-12345",
 		Nickname:    "mock_user",
+		UID:         "mock-uid-001",
 	})
 
 	handler := NewAPICompatHandler(nil, accMgr, nil, nil, nil, nil, nil)
@@ -176,8 +191,35 @@ func TestWorkBuddy_EndToEndMock(t *testing.T) {
 	if receivedAuthHeader != "Bearer mock-jwt-token-12345" {
 		t.Errorf("上游收到的 Auth Header 不匹配: %s", receivedAuthHeader)
 	}
-	if receivedIDEType != "CodeBuddy" {
-		t.Errorf("上游收到的 X-IDE-Type 不匹配: %s", receivedIDEType)
+	// chat 端点必须 1:1 复刻官方桌面端请求头(见 app.asar 的 chat header 构造)。
+	if receivedIDEType != "WorkBuddy" {
+		t.Errorf("上游收到的 X-IDE-Type 期望 WorkBuddy, 实际: %s", receivedIDEType)
+	}
+	if receivedCodeBuddyHeader != "1" {
+		t.Errorf("上游缺少官方 app-server 安全头 x-codebuddy-request=1, 实际: %q", receivedCodeBuddyHeader)
+	}
+	if receivedAgentPurpose != "conversation" {
+		t.Errorf("上游缺少 X-Agent-Purpose=conversation, 实际: %q", receivedAgentPurpose)
+	}
+	if receivedPrivateData != "true" {
+		t.Errorf("X-Private-Data 期望 true(官方值), 实际: %q", receivedPrivateData)
+	}
+	if receivedProduct != "SaaS" {
+		t.Errorf("X-Product 期望 SaaS(官方值), 实际: %q", receivedProduct)
+	}
+	if !strings.HasPrefix(receivedTraceparent, "00-") || !strings.Contains(receivedTraceparent, "-01") {
+		t.Errorf("上游缺少合法 traceparent 链路追踪头, 实际: %q", receivedTraceparent)
+	}
+	// 回归防护: X-Conversation-ID 必须是标准 UUID,且不得带内部会话键前缀(claude: / acc: 等),
+	// 否则上游渠道校验会返回 400 / code 11128 Illegal API invocation from an unapproved channel。
+	if !workbuddyUUIDPattern.MatchString(receivedConvID) {
+		t.Errorf("上游收到的 X-Conversation-ID 不是合法 UUID: %q", receivedConvID)
+	}
+	if strings.Contains(receivedConvID, ":") {
+		t.Errorf("X-Conversation-ID 泄露内部会话键前缀: %q", receivedConvID)
+	}
+	if receivedCurrentAccountID == "" {
+		t.Errorf("上游请求缺少官方客户端必带的 X-Current-Account-Id")
 	}
 	if !receivedStream {
 		t.Errorf("向 WorkBuddy 发出的请求强制 stream 期望为 true, 实际为 %v", receivedStream)
@@ -678,7 +720,7 @@ func TestWorkBuddy_ModelAffinityRouting_EndToEnd(t *testing.T) {
 	}
 }
 
-func TestWorkBuddy_11128_NoCooldownAndNoPoolExhaustion(t *testing.T) {
+func TestWorkBuddy_11128_QuarantineAndFailover(t *testing.T) {
 	var callCount int
 
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -731,20 +773,74 @@ func TestWorkBuddy_11128_NoCooldownAndNoPoolExhaustion(t *testing.T) {
 		t.Errorf("响应体应包含 11128 错误码, 实际: %s", w.Body.String())
 	}
 
-	// 2. 上游应该只被调用 1 次，严禁轮询重试号池其他账号
-	if callCount != 1 {
-		t.Errorf("期望仅调用 1 次以保护号池，实际调用了 %d 次", callCount)
+	// 2. 还有其它账号可用时必须换号重试: 两个账号各打一次
+	if callCount != 2 {
+		t.Errorf("期望换号重试共调用 2 次, 实际调用了 %d 次", callCount)
 	}
 
-	// 3. 两个账号都不应该进入冷冻状态
-	nowMs := time.Now().UnixNano() / 1e6
+	// 3. 11128 是请求级拦截(整池都会拒), 因此严禁冷冻账号: 否则一次失败会把整池冻死
 	a1 := mgr.GetAccountByID("wb-acc-1")
-	if a1 == nil || a1.CooldownUntil > nowMs || len(a1.Cooldowns) > 0 {
-		t.Errorf("wb-acc-1 不应被设置冷冻状态: %+v", a1)
+	if a1 == nil || len(a1.Cooldowns) > 0 {
+		t.Errorf("wb-acc-1 不应被冷冻(请求级拦截不隔离账号): %+v", a1)
 	}
 	a2 := mgr.GetAccountByID("wb-acc-2")
-	if a2 == nil || a2.CooldownUntil > nowMs || len(a2.Cooldowns) > 0 {
-		t.Errorf("wb-acc-2 不应被设置冷冻状态: %+v", a2)
+	if a2 == nil || len(a2.Cooldowns) > 0 {
+		t.Errorf("wb-acc-2 不应被冷冻: %+v", a2)
+	}
+}
+
+// TestWorkBuddy_11128_FailoverSucceeds 覆盖用户可感知的关键路径:
+// 命中被标记账号时, 换号后应正常返回内容, 而不是把 11128 抛给客户端。
+func TestWorkBuddy_11128_FailoverSucceeds(t *testing.T) {
+	var firstHit, secondHit bool
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if strings.Contains(auth, "token-bad") {
+			firstHit = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(w, `{"code":11128,"msg":"Illegal API invocation from an unapproved channel"}`)
+			return
+		}
+		secondHit = true
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"wb_ok\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"换号成功\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(mockServer.Close)
+
+	tmpDir := t.TempDir()
+	mgr := account.NewManager()
+	mgr.Init(tmpDir)
+	mgr.AddAccount(&account.Account{
+		ID: "wb-bad", Email: "bad@test.com", Provider: "workbuddy",
+		BaseURL: mockServer.URL, AccessToken: "token-bad", Enabled: true,
+	})
+	mgr.AddAccount(&account.Account{
+		ID: "wb-good", Email: "good@test.com", Provider: "workbuddy",
+		BaseURL: mockServer.URL, AccessToken: "token-good", Enabled: true,
+	})
+
+	handler := NewAPICompatHandler(nil, mgr, nil, nil, nil, nil, nil)
+	handler.client = mockServer.Client()
+	handler.streamClient = mockServer.Client()
+
+	reqBody := []byte(`{"model":"workbuddy/deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.handleWorkBuddy(w, req, &RelaySession{UserID: "test_user"})
+
+	if !firstHit || !secondHit {
+		t.Fatalf("期望先命中坏账号再换到好账号, 实际 firstHit=%v secondHit=%v", firstHit, secondHit)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("换号成功后应返回 200, 实际 %d, body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "换号成功") {
+		t.Errorf("客户端应拿到换号后的正常内容, 实际: %s", w.Body.String())
 	}
 }
 
@@ -826,3 +922,47 @@ func TestWorkBuddy_IntlPrefix_Overrides_StickyDomesticAccount(t *testing.T) {
 
 
 
+
+// TestWorkBuddyAttachGrowthEvent 锁定 craft 请求必须携带的 growthEvent 遥测参数。
+func TestWorkBuddyAttachGrowthEvent(t *testing.T) {
+	const convID = "11111111-2222-4333-8444-555555555555"
+
+	req := &OpenAIChatRequest{}
+	workbuddyAttachGrowthEvent(req, convID, "deepseek-v4.1-flash", 128)
+
+	raw, ok := req.ExtraVars["growthEvent"].(string)
+	if !ok || raw == "" {
+		t.Fatalf("growthEvent 未注入: %+v", req.ExtraVars)
+	}
+
+	var events []struct {
+		EventCode string `json:"eventCode"`
+		ID        string `json:"id"`
+		Extra     struct {
+			InputLength    int    `json:"inputLength"`
+			RequestModelID string `json:"requestModelId"`
+			Mode           string `json:"mode"`
+		} `json:"extra"`
+	}
+	if err := json.Unmarshal([]byte(raw), &events); err != nil {
+		t.Fatalf("growthEvent 不是合法 JSON: %v, raw: %s", err, raw)
+	}
+	if len(events) != 1 {
+		t.Fatalf("growthEvent 期望 1 条事件, 实际 %d", len(events))
+	}
+	if events[0].EventCode != "chat_request_send" {
+		t.Errorf("eventCode 期望 chat_request_send, 实际 %s", events[0].EventCode)
+	}
+	if events[0].ID != convID {
+		t.Errorf("事件 id 期望复用会话 UUID %s, 实际 %s", convID, events[0].ID)
+	}
+	if events[0].Extra.Mode != "craft" || events[0].Extra.RequestModelID != "deepseek-v4.1-flash" || events[0].Extra.InputLength != 128 {
+		t.Errorf("事件 extra 不符合官方形态: %+v", events[0].Extra)
+	}
+
+	// 重复注入不应报错,且保持单键
+	workbuddyAttachGrowthEvent(req, convID, "deepseek-v4.1-flash", 64)
+	if len(req.ExtraVars) != 1 {
+		t.Errorf("重复注入后 extra_vars 键数期望 1, 实际 %d", len(req.ExtraVars))
+	}
+}

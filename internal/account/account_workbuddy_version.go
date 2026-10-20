@@ -30,6 +30,18 @@ func (m *Manager) GetWorkBuddyCliVersion() string {
 	return v
 }
 
+// GetWorkBuddyCliVersionRaw 返回已配置的模拟版本号原文; 空串表示未配置。
+// 与 GetWorkBuddyCliVersion 的区别是不回退默认值,便于调用方按账号区域选择默认版本
+// (国际版 5.7.6 / 国内版 5.7.7),避免国际版被国内默认版本顶替。
+func (m *Manager) GetWorkBuddyCliVersionRaw() string {
+	if m == nil {
+		return ""
+	}
+	m.RLock()
+	defer m.RUnlock()
+	return strings.TrimSpace(m.workbuddyCliVersion)
+}
+
 // SetWorkBuddyCliVersion 设置 WorkBuddy 号池全局客户端模拟版本号并定向落盘。
 // 入参做 TrimSpace 空白规整; 传入空串等同「未配置」, GetWorkBuddyCliVersion 会回退默认 5.7.7。
 func (m *Manager) SetWorkBuddyCliVersion(v string) {

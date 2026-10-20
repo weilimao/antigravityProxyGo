@@ -233,3 +233,110 @@ func TestBackfillRelayTrendsFromDB_Idempotent(t *testing.T) {
 	}
 }
 
+// TestRelayRecordUsage_DedupWhenAlreadyTracked 验证当请求已经由本地核心代理处理并计入 statsTracker 时，
+// relayRecordUsage 不会发生二次统计与成对重复行追加，彻底防范双重记账。
+func TestRelayRecordUsage_DedupWhenAlreadyTracked(t *testing.T) {
+	tempDir := t.TempDir()
+
+	if err := db.InitDB(tempDir); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer db.CloseDB()
+
+	pricingMgr := pricing.NewManager()
+	statsTracker := stats.NewTracker(pricingMgr)
+	statsTracker.Init(tempDir)
+
+	relayStatsMgr := relay.NewStatsTracker(pricingMgr)
+
+	app := &App{
+		statsTracker:  statsTracker,
+		relayStatsMgr: relayStatsMgr,
+	}
+
+	reqID := "relay-req-already-tracked-001"
+	model := "gemini-3.8-flash-high"
+	inTokens := 60000
+	outTokens := 300
+	cachedTokens := 50000
+
+	// 1. 模拟核心代理层 (classifyResponse / helpers) 已经先处理并记录了该请求
+	statsTracker.TrackRequest(model, inTokens, outTokens, cachedTokens)
+	statsTracker.AddRequestLog(&stats.RequestLog{
+		ID:           reqID,
+		Model:        model,
+		Path:         "/v1internal:streamGenerateContent",
+		InTokens:     inTokens,
+		OutTokens:    outTokens,
+		CachedTokens: cachedTokens,
+		CacheStatus:  "HIT",
+		Account:      "core-acc@gmail.com",
+		SessionID:    "auth:acc:initial",
+		DurationMs:   40,
+		FirstByteMs:  2000,
+	})
+
+	// 记录调用 relayRecordUsage 前的请求数与日志条数
+	payloadBefore := statsTracker.GetPayload(nil)
+	reqsBefore := payloadBefore["stats"].(stats.GlobalStats).TotalRequests
+	trendsBefore := payloadBefore["trends"].([]*stats.HourlyTrend)
+	trendsReqsBefore := 0
+	for _, tr := range trendsBefore {
+		trendsReqsBefore += tr.Requests
+	}
+	rawLogsBefore := payloadBefore["requests"].([]stats.RequestLogLite)
+	if len(rawLogsBefore) != 1 {
+		t.Fatalf("expected initial 1 log, got %d", len(rawLogsBefore))
+	}
+
+	// 2. 模拟请求完成后触发 relayRecordUsage
+	app.relayRecordUsage(
+		"core-acc@gmail.com",
+		"user-1",
+		"key-1",
+		model,
+		inTokens,
+		outTokens,
+		cachedTokens,
+		"POST",
+		"daily-cloudcode-pa.googleapis.com",
+		"/v1internal:streamGenerateContent",
+		"auth:acc:initial",
+		40,
+		2000,
+		200,
+		reqID,
+	)
+
+	// 3. 验证: 全局请求数、trends 桶请求数、内存日志条数均没有翻倍
+	payloadAfter := statsTracker.GetPayload(nil)
+	reqsAfter := payloadAfter["stats"].(stats.GlobalStats).TotalRequests
+	if reqsAfter != reqsBefore {
+		t.Fatalf("expected TotalRequests to remain %d, got %d (duplicate tracking occurred!)", reqsBefore, reqsAfter)
+	}
+
+	trendsAfter := payloadAfter["trends"].([]*stats.HourlyTrend)
+	trendsReqsAfter := 0
+	for _, tr := range trendsAfter {
+		trendsReqsAfter += tr.Requests
+	}
+	if trendsReqsAfter != trendsReqsBefore {
+		t.Fatalf("expected trends requests to remain %d, got %d (duplicate trends occurred!)", trendsReqsBefore, trendsReqsAfter)
+	}
+
+	rawLogsAfter := payloadAfter["requests"].([]stats.RequestLogLite)
+	if len(rawLogsAfter) != 1 {
+		t.Fatalf("expected request logs count to remain 1, got %d (duplicate row added!)", len(rawLogsAfter))
+	}
+
+	// 4. 验证: SQLite 中依然能完整记入 mode='remote_relay' 的中继审计记录
+	var dbMode string
+	row := db.GlobalDB.QueryRow("SELECT mode FROM request_logs WHERE req_id = ? AND mode = 'remote_relay'", reqID)
+	if err := row.Scan(&dbMode); err != nil {
+		t.Fatalf("query remote_relay audit log failed: %v", err)
+	}
+	if dbMode != "remote_relay" {
+		t.Fatalf("expected mode 'remote_relay', got %q", dbMode)
+	}
+}
+

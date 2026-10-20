@@ -290,3 +290,136 @@ func TestSanitizeWorkBuddyFinalPayload(t *testing.T) {
 	}
 }
 
+
+// TestSanitizeWorkBuddySystemText_RemovesResidualIdentity 覆盖黑名单漏网后的残留身份兜底:
+// system 消息里只要还剩 claude / anthropic 字样,上游就有理由判定非官方客户端(11128)。
+func TestSanitizeWorkBuddySystemText_RemovesResidualIdentity(t *testing.T) {
+	raw := "You are Claude Code, Anthropic's official CLI for Claude.\n" +
+		"Read https://claude.ai/code/docs and install @anthropic-ai/sdk.\n" +
+		"Anthropic models are supported."
+
+	got := sanitizeWorkBuddySystemText(raw)
+	lower := strings.ToLower(got)
+
+	if strings.Contains(lower, "claude") {
+		t.Errorf("system 清洗后仍残留 claude: %q", got)
+	}
+	if strings.Contains(lower, "anthropic") {
+		t.Errorf("system 清洗后仍残留 anthropic: %q", got)
+	}
+	if !strings.Contains(got, "install") {
+		t.Errorf("清洗不应丢弃正文内容: %q", got)
+	}
+}
+
+// TestSanitizeWorkBuddyMessages_SystemOnlyResidualScrub 确认残留兜底只作用于 system,
+// 不篡改用户/助手正文(避免误伤正常对话内容)。
+func TestSanitizeWorkBuddyMessages_SystemOnlyResidualScrub(t *testing.T) {
+	req := &OpenAIChatRequest{
+		Messages: []ChatMessage{
+			{Role: "system", Content: "You are Claude Code, Anthropic's official CLI for Claude."},
+			{Role: "user", Content: "What is Anthropic's headquarters?"},
+			{Role: "assistant", Content: "Anthropic is based in San Francisco."},
+		},
+	}
+
+	sanitizeWorkBuddyMessages(req)
+
+	if strings.Contains(strings.ToLower(req.Messages[0].Content), "claude") ||
+		strings.Contains(strings.ToLower(req.Messages[0].Content), "anthropic") {
+		t.Errorf("system 消息残留身份特征: %q", req.Messages[0].Content)
+	}
+	if !strings.Contains(req.Messages[1].Content, "Anthropic") {
+		t.Errorf("用户正文不应被泛化替换: %q", req.Messages[1].Content)
+	}
+	if !strings.Contains(req.Messages[2].Content, "Anthropic") {
+		t.Errorf("助手正文不应被泛化替换: %q", req.Messages[2].Content)
+	}
+}
+
+// TestSanitizeWorkBuddy_GitStatusPRPhrase 覆盖实测到的上游提示词指纹黑名单:
+// `Main branch (you will usually use this for PRs)` 整句出现即被判 11128
+// (直连上游验证: 该句 + "hi" → 11128;去掉括号注释 → 200)。清洗后必须只保留
+// "Main branch: <分支>" 语义,不能把分支名一起丢掉。
+func TestSanitizeWorkBuddy_GitStatusPRPhrase(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "标准句式",
+			in:   "gitStatus: ...\n\nCurrent branch: main\n\nMain branch (you will usually use this for PRs): main\n\nGit user: weilimao",
+			want: "Main branch: main",
+		},
+		{
+			name: "大小写变体",
+			in:   "main BRANCH (You will usually use this for prs): dev",
+			want: "Main branch: dev",
+		},
+		{
+			name: "括号内多余空格",
+			in:   "Main branch ( you will usually use this for PRs ) : main",
+			want: "Main branch : main",
+		},
+	}
+
+	for _, tc := range tests {
+		got := sanitizeWorkBuddyText(tc.in)
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("%s: 清洗结果缺少 %q: %q", tc.name, tc.want, got)
+		}
+		if reWorkBuddyGitStatusPRPhrase.MatchString(got) {
+			t.Errorf("%s: 指纹句式仍残留: %q", tc.name, got)
+		}
+	}
+
+	// 不相关的 "Main branch" 写法不应被改动
+	keep := "Main branch: main"
+	if got := sanitizeWorkBuddyText(keep); got != keep {
+		t.Errorf("普通 Main branch 行不应被改写: %q", got)
+	}
+}
+
+// TestSanitizeWorkBuddyMessages_GitStatusPhraseAnyRole 确认指纹清洗对 system 与 user
+// 都生效(不同客户端把 gitStatus 段放在 system 或首条 user 里,两处都要兜住),
+// 且最终字节级载荷里也不再残留。
+func TestSanitizeWorkBuddyMessages_GitStatusPhraseAnyRole(t *testing.T) {
+	phrase := "Main branch (you will usually use this for PRs): main"
+	req := &OpenAIChatRequest{
+		Messages: []ChatMessage{
+			{Role: "system", Content: "You are an assistant.\n\n" + phrase},
+			{Role: "user", Content: "<system-reminder>\nCurrent branch: main\n\n" + phrase + "\n</system-reminder>"},
+		},
+	}
+
+	sanitizeWorkBuddyMessages(req)
+
+	for i, m := range req.Messages {
+		if reWorkBuddyGitStatusPRPhrase.MatchString(m.Content) {
+			t.Errorf("messages[%d] 仍残留指纹句式: %q", i, m.Content)
+		}
+		if !strings.Contains(m.Content, "Main branch: main") {
+			t.Errorf("messages[%d] 丢失分支语义: %q", i, m.Content)
+		}
+	}
+
+	raw, _ := json.Marshal(req)
+	payload := string(sanitizeWorkBuddyFinalPayload(raw))
+	if reWorkBuddyGitStatusPRPhrase.MatchString(payload) {
+		t.Errorf("最终载荷仍残留指纹句式: %s", payload)
+	}
+}
+
+// TestSanitizeWorkBuddyFinalPayload_GitStatusPhrase 字节级兜底:即使结构体层漏网
+// (例如指纹藏在工具参数或 ContentParts 里),序列化后也必须被抹掉。
+func TestSanitizeWorkBuddyFinalPayload_GitStatusPhrase(t *testing.T) {
+	raw := []byte(`{"messages":[{"role":"system","content":"Main branch (you will usually use this for PRs): main"}]}`)
+	got := string(sanitizeWorkBuddyFinalPayload(raw))
+	if strings.Contains(got, "you will usually use this for PRs") {
+		t.Errorf("最终载荷仍残留指纹句式: %s", got)
+	}
+	if !strings.Contains(got, "Main branch: main") {
+		t.Errorf("最终载荷丢失分支语义: %s", got)
+	}
+}

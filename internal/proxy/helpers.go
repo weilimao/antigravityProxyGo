@@ -234,8 +234,14 @@ func (h *ProxyHandler) logRequestToTracker(
 		logSession = "compat-api"
 	}
 
+	logReqID := r.Header.Get("X-Antigravity-Req-ID")
+	if logReqID == "" {
+		logReqID = fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000))
+		r.Header.Set("X-Antigravity-Req-ID", logReqID)
+	}
+
 	h.statsTracker.AddRequestLog(&stats.RequestLog{
-		ID:             fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
+		ID:             logReqID,
 		Timestamp:      time.Now().Format("01/02 15:04:05"),
 		Method:         logMethod,
 		Host:           targetHost,
