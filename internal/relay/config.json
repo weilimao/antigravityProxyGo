@@ -43,7 +43,7 @@
   "nvidiaCompressEnabled": false,
   "nvidiaCompressThresholdTokens": 0,
   "nvidiaCompressKeepToolResults": 0,
-  "nvidiaWorkerProxyUrl": "http://127.0.0.1:49994",
+  "nvidiaWorkerProxyUrl": "http://127.0.0.1:57866",
   "nvidiaWorkerProxyEnabled": false,
   "nvidiaDedicatedProxyEnabled": false,
   "nvidiaHedgeEnabled": false,
@@ -62,5 +62,12 @@
   "debuggerLogPath": "",
   "nvidiaPreferredModels": null,
   "accountLayout": "",
-  "accountGridColumns": 0
+  "accountGridColumns": 0,
+  "poolErrorRetry": {
+    "enabled": false,
+    "switchCodes": null,
+    "retryCodes": null,
+    "switchCooldownSecs": 0,
+    "maxRetries": 0
+  }
 }

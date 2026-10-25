@@ -22,6 +22,84 @@ func FetchChannelAvailableModels(accountMgr *account.Manager, channel string) ([
 		ch = "google"
 	}
 
+	// 0. 对于 Google / Antigravity / GCP 号池，收集所有可用候选账号并按付费权重排序探测
+	if isGoogleChannel(ch) {
+		var googleCandidates []*account.Account
+		if accountMgr != nil {
+			rawAccounts := accountMgr.GetRawAccountsByProvider("all")
+			for _, acc := range rawAccounts {
+				if acc != nil && acc.Enabled && acc.GetAccessToken() != "" {
+					accProv := strings.ToLower(strings.TrimSpace(acc.Provider))
+					if (accProv == "" || isGoogleChannel(accProv)) && accProv != "2fa" && accProv != "nvidia" && accProv != "workbuddy" && accProv != "opencode" {
+						googleCandidates = append(googleCandidates, acc)
+					}
+				}
+			}
+		}
+
+		if len(googleCandidates) == 0 {
+			return nil, fmt.Errorf("号池 [%s] 下暂无已启用的有效账号，请先在【账号池】中添加该号池账号", channel)
+		}
+
+		// 权重排序：Pro / Ultra 付费层级账号具备更高的模型权限（如 Gemini 4 Argon、Claude 5.5 等），优先排在前面探测
+		tierPriority := func(tier string) int {
+			t := strings.ToLower(strings.TrimSpace(tier))
+			if strings.Contains(t, "ultra") {
+				return 3
+			}
+			if strings.Contains(t, "pro") {
+				return 2
+			}
+			return 1
+		}
+		sort.SliceStable(googleCandidates, func(i, j int) bool {
+			return tierPriority(googleCandidates[i].Tier) > tierPriority(googleCandidates[j].Tier)
+		})
+
+		ua := ""
+		if accountMgr != nil {
+			ua = accountMgr.GetAntigravityUserAgent()
+		}
+		if strings.TrimSpace(ua) == "" {
+			ua = account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion)
+		}
+
+		// 跨账号探测与模型全集聚合（优先前 3 个代表性账号，去重且剔除已禁用占位模型）
+		modelSet := make(map[string]bool)
+		var firstErr error
+		probedCount := 0
+		for _, cand := range googleCandidates {
+			mList, err := fetchGeminiInternalModels(cand, ua)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			for _, m := range mList {
+				modelSet[m] = true
+			}
+			probedCount++
+			if probedCount >= 3 {
+				break
+			}
+		}
+
+		if len(modelSet) == 0 {
+			if firstErr != nil {
+				return nil, fmt.Errorf("打 Google 上游 v1internal:fetchAvailableModels 失败: %w", firstErr)
+			}
+			return nil, fmt.Errorf("Google 上游返回的模型列表为空")
+		}
+
+		var list []string
+		for k := range modelSet {
+			list = append(list, k)
+		}
+		sort.Strings(list)
+		return list, nil
+	}
+
 	var activeAcc *account.Account
 	if accountMgr != nil {
 		rawAccounts := accountMgr.GetRawAccountsByProvider("all")
@@ -100,22 +178,23 @@ func FetchChannelAvailableModels(accountMgr *account.Manager, channel string) ([
 		return models, nil
 	}
 
-	// 4. 对于 Google / Antigravity / GCP 号池，真正发起 v1internal:fetchAvailableModels 请求
-	models, err := fetchGeminiInternalModels(activeAcc)
-	if err != nil {
-		return nil, fmt.Errorf("打 Google 上游 v1internal:fetchAvailableModels 失败 (账号 %s): %w", activeAcc.Email, err)
-	}
-	if len(models) == 0 {
-		return nil, fmt.Errorf("Google 上游返回的模型列表为空")
-	}
-	return models, nil
+	return nil, fmt.Errorf("未知或不支持的号池渠道: %s", channel)
 }
 
 func isGoogleChannel(c string) bool {
 	return c == "antigravity" || c == "project" || c == "google" || c == "gcp" || c == "gemini-cli"
 }
 
-func fetchGeminiInternalModels(acc *account.Account) ([]string, error) {
+var geminiInternalTransport http.RoundTripper
+
+func getGeminiTransport() http.RoundTripper {
+	if geminiInternalTransport != nil {
+		return geminiInternalTransport
+	}
+	return netutil.NewTransport()
+}
+
+func fetchGeminiInternalModels(acc *account.Account, ua string) ([]string, error) {
 	token := acc.GetAccessToken()
 	if token == "" {
 		return nil, fmt.Errorf("账号 AccessToken 为空")
@@ -138,9 +217,12 @@ func fetchGeminiInternalModels(acc *account.Account) ([]string, error) {
 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/ide/2.1.1 windows/amd64")
+	if strings.TrimSpace(ua) == "" {
+		ua = account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion)
+	}
+	req.Header.Set("User-Agent", ua)
 
-	client := &http.Client{Timeout: 30 * time.Second, Transport: netutil.NewTransport()}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: getGeminiTransport()}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("网络连接失败: %w", err)
@@ -153,14 +235,20 @@ func fetchGeminiInternalModels(acc *account.Account) ([]string, error) {
 	}
 
 	var parsed struct {
-		Models map[string]interface{} `json:"models"`
+		Models map[string]struct {
+			DisplayName string `json:"displayName"`
+			Disabled    bool   `json:"disabled"`
+		} `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return nil, fmt.Errorf("解析上游响应 JSON 失败: %w", err)
 	}
 
 	var list []string
-	for k := range parsed.Models {
+	for k, v := range parsed.Models {
+		if v.Disabled || strings.HasSuffix(strings.ToLower(k), "-disabled") {
+			continue
+		}
 		list = append(list, k)
 	}
 	sort.Strings(list)

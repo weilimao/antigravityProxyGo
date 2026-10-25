@@ -9,9 +9,9 @@ import (
 
 const (
 	// DefaultAntigravityCliVersion 是 Antigravity 号池全局 Hub/客户端版本号的默认值,
-	// 用于发往 Google 上游的 User-Agent 身份头 (如 antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64))。
+	// 用于发往 Google 上游的 User-Agent 身份头 (如 antigravity/hub/2.25.0 (aidev_client; os_type=windows; arch=amd64))。
 	// 用户可在 Antigravity 官方账号控制区配置覆盖。
-	DefaultAntigravityCliVersion = "2.3.1"
+	DefaultAntigravityCliVersion = "2.25.0"
 )
 
 // FormatAntigravityUserAgent 格式化 Antigravity Hub User-Agent 字符串。

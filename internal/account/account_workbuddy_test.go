@@ -560,4 +560,40 @@ func TestWorkBuddyAccount_SanitizeCodeBuddyURL(t *testing.T) {
 		t.Errorf("期望 CooldownUntil 为 0 且 Cooldowns 清空，实际 CooldownUntil=%d, Cooldowns=%v", gotAcc.CooldownUntil, gotAcc.Cooldowns)
 	}
 }
+// TestWorkBuddy_AuthExpired_ExcludedFromPool 验证凭证失效 (AuthExpired=true) 的账号被号池调度器彻底排除，绝不参与轮询
+func TestWorkBuddy_AuthExpired_ExcludedFromPool(t *testing.T) {
+	mgr := NewManager()
+	accNormal := &Account{
+		ID:          "wb-normal",
+		Provider:    "workbuddy",
+		Email:       "normal@workbuddy.ai",
+		AccessToken: "valid-tok",
+		Enabled:     true,
+		AuthExpired: false,
+	}
+	accExpired := &Account{
+		ID:          "wb-expired",
+		Provider:    "workbuddy",
+		Email:       "expired@workbuddy.ai",
+		AccessToken: "invalid-tok",
+		Enabled:     true, // 即使 Enabled 为 true
+		AuthExpired: true, // 但凭证已失效
+	}
+	mgr.AddAccount(accNormal)
+	mgr.AddAccount(accExpired)
 
+	avail := mgr.GetAvailableAccountsForChannel("workbuddy", "claude-3-7-sonnet")
+	if len(avail) != 1 {
+		t.Fatalf("期望仅 1 个可用账号，实际得到 %d 个", len(avail))
+	}
+	if avail[0].ID != "wb-normal" {
+		t.Errorf("期望可用账号为 wb-normal，实际得到 %s", avail[0].ID)
+	}
+
+	// 恢复凭证后，能够自愈重新入池
+	mgr.MarkAccountAuthExpired("wb-expired", false)
+	availAfter := mgr.GetAvailableAccountsForChannel("workbuddy", "claude-3-7-sonnet")
+	if len(availAfter) != 2 {
+		t.Fatalf("恢复后期望 2 个可用账号，实际得到 %d 个", len(availAfter))
+	}
+}

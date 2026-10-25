@@ -7,6 +7,9 @@ export interface CategorizedModels {
 }
 
 export const DEFAULT_FALLBACK_MODELS: string[] = [
+    'gemini-4-argon-high',
+    'gemini-4-argon-medium',
+    'gemini-4-argon-low',
     'gemini-3.5-flash',
     'gemini-3.5-flash-low',
     'gemini-3.5-flash-extra-low',
@@ -43,7 +46,7 @@ export function categorizeModels(models: string[]): CategorizedModels {
         seen.add(m);
 
         const lower = m.toLowerCase();
-        if (lower.startsWith('gemini') || lower.includes('gemini')) {
+        if (lower.startsWith('gemini') || lower.includes('gemini') || lower.includes('argon')) {
             gemini.push(m);
         } else if (lower.startsWith('claude') || lower.includes('claude')) {
             claude.push(m);

@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"antigravity-proxy/internal/account"
 )
 
 func TestHeaderSanitizationAndSpoofing(t *testing.T) {
@@ -37,9 +39,10 @@ func TestHeaderSanitizationAndSpoofing(t *testing.T) {
 	headers.Del("Host")
 	headers.Del("host")
 
+	defaultUA := account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion)
 	ua := headers.Get("User-Agent")
 	if ua == "" || strings.Contains(strings.ToLower(ua), "go-http-client") {
-		headers.Set("User-Agent", "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)")
+		headers.Set("User-Agent", defaultUA)
 	}
 
 	// 验证敏感中继头已被完全剥离
@@ -53,7 +56,7 @@ func TestHeaderSanitizationAndSpoofing(t *testing.T) {
 	}
 
 	// 验证 User-Agent 伪装结果
-	expectedUA := "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)"
+	expectedUA := defaultUA
 	if headers.Get("User-Agent") != expectedUA {
 		t.Errorf("User-Agent spoofing mismatch. Expected: %s, Got: %s", expectedUA, headers.Get("User-Agent"))
 	}

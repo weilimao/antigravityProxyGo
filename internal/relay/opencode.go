@@ -3,17 +3,12 @@ package relay
 import (
 	"bufio"
 	"bytes"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,165 +33,9 @@ const (
 	opencodeChannel         = "opencode"
 	opencodeMaxAttemptsCap  = 5
 	opencodeCooldownShortMs = 60 * 1000
-	defaultOpenCodeUA       = "opencode/1.18.31"
+	defaultOpenCodeUA       = "opencode/1.19.4 ai-sdk/provider-utils/4.0.40 runtime/bun/1.4.4"
 	opencodeBase62Chars     = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
-
-var (
-	opencodeSessionCounter uint64
-	opencodeSessionLastTs  int64
-	opencodeSessionMu      sync.Mutex
-	opencodeSessionRe      = regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
-)
-
-// patchResponsesBodyModel 替换 Responses API 请求体的顶层 model 字段。
-//
-// 与 patchRoutedBodyModel 的差异: 后者用 map[string]json.RawMessage 保留所有字段,
-// 本函数同样保留全部字段(含 input/tools/max_output_tokens/store/include 等 Responses
-// 专有字段), 仅覆盖 model。返回 (新body, 是否成功); 解析失败时返回 (nil, false),
-// 由调用方回退原始 body。
-func patchResponsesBodyModel(body []byte, model string) ([]byte, bool) {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return nil, false
-	}
-	mb, err := json.Marshal(model)
-	if err != nil {
-		return nil, false
-	}
-	obj["model"] = mb
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return nil, false
-	}
-	return out, true
-}
-
-// isOpenCodeResponsesOnlyModel 判定模型是否仅支持 OpenAI Responses API。
-//
-// 实测(2026-09-27, 对 Zen /v1/models 全量免费模型逐个打两个端点):
-//   - muse-spark-1.2-contributor-free / muse-spark-1.3-contributor-free:
-//     POST /chat/completions → 400 {"type":"ModelProtocolUnsupported"}
-//     POST /responses        → 200 (需带完整 tools, 否则 403 FreeTierError)
-//   - jev-1.13-free: 两个端点均 400/403, 上游未开放, 不在此列(避免无效转发)。
-//
-// 命中该判定的模型, 中继需把上游端点从 /chat/completions 切到 /responses,
-// 并保持 Responses 协议透传(不做 Chat 转换), 否则必然 400。
-func isOpenCodeResponsesOnlyModel(model string) bool {
-	name := strings.ToLower(strings.TrimSpace(model))
-	if name == "" {
-		return false
-	}
-	if i := strings.LastIndex(name, "/"); i >= 0 {
-		name = name[i+1:]
-	}
-	if i := strings.Index(name, "["); i > 0 {
-		name = strings.TrimSpace(name[:i])
-	}
-	// muse-spark 系列: 实测 1.2 / 1.3 均仅支持 Responses API。
-	return strings.HasPrefix(name, "muse-spark-")
-}
-
-// isOpenCodeFreeModel 判定模型是否为 OpenCode Zen 免费额度模型。
-//
-// 判定依据(2026-09-27 对 Zen /v1/models 与实测):
-//   - 免费模型 id 统一以 "-free" 结尾(如 mimo-v2.5-free / ling-3.0-flash-fin-free);
-//   - big-pickle 为免费但无 -free 后缀, 需显式列出。
-//
-// 采用后缀判定而非硬编码全量清单: Zen 会持续新增免费模型(如 jev-1.13-free /
-// longcat-2.5-preview-free / space-bunny-free 均晚于代码内 OpenCodeSupportedModels
-// 清单出现), 硬编码清单会漏判导致这些模型在非流式请求下被上游 403。
-//
-// 该判定的唯一用途: 免费模型仅接受 stream=true, 故非流式请求需强制走上游流式
-// 并在本地聚合(见 opencode_sse_aggregate.go)。付费模型不受此限, 保持原行为。
-func isOpenCodeFreeModel(model string) bool {
-	name := strings.ToLower(strings.TrimSpace(model))
-	if name == "" {
-		return false
-	}
-	// 剥离可能存在的 "opencode/" 前缀与变体后缀, 兼容 clientModel 形态传入。
-	if i := strings.LastIndex(name, "/"); i >= 0 {
-		name = name[i+1:]
-	}
-	if i := strings.Index(name, "["); i > 0 {
-		name = strings.TrimSpace(name[:i])
-	}
-	if name == "big-pickle" {
-		return true
-	}
-	return strings.HasSuffix(name, "-free")
-}
-
-// generateOpenCodeSessionID 生成符合 OpenCode Canonical 规范的会话 ID (ses_ + 12 hex + 14 Base62)。
-func generateOpenCodeSessionID() string {
-	opencodeSessionMu.Lock()
-	now := time.Now().UnixMilli()
-	if now != opencodeSessionLastTs {
-		opencodeSessionLastTs = now
-		opencodeSessionCounter = 0
-	}
-	opencodeSessionCounter++
-	cnt := opencodeSessionCounter
-	opencodeSessionMu.Unlock()
-
-	current := (uint64(now) * 0x1000) + (cnt & 0x0FFF)
-	val := ^current
-
-	var timeBytes [6]byte
-	for i := 0; i < 6; i++ {
-		shift := 40 - 8*i
-		timeBytes[i] = byte((val >> shift) & 0xFF)
-	}
-	timeHex := hex.EncodeToString(timeBytes[:])
-
-	var randBytes [14]byte
-	_, _ = rand.Read(randBytes[:])
-	var randBase62 strings.Builder
-	randBase62.Grow(14)
-	for _, b := range randBytes {
-		randBase62.WriteByte(opencodeBase62Chars[int(b)%62])
-	}
-
-	return fmt.Sprintf("ses_%s%s", timeHex, randBase62.String())
-}
-
-// generateOpenCodeRequestID 生成符合 OpenCode Canonical 规范的请求 ID (msg_ + 12 hex + 14 Base62)。
-func generateOpenCodeRequestID() string {
-	now := time.Now().UnixMilli()
-	current := (uint64(now) * 0x1000) + 1
-	var timeBytes [6]byte
-	for i := 0; i < 6; i++ {
-		shift := 40 - 8*i
-		timeBytes[i] = byte((current >> shift) & 0xFF)
-	}
-	timeHex := hex.EncodeToString(timeBytes[:])
-
-	var randBytes [14]byte
-	_, _ = rand.Read(randBytes[:])
-	var randBase62 strings.Builder
-	randBase62.Grow(14)
-	for _, b := range randBytes {
-		randBase62.WriteByte(opencodeBase62Chars[int(b)%62])
-	}
-
-	return fmt.Sprintf("msg_%s%s", timeHex, randBase62.String())
-}
-
-// translateToOpenCodeSession 将下游客户端的会话标识映射为合法的 OpenCode Canonical 格式。
-func translateToOpenCodeSession(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	if opencodeSessionRe.MatchString(trimmed) {
-		return trimmed
-	}
-	h := sha256.Sum256([]byte("opencode\x00generic\x00" + trimmed))
-	timeHex := hex.EncodeToString(h[:6])
-	var randBase62 strings.Builder
-	randBase62.Grow(14)
-	for i := 6; i < 20; i++ {
-		randBase62.WriteByte(opencodeBase62Chars[int(h[i])%62])
-	}
-	return fmt.Sprintf("ses_%s%s", timeHex, randBase62.String())
-}
 
 // pickOpenCodeAccount 结合 sticky 与 round-robin 游标从可用列表中选号。
 func (h *APICompatHandler) pickOpenCodeAccount(lbMode, sessionKey string, accounts []*account.Account) *account.Account {
@@ -320,14 +159,64 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 
 	available := h.accountMgr.GetAvailableAccountsForChannel(opencodeChannel, inModel)
 	if len(available) == 0 {
-		h.log("⛔ [OpenCode 中继] OpenCode 号池无可用账号 (model=%s)", inModel)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
-			"error": map[string]interface{}{
-				"type":    "opencode_pool_empty",
-				"message": "no available OpenCode account in pool",
-			},
-		})
-		return
+		isBenchmark := r.Header.Get("X-Antigravity-Benchmark") == "1"
+		allAccounts := h.accountMgr.GetAccounts()
+		var opencodeAccs []*account.Account
+		var minCooldownRemaining int64 = 0
+		nowMs := time.Now().UnixNano() / int64(time.Millisecond)
+
+		for _, a := range allAccounts {
+			if a.Provider == opencodeChannel && a.Enabled && !a.IsAuthExpired() {
+				opencodeAccs = append(opencodeAccs, a)
+				cat := h.accountMgr.GetModelCategoryByProvider(opencodeChannel, inModel)
+				cd := int64(0)
+				if a.Cooldowns != nil {
+					if v, ok := a.Cooldowns[cat]; ok {
+						cd = v
+					} else if v, ok := a.Cooldowns[opencodeChannel]; ok {
+						cd = v
+					}
+				} else {
+					cd = a.CooldownUntil
+				}
+				if cd > nowMs {
+					rem := (cd - nowMs) / 1000
+					if minCooldownRemaining == 0 || rem < minCooldownRemaining {
+						minCooldownRemaining = rem
+					}
+				}
+			}
+		}
+
+		if isBenchmark && len(opencodeAccs) > 0 {
+			// 测速探活特权：当号池中所有账号均因 429 冷却时，测速回环仍允许发起探活，以侦测上游是否已解封
+			available = opencodeAccs
+		} else if len(opencodeAccs) > 0 {
+			// 存在账号但在冷却中：返回 429 限流并携带重试秒数，避免抛出误导性的 503
+			if minCooldownRemaining <= 0 {
+				minCooldownRemaining = 5
+			}
+			h.log("⏳ [OpenCode 中继] 号池所有账号均处于冷却中 (model=%s, retryAfter=%ds)", inModel, minCooldownRemaining)
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", minCooldownRemaining))
+			writeJSON(w, http.StatusTooManyRequests, map[string]interface{}{
+				"error": map[string]interface{}{
+					"type":    "opencode_pool_cooldown",
+					"message": fmt.Sprintf("all OpenCode accounts are currently in cooldown, please retry after %d seconds", minCooldownRemaining),
+					"code":    "rate_limit_exceeded",
+				},
+			})
+			return
+		} else {
+			// 真正无任何已配置或启用的账号
+			h.log("⛔ [OpenCode 中继] OpenCode 号池无已配置或启用的账号 (model=%s)", inModel)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+				"error": map[string]interface{}{
+					"type":    "opencode_pool_empty",
+					"message": "no available OpenCode account configured in pool",
+				},
+			})
+			return
+		}
 	}
 
 	sessionKey := h.stickyKeyOf(userSession)
@@ -340,6 +229,8 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 		maxAttempts = opencodeMaxAttemptsCap
 	}
 	skippedAccounts := make(map[string]bool)
+	var lastErrCode int
+	var lastErrBody []byte
 
 	startTs := time.Now()
 	firstByteRec := stats.NewFirstByteRecorder(startTs)
@@ -438,10 +329,7 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 		}
 
 		upstreamBytes, _ := json.Marshal(upstreamReq)
-		baseURL := strings.TrimRight(poolAccount.BaseURL, "/")
-		if baseURL == "" {
-			baseURL = account.DefaultOpenCodeBaseURL
-		}
+		baseURL := account.NormalizeOpenCodeBaseURL(poolAccount.BaseURL)
 		targetURL := baseURL + "/chat/completions"
 
 		// Responses-only 模型(如 muse-spark-*): 上游仅接受 Responses API,
@@ -515,22 +403,28 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		// 注入 Canonical 请求头防封指纹（优先透传客户端传入的合法会话头）
-		canonicalSession := strings.TrimSpace(r.Header.Get("x-opencode-session"))
+		// 注入 Canonical 请求头防封指纹（与官方 CLI 源码及监控 1:1 对齐）
+		canonicalSession := strings.TrimSpace(r.Header.Get("x-opencode-session-id"))
+		if canonicalSession == "" {
+			canonicalSession = strings.TrimSpace(r.Header.Get("x-opencode-session"))
+		}
 		if canonicalSession == "" || !opencodeSessionRe.MatchString(canonicalSession) {
 			canonicalSession = translateToOpenCodeSession(sessionKey)
+		}
+		clientType := strings.TrimSpace(r.Header.Get("x-opencode-client"))
+		if clientType == "" || clientType == "desktop" {
+			clientType = "cli"
+		}
+		projectID := strings.TrimSpace(r.Header.Get("x-opencode-project"))
+		if projectID == "" {
+			projectID = strings.TrimSpace(poolAccount.ProjectID)
+		}
+		if projectID == "" {
+			projectID = "global"
 		}
 		canonicalRequest := strings.TrimSpace(r.Header.Get("x-opencode-request"))
 		if canonicalRequest == "" {
 			canonicalRequest = generateOpenCodeRequestID()
-		}
-		clientType := strings.TrimSpace(r.Header.Get("x-opencode-client"))
-		if clientType == "" {
-			clientType = "desktop"
-		}
-		projectID := strings.TrimSpace(r.Header.Get("x-opencode-project"))
-		if projectID == "" {
-			projectID = "global"
 		}
 
 		httpReq.Header.Set("Content-Type", "application/json")
@@ -538,16 +432,12 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 		httpReq.Header.Set("User-Agent", defaultOpenCodeUA)
 		httpReq.Header.Set("x-opencode-client", clientType)
 		httpReq.Header.Set("x-opencode-project", projectID)
+		// 官方 CLI 源码证实：x-opencode-session 与 x-opencode-session-id 必须同时存在且值完全相同
 		httpReq.Header.Set("x-opencode-session", canonicalSession)
+		httpReq.Header.Set("x-opencode-session-id", canonicalSession)
 		httpReq.Header.Set("x-opencode-request", canonicalRequest)
-		// Accept 头按**上游实际协议**设置, 而非客户端期望形态:
-		// 免费模型/Responses-only 模型即便客户端要非流式, 上游仍必须是流式,
-		// 此时若发 Accept: application/json 会与 stream=true 语义冲突, 部分上游据此拒绝。
-		if upstreamStreaming {
-			httpReq.Header.Set("Accept", "text/event-stream")
-		} else {
-			httpReq.Header.Set("Accept", "application/json")
-		}
+		// 官方 CLI 监控实测统一为 Accept: */* (上游据此及 UA/cli 判定为官方 CLI 高优先级配额通道)
+		httpReq.Header.Set("Accept", "*/*")
 
 		client := h.streamClient
 		if client == nil {
@@ -575,11 +465,16 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
+			bodyErrBytes, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
+			errStr := string(bodyErrBytes)
 			skippedAccounts[poolAccount.ID] = true
 			cooldownUntilMs := time.Now().UnixNano()/1e6 + opencodeCooldownShortMs
 			h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, cooldownUntilMs, opencodeChannel, inModel)
 			h.accountMgr.ReleaseAccount(poolAccount.ID)
+			h.log("⚠️ [OpenCode 中继] 429 配额上限或限流 (%s, model=%s): %s", poolAccount.Email, inModel, errStr)
+			lastErrCode = http.StatusTooManyRequests
+			lastErrBody = bodyErrBytes
 			continue
 		}
 
@@ -596,6 +491,8 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 			if strings.Contains(errStr, "CreditsError") || strings.Contains(errStr, "No payment method") || strings.Contains(errStr, "billing") {
 				h.log("⚠️ [OpenCode 中继] 模型欠费/无支付方式 (%s, model=%s): %s", poolAccount.Email, inModel, errStr)
 			}
+			lastErrCode = resp.StatusCode
+			lastErrBody = bodyErrBytes
 			continue
 		}
 
@@ -624,6 +521,10 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 			w.WriteHeader(resp.StatusCode)
 			_, _ = w.Write(errBytes)
 			return
+		}
+
+		if h.accountMgr != nil && (poolAccount.CooldownUntil > 0 || len(poolAccount.Cooldowns) > 0) {
+			h.accountMgr.ClearAccountCooldown(poolAccount.ID)
 		}
 
 		logCtx := opencodeLogCtx{
@@ -933,6 +834,13 @@ func (h *APICompatHandler) handleOpenCode(w http.ResponseWriter, r *http.Request
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(respBytes)
+		return
+	}
+
+	if lastErrCode > 0 && len(lastErrBody) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(lastErrCode)
+		_, _ = w.Write(lastErrBody)
 		return
 	}
 

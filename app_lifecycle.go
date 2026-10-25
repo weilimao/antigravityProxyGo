@@ -177,6 +177,10 @@ func (a *App) startup(ctx context.Context) {
 	a.authMgr = quota.NewAuthManager(a.accountMgr)
 	a.quotaSvc = quota.NewQuotaService()
 	a.quotaSvc.Init(activeDir)
+	a.quotaSvc.SetAntigravityVersionProviders(
+		a.accountMgr.GetAntigravityUserAgent,
+		a.accountMgr.GetAntigravityCliVersion,
+	)
 	a.accountMgr.FetchQuota = func(acc *account.Account) (*account.QuotaResult, error) {
 		return a.quotaSvc.FetchQuota(acc, a.authMgr.RefreshToken, a.accountMgr.UpdateAccessToken)
 	}

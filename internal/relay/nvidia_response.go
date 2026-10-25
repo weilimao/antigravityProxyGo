@@ -215,6 +215,7 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 			continue
 		}
 		markFirstByte() // 首个非空 SSE 帧即上游首字时刻,触发 TTFT 打点(幂等)
+		line = sanitizeOpenAIToolCallsSSE(line)
 		_, _ = w.Write([]byte(line + "\n"))
 		if flusher != nil {
 			flusher.Flush()
@@ -248,6 +249,19 @@ func (h *APICompatHandler) proxyNvidiaOpenAIPassthrough(ctx context.Context, w h
 		}
 	}
 	return inUsage, outUsage, cachedUsage
+}
+
+// sanitizeOpenAIToolCallsSSE 清洗上游非标的 "tool_calls":[] 字段。
+//
+// 背景: 腾讯 WorkBuddy 等上游在流式 choices[0].delta 中若未触发工具调用，会非标地携带 "tool_calls": []。
+// 遵循 Vercel AI SDK 规范的客户端(如 ZCode、OpenCode 等)在解析 OpenAI 流时，使用 if (delta.tool_calls != null)
+// 判定工具边界；在 JS 中 [] != null 恒为 true，导致客户端在每个思考 token 帧都强行触发 reasoning-end，
+// 思考流被碎裂成上千个独立的思考折叠框。将其规整为 "tool_calls": null，契合标准规范并彻底根治下游 UI 碎裂。
+func sanitizeOpenAIToolCallsSSE(line string) string {
+	if strings.HasPrefix(line, "data:") && strings.Contains(line, `"tool_calls":[]`) {
+		return strings.ReplaceAll(line, `"tool_calls":[]`, `"tool_calls":null`)
+	}
+	return line
 }
 
 // writeNvidiaAnthropicNormal 处理非流式 Anthropic 入站：读全量 OpenAI Chat 响应 → 回译 → 写出。

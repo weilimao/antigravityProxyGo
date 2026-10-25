@@ -48,10 +48,11 @@ func ParseUserQuotaSummary(resBytes []byte) []account.QuotaBucket {
 	return buckets
 }
 
-// HasGeminiGroup 检查配额桶列表中是否已包含 Gemini Models 分组
+// HasGeminiGroup 检查配额桶列表中是否已包含常规 Gemini Models 分组（排除 Gemini 4 Argon 独立分组）
 func HasGeminiGroup(buckets []account.QuotaBucket) bool {
 	for _, b := range buckets {
-		if strings.Contains(strings.ToLower(b.Group), "gemini") {
+		lower := strings.ToLower(b.Group)
+		if strings.Contains(lower, "gemini") && !strings.Contains(lower, "argon") {
 			return true
 		}
 	}
@@ -70,7 +71,7 @@ func ExtractModelQuotasFromDetail(resBytes []byte) (geminiBucket *account.QuotaB
 
 	for _, b := range detailResp.Buckets {
 		lowerModel := strings.ToLower(b.ModelID)
-		if geminiBucket == nil && strings.Contains(lowerModel, "gemini") {
+		if geminiBucket == nil && strings.Contains(lowerModel, "gemini") && !strings.Contains(lowerModel, "argon") {
 			geminiBucket = &account.QuotaBucket{
 				ModelID:           "Five Hour Limit Remaining",
 				Group:             "Gemini Models",
@@ -95,20 +96,22 @@ func ExtractModelQuotasFromDetail(resBytes []byte) (geminiBucket *account.QuotaB
 	return geminiBucket, claudeBucket
 }
 
-// MergeQuotaBuckets 合并 Summary 和 Detail 配额数据，确保 Gemini Models 和 Claude and GPT models 均完整
+// MergeQuotaBuckets 合并 Summary 和 Detail 配额数据，确保 Gemini Models、Claude and GPT models 及 Gemini 4 Argon 顺序规范完整
 func MergeQuotaBuckets(summaryBuckets []account.QuotaBucket, detailBytes []byte) []account.QuotaBucket {
 	var out []account.QuotaBucket
 
 	geminiBucket, claudeBucket := ExtractModelQuotasFromDetail(detailBytes)
 
-	// 1. 如果已有或补齐 Gemini Models，Gemini 优先置顶显示
-	if HasGeminiGroup(summaryBuckets) {
-		for _, b := range summaryBuckets {
-			if strings.Contains(strings.ToLower(b.Group), "gemini") {
-				out = append(out, b)
-			}
+	// 1. 常规 Gemini Models 优先置顶显示
+	hasGemini := false
+	for _, b := range summaryBuckets {
+		lower := strings.ToLower(b.Group)
+		if strings.Contains(lower, "gemini") && !strings.Contains(lower, "argon") {
+			out = append(out, b)
+			hasGemini = true
 		}
-	} else if geminiBucket != nil {
+	}
+	if !hasGemini && geminiBucket != nil {
 		out = append(out,
 			account.QuotaBucket{
 				ModelID:           "Weekly Limit Remaining",
@@ -121,18 +124,15 @@ func MergeQuotaBuckets(summaryBuckets []account.QuotaBucket, detailBytes []byte)
 		)
 	}
 
-	// 2. 追加 Claude and GPT models 或其他分组
+	// 2. 追加 Claude and GPT models 分组
 	hasClaude := false
 	for _, b := range summaryBuckets {
-		if !strings.Contains(strings.ToLower(b.Group), "gemini") {
+		lower := strings.ToLower(b.Group)
+		if strings.Contains(lower, "claude") || strings.Contains(lower, "gpt") {
 			out = append(out, b)
-			if strings.Contains(strings.ToLower(b.Group), "claude") {
-				hasClaude = true
-			}
+			hasClaude = true
 		}
 	}
-
-	// 若 Summary 完全为空且有 claudeBucket，兜底组装 Claude 组
 	if !hasClaude && claudeBucket != nil {
 		out = append(out,
 			account.QuotaBucket{
@@ -144,6 +144,25 @@ func MergeQuotaBuckets(summaryBuckets []account.QuotaBucket, detailBytes []byte)
 			},
 			*claudeBucket,
 		)
+	}
+
+	// 3. 追加 Gemini 4 Argon 独立分组
+	for _, b := range summaryBuckets {
+		lower := strings.ToLower(b.Group)
+		if strings.Contains(lower, "argon") {
+			out = append(out, b)
+		}
+	}
+
+	// 4. 追加其他未涵盖的分组（若未来上游推出新分组）
+	for _, b := range summaryBuckets {
+		lower := strings.ToLower(b.Group)
+		isStandardGemini := strings.Contains(lower, "gemini") && !strings.Contains(lower, "argon")
+		isClaude := strings.Contains(lower, "claude") || strings.Contains(lower, "gpt")
+		isArgon := strings.Contains(lower, "argon")
+		if !isStandardGemini && !isClaude && !isArgon {
+			out = append(out, b)
+		}
 	}
 
 	return out

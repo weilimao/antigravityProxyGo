@@ -11,21 +11,30 @@ import (
 	"time"
 )
 
-// account_opencode.go: OpenCode Zen 聚合网关号池的账号构造、校验、本地导入与模型解析。
+// account_opencode.go: OpenCode 聚合网关号池的账号构造、校验、本地导入与模型解析。
 //
 // 设计:
 //   - Provider 固定 "opencode", ScopeType 固定 "opencode"。
-//   - 上游 API 端点固定为 POST {BaseURL}/chat/completions (默认 https://opencode.ai/zen/v1)。
-//   - 认证使用 Bearer Token，格式形如 sk-...，由 https://opencode.ai/zen 签发。
+//   - 上游 API 端点固定为 POST {BaseURL}/chat/completions (默认 https://opencode.ai/inference/openai/v1)。
+//   - 认证使用 Bearer Token，格式形如 oc_sk_...，由 https://opencode.ai 签发。
 //   - 支持一键从本地 ~/.local/share/opencode/auth.json 读取凭证。
 
 const (
 	opencodeProvider = "opencode"
 	opencodeScope    = "opencode"
 
-	DefaultOpenCodeBaseURL = "https://opencode.ai/zen/v1"
+	DefaultOpenCodeBaseURL = "https://opencode.ai/inference/openai/v1"
 	DefaultOpenCodeModel   = "claude-sonnet-4-6"
 )
+
+// NormalizeOpenCodeBaseURL 规整 OpenCode API 端点，默认指向官方最新 https://opencode.ai/inference/openai/v1。
+func NormalizeOpenCodeBaseURL(raw string) string {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" || raw == "https://opencode.ai/zen/v1" || raw == "https://opencode.ai/zen" {
+		return DefaultOpenCodeBaseURL
+	}
+	return raw
+}
 
 // OpenCodeSupportedModels 列出 OpenCode Zen 原生支持的核心主流模型。
 var OpenCodeSupportedModels = []string{
@@ -43,10 +52,13 @@ var OpenCodeSupportedModels = []string{
 	"kimi-k3",
 	"qwen3.6-plus",
 	"big-pickle",
+	"deepseek-v4.1-flash-free",
 	"deepseek-v4-flash-free",
+	"mimo-v2.6-flash-free",
 	"mimo-v2.5-free",
 	"nemotron-3-ultra-free",
 	"nemotron-3.5-lightning-free",
+	"nemotron-3.5-super-vl-free",
 	"muse-spark-1.3-contributor-free",
 	"ling-3.0-flash-fin-free",
 }
@@ -65,10 +77,7 @@ func ValidateOpenCodeAccountInput(in OpenCodeAccountInput) error {
 }
 
 func validateOpenCodeFields(in OpenCodeAccountInput, requireKey bool) error {
-	baseURL := strings.TrimSpace(in.BaseURL)
-	if baseURL == "" {
-		baseURL = DefaultOpenCodeBaseURL
-	}
+	baseURL := NormalizeOpenCodeBaseURL(in.BaseURL)
 	u, err := url.Parse(baseURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return errors.New("base_url 必须是合法的 http/https 地址")
@@ -81,10 +90,7 @@ func validateOpenCodeFields(in OpenCodeAccountInput, requireKey bool) error {
 
 // NewOpenCodeAccount 根据 input 构造未入库的 OpenCode Account。
 func NewOpenCodeAccount(in OpenCodeAccountInput) *Account {
-	baseURL := strings.TrimSpace(in.BaseURL)
-	if baseURL == "" {
-		baseURL = DefaultOpenCodeBaseURL
-	}
+	baseURL := NormalizeOpenCodeBaseURL(in.BaseURL)
 	label := strings.TrimSpace(in.Label)
 	if label == "" {
 		key := strings.TrimSpace(in.AccessToken)
@@ -114,9 +120,7 @@ func NewOpenCodeAccount(in OpenCodeAccountInput) *Account {
 
 // AddOpenCodeAccount 校验 + 构造 + 入库，返回新账号 ID。
 func (m *Manager) AddOpenCodeAccount(in OpenCodeAccountInput) (string, error) {
-	if in.BaseURL == "" {
-		in.BaseURL = DefaultOpenCodeBaseURL
-	}
+	in.BaseURL = NormalizeOpenCodeBaseURL(in.BaseURL)
 	if err := ValidateOpenCodeAccountInput(in); err != nil {
 		return "", err
 	}
@@ -127,9 +131,7 @@ func (m *Manager) AddOpenCodeAccount(in OpenCodeAccountInput) (string, error) {
 
 // UpdateOpenCodeAccount 就地更新已有 OpenCode 账号字段。
 func (m *Manager) UpdateOpenCodeAccount(id string, in OpenCodeAccountInput) (*Account, error) {
-	if in.BaseURL == "" {
-		in.BaseURL = DefaultOpenCodeBaseURL
-	}
+	in.BaseURL = NormalizeOpenCodeBaseURL(in.BaseURL)
 	if err := validateOpenCodeFields(in, false); err != nil {
 		return nil, err
 	}

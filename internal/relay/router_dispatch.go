@@ -260,7 +260,9 @@ func (h *APICompatHandler) ResolveBenchmarkEntryPath(model string) string {
 	lower := strings.ToLower(model)
 	if strings.HasPrefix(lower, "nvidia/") || strings.HasPrefix(lower, "grok/") ||
 		strings.HasPrefix(lower, "xai/") || strings.HasPrefix(lower, "other/") ||
-		strings.HasPrefix(lower, "deepseek/") {
+		strings.HasPrefix(lower, "deepseek/") ||
+		strings.HasPrefix(lower, "opencode/") || strings.HasPrefix(lower, "oc/") ||
+		strings.HasPrefix(lower, "workbuddy/") || strings.HasPrefix(lower, "wb/") {
 		return "/route/v1/chat/completions"
 	}
 

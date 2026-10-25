@@ -600,11 +600,47 @@ func (h *APICompatHandler) handleWorkBuddy(w http.ResponseWriter, r *http.Reques
 		}
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 			_ = resp.Body.Close()
-			skippedAccounts[poolAccount.ID] = true
-			cooldownUntilMs := time.Now().UnixNano()/1e6 + 24*3600*1000
-			h.accountMgr.SetAccountCooldownForChannel(poolAccount.ID, cooldownUntilMs, workbuddyChannel, inModel)
-			h.accountMgr.ReleaseAccount(poolAccount.ID)
-			continue
+			// 若存在 RefreshToken，尝试原地换取新 Token 并重试一次请求
+			refreshed := false
+			if strings.TrimSpace(poolAccount.GetRefreshToken()) != "" && h.accountMgr != nil && h.accountMgr.RefreshToken != nil {
+				h.log("🔄 [WorkBuddy 中继] 账号 %s 返回 HTTP %d，尝试通过 RefreshToken 自动换取新凭证...", poolAccount.Email, resp.StatusCode)
+				_, refErr := h.accountMgr.RefreshToken(poolAccount)
+				if refErr == nil {
+					h.log("✅ [WorkBuddy 中继] 账号 %s 凭证自动刷新成功，正在使用新凭证重试请求...", poolAccount.Email)
+					retryReq, errRetryReq := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(upstreamBytes))
+					if errRetryReq == nil {
+						newWbHeaders := account.BuildWorkBuddyHeaders(poolAccount, cliVer)
+						for k, v := range newWbHeaders {
+							retryReq.Header.Set(k, v)
+						}
+						applyWorkBuddyChatHeaders(retryReq.Header, convID, account.GenerateWorkBuddyHex32(), account.GenerateWorkBuddyHex32(), newWbHeaders["X-IDE-Version"])
+						if uid := newWbHeaders["X-User-Id"]; uid != "" {
+							retryReq.Header.Set("X-Current-Account-Id", uid)
+						}
+						retryResp, errRetryDo := client.Do(retryReq)
+						if errRetryDo == nil && retryResp.StatusCode != http.StatusUnauthorized && retryResp.StatusCode != http.StatusForbidden {
+							resp = retryResp
+							refreshed = true
+						} else if retryResp != nil {
+							_ = retryResp.Body.Close()
+						}
+					}
+				} else {
+					h.log("❌ [WorkBuddy 中继] 账号 %s 自动换取 Token 失败: %v", poolAccount.Email, refErr)
+				}
+			}
+
+			if !refreshed {
+				skippedAccounts[poolAccount.ID] = true
+				h.log("❌ [WorkBuddy 中继] 账号 %s 凭证失效 (HTTP %d) 且自动换取失败，标记登录已过期并停用账号，清除虚假冷却", poolAccount.Email, resp.StatusCode)
+				if h.accountMgr != nil {
+					h.accountMgr.MarkAccountAuthExpired(poolAccount.ID, true)
+					h.accountMgr.ClearAccountCooldown(poolAccount.ID)
+					h.accountMgr.UpdateAccountEnabled(poolAccount.ID, false)
+				}
+				h.accountMgr.ReleaseAccount(poolAccount.ID)
+				continue
+			}
 		}
 		if resp.StatusCode >= 500 {
 			_ = resp.Body.Close()

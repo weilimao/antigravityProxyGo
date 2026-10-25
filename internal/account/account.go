@@ -64,6 +64,9 @@ type Account struct {
 	Formats []string `json:"formats,omitempty"`
 	// ValidationURL 记录 Google 账号触发风控人机验证(VALIDATION_REQUIRED)时的直达验证 URL
 	ValidationURL string `json:"validationUrl,omitempty"`
+	// AuthExpired 标记账号是否因 401 / 会话失效而处于「登录已过期」状态。
+	// 用于前端卡片高亮红色「已失效 (401)」状态徽章，并杜绝被误判为「冷却中」或被轮询调度。
+	AuthExpired bool `json:"authExpired,omitempty"`
 }
 
 // GetAccessToken safely reads the access token under read lock.
@@ -83,6 +86,13 @@ func (a *Account) SetAccessToken(token string) {
 	a.tokenMu.Unlock()
 }
 
+// GetRefreshToken safely reads the refresh token under read lock.
+func (a *Account) GetRefreshToken() string {
+	a.tokenMu.RLock()
+	defer a.tokenMu.RUnlock()
+	return a.RefreshToken
+}
+
 // SetRefreshToken safely updates the refresh token under write lock.
 func (a *Account) SetRefreshToken(token string) {
 	a.tokenMu.Lock()
@@ -95,6 +105,20 @@ func (a *Account) GetTokenRefreshedAt() int64 {
 	a.tokenMu.RLock()
 	defer a.tokenMu.RUnlock()
 	return a.TokenRefreshedAt
+}
+
+// IsAuthExpired safely reads whether account credentials have expired under read lock.
+func (a *Account) IsAuthExpired() bool {
+	a.tokenMu.RLock()
+	defer a.tokenMu.RUnlock()
+	return a.AuthExpired
+}
+
+// SetAuthExpired safely updates whether account credentials have expired under write lock.
+func (a *Account) SetAuthExpired(expired bool) {
+	a.tokenMu.Lock()
+	a.AuthExpired = expired
+	a.tokenMu.Unlock()
 }
 
 // AccessTokenExp 解析 access_token(JWT,OAuth 账号)的 exp claim,返回 Unix 秒;非 JWT/无 exp/解析失败返回 0。

@@ -129,7 +129,10 @@ function buildAccountHeaderInnerHTML(acc: any, dict: any): string {
 // buildAccountStatusBadgeHTML:只返回 statusBadge 的 innerHTML 体(不含外层 className,className
 // 由调用方各自写 amber/emerald 包装——create 与 patch 仅差 1 字符缩进,不值得再抽)。
 // 修正:statusBadge body 在 create(L746-756)与 patch(L1036-1048)逐字节相同,统一产出避免重复。
-function buildAccountStatusBadgeHTML(opts: { isValidationRequired?: boolean; isOverallCooling: boolean; isNvidiaAcc: boolean; isGrokAcc: boolean; minCooldownTime: number; dict: any }): string {
+function buildAccountStatusBadgeHTML(opts: { isAuthExpired?: boolean; isValidationRequired?: boolean; isOverallCooling: boolean; isNvidiaAcc: boolean; isGrokAcc: boolean; minCooldownTime: number; dict: any }): string {
+    if (opts.isAuthExpired) {
+        return `<span class="material-symbols-outlined text-[12px]">error</span> ${opts.dict.accountStatusExpired || '已失效 (401)'}`;
+    }
     if (opts.isValidationRequired) {
         return `<span class="material-symbols-outlined text-[12px]">security</span> ${opts.dict.verifyBadge || '需验证'}`;
     }
@@ -336,12 +339,16 @@ export function renderAccounts(accounts: any[]) {
             info.innerHTML = buildAccountHeaderInnerHTML(acc, dict);
             
             const isValidationRequired = !!(acc.validationUrl || (state.accountValidationUrls && state.accountValidationUrls[acc.id]));
+            const quotaErr = state.nvidiaQuotaError ? state.nvidiaQuotaError[acc.id] : '';
+            const isAuthExpired = !!(acc.authExpired || (quotaErr && (quotaErr.includes('401') || quotaErr.includes('失效') || quotaErr.includes('Unauthorized'))));
             const isWarning = isOverallCooling || isValidationRequired;
             const statusBadge = document.createElement('div');
-            statusBadge.className = isWarning
+            statusBadge.className = isAuthExpired
+                ? 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 dark:bg-red-900/30 dark:text-red-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0'
+                : isWarning
                 ? 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0'
                 : 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
-            statusBadge.innerHTML = buildAccountStatusBadgeHTML({ isValidationRequired, isOverallCooling, isNvidiaAcc, isGrokAcc, minCooldownTime, dict });
+            statusBadge.innerHTML = buildAccountStatusBadgeHTML({ isAuthExpired, isValidationRequired, isOverallCooling, isNvidiaAcc, isGrokAcc, minCooldownTime, dict });
             
             leftGroup.appendChild(checkboxEl);
             leftGroup.appendChild(info);
@@ -620,11 +627,15 @@ export function renderAccounts(accounts: any[]) {
             const dict = i18n[state.currentLanguage] || i18n.zh;
             if (statusBadge) {
                 const isValidationRequired = !!(acc.validationUrl || (state.accountValidationUrls && state.accountValidationUrls[acc.id]));
+                const quotaErr = state.nvidiaQuotaError ? state.nvidiaQuotaError[acc.id] : '';
+                const isAuthExpired = !!(acc.authExpired || (quotaErr && (quotaErr.includes('401') || quotaErr.includes('失效') || quotaErr.includes('Unauthorized'))));
                 const isWarning = isOverallCooling || isValidationRequired;
-                statusBadge.className = isWarning
+                statusBadge.className = isAuthExpired
+                    ? 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 dark:bg-red-900/30 dark:text-red-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0'
+                    : isWarning
                     ? 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0'
                     : 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
-                statusBadge.innerHTML = buildAccountStatusBadgeHTML({ isValidationRequired, isOverallCooling, isNvidiaAcc, isGrokAcc, minCooldownTime, dict });
+                statusBadge.innerHTML = buildAccountStatusBadgeHTML({ isAuthExpired, isValidationRequired, isOverallCooling, isNvidiaAcc, isGrokAcc, minCooldownTime, dict });
             }
 
             // 2. Update AI Credits (Antigravity only)

@@ -8,6 +8,7 @@ import (
 
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/cert"
+	"antigravity-proxy/internal/settings"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -346,6 +347,22 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		} else {
 			a.AddLog("🔄 Gemini CLI Load Balancing disabled. Using a single active Gemini CLI account.")
 		} */
+		return true
+
+	case "accounts:set-pool-error-retry":
+		ruleJSON := getStringArg(0)
+		var rule settings.PoolErrorRetryConfig
+		if strings.TrimSpace(ruleJSON) != "" {
+			_ = json.Unmarshal([]byte(ruleJSON), &rule)
+		} else if len(args) > 0 {
+			if b, err := json.Marshal(args[0]); err == nil {
+				_ = json.Unmarshal(b, &rule)
+			}
+		}
+		_ = a.settingsMgr.SetPoolErrorRetry(rule)
+		a.AddLog(fmt.Sprintf("⚙️ [号池策略] 更新报错重试与切号配置: 启用=%v, 切号状态码=%v, 同号重试状态码=%v, 冷静期=%ds, 最大重试=%d",
+			rule.Enabled, rule.SwitchCodes, rule.RetryCodes, rule.SwitchCooldownSecs, rule.MaxRetries))
+		a.emitAccountsRes()
 		return true
 
 	case "channel:switch":

@@ -377,9 +377,29 @@ function formatCreditsNumber(val: number): string {
 // - 国外账号：正常请求上游端点，显示积分余额胶囊（如 410 积分）。
 export function renderWorkBuddyAccountQuota(containerEl: HTMLElement, acc: any, isZH: boolean, dict: any) {
     if (!containerEl) return;
+    // 1. 凭证失效 (401 / 登录过期)：最高优先级展示失效红泡（严禁被停用灰泡或虚假冷却覆盖）
+    const loadState = state.quotaLoadingState ? state.quotaLoadingState[acc.id] : undefined;
+    const errMsg = state.nvidiaQuotaError ? state.nvidiaQuotaError[acc.id] : '';
+    const isAuthExpired = !!(acc.authExpired || (errMsg && (errMsg.includes('401') || errMsg.includes('失效') || errMsg.includes('Unauthorized'))));
+
+    if (isAuthExpired) {
+        const failTitle = dict.workbuddyCredentialExpired || (isZH ? '凭证已失效 (401)' : 'Credential Expired (401)');
+        const reason = errMsg || (isZH ? '账号登录凭证已失效，需要重新登录导入' : 'Session expired, re-login required');
+        containerEl.innerHTML = `
+            <div class="flex flex-col gap-1 bg-red-500/10 dark:bg-red-500/5 border border-red-500/20 rounded-lg p-2.5 mt-1">
+                <div class="flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                    <span class="text-[10px] font-bold text-red-600 dark:text-red-400">${escapeHtml(failTitle)}</span>
+                </div>
+                <span class="text-[9px] text-red-500/80 dark:text-red-400/70 truncate" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span>
+            </div>
+        `;
+        return;
+    }
+
     const isEnabled = acc && acc.enabled !== false;
 
-    // 1. 停用账号：灰泡
+    // 1.2 停用账号：灰泡
     if (!isEnabled) {
         containerEl.innerHTML = `
             <div class="flex items-center gap-1.5 bg-slate-500/10 dark:bg-slate-500/5 border border-slate-500/20 rounded-lg p-2.5 mt-1">
@@ -409,9 +429,24 @@ export function renderWorkBuddyAccountQuota(containerEl: HTMLElement, acc: any, 
         return;
     }
 
-    // 2. 优先展示真实积分胶囊（刷新成功或已有积分缓存）
+    // 2. 其它非 401 配额探测错误：红泡
+    if (loadState === 'error' || errMsg) {
+        const reason = errMsg || (isZH ? '未知错误' : 'Unknown error');
+        const failTitle = dict.workbuddyQuotaFail || (isZH ? '配额请求失败' : 'Quota Probe Failed');
+        containerEl.innerHTML = `
+            <div class="flex flex-col gap-1 bg-red-500/10 dark:bg-red-500/5 border border-red-500/20 rounded-lg p-2.5 mt-1">
+                <div class="flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                    <span class="text-[10px] font-bold text-red-600 dark:text-red-400">${escapeHtml(failTitle)}</span>
+                </div>
+                <span class="text-[9px] text-red-500/80 dark:text-red-400/70 truncate" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span>
+            </div>
+        `;
+        return;
+    }
+
+    // 3. 优先展示真实积分胶囊（刷新成功或已有积分缓存）
     const buckets = state.quotaCache ? state.quotaCache[acc.id] : undefined;
-    const loadState = state.quotaLoadingState ? state.quotaLoadingState[acc.id] : undefined;
     if (loadState === 'success' && buckets && buckets.length > 0) {
         const desc = (typeof buckets[0].modelId === 'string' && buckets[0].modelId)
             ? buckets[0].modelId
@@ -438,28 +473,12 @@ export function renderWorkBuddyAccountQuota(containerEl: HTMLElement, acc: any, 
         return;
     }
 
-    // 3. 国内邮箱未开通计量/无配额账号：只显示纯粹的“账号可用”
+    // 4. 国内邮箱未开通计量/无配额账号：只显示纯粹的“账号可用”
     if (isDomesticWorkBuddyAccount(acc)) {
         containerEl.innerHTML = `
             <div class="flex items-center gap-1.5 bg-emerald-500/10 dark:bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2.5 mt-1">
                 <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                 <span class="text-[10px] font-medium text-emerald-600 dark:text-emerald-400" data-i18n="workbuddyAccountAvailable">${isZH ? '账号可用' : (dict.workbuddyAccountAvailable || 'Account Available')}</span>
-            </div>
-        `;
-        return;
-    }
-
-    // 4. 刷新失败红泡
-    const errMsg = state.nvidiaQuotaError ? state.nvidiaQuotaError[acc.id] : '';
-    if (loadState === 'error' || errMsg) {
-        const reason = errMsg || (isZH ? '未知错误' : 'Unknown error');
-        containerEl.innerHTML = `
-            <div class="flex flex-col gap-1 bg-red-500/10 dark:bg-red-500/5 border border-red-500/20 rounded-lg p-2.5 mt-1">
-                <div class="flex items-center gap-1.5">
-                    <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                    <span class="text-[10px] font-bold text-red-600 dark:text-red-400" data-i18n="workbuddyQuotaFail">${isZH ? '配额请求失败' : (dict.workbuddyQuotaFail || 'Quota Probe Failed')}</span>
-                </div>
-                <span class="text-[9px] text-red-500/80 dark:text-red-400/70 truncate" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span>
             </div>
         `;
         return;

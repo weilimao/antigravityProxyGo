@@ -23,6 +23,7 @@ type BenchmarkResult struct {
 	PrevTTFTMs  int64  `json:"prevTtftMs"`  // 上一轮首字延迟(供趋势对比)
 	PrevTotalMs int64  `json:"prevTotalMs"` // 上一轮总耗时
 	Status      string `json:"status"`      // ok | warning | error
+	StatusCode  int    `json:"statusCode"`  // HTTP 状态码(如 200, 404, 429, 500, 504; 0=未采集)
 	Error       string `json:"error"`       // 失败原因(空=成功)
 	TestedAt    string `json:"testedAt"`     // 本轮测试时刻(RFC3339)
 }
@@ -43,17 +44,18 @@ func UpsertBenchmarkResult(r *BenchmarkResult) error {
 	var oldTTFT, oldTotal int64
 	_ = GlobalDB.QueryRow("SELECT ttft_ms, total_ms FROM benchmark_results WHERE model = ?", r.Model).Scan(&oldTTFT, &oldTotal)
 
-	query := `INSERT INTO benchmark_results (model, ttft_ms, total_ms, prev_ttft_ms, prev_total_ms, status, error, tested_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	query := `INSERT INTO benchmark_results (model, ttft_ms, total_ms, prev_ttft_ms, prev_total_ms, status, status_code, error, tested_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(model) DO UPDATE SET
 			ttft_ms = excluded.ttft_ms,
 			total_ms = excluded.total_ms,
 			prev_ttft_ms = excluded.prev_ttft_ms,
 			prev_total_ms = excluded.prev_total_ms,
 			status = excluded.status,
+			status_code = excluded.status_code,
 			error = excluded.error,
 			tested_at = excluded.tested_at;`
-	_, err := GlobalDB.Exec(query, r.Model, r.TTFTMs, r.TotalMs, oldTTFT, oldTotal, r.Status, r.Error, r.TestedAt)
+	_, err := GlobalDB.Exec(query, r.Model, r.TTFTMs, r.TotalMs, oldTTFT, oldTotal, r.Status, r.StatusCode, r.Error, r.TestedAt)
 	return err
 }
 
@@ -66,7 +68,7 @@ func ListBenchmarkResults() ([]BenchmarkResult, error) {
 		return nil, fmt.Errorf("database not initialized")
 	}
 
-	rows, err := GlobalDB.Query("SELECT model, ttft_ms, total_ms, prev_ttft_ms, prev_total_ms, status, error, tested_at FROM benchmark_results ORDER BY model")
+	rows, err := GlobalDB.Query("SELECT model, ttft_ms, total_ms, prev_ttft_ms, prev_total_ms, status, status_code, error, tested_at FROM benchmark_results ORDER BY model")
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +78,7 @@ func ListBenchmarkResults() ([]BenchmarkResult, error) {
 	for rows.Next() {
 		var r BenchmarkResult
 		var testedAt sql.NullString
-		if err := rows.Scan(&r.Model, &r.TTFTMs, &r.TotalMs, &r.PrevTTFTMs, &r.PrevTotalMs, &r.Status, &r.Error, &testedAt); err != nil {
+		if err := rows.Scan(&r.Model, &r.TTFTMs, &r.TotalMs, &r.PrevTTFTMs, &r.PrevTotalMs, &r.Status, &r.StatusCode, &r.Error, &testedAt); err != nil {
 			return nil, err
 		}
 		r.TestedAt = testedAt.String

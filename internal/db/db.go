@@ -174,6 +174,7 @@ func runMigrations(db *sql.DB, dataDir string) error {
 			prev_ttft_ms INTEGER NOT NULL DEFAULT 0,
 			prev_total_ms INTEGER NOT NULL DEFAULT 0,
 			status TEXT NOT NULL DEFAULT 'ok',
+			status_code INTEGER NOT NULL DEFAULT 0,
 			error TEXT NOT NULL DEFAULT '',
 			tested_at TEXT NOT NULL DEFAULT ''
 		);`,
@@ -211,6 +212,8 @@ func runMigrations(db *sql.DB, dataDir string) error {
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN request_headers TEXT NOT NULL DEFAULT '';`)
 	// cache_status: 缓存命中标记(HIT/MISS/NONE), 幂等 ALTER, 旧数据默认空串(前端不渲染即视为未知)。
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN cache_status TEXT NOT NULL DEFAULT '';`)
+	// benchmark_results: 存量数据库平滑升级, 补充 status_code 字段
+	_, _ = db.Exec(`ALTER TABLE benchmark_results ADD COLUMN status_code INTEGER NOT NULL DEFAULT 0;`)
 
 	// --- Versioned Migrations ---
 	migrationVersion := getMigrationVersion(db)

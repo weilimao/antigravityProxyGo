@@ -59,7 +59,7 @@
                      User-Agent 身份头(如 antigravity/hub/<ver> (aidev_client; os_type=windows; arch=amd64))。留空回退默认 2.3.1。 -->
                 <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20" id="antigravityCliVersionWrap">
                     <span class="text-[12px] font-medium text-on-surface dark:text-white whitespace-nowrap" data-i18n="antigravityCliVersionLabel">Hub版本</span>
-                    <input type="text" id="antigravityCliVersion" placeholder="2.3.1" class="w-20 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="antigravityCliVersionTip" title="Antigravity Hub 版本号(发往 Google 上游的 User-Agent 伪装版本);默认 2.3.1,留空回退默认" />
+                    <input type="text" id="antigravityCliVersion" placeholder="2.25.0" class="w-20 px-1.5 py-0.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary text-center" data-i18n-title="antigravityCliVersionTip" title="Antigravity Hub 版本号(发往 Google 上游的 User-Agent 伪装版本);默认 2.25.0,留空回退默认" />
                 </div>
                 <!-- Antigravity 池 Cloudflare Worker 出口代理(对仗 grokWorkerProxyEnabled):
                      启用后 finalRequester 把 https://{google host}/v1beta/... 的 scheme/host 改写为 Worker 地址,
@@ -71,6 +71,13 @@
                         <span class="relative inline-block w-7 h-3.5 bg-slate-300 dark:bg-white/10 rounded-full peer-checked:bg-primary transition-colors peer-checked:after:translate-x-3 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-3 after:h-3 after:bg-white dark:after:bg-slate-200 after:rounded-full after:shadow-sm after:transition-transform"></span>
                     </label>
                     <input type="text" id="antigravityWorkerProxyUrl" class="w-40 px-2 py-0.5 bg-transparent border border-outline-variant/40 rounded text-[12px] text-on-surface dark:text-white focus:outline-none focus:border-primary font-mono" placeholder="https://your-worker.workers.dev" data-i18n-placeholder="antigravityWorkerProxyUrlPlaceholder" data-i18n-title="antigravityWorkerProxyTip" title="启用后,Antigravity 号池 Google 上游请求将经由此 Cloudflare Worker 出口转发;Worker 需按 X-Target-Upstream 头回源。" />
+                </div>
+                <!-- 报错重试与切号配置按钮 -->
+                <div class="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/20" id="poolErrorRetryBtnWrap">
+                    <button type="button" id="btnOpenPoolErrorRetry" onclick="window.openPoolErrorRetryModal && window.openPoolErrorRetryModal()" class="flex items-center gap-1 px-2.5 py-1 text-[12px] font-medium text-outline dark:text-outline-variant bg-slate-100 dark:bg-white/5 hover:border-primary/40 hover:bg-primary/10 hover:text-primary rounded-lg border border-outline-variant/30 transition-all select-none cursor-pointer whitespace-nowrap" data-i18n-title="poolErrorRetryBtnTip" title="自由配置遇到报错状态码时直接重试或切换下一个号">
+                        <span class="material-symbols-outlined text-[15px]">tune</span>
+                        <span data-i18n="poolErrorRetryBtnLabel">重试与切号</span>
+                    </button>
                 </div>
             </div>
 

@@ -232,3 +232,100 @@ func TestRetrieveUserQuota_RealUpstreamLiveTest(t *testing.T) {
 }
 
 
+
+func TestParseUserQuotaSummary_Gemini4Argon(t *testing.T) {
+	rawJSON := []byte(`{
+  "groups": [
+    {
+      "buckets": [
+        {
+          "bucketId": "gemini-weekly",
+          "displayName": "Weekly Limit Remaining",
+          "window": "weekly",
+          "resetTime": "2026-10-24T05:23:38Z",
+          "description": "You have used some of your weekly limit, it will fully refresh in 1 day, 4 hours.",
+          "remainingFraction": 0.828226
+        },
+        {
+          "bucketId": "gemini-5h",
+          "displayName": "Five Hour Limit Remaining",
+          "window": "5h",
+          "resetTime": "2026-10-23T06:12:22Z",
+          "remainingFraction": 1
+        }
+      ],
+      "displayName": "Gemini Models",
+      "description": "Models within this group: Gemini Flash, Gemini Pro"
+    },
+    {
+      "buckets": [
+        {
+          "bucketId": "3p-weekly",
+          "displayName": "Weekly Limit Remaining",
+          "window": "weekly",
+          "resetTime": "2026-10-26T14:52:32Z",
+          "description": "You have used some of your weekly limit, it will fully refresh in 3 days, 13 hours.",
+          "remainingFraction": 0.4933516
+        },
+        {
+          "bucketId": "3p-5h",
+          "displayName": "Five Hour Limit Remaining",
+          "window": "5h",
+          "resetTime": "2026-10-23T06:12:22Z",
+          "remainingFraction": 1
+        }
+      ],
+      "displayName": "Claude and GPT models",
+      "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS"
+    },
+    {
+      "buckets": [
+        {
+          "bucketId": "gemini-argon-wtu-weekly",
+          "displayName": "Gemini 4 Argon Weekly Limit",
+          "window": "weekly",
+          "resetTime": "2026-10-30T01:12:22Z",
+          "remainingFraction": 1
+        }
+      ],
+      "displayName": "Gemini 4 Argon",
+      "description": "For paid Pro plans, Argon quota is separate. Higher Argon quota (included as part of the larger Gemini quota bucket) is available on Ultra plans."
+    }
+  ]
+}`)
+
+	buckets := ParseUserQuotaSummary(rawJSON)
+	if len(buckets) != 5 {
+		t.Fatalf("expected 5 buckets parsed from 3 groups, got %d", len(buckets))
+	}
+
+	// 验证各分组归属与精确百分比
+	if buckets[0].Group != "Gemini Models" || buckets[0].RemainPercent != 83 {
+		t.Fatalf("unexpected bucket 0: %+v", buckets[0])
+	}
+	if buckets[1].Group != "Gemini Models" || buckets[1].RemainPercent != 100 {
+		t.Fatalf("unexpected bucket 1: %+v", buckets[1])
+	}
+	if buckets[2].Group != "Claude and GPT models" || buckets[2].RemainPercent != 49 {
+		t.Fatalf("unexpected bucket 2: %+v", buckets[2])
+	}
+	if buckets[3].Group != "Claude and GPT models" || buckets[3].RemainPercent != 100 {
+		t.Fatalf("unexpected bucket 3: %+v", buckets[3])
+	}
+	if buckets[4].Group != "Gemini 4 Argon" || buckets[4].ModelID != "Gemini 4 Argon Weekly Limit" || buckets[4].RemainPercent != 100 {
+		t.Fatalf("unexpected bucket 4: %+v", buckets[4])
+	}
+
+	if !HasGeminiGroup(buckets) {
+		t.Fatalf("expected HasGeminiGroup to return true")
+	}
+
+	// 验证 Merge 保持顺序: Gemini -> Claude -> Argon
+	merged := MergeQuotaBuckets(buckets, nil)
+	if len(merged) != 5 {
+		t.Fatalf("expected 5 merged buckets, got %d", len(merged))
+	}
+	if merged[0].Group != "Gemini Models" || merged[2].Group != "Claude and GPT models" || merged[4].Group != "Gemini 4 Argon" {
+		t.Fatalf("unexpected merged order: 0=%s, 2=%s, 4=%s", merged[0].Group, merged[2].Group, merged[4].Group)
+	}
+}

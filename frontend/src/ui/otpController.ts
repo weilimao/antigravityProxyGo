@@ -1,4 +1,5 @@
 import { ipcRenderer } from '../shared/ipc';
+import { saveText } from '../shared/fileService';
 import state from './dashboardState';
 import i18n from '../shared/i18n';
 import { 
@@ -24,6 +25,11 @@ export function initOtpEvents() {
     const btnAddNewOtp = document.getElementById('btnAddNewOtp');
     if (btnAddNewOtp) {
         btnAddNewOtp.addEventListener('click', handleAddNewOtp);
+    }
+
+    const btnExportOtp = document.getElementById('btnExportOtp');
+    if (btnExportOtp) {
+        btnExportOtp.addEventListener('click', handleExportOtp);
     }
 
     // Reset pagination/search state on initialization
@@ -234,6 +240,20 @@ async function handleAddNewOtp() {
         ipcRenderer.send('accounts:get');
         refreshOtpList();
     }
+}
+
+async function handleExportOtp() {
+    const dict = i18n[state.currentLanguage] || i18n.zh;
+    if (!lastOtpList || lastOtpList.length === 0) {
+        alert(dict.otp_noAccountsToExport || '暂无 2FA 账号可导出');
+        return;
+    }
+
+    await saveText(
+        { channel: 'totp:export', args: [] },
+        dict.otp_exportSuccess || '2FA 账号已成功导出！',
+        dict.otp_exportFailed || '导出失败: ',
+    );
 }
 
 async function refreshInstantOtp() {

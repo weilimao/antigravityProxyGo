@@ -13,6 +13,8 @@ import * as chartRenderer from './chartRenderer';
 import * as usageDetails from './usageDetails';
 import * as pricingController from './pricingController';
 import * as hitRateFilter from './hitRateFilter';
+import { renderModelsTable, initModelRangeFilter } from './dashboardModelStats';
+export { renderModelsTable, initModelRangeFilter };
 import { refreshDataDir } from './migrationController';
 import { initAppVersion } from './updaterController';
 import { startOtpTimer, stopOtpTimer } from './otpController';
@@ -78,7 +80,6 @@ function scheduleInitialTrendsRecovery(): void {
 }
 
 // Tables
-let modelsTableBody: HTMLElement | null;
 let logsTableBody: HTMLElement | null;
 let logSearchInput: HTMLInputElement | null;
 let btnClearLogSearch: HTMLButtonElement | null;
@@ -577,7 +578,6 @@ export function initDashboardEvents() {
     barSuccess = document.getElementById('barSuccess');
     barErrors = document.getElementById('barErrors');
     valSuccessRate = document.getElementById('valSuccessRate');
-    modelsTableBody = document.querySelector('#modelsTable tbody');
     logsTableBody = document.querySelector('#logsTable tbody');
 
     // 缓存命中率卡片号池筛选下拉: 绑定 change 监听(只需绑一次) + 首次渲染选项。
@@ -806,115 +806,6 @@ export function initDashboardEvents() {
 
     // 监听器注册完毕后立即主动拉取一次最新状态与统计数据，杜绝首屏时序丢失
     ipcRenderer.send('get-state');
-}
-
-export function renderModelsTable(stats: any) {
-    if (!modelsTableBody) {
-        modelsTableBody = document.querySelector('#modelsTable tbody');
-    }
-    if (!modelsTableBody) return;
-
-    modelsTableBody.innerHTML = '';
-    const dict = i18n[state.currentLanguage] || {};
-    const modelEntries = Object.entries(stats.models || {}).sort((a: any, b: any) => {
-        const totalA = (a[1].inTokens || 0) + (a[1].outTokens || 0);
-        const totalB = (b[1].inTokens || 0) + (b[1].outTokens || 0);
-        if (totalB !== totalA) return totalB - totalA;
-        return (b[1].reqs || 0) - (a[1].reqs || 0);
-    });
-
-    if (modelEntries.length === 0) {
-        modelsTableBody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-outline dark:text-outline-variant italic">${dict.noData || '暂无数据'}</td></tr>`;
-    } else {
-        modelEntries.forEach(([model, data]: [string, any]) => {
-            if (model === 'unknown' && data.reqs === 0) return;
-            const tr = document.createElement('tr');
-            tr.className = 'hover:bg-slate-50 dark:hover:bg-white/5 transition-colors';
-
-            const modelHitRate = data.inTokens > 0 ? (data.cachedTokens / data.inTokens * 100) : 0;
-            const avgCost = data.reqs > 0 ? (data.cost / data.reqs) : 0;
-            const totalTokens = (data.inTokens || 0) + (data.outTokens || 0);
-
-            tr.innerHTML = `
-                <td class="p-3 font-sans font-semibold text-on-surface dark:text-white">${model}</td>
-                <td class="p-3 text-right">${data.reqs}</td>
-                <td class="p-3 text-right font-semibold" title="${totalTokens.toLocaleString()}">${chartRenderer.formatTokenCount(totalTokens)}</td>
-                <td class="p-3 text-right text-outline dark:text-outline-variant" title="${(data.inTokens || 0).toLocaleString()}">${chartRenderer.formatTokenCount(data.inTokens || 0)}</td>
-                <td class="p-3 text-right text-on-surface dark:text-white" title="${(data.outTokens || 0).toLocaleString()}">${chartRenderer.formatTokenCount(data.outTokens || 0)}</td>
-                <td class="p-3 text-right">${modelHitRate.toFixed(1)}%</td>
-                <td class="p-3 text-right text-primary dark:text-primary-fixed-dim font-bold">$${data.cost.toFixed(4)}</td>
-                <td class="p-3 text-right text-outline dark:text-outline-variant">$${avgCost.toFixed(5)}</td>
-            `;
-            modelsTableBody!.appendChild(tr);
-        });
-    }
-}
-
-// initModelRangeFilter 绑定模型统计表的时间范围筛选按钮(全部/今日/近三日/近七天)。
-// 「全部」范围直连全局全量累积 statsData.models(由 statsTracker/stats.json 持久化, 涵盖所有历史模型与请求量),
-// 同时置空 filteredModelStats, 使后续实时请求能够通过 stats-updated 事件秒级驱动表格递增更新。
-// 「今日」/「近三日」/「近七天」范围走 stats:model-range 后端 SQLite request_logs 时间窗口切片聚合,
-// 聚合结果存入 filteredModelStats 并冻结视图, 保证窗口切片期间不受全量实时心跳干扰。
-export function initModelRangeFilter() {
-    const sel = document.getElementById('modelRangeSelector');
-    if (!sel) return;
-    const buttons = sel.querySelectorAll('button[data-mrange]');
-    const activeClass = 'px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold';
-    const inactiveClass = 'px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium';
-
-    const applyRange = async (range: string) => {
-        state.currentModelRange = range as any;
-        buttons.forEach((b: any) => {
-            b.className = b.getAttribute('data-mrange') === range ? activeClass : inactiveClass;
-        });
-
-        // 选定「全部」范围：
-        // 直接使用全局全量 statsData(含全部 77+ 模型), 置空 filteredModelStats 允许实时刷新。
-        if (range === 'all') {
-            state.filteredModelStats = null;
-            if (state.statsData) {
-                renderModelsTable(state.statsData);
-                return;
-            }
-        }
-
-        // 选定时间切片范围(today/3d/7d)或全量未就绪时的兜底拉取:
-        try {
-            const resRaw = await ipcRenderer.invoke('stats:model-range', range);
-            // 竞态守卫: 拉取期间用户又切换了范围, 丢弃过期响应, 避免旧范围数据覆盖新选择。
-            if (state.currentModelRange !== range) return;
-            const res = typeof resRaw === 'string' ? JSON.parse(resRaw) : resRaw;
-            const stats = (res && res.stats) ? res.stats : res;
-            if (range === 'all') {
-                state.filteredModelStats = null;
-                renderModelsTable(stats || { models: {} });
-            } else {
-                state.filteredModelStats = stats || { models: {} };
-                renderModelsTable(state.filteredModelStats);
-            }
-        } catch (e) {
-            console.error('[Dashboard] model range fetch failed', e);
-            if (state.currentModelRange !== range) return;
-            state.filteredModelStats = null;
-            if (state.statsData) renderModelsTable(state.statsData);
-        }
-    };
-
-    buttons.forEach(btn => {
-        btn.addEventListener('click', () => applyRange(btn.getAttribute('data-mrange') || 'all'));
-    });
-
-    // 首屏初始化：如果当前范围是 'all' 且已有实时 statsData，直接渲染全量；否则拉取一次
-    if (state.currentModelRange === 'all') {
-        state.filteredModelStats = null;
-        if (state.statsData) {
-            renderModelsTable(state.statsData);
-        } else {
-            applyRange('all');
-        }
-    } else if (state.filteredModelStats === null) {
-        applyRange(state.currentModelRange || 'all');
-    }
 }
 
 export function renderActiveView() {

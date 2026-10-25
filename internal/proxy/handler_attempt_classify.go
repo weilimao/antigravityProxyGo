@@ -86,6 +86,21 @@ func (sc *serveContext) classifyResponse(attemptIndex int, ro *routeOutcome, fo 
 		return 200, headersCopy, mockBytes, false, nil
 	}
 
+	// 优先检查用户自定义的号池报错重试与切号策略
+	if sc.h.SettingsMgr != nil {
+		poolRule := sc.h.SettingsMgr.GetPoolErrorRetry()
+		if poolRule.Enabled {
+			act := poolRule.MatchAction(status)
+			if act == "switch" {
+				sc.h.logFn(fmt.Sprintf("%s ⚠️ 上游 HTTP %d 命中号池自定义切号规则 (SWITCH_NEXT_ACCOUNT)", sc.logPrefix, status))
+				return status, headers, body, false, fmt.Errorf("CUSTOM_SWITCH_ACCOUNT:%d", status)
+			} else if act == "retry" {
+				sc.h.logFn(fmt.Sprintf("%s ⚠️ 上游 HTTP %d 命中号池自定义重试规则 (RETRY_SAME_ACCOUNT)", sc.logPrefix, status))
+				return status, headers, body, false, fmt.Errorf("CUSTOM_RETRY_ACCOUNT:%d", status)
+			}
+		}
+	}
+
 	// 429 Quota Error
 	if (status == 429 || status == 403 || status == 402) && !strings.Contains(ro.targetPath, "retrieveUserQuota") {
 		bodyStr := string(body)

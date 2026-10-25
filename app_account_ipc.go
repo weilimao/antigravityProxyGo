@@ -116,6 +116,7 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 						payload.Prompt,
 						a.quotaSvc.GetStoredProject,
 						a.authMgr.RefreshToken,
+						a.accountMgr.GetAntigravityUserAgent,
 					)
 					cancel()
 

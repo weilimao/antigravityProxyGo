@@ -175,6 +175,7 @@
     <BenchmarkConfigModal />
     <WorkBuddyAccountModal />
     <OpenCodeAccountModal />
+    <PoolErrorRetryModal />
   </div>
 </template>
 
@@ -212,6 +213,8 @@ import OtherCooldownConfigModal from './components/modals/OtherCooldownConfigMod
 import BenchmarkConfigModal from './components/modals/BenchmarkConfigModal.vue';
 import WorkBuddyAccountModal from './components/modals/WorkBuddyAccountModal.vue';
 import OpenCodeAccountModal from './components/modals/OpenCodeAccountModal.vue';
+import PoolErrorRetryModal from './components/modals/PoolErrorRetryModal.vue';
+import { initPoolErrorRetryEvents } from './ui/poolErrorRetryModal';
 import { initRemoteEvents } from './ui/remoteController';
 import { setLanguage, switchView, initDashboardEvents, initModelRangeFilter } from './ui/dashboard';
 import { ipcRenderer } from './shared/ipc';
@@ -399,6 +402,7 @@ onMounted(() => {
     initAiPricingEvents();
     initAutotriggerHistoryEvents();
     initAccountsGlobalEvents();
+    initPoolErrorRetryEvents();
     
     // Page-specific inits are now called from each page's onMounted hook
     // (see Accounts.vue, Settings.vue, Packets.vue, OTP.vue, UsageDetails.vue)

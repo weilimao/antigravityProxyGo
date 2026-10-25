@@ -6,6 +6,10 @@
 <p class="text-xs text-outline dark:text-outline-variant" data-i18n="otpDesc">为账号配置谷歌两步验证 (2FA/TOTP) 密钥，实时生成并自动刷新动态验证码</p>
 </div>
 <div class="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+                <button class="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-[#1a1f30] border border-outline-variant/50 rounded-md text-[13px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors shadow-sm cursor-pointer whitespace-nowrap flex-shrink-0" id="btnExportOtp">
+                    <span class="material-symbols-outlined text-[16px]">download</span>
+                    <span data-i18n="btnExport">导出</span>
+                </button>
 <button class="flex items-center gap-1.5 px-4 py-1.5 bg-primary text-white hover:bg-primary/90 rounded-md text-[13px] font-bold transition-colors shadow-sm cursor-pointer whitespace-nowrap flex-shrink-0" id="btnAddNewOtp">
 <span class="material-symbols-outlined text-[16px]">add_circle</span>
                     <span data-i18n="btnAddOtpAccount">新增 2FA 账号</span>

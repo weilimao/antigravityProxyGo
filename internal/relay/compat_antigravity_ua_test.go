@@ -46,7 +46,7 @@ func TestAPICompatHandler_AntigravityUserAgent_Default(t *testing.T) {
 	if err != nil {
 		t.Fatalf("finalRequester failed: %v", err)
 	}
-	expectedDefault := "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)"
+	expectedDefault := account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion)
 	if capturedUA != expectedDefault {
 		t.Errorf("captured UA = %q, want default %q", capturedUA, expectedDefault)
 	}

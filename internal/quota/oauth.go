@@ -114,11 +114,36 @@ func (am *AuthManager) RefreshToken(acc *account.Account) (string, error) {
 
 	clientID, clientSecret := getCredentials(acc.Provider)
 
-	// WorkBuddy 账号使用独立 Keycloak 授权体系，不支持 Google OAuth 刷新流，防御性拦截
+	// WorkBuddy 账号使用官方 /v2/plugin/auth/token/refresh 端点 + X-Refresh-Token 换取新 Token
 	if acc.Provider == "workbuddy" {
-		err := errors.New("workbuddy does not support Google OAuth refresh flow")
-		promise.err = err
-		return "", err
+		res, refErr := account.RefreshWorkBuddyToken(acc)
+		if refErr != nil {
+			promise.err = refErr
+			// 判定是否永久性失效（如 invalid_grant、401、offline user session not found 等）
+			errLower := strings.ToLower(refErr.Error())
+			isPermanent := strings.Contains(errLower, "invalid_grant") ||
+				strings.Contains(errLower, "401") ||
+				strings.Contains(errLower, "offline user session not found")
+			if isPermanent && am.accountMgr != nil {
+				fmt.Printf("[AuthManager] WorkBuddy permanent token refresh failure for %s, marking auth expired and disabling account.\n", acc.Email)
+				am.accountMgr.MarkAccountAuthExpired(acc.ID, true)
+				am.accountMgr.ClearAccountCooldown(acc.ID)
+				am.accountMgr.UpdateAccountEnabled(acc.ID, false)
+			}
+			return "", refErr
+		}
+		// 刷新成功，自愈恢复 AuthExpired
+		if am.accountMgr != nil {
+			am.accountMgr.MarkAccountAuthExpired(acc.ID, false)
+		}
+		promise.token = res.AccessToken
+		if am.accountMgr != nil {
+			am.accountMgr.UpdateAccessToken(acc.ID, promise.token)
+			if strings.TrimSpace(res.RefreshToken) != "" && strings.TrimSpace(res.RefreshToken) != strings.TrimSpace(acc.RefreshToken) {
+				am.accountMgr.UpdateAccountRefreshToken(acc.ID, res.RefreshToken)
+			}
+		}
+		return promise.token, nil
 	}
 
 	// xAI (Grok) OAuth 刷新:走 xai 设备码流 RefreshTokens(无 client_secret),

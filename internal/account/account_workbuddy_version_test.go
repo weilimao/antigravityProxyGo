@@ -1,7 +1,11 @@
 package account
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestManager_WorkBuddyCliVersion_Default(t *testing.T) {
@@ -143,5 +147,77 @@ func TestBuildWorkBuddyHeaders_CustomAndDefaultVersions(t *testing.T) {
 	hIntlCustom := BuildWorkBuddyHeaders(accIntl, "5.8.1")
 	if hIntlCustom["X-IDE-Version"] != "5.8.1" || hIntlCustom["User-Agent"] != "WorkBuddy/5.8.1" {
 		t.Errorf("international custom headers mismatch: X-IDE-Version=%s, UA=%s", hIntlCustom["X-IDE-Version"], hIntlCustom["User-Agent"])
+	}
+}
+
+func TestParseUpstreamVersion(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"5.8.3.41334564", "5.8.3"},
+		{"v5.8.3.41334564", "5.8.3"},
+		{"5.8.3", "5.8.3"},
+		{"v5.8.3", "5.8.3"},
+		{"5.9.0-rc1.123", "5.9.0-rc1"},
+		{"", ""},
+		{"   ", ""},
+	}
+
+	for _, c := range cases {
+		got := parseUpstreamVersion(c.input)
+		if got != c.want {
+			t.Errorf("parseUpstreamVersion(%q) = %q, want %q", c.input, got, c.want)
+		}
+	}
+}
+
+func TestFetchVersionFromUpstream_Mock(t *testing.T) {
+	// 保存原配置并在测试结束时还原 (Teardown 环境恢复)
+	origURL := workbuddyUpstreamUpdateURL
+	origClient := workbuddyUpstreamHTTPClient
+	defer func() {
+		workbuddyUpstreamUpdateURL = origURL
+		workbuddyUpstreamHTTPClient = origClient
+	}()
+
+	workbuddyUpstreamHTTPClient = &http.Client{Timeout: 1 * time.Second}
+
+	// 1. 模拟正常 200 返回四位版本
+	serverOK := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"productVersion":"5.8.4.12345678","version":"5.8.4.12345678"}`)
+	}))
+	defer serverOK.Close()
+
+	workbuddyUpstreamUpdateURL = serverOK.URL
+	gotOK := fetchVersionFromUpstream()
+	if gotOK != "5.8.4" {
+		t.Errorf("fetchVersionFromUpstream (OK) = %q, want 5.8.4", gotOK)
+	}
+
+	// 2. 模拟 204 No Content
+	serverNoContent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer serverNoContent.Close()
+
+	workbuddyUpstreamUpdateURL = serverNoContent.URL
+	gotNoContent := fetchVersionFromUpstream()
+	if gotNoContent != "" {
+		t.Errorf("fetchVersionFromUpstream (204) = %q, want empty", gotNoContent)
+	}
+
+	// 3. 模拟 500 异常
+	serverErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer serverErr.Close()
+
+	workbuddyUpstreamUpdateURL = serverErr.URL
+	gotErr := fetchVersionFromUpstream()
+	if gotErr != "" {
+		t.Errorf("fetchVersionFromUpstream (500) = %q, want empty", gotErr)
 	}
 }

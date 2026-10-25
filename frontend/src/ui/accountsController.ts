@@ -22,6 +22,11 @@ import { initNvidiaAccountModalEvents, writeNvidiaModalError, openNvidiaAccountM
 import { initNvidiaBatchAssignIPModal } from './nvidiaBatchAssignIPModal';
 import { initOtherAccountModalEvents, writeOtherModalError, openOtherAccountModal } from './otherAccountModal';
 import { initOtherCooldownModalEvents } from './otherCooldownModal';
+import {
+    updatePoolErrorRetryFromBackend,
+    renderPoolErrorRetryButtonBadge,
+    initPoolErrorRetryEvents
+} from './poolErrorRetryModal';
 import { initGrokAccountModalEvents, writeGrokModalError, openGrokAccountModal } from './grokAccountModal';
 import { initGrokThawModalEvents } from './grokThawModal';
 import { initGrokCheckAuthEvents } from './grokCheckAuth';
@@ -148,7 +153,7 @@ export function updateViewTabUI() {
             }
             if (antigravityCliVersionWrap) antigravityCliVersionWrap.classList.remove('hidden');
             if (antigravityCliVersion && state.lastBackendData) {
-                antigravityCliVersion.value = state.lastBackendData.antigravityCliVersion || '2.3.1';
+                antigravityCliVersion.value = state.lastBackendData.antigravityCliVersion || '2.25.0';
             }
             // Antigravity Tab:Worker 代理出口 toggle+URL input 随容器一起显隐,回填自 settings 层。
             if (antigravityWorkerProxyWrap) antigravityWorkerProxyWrap.classList.remove('hidden');
@@ -369,6 +374,9 @@ export function initAccountsEvents() {
     // Other 组级自定义冷却 Modal:句柄赋值 + 事件绑定(已抽离 otherCooldownModal.ts,
     // 工具栏入口按钮 btnOtherCooldownConfig 在 Other 通道选中具体组时显示)。
     initOtherCooldownModalEvents();
+
+    // 号池报错重试与切号 Modal: 句柄赋值 + 事件绑定(抽离自 poolErrorRetryModal.ts)
+    initPoolErrorRetryEvents();
 
     // NVIDIA 账号 Modal：句柄赋值 + 事件绑定（已抽离 nvidiaAccountModal.ts）
     initNvidiaAccountModalEvents();
@@ -719,7 +727,7 @@ export function initAccountsEvents() {
     if (antigravityCliVersion) {
         let acvDebounce: ReturnType<typeof setTimeout> | null = null;
         antigravityCliVersion.addEventListener('change', (e: any) => {
-            const v = (e.target.value || '').trim() || '2.3.1';
+            const v = (e.target.value || '').trim() || '2.25.0';
             e.target.value = v;
             if (acvDebounce) clearTimeout(acvDebounce);
             acvDebounce = setTimeout(() => {
@@ -860,6 +868,7 @@ export function initAccountsGlobalEvents() {
             // otherPoolMode 等字段,展开 {...old, ...data} 在缺字段时保留上一次完整值,避免 Other
             // 分组子 Tab 被冲成空数组而偶发隐藏。
             state.lastBackendData = { ...(state.lastBackendData || {}), ...data };
+            updatePoolErrorRetryFromBackend(data);
             if (data && typeof data.activeChannel !== 'undefined') {
                 state.currentActiveChannel = data.activeChannel;
             }

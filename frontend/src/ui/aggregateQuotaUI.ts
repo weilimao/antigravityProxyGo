@@ -174,7 +174,9 @@ export function updateAggregateQuotaUI() {
             panel.classList.remove('flex');
         } else {
             const childCount = grid.children.length;
-            if (childCount === 2) {
+            if (childCount === 5) {
+        grid.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3';
+    } else if (childCount === 2) {
                 grid.className = 'grid grid-cols-1 sm:grid-cols-2 gap-4';
             } else if (childCount === 1) {
                 grid.className = 'grid grid-cols-1 gap-4';
@@ -200,13 +202,23 @@ export function updateAggregateQuotaUI() {
         gemini_weekly: { sum: 0, count: 0 },
         gemini_5hour: { sum: 0, count: 0 },
         claude_weekly: { sum: 0, count: 0 },
-        claude_5hour: { sum: 0, count: 0 }
+        claude_5hour: { sum: 0, count: 0 },
+        argon_weekly: { sum: 0, count: 0 }
     };
 
     const enabledAccounts = state.currentAccountsList.filter(a => {
         const accountChannel = a.provider;
         return accountChannel === state.currentActiveChannel && a.enabled !== false;
     });
+
+    const hasArgonQuota = enabledAccounts.some(acc => {
+        const buckets = state.quotaCache[acc.id];
+        return buckets && buckets.some((b: any) => (b.group || '').toLowerCase().includes('argon'));
+    });
+
+    if (hasArgonQuota) {
+        categories.push({ group: 'Gemini 4 Argon', modelId: 'Weekly Limit', label: 'Argon Weekly', key: 'argon_weekly' });
+    }
 
     enabledAccounts.forEach(acc => {
         const buckets = state.quotaCache[acc.id];
@@ -254,6 +266,7 @@ export function updateAggregateQuotaUI() {
             else if (cat.key === 'gemini_5hour') displayLabel = 'Gemini 5小时限额';
             else if (cat.key === 'claude_weekly') displayLabel = 'Claude 周限额';
             else if (cat.key === 'claude_5hour') displayLabel = 'Claude 5小时限额';
+            else if (cat.key === 'argon_weekly') displayLabel = 'Argon 周限额';
         }
 
         if (data.count > 0) {
@@ -293,7 +306,9 @@ export function updateAggregateQuotaUI() {
     });
 
     const childCount = grid.children.length;
-    if (childCount === 2) {
+    if (childCount === 5) {
+        grid.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3';
+    } else if (childCount === 2) {
         grid.className = 'grid grid-cols-1 sm:grid-cols-2 gap-4';
     } else if (childCount === 1) {
         grid.className = 'grid grid-cols-1 gap-4';

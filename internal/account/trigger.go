@@ -32,8 +32,13 @@ type GeminiRequest struct {
 	GenerationConfig GenerationConfig `json:"generationConfig"`
 }
 
+var (
+	triggerAntigravityEndpoint = "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
+	triggerHTTPClient          *http.Client
+)
+
 // TriggerTestResponse sends a minimal generateContent request to Google/Vertex AI using the account credentials.
-func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, prompt string, getStoredProject func(string) string, refreshToken func(*Account) (string, error)) (string, error) {
+func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, prompt string, getStoredProject func(string) string, refreshToken func(*Account) (string, error), getUserAgent ...func() string) (string, error) {
 	// 1. Refresh access token
 	accessToken, err := refreshToken(acc)
 	if err != nil {
@@ -45,7 +50,10 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, pr
 		testPrompt = "ok"
 	}
 
-	client := netutil.NewClient(15 * time.Second)
+	client := triggerHTTPClient
+	if client == nil {
+		client = netutil.NewClient(15 * time.Second)
+	}
 
 	if acc.Provider == "project" {
 		// Vertex AI (Google Cloud Project)
@@ -92,17 +100,17 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, pr
 		return extractTextFromGeminiResponse(bodyBytes), nil
 	} else {
 		// Antigravity (Official Account)
-		targetUrl := "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
+		targetUrl := triggerAntigravityEndpoint
 		
 		actualProjectId := acc.ProjectID
-		if actualProjectId == "" {
+		if actualProjectId == "" && getStoredProject != nil {
 			actualProjectId = getStoredProject(acc.Email)
 		}
-		if actualProjectId == "" {
+		if actualProjectId == "" && getStoredProject != nil {
 			actualProjectId = getStoredProject("default")
 		}
 		if actualProjectId == "" {
-			actualProjectId = "expanded-palisade-stpfc"
+			actualProjectId = "favorable-synapse-ttvcb"
 		}
 
 		reqBody := GeminiRequest{
@@ -135,10 +143,22 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, pr
 			return "", err
 		}
 
+		ua := ""
+		for _, fn := range getUserAgent {
+			if fn != nil {
+				if v := strings.TrimSpace(fn()); v != "" {
+					ua = v
+					break
+				}
+			}
+		}
+		if ua == "" {
+			ua = FormatAntigravityUserAgent(DefaultAntigravityCliVersion)
+		}
+
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+accessToken)
-		req.Header.Set("User-Agent", "antigravity/1.21.9 darwin/arm64 google-api-nodejs-client/10.3.0")
-		req.Header.Set("X-Goog-Api-Client", "gl-node/22.21.1")
+		req.Header.Set("User-Agent", ua)
 
 		resp, err := client.Do(req)
 		if err != nil {

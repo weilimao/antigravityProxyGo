@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,8 +134,8 @@ func TestWorkBuddyQuota_Unauthorized(t *testing.T) {
 	if err == nil {
 		t.Fatal("期望 401 报错，实际返回 nil")
 	}
-	if !strings.Contains(err.Error(), "失效") {
-		t.Errorf("错误信息期望包含 '失效', 实际为 %v", err)
+	if !strings.Contains(err.Error(), "失效") || !strings.Contains(err.Error(), "HTTP 401") || !strings.Contains(err.Error(), "需要重新登录导入") {
+		t.Errorf("错误信息期望包含 '失效'、'HTTP 401' 与 '需要重新登录导入', 实际为 %v", err)
 	}
 }
 
@@ -208,22 +209,157 @@ func TestWorkBuddyQuota_Code20017Fallback(t *testing.T) {
 	}
 }
 
-// TestAuthManager_RefreshToken_WorkBuddyBlocked 验证 AuthManager.RefreshToken 拦截 WorkBuddy 账号，杜绝打向 Google OAuth 端点
-func TestAuthManager_RefreshToken_WorkBuddyBlocked(t *testing.T) {
+// TestAuthManager_RefreshToken_WorkBuddy 验证 AuthManager.RefreshToken 成功走 WorkBuddy 官方换取流
+func TestAuthManager_RefreshToken_WorkBuddy(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/plugin/auth/token/refresh" {
+			t.Errorf("非预期请求路径: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Header.Get("X-Refresh-Token") != "wb-valid-rf" {
+			t.Errorf("未正确携带 X-Refresh-Token: %s", r.Header.Get("X-Refresh-Token"))
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"code": 0,
+			"msg": "ok",
+			"data": {
+				"accessToken": "new-wb-access-tok",
+				"refreshToken": "new-wb-refresh-tok",
+				"expiresIn": 7200,
+				"refreshExpiresIn": 2592000
+			}
+		}`))
+	}))
+	defer ts.Close() // Teardown
+
 	am := NewAuthManager(nil)
 	acc := &account.Account{
-		ID:           "acc-wb-guard",
+		ID:           "acc-wb-refresh",
 		Provider:     "workbuddy",
-		Email:        "guard@workbuddy.ai",
-		RefreshToken: "wb-refresh-token",
+		BaseURL:      ts.URL,
+		Email:        "refresh@workbuddy.ai",
+		RefreshToken: "wb-valid-rf",
 	}
 
 	tok, err := am.RefreshToken(acc)
-	if err == nil {
-		t.Fatalf("期望 WorkBuddy 账号刷新被拦截抛错，实际返回 token: %s", tok)
+	if err != nil {
+		t.Fatalf("期望 WorkBuddy 账号刷新成功，实际抛错: %v", err)
 	}
-	if !strings.Contains(err.Error(), "workbuddy does not support Google OAuth refresh flow") {
-		t.Errorf("错误信息不符合预期: %v", err)
+	if tok != "new-wb-access-tok" {
+		t.Errorf("返回 token 期望 'new-wb-access-tok', 实际得到 '%s'", tok)
+	}
+	if acc.GetAccessToken() != "new-wb-access-tok" {
+		t.Errorf("账号内存 AccessToken 期望更新为 'new-wb-access-tok', 实际得到 '%s'", acc.GetAccessToken())
+	}
+	if acc.GetRefreshToken() != "new-wb-refresh-tok" {
+		t.Errorf("账号内存 RefreshToken 期望更新为 'new-wb-refresh-tok', 实际得到 '%s'", acc.GetRefreshToken())
+	}
+}
+
+// TestWorkBuddyQuota_AutoRefresh_Success 验证配额探测遇 401 时自动换取 Token 并自愈重试成功
+func TestWorkBuddyQuota_AutoRefresh_Success(t *testing.T) {
+	reqCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqCount++
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer token-refreshed" {
+			// 旧 token 返回 401
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"code": 401, "msg": "Unauthorized"}`))
+			return
+		}
+		// 新 token 成功返回配额
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"code": 0,
+			"msg": "ok",
+			"data": {
+				"Packages": [
+					{
+						"PackageCode": "pkg-wb",
+						"CycleTotalCapacity": "1000",
+						"CycleRemainCapacity": "850",
+						"CapacityUnit": "credit"
+					}
+				],
+				"IsPaidUser": true
+			}
+		}`))
+	}))
+	defer ts.Close() // Teardown
+
+	q := NewQuotaService()
+	acc := &account.Account{
+		ID:           "acc-wb-autorefresh",
+		Provider:     "workbuddy",
+		BaseURL:      ts.URL,
+		AccessToken:  "token-old",
+		RefreshToken: "rf-token-ok",
+		Email:        "autorefresh@workbuddy.ai",
+	}
+
+	refreshCalled := false
+	refreshCallback := func(a *account.Account) (string, error) {
+		refreshCalled = true
+		a.SetAccessToken("token-refreshed")
+		return "token-refreshed", nil
+	}
+
+	res, err := q.FetchQuota(acc, refreshCallback, nil)
+	if err != nil {
+		t.Fatalf("自动刷新后配额探测期望成功，实际报错: %v", err)
+	}
+	if !refreshCalled {
+		t.Errorf("期望触发 refreshCallback，实际未触发")
+	}
+	if reqCount != 2 {
+		t.Errorf("期望执行 2 次请求（首错+重试），实际为 %d", reqCount)
+	}
+	if res.Tier != "Pro" {
+		t.Errorf("Tier 期望 Pro, 实际得到 %s", res.Tier)
+	}
+	if res.Credits == nil || *res.Credits != 850 {
+		t.Errorf("Credits 期望 850, 实际得到 %v", res.Credits)
+	}
+}
+
+// TestWorkBuddyQuota_AutoRefresh_Failure 验证配额探测遇 401 且换取失败时返回失效错误
+func TestWorkBuddyQuota_AutoRefresh_Failure(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"code": 401, "msg": "Unauthorized"}`))
+	}))
+	defer ts.Close() // Teardown
+
+	q := NewQuotaService()
+	acc := &account.Account{
+		ID:           "acc-wb-autorefresh-fail",
+		Provider:     "workbuddy",
+		BaseURL:      ts.URL,
+		AccessToken:  "token-old",
+		RefreshToken: "rf-token-revoked",
+		Email:        "fail@workbuddy.ai",
+	}
+
+	refreshCallback := func(a *account.Account) (string, error) {
+		return "", errors.New("invalid_grant: Offline user session not found")
+	}
+
+	_, err := q.FetchQuota(acc, refreshCallback, nil)
+	if err == nil {
+		t.Fatal("期望换取失败后抛错，实际返回 nil")
+	}
+	if !strings.Contains(err.Error(), "凭证已失效（HTTP 401）") || !strings.Contains(err.Error(), "需要重新登录导入") {
+		t.Errorf("错误信息期望包含失效与重新登录提示，实际得到: %v", err)
+	}
+	if !strings.Contains(err.Error(), "invalid_grant: Offline user session not found") {
+		t.Errorf("错误信息期望包含换取失败原因，实际得到: %v", err)
 	}
 }
 

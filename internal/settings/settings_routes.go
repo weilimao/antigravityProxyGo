@@ -24,6 +24,9 @@ func GetDefaultModelRoutes() []ModelRouteRule {
 		{Pattern: "deepseek-v4.1-flash", TargetProvider: "workbuddy", Priority: 50, Enabled: true},
 		{Pattern: "hy4-preview-f", TargetProvider: "workbuddy", Priority: 50, Enabled: true},
 		{Pattern: "hy3", TargetProvider: "workbuddy", Priority: 50, Enabled: true},
+		// OpenCode 号池: opencode/* 与 oc/* 命名空间模型走 opencode 号池。
+		{Pattern: "opencode/*", TargetProvider: "opencode", Priority: 50, Enabled: true},
+		{Pattern: "oc/*", TargetProvider: "opencode", Priority: 50, Enabled: true},
 		// 顶层兜底:未命中其它规则的模型统一丢给 nvidia 号池(向后兼容,与原 /nvidia 行为对齐)。
 		{Pattern: "*", TargetProvider: "nvidia", Priority: 0, Enabled: true},
 	}

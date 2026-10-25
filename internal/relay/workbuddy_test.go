@@ -966,3 +966,49 @@ func TestWorkBuddyAttachGrowthEvent(t *testing.T) {
 		t.Errorf("重复注入后 extra_vars 键数期望 1, 实际 %d", len(req.ExtraVars))
 	}
 }
+// TestWorkBuddy_401_DisablesAccountWithoutCooldown 验证中继遇 401 且换取失败时，停用账号、标记失效且不挂 24h 虚假冷却
+func TestWorkBuddy_401_DisablesAccountWithoutCooldown(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"code": 401, "msg": "Unauthorized"}`))
+	}))
+	t.Cleanup(mockServer.Close)
+
+	tmpDir := t.TempDir()
+	mgr := account.NewManager()
+	mgr.Init(tmpDir)
+
+	acc := &account.Account{
+		ID:          "wb-test-401",
+		Email:       "test-401@workbuddy.ai",
+		Provider:    "workbuddy",
+		BaseURL:     mockServer.URL,
+		AccessToken: "expired-token",
+		Enabled:     true,
+	}
+	mgr.AddAccount(acc)
+
+	handler := NewAPICompatHandler(nil, mgr, nil, nil, nil, nil, nil)
+
+	reqBody := []byte(`{"model":"claude-3-7-sonnet","messages":[{"role":"user","content":"hi"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.handleWorkBuddy(w, req, &RelaySession{UserID: "test_user_401"})
+
+	// 验证账号已被自动停用且标记 AuthExpired
+	got := mgr.GetAccountByID("wb-test-401")
+	if got == nil {
+		t.Fatalf("未能找到账号 wb-test-401")
+	}
+	if got.Enabled {
+		t.Errorf("期望账号已被停用 (Enabled=false)，实际 Enabled=true")
+	}
+	if !got.IsAuthExpired() {
+		t.Errorf("期望账号已标记凭证失效 (AuthExpired=true)，实际为 false")
+	}
+	// 验证没有挂 24h 虚假冷却
+	if got.CooldownUntil != 0 || (got.Cooldowns != nil && got.Cooldowns["workbuddy"] != 0) {
+		t.Errorf("401 凭证失效账号严禁挂冷却，实际 CooldownUntil=%d, Cooldowns=%v", got.CooldownUntil, got.Cooldowns)
+	}
+}

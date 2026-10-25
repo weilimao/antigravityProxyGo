@@ -89,12 +89,16 @@ func TestGetDefaultModelRoutes_Shape(t *testing.T) {
 	if len(r) < 2 {
 		t.Fatalf("expected at least 2 default routes, got %d", len(r))
 	}
-	// 应包含 nvidia/* 前缀规则与顶层 "*" 兜底。
+	// 应包含 nvidia/* 前缀规则、opencode/* 规则与顶层 "*" 兜底。
 	hasNvidiaPrefix := false
+	hasOpencodePrefix := false
 	hasStarFallback := false
 	for _, rule := range r {
-		if rule.Pattern == "nvidia/*" && rule.TargetProvider == "nvidia" && !rule.Enabled == false {
+		if rule.Pattern == "nvidia/*" && rule.TargetProvider == "nvidia" && rule.Enabled {
 			hasNvidiaPrefix = true
+		}
+		if rule.Pattern == "opencode/*" && rule.TargetProvider == "opencode" && rule.Enabled {
+			hasOpencodePrefix = true
 		}
 		if rule.Pattern == "*" && rule.TargetProvider == "nvidia" {
 			hasStarFallback = true
@@ -102,6 +106,9 @@ func TestGetDefaultModelRoutes_Shape(t *testing.T) {
 	}
 	if !hasNvidiaPrefix {
 		t.Errorf("default routes should include nvidia/* prefix rule")
+	}
+	if !hasOpencodePrefix {
+		t.Errorf("default routes should include opencode/* prefix rule")
 	}
 	if !hasStarFallback {
 		t.Errorf("default routes should include * fallback rule")

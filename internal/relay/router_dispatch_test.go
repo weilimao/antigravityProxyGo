@@ -159,6 +159,11 @@ func TestResolveBenchmarkEntryPath(t *testing.T) {
 		{"xai/grok-3-mini", "/route/v1/chat/completions"},
 		{"other/openai/gpt-4o", "/route/v1/chat/completions"},
 		{"deepseek/deepseek-chat", "/route/v1/chat/completions"},
+		{"opencode/deepseek-v4-flash-free", "/route/v1/chat/completions"},
+		{"opencode/claude-sonnet-4-6", "/route/v1/chat/completions"},
+		{"oc/mimo-v2.5-free", "/route/v1/chat/completions"},
+		{"workbuddy/deepseek-v4.1-flash", "/route/v1/chat/completions"},
+		{"wb/hy4-preview-f", "/route/v1/chat/completions"},
 		// Google 名即使被默认兜底通配 * → nvidia 误命中, 也不得走 /route
 		{"gemini-2.5-flash", "/v1/chat/completions"},
 		{"gemini-3-flash", "/v1/chat/completions"},

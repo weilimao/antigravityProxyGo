@@ -17,8 +17,9 @@ func TestManager_AntigravityCliVersion(t *testing.T) {
 	if got := m.GetAntigravityCliVersion(); got != DefaultAntigravityCliVersion {
 		t.Errorf("default antigravity cli version: want %q, got %q", DefaultAntigravityCliVersion, got)
 	}
-	if got := m.GetAntigravityUserAgent(); got != "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)" {
-		t.Errorf("default antigravity user-agent: want %q, got %q", "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)", got)
+	defaultUA := FormatAntigravityUserAgent(DefaultAntigravityCliVersion)
+	if got := m.GetAntigravityUserAgent(); got != defaultUA {
+		t.Errorf("default antigravity user-agent: want %q, got %q", defaultUA, got)
 	}
 
 	// 2. 显式设置自定义版本号
@@ -49,8 +50,8 @@ func TestManager_AntigravityCliVersion(t *testing.T) {
 	if got := nilMgr.GetAntigravityCliVersion(); got != DefaultAntigravityCliVersion {
 		t.Errorf("nil manager version: want %q, got %q", DefaultAntigravityCliVersion, got)
 	}
-	if got := nilMgr.GetAntigravityUserAgent(); got != "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)" {
-		t.Errorf("nil manager user-agent: want %q, got %q", "antigravity/hub/2.3.1 (aidev_client; os_type=windows; arch=amd64)", got)
+	if got := nilMgr.GetAntigravityUserAgent(); got != defaultUA {
+		t.Errorf("nil manager user-agent: want %q, got %q", defaultUA, got)
 	}
 }
 

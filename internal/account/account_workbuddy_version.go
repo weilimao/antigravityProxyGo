@@ -2,10 +2,13 @@ package account
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // account_workbuddy_version.go: WorkBuddy 客户端模拟版本号管理与自适应探测。
@@ -54,22 +57,92 @@ func (m *Manager) SetWorkBuddyCliVersion(v string) {
 	_ = m.SaveAccountsFor(false, poolPartKind)
 }
 
+var (
+	// workbuddyUpstreamUpdateURL 官方更新检查接口基地址 (内部可配置, 便于测试打桩)
+	workbuddyUpstreamUpdateURL = "https://copilot.tencent.com/v2/update?platform=workbuddy-win32-x64-user&version=5.0.0"
+	workbuddyUpstreamHTTPClient = &http.Client{
+		Timeout: 3 * time.Second,
+	}
+)
+
+type workbuddyUpdateFeedResponse struct {
+	Version        string `json:"version"`
+	ProductVersion string `json:"productVersion"`
+}
+
+// parseUpstreamVersion 从上游四位版本号 (如 5.8.3.41334564) 提取主语义版本 (如 5.8.3)。
+func parseUpstreamVersion(raw string) string {
+	raw = strings.TrimPrefix(strings.TrimSpace(raw), "v")
+	if raw == "" {
+		return ""
+	}
+	parts := strings.Split(raw, ".")
+	if len(parts) >= 3 {
+		return strings.Join(parts[:3], ".")
+	}
+	return raw
+}
+
+// fetchVersionFromUpstream 尝试通过逆向分析出的官方更新接口获取最新发布的客户端版本。
+// 遇网络错误、非 200 状态码或解析失败时静默返回空串，平滑降级至本地探测。
+func fetchVersionFromUpstream() string {
+	req, err := http.NewRequest(http.MethodGet, workbuddyUpstreamUpdateURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "WorkBuddy/5.0.0")
+
+	resp, err := workbuddyUpstreamHTTPClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return ""
+	}
+
+	var data workbuddyUpdateFeedResponse
+	if err := json.Unmarshal(body, &data); err != nil {
+		return ""
+	}
+
+	rawVer := strings.TrimSpace(data.ProductVersion)
+	if rawVer == "" {
+		rawVer = strings.TrimSpace(data.Version)
+	}
+	return parseUpstreamVersion(rawVer)
+}
+
 // DetectWorkBuddyLatestVersion 综合探测当前环境可用的 WorkBuddy 最新版本。
 // 探测优先级:
-// 1. 本机 Windows 注册表已安装版本 (如 5.7.7)
-// 2. 本机安装目录中的 install-manifest.json 中的 appVersion
-// 3. 官方稳定基准默认值 (DefaultWorkBuddyDomesticVersion 5.7.7)
+// 1. 官方更新接口 (copilot.tencent.com/v2/update) 逆向获取最新版本
+// 2. 本机 Windows 注册表已安装版本 (如 5.8.3)
+// 3. 本机安装目录中的 install-manifest.json 中的 appVersion
+// 4. 官方稳定基准默认值 (DefaultWorkBuddyDomesticVersion 5.7.7)
 func DetectWorkBuddyLatestVersion() string {
 	highest := DefaultWorkBuddyDomesticVersion
 
-	// 1. 尝试从操作系统注册表探测
+	// 1. 优先尝试从官方更新接口探测最新版本
+	if apiVer := fetchVersionFromUpstream(); apiVer != "" {
+		if compareSemver(apiVer, highest) > 0 {
+			highest = apiVer
+		}
+	}
+
+	// 2. 尝试从操作系统注册表探测
 	if regVer := detectVersionFromRegistry(); regVer != "" {
 		if compareSemver(regVer, highest) > 0 {
 			highest = regVer
 		}
 	}
 
-	// 2. 尝试从本地 manifest 文件探测
+	// 3. 尝试从本地 manifest 文件探测
 	if localVer := detectVersionFromLocalManifests(); localVer != "" {
 		if compareSemver(localVer, highest) > 0 {
 			highest = localVer

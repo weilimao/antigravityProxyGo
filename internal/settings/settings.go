@@ -259,6 +259,8 @@ type Config struct {
 	BenchmarkIntervalMinutes int      `json:"benchmarkIntervalMinutes,omitempty"`
 	BenchmarkPrompt          string   `json:"benchmarkPrompt,omitempty"`
 	BenchmarkTimeoutMs       int      `json:"benchmarkTimeoutMs,omitempty"`
+	// PoolErrorRetry 是号池遇到上游报错状态码时直接重试或切换下一个号的自由配置。
+	PoolErrorRetry           PoolErrorRetryConfig `json:"poolErrorRetry,omitempty"`
 }
 
 // DefaultOcrModel 默认为空，由管理控制台平台配置驱动。
@@ -298,6 +300,8 @@ type ManagerInterface interface {
 	SetEnableSystemLog(enable bool) error
 	GetIsInterceptMode() bool
 	SetIsInterceptMode(mode bool) error
+	GetPoolErrorRetry() PoolErrorRetryConfig
+	SetPoolErrorRetry(cfg PoolErrorRetryConfig) error
 	GetAutoStart() bool
 	SetAutoStart(enabled bool) error
 	GetSilentStart() bool

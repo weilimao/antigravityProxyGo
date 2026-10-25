@@ -17,6 +17,9 @@ import (
 
 func (m *Manager) GetModelCategory(modelName string) string {
 	name := strings.ToLower(modelName)
+	if strings.Contains(name, "argon") {
+		return "argon"
+	}
 	if strings.Contains(name, "claude") {
 		return "claude"
 	}
@@ -172,7 +175,7 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 	var activeAccounts []*Account
 	for _, a := range m.accounts {
 		accountChannel := a.Provider
-		if accountChannel == currentChannel && a.Enabled {
+		if accountChannel == currentChannel && a.Enabled && !a.IsAuthExpired() {
 			if a.AccessToken != "" || a.RefreshToken != "" {
 				activeAccounts = append(activeAccounts, a)
 			}
@@ -389,7 +392,7 @@ func (m *Manager) GetAvailableAccountsForChannelAndGroup(channel, groupID string
 	var list []*Account
 	for _, a := range m.accounts {
 		accountChannel := a.Provider
-		if accountChannel != channel || !a.Enabled {
+		if accountChannel != channel || !a.Enabled || a.IsAuthExpired() {
 			continue
 		}
 		// Other 号池按 GroupID 细分:groupID 非空时仅选该组账号。groupID 为空时不过滤(向后兼容)。
@@ -446,8 +449,8 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 	// NVIDIA 号池走独立 "nvidia" 冷却键，避免其满额配额被误判为 gemini 恢复。
 	isNvidiaAcc := strings.EqualFold(acc.Provider, "nvidia")
 
-	var geminiExhausted, claudeExhausted, nvidiaExhausted bool
-	var geminiResetTime, claudeResetTime, nvidiaResetTime int64
+	var geminiExhausted, claudeExhausted, nvidiaExhausted, argonExhausted bool
+	var geminiResetTime, claudeResetTime, nvidiaResetTime, argonResetTime int64
 
 	nowMs := time.Now().UnixNano() / int64(time.Millisecond)
 
@@ -473,6 +476,9 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 		if strings.Contains(lowerGroup, "nvidia") || strings.Contains(lowerModelID, "nvidia") {
 			return "nvidia"
 		}
+		if strings.Contains(lowerGroup, "argon") || strings.Contains(lowerModelID, "argon") {
+			return "argon"
+		}
 		if strings.Contains(lowerGroup, "claude") || strings.Contains(lowerModelID, "claude") {
 			return "claude"
 		}
@@ -491,6 +497,11 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 		}
 		resetMs := parseTime(b.ResetTime)
 		switch category {
+		case "argon":
+			argonExhausted = true
+			if resetMs > argonResetTime {
+				argonResetTime = resetMs
+			}
 		case "claude":
 			claudeExhausted = true
 			if resetMs > claudeResetTime {
@@ -552,6 +563,9 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 
 	updateCatCooldown("gemini", geminiExhausted, geminiResetTime)
 	updateCatCooldown("claude", claudeExhausted, claudeResetTime)
+	if !isNvidiaAcc {
+		updateCatCooldown("argon", argonExhausted, argonResetTime)
+	}
 
 	// NVIDIA 号池走独立的 "nvidia" 冷却类别，与 gemini/claude 解耦：
 	// 仅当本次刷新观察到"nvidia 冷却键实际存在且本次配额已满额恢复"时，

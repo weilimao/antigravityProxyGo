@@ -503,6 +503,7 @@ func (m *Manager) UpdateAccessToken(id, newToken string) {
 	// Use per-account token lock to update safely without holding the global Manager write lock
 	if target != nil {
 		target.SetAccessToken(newToken)
+		target.SetAuthExpired(false)
 		// 定向落盘:只重写该账号所属 provider 分区,不触碰其它号池的大文件。
 		_ = m.SaveAccountsFor(true, provider)
 	}
@@ -528,6 +529,40 @@ func (m *Manager) UpdateAccountRefreshToken(id, newRefresh string) {
 	if target != nil {
 		target.SetRefreshToken(newRefresh)
 		_ = m.SaveAccountsFor(true, provider)
+	}
+}
+
+// MarkAccountAuthExpired 标记账号凭证是否失效（如 401 / 离线会话销毁）。
+// 状态变更时定向落盘该 provider 分区，并触发 OnAccountsUpdated 广播前端。
+func (m *Manager) MarkAccountAuthExpired(id string, expired bool) {
+	m.RLock()
+	var target *Account
+	for _, a := range m.accounts {
+		if a.ID == id {
+			target = a
+			break
+		}
+	}
+	provider := ""
+	if target != nil {
+		provider = target.Provider
+	}
+	m.RUnlock()
+
+	if target == nil {
+		return
+	}
+
+	target.tokenMu.Lock()
+	changed := target.AuthExpired != expired
+	target.AuthExpired = expired
+	target.tokenMu.Unlock()
+
+	if changed {
+		_ = m.SaveAccountsFor(true, provider)
+		if m.OnAccountsUpdated != nil {
+			go m.OnAccountsUpdated(m.accounts)
+		}
 	}
 }
 

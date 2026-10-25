@@ -90,7 +90,9 @@ export function renderQuotaBars(containerEl: HTMLElement | null, buckets: any[],
             const lowerGroup = groupName.toLowerCase();
             // 冷却类别与后端 account.go 解耦为三族：gemini / claude / nvidia。
             // NVIDIA 号池走独立 "nvidia" 冷却键，避免误读 gemini 冷静条。
-            const category = lowerGroup.includes('claude')
+            const category = lowerGroup.includes('argon')
+                ? 'argon'
+                : lowerGroup.includes('claude')
                 ? 'claude'
                 : lowerGroup.includes('nvidia')
                     ? 'nvidia'
@@ -348,20 +350,21 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
         return;
     }
     if (accForProbe0 && accForProbe0.provider === 'workbuddy') {
-        // WorkBuddy 冷却短路:读 cooldowns.workbuddy(后端单冷却族 "workbuddy")。
-        // 冷却中走冷静气泡渲染,不发 quota:fetch 探活。
-        const now = Date.now();
-        const cdWb = accForProbe0.cooldowns && typeof accForProbe0.cooldowns.workbuddy === 'number'
-            ? accForProbe0.cooldowns.workbuddy : 0;
-        const cdUntil = (cdWb > now) ? cdWb : 0;
-        if (cdUntil > 0) {
-            const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
-            if (activeContainer) renderQuotaBars(activeContainer, [], accForProbe0.cooldowns || cooldowns);
-            if (refreshBtn) {
-                const icon = refreshBtn.querySelector('.material-symbols-outlined') || refreshBtn;
-                if (icon) icon.classList.remove('animate-spin');
+        // WorkBuddy 冷却短路:若账号已标记 authExpired，严禁进入冷却短路分支，保持红泡展示
+        if (!accForProbe0.authExpired) {
+            const now = Date.now();
+            const cdWb = accForProbe0.cooldowns && typeof accForProbe0.cooldowns.workbuddy === 'number'
+                ? accForProbe0.cooldowns.workbuddy : 0;
+            const cdUntil = (cdWb > now) ? cdWb : 0;
+            if (cdUntil > 0) {
+                const activeContainer = document.getElementById(`quotaBars-${accountId}`) || containerEl;
+                if (activeContainer) renderQuotaBars(activeContainer, [], accForProbe0.cooldowns || cooldowns);
+                if (refreshBtn) {
+                    const icon = refreshBtn.querySelector('.material-symbols-outlined') || refreshBtn;
+                    if (icon) icon.classList.remove('animate-spin');
+                }
+                return;
             }
-            return;
         }
         // 若账号为国内邮箱注册账号且非手动强制刷新，短路不发网络探活
         if (!force && isDomesticWorkBuddyAccount(accForProbe0)) {
@@ -417,9 +420,19 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
             if (accForProbe && (accForProbe.provider === 'nvidia' || accForProbe.provider === 'grok' || accForProbe.provider === 'workbuddy')) {
                 // NVIDIA/Grok/WorkBuddy 失败：记失败原因并走红泡渲染(展示上游 HTTP/错误简述)
                 // 决策 B:Grok/WorkBuddy 失败亦写入 state.nvidiaQuotaError[acc.id](该 map 按 acc.id 索引,内容通用)。
+                const errStr = String(result.error);
                 if (!state.nvidiaQuotaError) state.nvidiaQuotaError = {};
-                state.nvidiaQuotaError[accountId] = String(result.error);
+                state.nvidiaQuotaError[accountId] = errStr;
                 renderQuotaBars(activeContainer, [], cooldowns);
+
+                // 若错误为 401 凭证失效，同步翻红卡片右上角徽标为「已失效 (401)」
+                const isAuthExpired = errStr.includes('401') || errStr.includes('失效') || errStr.includes('Unauthorized');
+                const currentCard = document.querySelector(`[data-account-id="${accountId}"]`);
+                const statusBadge = currentCard?.querySelector('.acc-status-badge') as HTMLElement | null;
+                if (statusBadge && isAuthExpired) {
+                    statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 dark:bg-red-900/30 dark:text-red-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
+                    statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">error</span> ${dict.accountStatusExpired || (isZH ? '已失效 (401)' : 'Expired (401)')}`;
+                }
             } else {
                 const isVerificationRequired = !!(
                     result.validationUrl ||
@@ -475,6 +488,14 @@ export async function loadAccountQuota(accountId: string, containerEl: HTMLEleme
             if (!state.nvidiaQuotaError) state.nvidiaQuotaError = {};
             state.nvidiaQuotaError[accountId] = reason;
             renderQuotaBars(activeContainer, [], cooldowns);
+
+            const isAuthExpired = reason.includes('401') || reason.includes('失效') || reason.includes('Unauthorized');
+            const currentCard = document.querySelector(`[data-account-id="${accountId}"]`);
+            const statusBadge = currentCard?.querySelector('.acc-status-badge') as HTMLElement | null;
+            if (statusBadge && isAuthExpired) {
+                statusBadge.className = 'acc-status-badge flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 dark:bg-red-900/30 dark:text-red-400 px-2 py-0.5 rounded text-nowrap self-start flex-shrink-0';
+                statusBadge.innerHTML = `<span class="material-symbols-outlined text-[12px]">error</span> ${dict.accountStatusExpired || (isZH ? '已失效 (401)' : 'Expired (401)')}`;
+            }
         } else {
             if (activeContainer) activeContainer.innerHTML = `<span class="text-[10px] text-red-400">${isZH ? '请求失败' : 'Request failed'}</span>`;
         }

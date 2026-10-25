@@ -182,6 +182,7 @@ func (s *Scheduler) runTask(task db.AutoTriggerTask, filterAccountID string) {
 					task.Prompt,
 					s.quotaSvc.GetStoredProject,
 					s.authMgr.RefreshToken,
+					s.accountMgr.GetAntigravityUserAgent,
 				)
 				cancel()
 

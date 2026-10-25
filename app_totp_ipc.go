@@ -3,8 +3,12 @@ package main
 import (
 	"encoding/base32"
 	"encoding/json"
+	"fmt"
+	"os"
 	"strings"
+	"time"
 
+	"antigravity-proxy/internal/dialogs"
 	"antigravity-proxy/internal/totp"
 )
 
@@ -121,6 +125,84 @@ func (a *App) handleTotpIPC(channel string, args []interface{}) (string, bool, e
 			"code":      code,
 			"remaining": remaining,
 		})
+		return data, true, err
+
+	case "totp:export":
+		if a.dialogSvc == nil {
+			data, err := marshalResponse(false)
+			return data, true, err
+		}
+
+		accs := a.accountMgr.GetTwoFAAccounts()
+		if len(accs) == 0 {
+			data, err := marshalResponse(false)
+			return data, true, err
+		}
+
+		nowStr := time.Now().Format("20060102_150405")
+		filePath, ok, _ := a.dialogSvc.Save(a.ctx, dialogs.SaveRequest{
+			Title:       "导出 2FA 账号",
+			DefaultName: fmt.Sprintf("2fa_accounts_%s.txt", nowStr),
+			Filters: []dialogs.FileFilter{
+				{DisplayName: "TXT Files (*.txt)", Pattern: "*.txt"},
+				{DisplayName: "CSV Files (*.csv)", Pattern: "*.csv"},
+				{DisplayName: "JSON Files (*.json)", Pattern: "*.json"},
+			},
+		})
+		if !ok {
+			data, err := marshalResponse(false)
+			return data, true, err
+		}
+
+		var content []byte
+		if strings.HasSuffix(strings.ToLower(filePath), ".csv") {
+			var csv strings.Builder
+			csv.WriteString("\uFEFF邮箱,2FA密钥\n")
+			for _, acc := range accs {
+				csv.WriteString(fmt.Sprintf("\"%s\",\"%s\"\n",
+					strings.ReplaceAll(acc.Email, "\"", "\"\""),
+					strings.ReplaceAll(acc.TwoFASecret, "\"", "\"\"")))
+			}
+			content = []byte(csv.String())
+		} else if strings.HasSuffix(strings.ToLower(filePath), ".json") {
+			type ExportItem struct {
+				Email  string `json:"email"`
+				Secret string `json:"secret"`
+			}
+			items := make([]ExportItem, 0, len(accs))
+			for _, acc := range accs {
+				items = append(items, ExportItem{
+					Email:  acc.Email,
+					Secret: acc.TwoFASecret,
+				})
+			}
+			data, err := json.MarshalIndent(items, "", "  ")
+			if err != nil {
+				data, mErr := marshalResponse(false)
+				return data, true, mErr
+			}
+			content = data
+		} else {
+			var txt strings.Builder
+			for _, acc := range accs {
+				if acc.TwoFASecret != "" {
+					txt.WriteString(fmt.Sprintf("%s----%s\n", acc.Email, acc.TwoFASecret))
+				} else {
+					txt.WriteString(fmt.Sprintf("%s\n", acc.Email))
+				}
+			}
+			content = []byte(txt.String())
+		}
+
+		if err := os.WriteFile(filePath, content, 0644); err != nil {
+			a.AddLog(fmt.Sprintf("❌ [2FA导出] 写盘失败: %v", err))
+			data, mErr := marshalResponse(false)
+			return data, true, mErr
+		}
+
+		a.AddLog(fmt.Sprintf("📥 [2FA导出] 成功导出 %d 个 2FA 账号到: %s", len(accs), filePath))
+		a.dialogSvc.RevealFile(filePath)
+		data, err := marshalResponse(true)
 		return data, true, err
 	}
 

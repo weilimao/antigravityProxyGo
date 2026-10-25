@@ -23,19 +23,60 @@ import (
 
 const (
 	// AntigravityIDEUserAgent 与官方 Antigravity IDE (language_server) 与上游通信的标头保持一致
-	AntigravityIDEUserAgent = "antigravity/ide/2.5.5 (aidev_client; os_type=windows; arch=amd64)"
+	AntigravityIDEUserAgent = "antigravity/hub/2.25.0 (aidev_client; os_type=windows; arch=amd64)"
 )
 
 type QuotaService struct {
 	sync.RWMutex
 	dataDir    string
-	projectMap map[string]string // email -> projectId
+	projectMap            map[string]string // email -> projectId
+	antigravityUserAgent  func() string
+	antigravityCliVersion func() string
 }
 
 func NewQuotaService() *QuotaService {
 	return &QuotaService{
 		projectMap: make(map[string]string),
 	}
+}
+
+// SetAntigravityVersionProviders 动态注入 Antigravity Hub 版本与 User-Agent 解析器，
+// 严格对齐界面用户配置，界面配置什么版本就以什么版本请求上游
+func (q *QuotaService) SetAntigravityVersionProviders(uaProvider func() string, versionProvider func() string) {
+	q.Lock()
+	defer q.Unlock()
+	q.antigravityUserAgent = uaProvider
+	q.antigravityCliVersion = versionProvider
+}
+
+// GetAntigravityUA 获取发往 Google 上游的动态 User-Agent，优先取用户界面设置的 Hub 版本
+func (q *QuotaService) GetAntigravityUA() string {
+	if q != nil {
+		q.RLock()
+		fn := q.antigravityUserAgent
+		q.RUnlock()
+		if fn != nil {
+			if ua := strings.TrimSpace(fn()); ua != "" {
+				return ua
+			}
+		}
+	}
+	return account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion)
+}
+
+// GetAntigravityVersion 获取发往 Google 上游的动态客户端版本号，优先取用户界面设置的 Hub 版本
+func (q *QuotaService) GetAntigravityVersion() string {
+	if q != nil {
+		q.RLock()
+		fn := q.antigravityCliVersion
+		q.RUnlock()
+		if fn != nil {
+			if v := strings.TrimSpace(fn()); v != "" {
+				return v
+			}
+		}
+	}
+	return account.DefaultAntigravityCliVersion
 }
 
 func (q *QuotaService) Init(dataDir string) {
@@ -323,17 +364,17 @@ func ExtractValidationURL(resBytes []byte) string {
 	return ""
 }
 
-func loadCodeAssist(accessToken string, isAntigravity bool) (string, string, *float64, error) {
+func (q *QuotaService) loadCodeAssist(accessToken string, isAntigravity bool) (string, string, *float64, error) {
 	headers := map[string]string{
 		"Authorization": "Bearer " + accessToken,
 	}
 	var body map[string]interface{}
 	if isAntigravity {
-		headers["User-Agent"] = AntigravityIDEUserAgent
+		headers["User-Agent"] = q.GetAntigravityUA()
 		body = map[string]interface{}{
 			"metadata": map[string]interface{}{
 				"ideType":    "ANTIGRAVITY",
-				"ideVersion": "2.5.5",
+				"ideVersion": q.GetAntigravityVersion(),
 				"ideName":    "antigravity",
 			},
 		}
@@ -509,12 +550,12 @@ type RetrieveUserQuotaSummaryResponse struct {
 	} `json:"error"`
 }
 
-func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]account.QuotaBucket, error) {
+func (q *QuotaService) retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]account.QuotaBucket, error) {
 	headers := map[string]string{
 		"Authorization": "Bearer " + accessToken,
 	}
 	if isAntigravity {
-		headers["User-Agent"] = AntigravityIDEUserAgent
+		headers["User-Agent"] = q.GetAntigravityUA()
 	}
 
 	host := "cloudcode-pa.googleapis.com"
@@ -581,6 +622,7 @@ func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]accou
 					{ModelID: "Five Hour Limit", Group: "Gemini Models", RemainingFraction: 0, RemainPercent: 0},
 					{ModelID: "Weekly Limit", Group: "Claude and GPT models", RemainingFraction: 0, RemainPercent: 0},
 					{ModelID: "Five Hour Limit", Group: "Claude and GPT models", RemainingFraction: 0, RemainPercent: 0},
+					{ModelID: "Gemini 4 Argon Weekly Limit", Group: "Gemini 4 Argon", RemainingFraction: 0, RemainPercent: 0},
 				}, nil
 			}
 			return []account.QuotaBucket{
@@ -720,6 +762,7 @@ func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]accou
 			{ModelID: "Five Hour Limit", Group: "Gemini Models", RemainingFraction: 0.57, RemainPercent: 57, ResetTime: now.Add(2 * time.Hour).Format(time.RFC3339)},
 			{ModelID: "Weekly Limit", Group: "Claude and GPT models", RemainingFraction: 1.0, RemainPercent: 100},
 			{ModelID: "Five Hour Limit", Group: "Claude and GPT models", RemainingFraction: 1.0, RemainPercent: 100},
+			{ModelID: "Gemini 4 Argon Weekly Limit", Group: "Gemini 4 Argon", RemainingFraction: 1.0, RemainPercent: 100},
 		}, nil
 	}
 
@@ -833,7 +876,7 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 	// 无论国内或国外注册账号，统一弹性探测官方端点。若账号拥有合法计量包（如 QQ 邮箱海外版）
 	// 则如实展示真实积分；若上游返回未开通策略（如 500/20017），在 fetchWorkBuddyQuota 中优雅降级为空桶不抛错。
 	if acc.Provider == "workbuddy" {
-		return fetchWorkBuddyQuota(acc)
+		return fetchWorkBuddyQuota(acc, refreshCallback)
 	}
 
 	token := acc.AccessToken
@@ -844,7 +887,7 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 	var credits *float64
 	var err error
 
-	project, tier, credits, err = loadCodeAssist(token, isAntigravity)
+	project, tier, credits, err = q.loadCodeAssist(token, isAntigravity)
 	if err != nil && acc.RefreshToken != "" && refreshCallback != nil {
 		var vErr *account.AccountValidationError
 		if !errors.As(err, &vErr) {
@@ -855,7 +898,7 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 				if updateTokenCallback != nil {
 					updateTokenCallback(acc.ID, newToken)
 				}
-				project, tier, credits, err = loadCodeAssist(token, isAntigravity)
+				project, tier, credits, err = q.loadCodeAssist(token, isAntigravity)
 			} else {
 				return nil, fmt.Errorf("Token refresh failed: %v", refreshErr)
 			}
@@ -891,7 +934,7 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 	}
 
 	// Step 2: retrieveUserQuota
-	buckets, err := retrieveUserQuota(token, project, isAntigravity)
+	buckets, err := q.retrieveUserQuota(token, project, isAntigravity)
 	if err != nil {
 		var vErr *account.AccountValidationError
 		if errors.As(err, &vErr) {
@@ -908,4 +951,17 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 		Tier:    tier,
 		Credits: credits,
 	}, nil
+}
+
+
+// loadCodeAssist 兼容包装器，以空实例执行默认元数据与 UA 探测
+func loadCodeAssist(accessToken string, isAntigravity bool) (string, string, *float64, error) {
+	var q *QuotaService
+	return q.loadCodeAssist(accessToken, isAntigravity)
+}
+
+// retrieveUserQuota 兼容包装器，以空实例执行默认 UA 探测
+func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]account.QuotaBucket, error) {
+	var q *QuotaService
+	return q.retrieveUserQuota(accessToken, project, isAntigravity)
 }

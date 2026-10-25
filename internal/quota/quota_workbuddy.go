@@ -15,18 +15,6 @@ import (
 	"antigravity-proxy/internal/netutil"
 )
 
-// quota_workbuddy.go: WorkBuddy 官方套餐与资源包配额探测逻辑。
-//
-// 官方协议对齐:
-//   - 端点: POST {BaseURL}/billing/meter/get-user-resource-summary
-//   - 认证: Authorization: Bearer {token} + WorkBuddy 桌面端指纹请求头
-//   - 资源包识别:
-//       * TCACA_code_007_nzdH5h4Nl0: 活跃奖励包 (Bonus Pack / 30 积分/天)
-//       * TCACA_code_035_ArVxJcGDsm: 国际版免费套餐月度基础包 (100 积分)
-//   - 优雅降级: 若遇到 CAM 策略未授权 (如国内邮箱账号在海外集群无资源包，返回 500 / 20017)，
-//     自动标记 NoQuota 并返回空桶，杜绝冷启动报错与误进冷静期。
-
-// formatPoints formats a float64 point number cleanly as an integer or two-decimal string.
 func formatPoints(val float64) string {
 	if val == float64(int64(val)) {
 		return strconv.FormatInt(int64(val), 10)
@@ -34,9 +22,9 @@ func formatPoints(val float64) string {
 	return fmt.Sprintf("%.2f", val)
 }
 
-// fetchWorkBuddyQuota 向 WorkBuddy 官方套餐端点 /billing/meter/get-user-resource-summary 发送请求，
-// 实时拉取并聚合各资源包的剩余积分（CycleRemainCapacity），返回真实积分余额、细分结构与套餐版本。
-func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
+// doFetchWorkBuddyQuota 执行单次对 WorkBuddy 官方配额端点 /billing/meter/get-user-resource-summary 的探测。
+// 返回 (QuotaResult, httpStatusCode, error)。
+func doFetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, int, error) {
 	baseURL := strings.TrimSpace(acc.BaseURL)
 	if baseURL == "" || strings.Contains(baseURL, "codebuddy.ai") {
 		if acc.IsWorkBuddyDomestic() {
@@ -48,13 +36,13 @@ func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
 
 	token := strings.TrimSpace(acc.AccessToken)
 	if token == "" {
-		return nil, errors.New("账号 AccessToken 为空")
+		return nil, 0, errors.New("账号 AccessToken 为空")
 	}
 
 	summaryURL := strings.TrimRight(baseURL, "/") + "/billing/meter/get-user-resource-summary"
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, summaryURL, strings.NewReader("{}"))
 	if err != nil {
-		return nil, fmt.Errorf("创建配额探测请求失败: %w", err)
+		return nil, 0, fmt.Errorf("创建配额探测请求失败: %w", err)
 	}
 
 	headers := account.BuildWorkBuddyHeaders(acc)
@@ -65,12 +53,12 @@ func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
 	client := &http.Client{Timeout: 15 * time.Second, Transport: netutil.NewTransport()}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("配额请求失败: %w", err)
+		return nil, 0, fmt.Errorf("配额请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("凭证已失效 (HTTP %d)，请重新授权或导入", resp.StatusCode)
+		return nil, resp.StatusCode, nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
@@ -82,7 +70,7 @@ func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
 		return &account.QuotaResult{
 			Tier:    "Free",
 			Buckets: []account.QuotaBucket{},
-		}, nil
+		}, resp.StatusCode, nil
 	}
 
 	var respData struct {
@@ -101,7 +89,7 @@ func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		return nil, fmt.Errorf("解析配额响应 JSON 失败: %w", err)
+		return nil, resp.StatusCode, fmt.Errorf("解析配额响应 JSON 失败: %w", err)
 	}
 
 	if respData.Code != 0 {
@@ -111,7 +99,7 @@ func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
 		return &account.QuotaResult{
 			Tier:    "Free",
 			Buckets: []account.QuotaBucket{},
-		}, nil
+		}, resp.StatusCode, nil
 	}
 
 	totalRemain := float64(0)
@@ -133,8 +121,9 @@ func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
 		}
 	}
 
-	// 探测成功，自愈可能存在的历史误标记免配额状态
+	// 探测成功，自愈可能存在的历史误标记免配额与失效状态
 	acc.NoQuota = false
+	acc.SetAuthExpired(false)
 
 	tier := "Free"
 	if respData.Data.IsPaidUser {
@@ -175,5 +164,49 @@ func fetchWorkBuddyQuota(acc *account.Account) (*account.QuotaResult, error) {
 			},
 		},
 		Credits: &credits,
-	}, nil
+	}, resp.StatusCode, nil
+}
+
+// fetchWorkBuddyQuota 向 WorkBuddy 官方套餐端点 /billing/meter/get-user-resource-summary 发送请求，
+// 实时拉取并聚合各资源包的剩余积分（CycleRemainCapacity），返回真实积分余额、细分结构与套餐版本。
+// 当探测到凭证失效（401/403）时，若配置有 RefreshToken，会自动尝试换取新 Token 并自愈重试；仅在换取失败或无 RefreshToken 时报错提示用户重新登录。
+func fetchWorkBuddyQuota(acc *account.Account, refreshCallback func(*account.Account) (string, error)) (*account.QuotaResult, error) {
+	res, statusCode, err := doFetchWorkBuddyQuota(acc)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+		rfToken := strings.TrimSpace(acc.GetRefreshToken())
+		if rfToken != "" {
+			fmt.Printf("[WorkBuddyQuota] 账号 %s 凭证过期 (HTTP %d)，尝试使用 RefreshToken 自动换取新 Token...\n", acc.Email, statusCode)
+			var refErr error
+			if refreshCallback != nil {
+				_, refErr = refreshCallback(acc)
+			} else {
+				_, refErr = account.RefreshWorkBuddyToken(acc)
+			}
+			if refErr == nil {
+				// 换取新 Token 成功，自动重试配额探测
+				retryRes, retryStatus, retryErr := doFetchWorkBuddyQuota(acc)
+				if retryErr != nil {
+					return nil, retryErr
+				}
+				if retryStatus == http.StatusOK {
+					fmt.Printf("[WorkBuddyQuota] 账号 %s 自动换取 Token 成功且配额重试探测通过\n", acc.Email)
+					acc.SetAuthExpired(false)
+					return retryRes, nil
+				}
+				if retryStatus == http.StatusUnauthorized || retryStatus == http.StatusForbidden {
+					acc.SetAuthExpired(true)
+					return nil, fmt.Errorf("凭证已失效（HTTP %d），且自动换取 Token 后仍无权限，需要重新登录导入", retryStatus)
+				}
+				return retryRes, nil
+			}
+			acc.SetAuthExpired(true)
+			return nil, fmt.Errorf("凭证已失效（HTTP %d），且自动换取 Token 失败，需要重新登录导入: %w", statusCode, refErr)
+		}
+		acc.SetAuthExpired(true)
+		return nil, fmt.Errorf("凭证已失效（HTTP %d），需要重新登录导入", statusCode)
+	}
+	return res, nil
 }

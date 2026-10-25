@@ -50,6 +50,9 @@ export const otpZh: Record<string, string> = {
     otp_btnAdd: "添加",
     otp_emailRequired: "账号邮箱不能为空",
     otp_addFailed: "添加失败",
+    otp_noAccountsToExport: "暂无 2FA 账号可导出",
+    otp_exportSuccess: "2FA 账号已成功导出！",
+    otp_exportFailed: "导出失败: ",
 };
 
 export const otpEn: Record<string, string> = {
@@ -100,4 +103,7 @@ export const otpEn: Record<string, string> = {
     otp_btnAdd: "Add",
     otp_emailRequired: "Please enter email/name",
     otp_addFailed: "Add failed",
+    otp_noAccountsToExport: "No 2FA accounts to export",
+    otp_exportSuccess: "2FA accounts exported successfully!",
+    otp_exportFailed: "Export failed: ",
 };

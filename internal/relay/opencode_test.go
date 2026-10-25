@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"antigravity-proxy/internal/account"
 )
@@ -84,12 +85,17 @@ func TestOpenCodeRelay_MockUpstream(t *testing.T) {
 		_ = os.RemoveAll(tempDir)
 	})
 
-	var receivedUA, receivedClient, receivedSession, receivedRequest, receivedAuth string
+	var receivedUA, receivedClient, receivedSession, receivedSessionID, receivedRequest, receivedAccept, receivedAuth string
+	var hasSessionID, hasRequestHeader bool
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedUA = r.Header.Get("User-Agent")
 		receivedClient = r.Header.Get("x-opencode-client")
 		receivedSession = r.Header.Get("x-opencode-session")
+		receivedSessionID = r.Header.Get("x-opencode-session-id")
 		receivedRequest = r.Header.Get("x-opencode-request")
+		receivedAccept = r.Header.Get("Accept")
+		hasSessionID = receivedSessionID != ""
+		hasRequestHeader = receivedRequest != ""
 		receivedAuth = r.Header.Get("Authorization")
 
 		w.Header().Set("Content-Type", "application/json")
@@ -154,14 +160,26 @@ func TestOpenCodeRelay_MockUpstream(t *testing.T) {
 	if receivedUA != defaultOpenCodeUA {
 		t.Errorf("expected User-Agent %s, got %s", defaultOpenCodeUA, receivedUA)
 	}
-	if receivedClient != "desktop" {
-		t.Errorf("expected x-opencode-client 'desktop', got %s", receivedClient)
+	if !strings.Contains(receivedUA, "ai-sdk/provider-utils") || !strings.Contains(receivedUA, "runtime/bun") {
+		t.Errorf("expected User-Agent to contain ai-sdk and runtime/bun, got %s", receivedUA)
+	}
+	if receivedClient != "cli" {
+		t.Errorf("expected x-opencode-client 'cli', got %s", receivedClient)
+	}
+	if receivedAccept != "*/*" {
+		t.Errorf("expected Accept '*/*', got %s", receivedAccept)
 	}
 	if !opencodeSessionRe.MatchString(receivedSession) {
 		t.Errorf("expected canonical x-opencode-session, got %s", receivedSession)
 	}
-	if !strings.HasPrefix(receivedRequest, "msg_") {
-		t.Errorf("expected x-opencode-request with msg_, got %s", receivedRequest)
+	if !hasSessionID {
+		t.Errorf("expected x-opencode-session-id header to be present")
+	}
+	if receivedSessionID != receivedSession {
+		t.Errorf("expected x-opencode-session-id to match x-opencode-session, got %s vs %s", receivedSessionID, receivedSession)
+	}
+	if !hasRequestHeader || !strings.HasPrefix(receivedRequest, "msg_") {
+		t.Errorf("expected x-opencode-request header with msg_ prefix, got %s", receivedRequest)
 	}
 	if receivedAuth != "Bearer sk-test-mock-key-12345" {
 		t.Errorf("expected Authorization 'Bearer sk-test-mock-key-12345', got %s", receivedAuth)
@@ -387,4 +405,158 @@ func TestOpenCode_ClientHeadersPreserved(t *testing.T) {
 		t.Errorf("expected preserved project 'my-project', got %s", gotProject)
 	}
 }
+
+func TestOpenCodeRelay_AllAccounts429_PreservesError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "opencode_429_test_*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(tempDir)
+	})
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"FreeUsageLimitError","message":"Free usage limit reached"}}`))
+	}))
+	defer mockServer.Close()
+
+	mgr := account.NewManager()
+	mgr.Init(tempDir)
+
+	_, _ = mgr.AddOpenCodeAccount(account.OpenCodeAccountInput{
+		BaseURL:      mockServer.URL,
+		AccessToken:  "sk-test-single",
+		Label:        "SingleAccount",
+		DefaultModel: "deepseek-v4.1-flash-free",
+	})
+
+	h := &APICompatHandler{
+		accountMgr: mgr,
+		client:     mockServer.Client(),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/opencode/v1/chat/completions", bytes.NewReader([]byte(`{"model":"deepseek-v4.1-flash-free","messages":[{"role":"user","content":"hi"}]}`)))
+	w := httptest.NewRecorder()
+
+	h.handleOpenCode(w, req, &RelaySession{Token: "test"})
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 status code preserved, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "FreeUsageLimitError") {
+		t.Errorf("expected FreeUsageLimitError preserved in response body, got %s", w.Body.String())
+	}
+}
+
+func TestOpenCodeRelay_BaseURL_Normalization(t *testing.T) {
+	// 验证 NormalizeOpenCodeBaseURL 行为：zen / zen/v1 及空串自动规整为官方最新推断端点 DefaultOpenCodeBaseURL
+	expectedDefault := account.DefaultOpenCodeBaseURL
+	if norm := account.NormalizeOpenCodeBaseURL("https://opencode.ai/zen/v1"); norm != expectedDefault {
+		t.Errorf("expected zen/v1 to normalize to %s, got %s", expectedDefault, norm)
+	}
+	if norm := account.NormalizeOpenCodeBaseURL("https://opencode.ai/zen"); norm != expectedDefault {
+		t.Errorf("expected zen to normalize to %s, got %s", expectedDefault, norm)
+	}
+	if norm := account.NormalizeOpenCodeBaseURL(""); norm != expectedDefault {
+		t.Errorf("expected empty to normalize to %s, got %s", expectedDefault, norm)
+	}
+	custom := "https://my-custom-proxy.internal/v1"
+	if norm := account.NormalizeOpenCodeBaseURL(custom); norm != custom {
+		t.Errorf("expected custom url preserved %s, got %s", custom, norm)
+	}
+}
+
+func TestOpenCodeRelay_Cooldown_Returns429_Not503(t *testing.T) {
+	mgr := account.NewManager()
+	accID, err := mgr.AddOpenCodeAccount(account.OpenCodeAccountInput{
+		BaseURL:      "https://opencode.ai/zen/v1",
+		AccessToken:  "oc_sk_test",
+		DefaultModel: "deepseek-v4.1-flash-free",
+	})
+	if err != nil {
+		t.Fatalf("failed to add account: %v", err)
+	}
+
+	future := time.Now().UnixNano()/1e6 + 60000
+	mgr.SetAccountCooldownForChannel(accID, future, "opencode", "deepseek-v4.1-flash-free")
+
+	handler := &APICompatHandler{
+		accountMgr: mgr,
+	}
+
+	// 1. 普通请求在号池冷却时应返回 429 且带有 Retry-After 头，绝不返回误导性 503
+	reqBody := []byte(`{"model":"deepseek-v4.1-flash-free","messages":[{"role":"user","content":"hi"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/opencode/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.handleOpenCode(w, req, &RelaySession{UserID: "test_user"})
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 status code when all accounts cooling down, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "opencode_pool_cooldown") {
+		t.Errorf("expected opencode_pool_cooldown in error body, got %s", w.Body.String())
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Errorf("expected Retry-After header present")
+	}
+
+	// 2. 测速请求（带 X-Antigravity-Benchmark: 1）在冷却时应具备探活特权，允许尝试上游
+	var upstreamCalled bool
+	ts := httptest.NewServer(http.HandlerFunc(func(sw http.ResponseWriter, sr *http.Request) {
+		upstreamCalled = true
+		sw.Header().Set("Content-Type", "text/event-stream")
+		sw.WriteHeader(http.StatusOK)
+		_, _ = sw.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer ts.Close()
+
+	testAcc := mgr.GetAccountByID(accID)
+	testAcc.BaseURL = ts.URL
+
+	benchReq := httptest.NewRequest(http.MethodPost, "/opencode/v1/chat/completions", bytes.NewReader(reqBody))
+	benchReq.Header.Set("Content-Type", "application/json")
+	benchReq.Header.Set("X-Antigravity-Benchmark", "1")
+	wBench := httptest.NewRecorder()
+
+	handler.handleOpenCode(wBench, benchReq, &RelaySession{UserID: "test_user", IsBenchmark: true})
+
+	if !upstreamCalled {
+		t.Fatalf("expected benchmark request to probe upstream even during cooldown")
+	}
+	if wBench.Code != http.StatusOK {
+		t.Fatalf("expected benchmark probe to succeed 200, got %d: %s", wBench.Code, wBench.Body.String())
+	}
+	// 探活成功后自愈清除了冷却
+	if testAcc.CooldownUntil != 0 {
+		t.Errorf("expected cooldown to be cleared on 200 OK, got CooldownUntil=%d", testAcc.CooldownUntil)
+	}
+}
+
+func TestOpenCodeURLNormalizationInRelay(t *testing.T) {
+	// 验证各种历史 baseUrl 均能统一归一化为官方 API 端点
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"", account.DefaultOpenCodeBaseURL},
+		{"https://opencode.ai/zen", account.DefaultOpenCodeBaseURL},
+		{"https://opencode.ai/zen/v1", account.DefaultOpenCodeBaseURL},
+		{"https://opencode.ai/zen/v1/", account.DefaultOpenCodeBaseURL},
+		{"https://opencode.ai/inference/openai/v1", account.DefaultOpenCodeBaseURL},
+		{"https://my-custom.endpoint.com/v1", "https://my-custom.endpoint.com/v1"},
+	}
+
+	for _, tc := range cases {
+		got := account.NormalizeOpenCodeBaseURL(tc.input)
+		if got != tc.want {
+			t.Errorf("NormalizeOpenCodeBaseURL(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+
 

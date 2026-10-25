@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/settings"
 	"encoding/json"
+	"strings"
 	"fmt"
 	"math"
 	"math/rand"
@@ -17,6 +19,16 @@ import (
 
 func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 	maxRetries := sc.h.getMaxRetries()
+	var poolErrorRule *settings.PoolErrorRetryConfig
+	if sc.h.SettingsMgr != nil {
+		rule := sc.h.SettingsMgr.GetPoolErrorRetry()
+		if rule.Enabled {
+			poolErrorRule = &rule
+			if rule.MaxRetries > 0 {
+				maxRetries = rule.MaxRetries
+			}
+		}
+	}
 	var lastUsedAccount *account.Account
 	var lastAccountID string
 	var lastAccountFailCount int
@@ -138,14 +150,20 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Process Errors (Rate Limits, Quota Exceeded, Token Expired)
-		isRetryable := errAttempt.Error() == "CAPACITY_EXHAUSTED" ||
-			errAttempt.Error() == "QUOTA_EXHAUSTED" ||
-			errAttempt.Error() == "RATE_LIMITED" ||
-			errAttempt.Error() == "TOKEN_EXPIRED" ||
-			errAttempt.Error() == "CREDITS_EXHAUSTED" ||
-			errAttempt.Error() == "SERVER_ERROR" ||
-			errAttempt.Error() == "STREAM_INTERRUPTED"
+		// Process Errors (Rate Limits, Quota Exceeded, Token Expired, Custom Rules)
+		errStr := errAttempt.Error()
+		isCustomSwitch := strings.HasPrefix(errStr, "CUSTOM_SWITCH_ACCOUNT")
+		isCustomRetry := strings.HasPrefix(errStr, "CUSTOM_RETRY_ACCOUNT")
+
+		isRetryable := isCustomSwitch ||
+			isCustomRetry ||
+			errStr == "CAPACITY_EXHAUSTED" ||
+			errStr == "QUOTA_EXHAUSTED" ||
+			errStr == "RATE_LIMITED" ||
+			errStr == "TOKEN_EXPIRED" ||
+			errStr == "CREDITS_EXHAUSTED" ||
+			errStr == "SERVER_ERROR" ||
+			errStr == "STREAM_INTERRUPTED"
 
 		if lastUsedAccount != nil {
 			accId := lastUsedAccount.ID
@@ -253,6 +271,23 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			if isCustomSwitch {
+				cooldownSecs := settings.DefaultSwitchCooldownSecs
+				if poolErrorRule != nil && poolErrorRule.SwitchCooldownSecs >= 0 {
+					cooldownSecs = poolErrorRule.SwitchCooldownSecs
+				}
+				if cooldownSecs > 0 {
+					sc.h.logFn(fmt.Sprintf("🔀 [负载均衡] 账号 %s 遇到报错 (%d) 命中自定义切号规则。设置临时冷静期 (%ds) 并切换下一个账号重试...", email, status, cooldownSecs))
+					sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+int64(cooldownSecs)*1000, sc.currentModel)
+				} else {
+					sc.h.logFn(fmt.Sprintf("🔀 [负载均衡] 账号 %s 遇到报错 (%d) 命中自定义切号规则 (不设全局冷静期，仅本次重试切换)...", email, status))
+				}
+			}
+
+			if isCustomRetry {
+				sc.h.logFn(fmt.Sprintf("🔁 [负载均衡] 账号 %s 遇到报错 (%d) 命中自定义重试规则。不设置冷静期，继续使用当前账号重试...", email, status))
+			}
+
 			if errAttempt.Error() == "CAPACITY_EXHAUSTED" || errAttempt.Error() == "QUOTA_EXHAUSTED" {
 				sc.h.accountMgr.RecordAccountError(accId, status, sc.currentModel, sc.h.logFn)
 			}
@@ -293,7 +328,13 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 			jitter := rand.Float64() * 500.0
 			maxDelayMs := float64(sc.h.getMaxRetryDelay() * 1000)
 			delay := math.Min(float64(sc.h.statsTracker.GetTotalRetries()*1000), maxDelayMs) + jitter
-			sc.h.logFn(fmt.Sprintf("%s ⚠️ 请求失败 (%s)。将在 %dms 后自动切换账号重试...", sc.logPrefix, errAttempt.Error(), int(delay)))
+			if isCustomSwitch {
+				sc.h.logFn(fmt.Sprintf("%s 🔀 请求遇到状态码 %d，命中自定义切号规则。将在 %dms 后切换账号重试...", sc.logPrefix, status, int(delay)))
+			} else if isCustomRetry {
+				sc.h.logFn(fmt.Sprintf("%s 🔁 请求遇到状态码 %d，命中自定义重试规则。将在 %dms 后当前账号重试...", sc.logPrefix, status, int(delay)))
+			} else {
+				sc.h.logFn(fmt.Sprintf("%s ⚠️ 请求失败 (%s)。将在 %dms 后自动切换账号重试...", sc.logPrefix, errAttempt.Error(), int(delay)))
+			}
 
 			sc.h.errLogger.Log("RETRY", sc.targetPath, sc.currentModel, sc.allocatedAccount, attempt+1, errAttempt.Error())
 			select {
@@ -307,17 +348,27 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 			sc.logRequestToTracker(429, errAttempt.Error())
 
 			if !sc.headersSent {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(429)
-				errResp := map[string]interface{}{
-					"error": map[string]interface{}{
-						"code":    429,
-						"message": "Active accounts quota exhausted",
-						"status":  "RESOURCE_EXHAUSTED",
-					},
+				if (isCustomSwitch || isCustomRetry) && status > 0 && len(body) > 0 {
+					for k, values := range headers {
+						for _, v := range values {
+							w.Header().Add(k, v)
+						}
+					}
+					w.WriteHeader(status)
+					w.Write(body)
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(429)
+					errResp := map[string]interface{}{
+						"error": map[string]interface{}{
+							"code":    429,
+							"message": "Active accounts quota exhausted",
+							"status":  "RESOURCE_EXHAUSTED",
+						},
+					}
+					b, _ := json.Marshal(errResp)
+					w.Write(b)
 				}
-				b, _ := json.Marshal(errResp)
-				w.Write(b)
 			}
 			return
 		}
