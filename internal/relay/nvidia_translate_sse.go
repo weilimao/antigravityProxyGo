@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,7 +124,7 @@ func openAIChatSSEToAnthropicSSEIntoPinned(ctx context.Context, reader io.Reader
 				} `json:"error"`
 			}
 			var errChunk sseErrorChunk
-			if json.Unmarshal(dataBytes, &errChunk) == nil && errChunk.Error != nil && errChunk.Error.Message != "" {
+			if fastUnmarshal(dataBytes, &errChunk) == nil && errChunk.Error != nil && errChunk.Error.Message != "" {
 				errMsg := fmt.Sprintf("upstream sse error: %s (code: %v)", errChunk.Error.Message, errChunk.Error.Code)
 				// 保住 err 供上层(writeNvidiaAnthropicStream 忽略返回值,但 watchCancel/日志可取)
 				// 仅在尚未被 ctx 取消语义占据时记录上游 error,避免覆盖既有 ctx 取消路径的语义。
@@ -146,7 +145,7 @@ func openAIChatSSEToAnthropicSSEIntoPinned(ctx context.Context, reader io.Reader
 		}
 
 		var chunk OpenAIChatStreamChunk
-		if err := json.Unmarshal(dataBytes, &chunk); err != nil {
+		if err := fastUnmarshal(dataBytes, &chunk); err != nil {
 			// 跳过无法解析的行，但不中断流
 			continue
 		}

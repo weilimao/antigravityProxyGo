@@ -1,24 +1,24 @@
-### v1.7.4 更新日志
+### v1.7.5 更新日志
 
-- **WorkBuddy 400 / 11128 渠道校验拦截修复（重点）**：
-  - 会话标识规整：新增 `workbuddyConversationID`，把内部会话键（`claude:` / `opencode:` / `acc:` / `auth:acc:` / `sock:acc:` 等带前缀形态）经 SHA-256 派生为确定性 UUID 后写入 `X-Conversation-ID`。此前内部前缀直接外泄，既不符合上游 UUID 格式要求，`claude:` 本身就是「非官方客户端」的最强指纹；派生方案保持同一会话的粘性语义不变；
-  - 请求头 1:1 复刻官方桌面端：`applyWorkBuddyChatHeaders` 补齐 `x-codebuddy-request`、`X-Product`、`X-Private-Data`、`X-Agent-Intent`、`X-Agent-Purpose` 等 app-server 安全头，以及 `traceparent` / `b3` / `X-B3-*` / `X-Trace-ID` 链路追踪头；新增 `X-Current-Account-Id`（与 `X-User-Id` 同值）；
-  - 提示词指纹清洗：system 消息在通用清洗后再泛化残留 `claude` / `anthropic` 字样，并抹除 `Main branch (you will usually use this for PRs)` 句式指纹（实测单句即可触发 11128），只去掉括号注释，语义不丢；
-  - 号池保护策略调整：11128 不再冷冻账号（避免一个坏载荷连坐整池），改为本请求内跳过该账号换号重试；全部账号失败时回传上游原始错误体，客户端看到真实原因而非包装后的 502；被拦载荷与请求头摘要落本机临时目录用于排查。
+- **号池自定义切号与错误重试规则引擎（重点）**：
+  - 新增号池自定义重试规则配置（`settings_pool_error_retry.go`），支持根据 HTTP 状态码（如 429、500 等）和错误内容关键字定义切号行为（`SWITCH_NEXT_ACCOUNT` 换号重试、`RETRY_SAME_ACCOUNT` 同号重试）与独立冷静期；
+  - 代理转发重试循环深度打通，上游报错命中自定义规则时自动设置临时冷静期并平滑无感切号重试，大幅提升高并发与节点异常时的容灾成功率；
+  - 前端控制台设置新增「号池错误重试配置」可视化弹窗（`PoolErrorRetryModal.vue`），支持按状态码及错误模式增删改查重试规则。
 
-- **WorkBuddy 客户端版本按区域回退**：
-  - 新增 `GetWorkBuddyCliVersionRaw`，返回未回退默认值的配置原文，由 `BuildWorkBuddyHeaders` 按账号区域选择默认版本（国际版 `5.7.6` / 国内版 `5.7.7`）。此前统一传国内默认版本，国际版账号会被顶替成不匹配的版本。
+- **WorkBuddy Token 后台静默自动刷新与配额兼容**：
+  - 新增 WorkBuddy 令牌后台自动刷新机制（`account_workbuddy_refresh.go`），检测 AccessToken 过期失效时利用 RefreshToken 自动静默换发新凭证，杜绝频繁手动重登；
+  - 完善国内版（CodeBuddy / 国际 WorkBuddy）双模版本适配与动态配额解析，修正国内版周期重置时间与额度计算。
 
-- **请求日志重复记账修复**：
-  - 新增 `Tracker.HasRequest` 与同 ID 幂等合并，中继侧 `relayRecordUsage` 与 proxyHandler 记账互斥，消除请求量翻倍与成对重复行；
-  - 远端转发日志改用 `AddRequestLogInMemoryOnly`，不再异步二次写入 `mode="local"` 重复记录；
-  - 日志 `ReqID` 复用 `X-Antigravity-Req-ID`，贯通去重链路；补齐 `CacheStatus` 字段（HIT / MISS / NONE），前端缓存徽标兼容仅有 `cachedTokens` 的回填历史行。
+- **控制台压测模型统计与虚拟滚动性能优化**：
+  - 控制台首页新增模型级统计卡片与虚拟列表滚动架构（`dashboardModelStats.ts`），解决海量请求记录下的 DOM 节点堆积与卡顿掉帧问题；
+  - 优化压测结果状态码回退提取逻辑（显式状态码与文本错误正则解析双重保障），指标卡片新增首帧延迟与错误状态 Badge 双语高亮渲染。
 
-- **首页顶部广告横幅轮播**：
-  - 新增 `AdCarousel` 组件与 `adService` 数据服务，从后端拉取公开免鉴权广告列表；
-  - 具备 3 秒超时隔离与多端口回退（8090 → 8000）容错，本地轻量缓存 + 服务不可达时的降级默认宣传项；
-  - 支持自动轮播、悬停暂停、手动切换、图片加载失败兜底与中英文标题切换。
+- **2FA / TOTP 账号批量导出能力**：
+  - 新增 TOTP IPC 处理模块（`app_totp_ipc.go`），支持 2FA 账号一键批量导出为 TXT、CSV 与 JSON 格式，具备安全的系统文件保存对话框与导出校验；
+  - OTP 界面全面集成导出交互与中英文双语适配。
 
-- **WorkBuddy 请求区域错位修复**：
-  - 路由转发改写请求体模型前，把客户端原始模型名写入 `X-Antigravity-Original-Model`；选号阶段优先用它判断区域亲和性，避免带前缀模型（`workbuddy/cn/*`、`workbuddy/intl/*`）在请求体 model 被映射为裸模型名后丢失区域意图，导致国内请求被分到国际账号。
-  - 号池中无匹配区域账号时降级使用全量号池，不影响可用性。
+- **OpenCode 粘性会话与中继流式吞吐性能增强**：
+  - 引入高性能 `goccy/go-json`（`fast_json.go`）重构 SSE 增量数据块序列化与解析，大幅降低高频流式传输下的 CPU 反射开销与内存分配；
+  - 优化 OpenCode 会话隔离键（`opencode_session.go`），规范上游流式与非流式通道透传；
+  - NVIDIA 模块针对 SSE 数据块解析与多会话取消隔离进行深度加固。
+

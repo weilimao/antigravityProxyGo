@@ -93,29 +93,8 @@ func (h *APICompatHandler) handleStreamResponse(
 
 	// Anthropic 协议下，开始流时首发 message_start
 	if apiFormat == "anthropic" {
-		msgStart := map[string]interface{}{
-			"type": "message_start",
-			"message": map[string]interface{}{
-				"id":            streamID,
-				"type":          "message",
-				"role":          "assistant",
-				"content":       []interface{}{},
-				"model":         displayModel,
-				"stop_reason":   nil,
-				"stop_sequence": nil,
-				// usage:首帧 input_tokens 用入站请求本地估算值(保底 1),让客户端(Claude Code spinner
-				// 进行中)在流首即可显示 ↑;output_tokens 起始占位为 1(官方惯例预扣占位,与 NVIDIA 路径
-				// messageStartPayload 历史一致)。真实累计值由末帧 message_delta.usage 覆盖。
-				"usage": map[string]interface{}{
-					"input_tokens":                startInputTokens,
-					"output_tokens":               1,
-					"cache_creation_input_tokens": 0,
-					"cache_read_input_tokens":     0,
-				},
-			},
-		}
-		msgStartBytes, _ := json.Marshal(msgStart)
-		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", string(msgStartBytes))
+		// 性能优化：直接使用零反射预分配 payload 构造器 messageStartPayload
+		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", messageStartPayload(streamID, displayModel, startInputTokens))
 		flusher.Flush()
 	}
 
@@ -251,7 +230,7 @@ func (h *APICompatHandler) handleStreamResponse(
 		}
 
 		var gemResp GeminiResponse
-		if err = json.Unmarshal([]byte(dataStr), &gemResp); err != nil {
+		if err = fastUnmarshal([]byte(dataStr), &gemResp); err != nil {
 			continue
 		}
 
@@ -287,7 +266,7 @@ func (h *APICompatHandler) handleStreamResponse(
 					{Index: 0, Delta: OpenAIDelta{Role: "assistant"}, FinishReason: nil},
 				},
 			}
-			initBytes, _ := json.Marshal(initChunk)
+			initBytes, _ := fastMarshal(initChunk)
 			fmt.Fprintf(w, "data: %s\n\n", string(initBytes))
 			flusher.Flush()
 			openAIRoleSent = true
@@ -305,30 +284,16 @@ func (h *APICompatHandler) handleStreamResponse(
 					// 思考过程分片处理
 					if apiFormat == "anthropic" {
 						if textBlockOpen {
-							stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
-							stopBytes, _ := json.Marshal(stopEvt)
-							fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
+							fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", contentBlockStopPayload(blockIndex))
 							blockIndex++
 							textBlockOpen = false
 						}
 						if !thinkingBlockOpen {
-							startEvt := map[string]interface{}{
-								"type":          "content_block_start",
-								"index":         blockIndex,
-								"content_block": map[string]interface{}{"type": "thinking", "thinking": "", "signature": ""},
-							}
-							startBytes, _ := json.Marshal(startEvt)
-							fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", string(startBytes))
+							fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", contentBlockThinkingStartPayload(blockIndex))
 							thinkingBlockOpen = true
 							thinkingEmittedAny = false
 						}
-						deltaEvt := map[string]interface{}{
-							"type":  "content_block_delta",
-							"index": blockIndex,
-							"delta": map[string]interface{}{"type": "thinking_delta", "thinking": cleanText},
-						}
-						deltaBytes, _ := json.Marshal(deltaEvt)
-						fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(deltaBytes))
+						fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", contentBlockThinkingDeltaPayload(blockIndex, cleanText))
 						thinkingEmittedAny = true
 					} else if apiFormat == "openai" {
 						// OpenAI 流式思考走官方独立 reasoning_content 字段,不混入 delta.content,
@@ -343,7 +308,7 @@ func (h *APICompatHandler) handleStreamResponse(
 								{Index: 0, Delta: OpenAIDelta{ReasoningContent: cleanText}, FinishReason: nil},
 							},
 						}
-						chunkBytes, _ := json.Marshal(chunk)
+						chunkBytes, _ := fastMarshal(chunk)
 						fmt.Fprintf(w, "data: %s\n\n", string(chunkBytes))
 					} else if apiFormat == "responses" {
 						if !responsesReasoningOpened {
@@ -404,7 +369,7 @@ func (h *APICompatHandler) handleStreamResponse(
 									{Index: 0, Delta: OpenAIDelta{Role: "assistant"}, FinishReason: nil},
 								},
 							}
-							initBytes, _ := json.Marshal(initChunk)
+							initBytes, _ := fastMarshal(initChunk)
 							fmt.Fprintf(w, "data: %s\n\n", string(initBytes))
 							flusher.Flush()
 							openAIRoleSent = true
@@ -419,7 +384,7 @@ func (h *APICompatHandler) handleStreamResponse(
 								{Index: 0, Delta: OpenAIDelta{Content: cleanText}, FinishReason: nil},
 							},
 						}
-						chunkBytes, _ := json.Marshal(chunk)
+						chunkBytes, _ := fastMarshal(chunk)
 						fmt.Fprintf(w, "data: %s\n\n", string(chunkBytes))
 					} else if apiFormat == "responses" {
 						// 进入正文 item 前,先把可能已开启的 reasoning item 闭合掉:
@@ -478,16 +443,8 @@ func (h *APICompatHandler) handleStreamResponse(
 							// 则不发 signature_delta 也不发 stop —— 但此处 thinkingBlockOpen 必伴随首 delta,
 							// 故仅作防御保留对称逻辑,正常路径总会执行 signature_delta。
 							if thinkingEmittedAny {
-								sigEvt := map[string]interface{}{
-									"type":  "content_block_delta",
-									"index": blockIndex,
-									"delta": map[string]interface{}{"type": "signature_delta", "signature": ""},
-								}
-								sigBytes, _ := json.Marshal(sigEvt)
-								fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(sigBytes))
-								stopEvt := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
-								stopBytes, _ := json.Marshal(stopEvt)
-								fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
+								fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", contentBlockSignatureDeltaPayload(blockIndex, ""))
+								fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", contentBlockStopPayload(blockIndex))
 								blockIndex++
 							}
 							thinkingBlockOpen = false
@@ -495,22 +452,10 @@ func (h *APICompatHandler) handleStreamResponse(
 						}
 						// 延迟开启 text block：仅在有实际文本时才发送 content_block_start
 						if !textBlockOpen {
-							blockStart := map[string]interface{}{
-								"type":          "content_block_start",
-								"index":         blockIndex,
-								"content_block": map[string]interface{}{"type": "text", "text": ""},
-							}
-							blockStartBytes, _ := json.Marshal(blockStart)
-							fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", string(blockStartBytes))
+							fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", contentBlockStartPayload(blockIndex, "text", "", ""))
 							textBlockOpen = true
 						}
-						delta := map[string]interface{}{
-							"type":  "content_block_delta",
-							"index": blockIndex,
-							"delta": map[string]interface{}{"type": "text_delta", "text": cleanText},
-						}
-						deltaBytes, _ := json.Marshal(delta)
-						fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(deltaBytes))
+						fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", contentBlockTextDeltaPayload(blockIndex, cleanText))
 					}
 					flusher.Flush()
 				}
@@ -526,7 +471,7 @@ func (h *APICompatHandler) handleStreamResponse(
 					openAIToolCallIdx++
 					toolCallIndex := openAIToolCallIdx
 					callID := fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), rand.Int63n(1000))
-					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+					argsJSON, _ := fastMarshal(part.FunctionCall.Args)
 					if len(argsJSON) == 0 || string(argsJSON) == "null" {
 						argsJSON = []byte("{}")
 					}
@@ -589,7 +534,7 @@ func (h *APICompatHandler) handleStreamResponse(
 					closeResponsesReasoning()
 					callID := fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), rand.Int63n(1000))
 					fcItemID := fmt.Sprintf("fc_%s", callID)
-					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+					argsJSON, _ := fastMarshal(part.FunctionCall.Args)
 					if len(argsJSON) == 0 || string(argsJSON) == "null" {
 						argsJSON = []byte("{}")
 					}
@@ -700,36 +645,17 @@ func (h *APICompatHandler) handleStreamResponse(
 					toolID := generateToolUseID()
 
 					// content_block_start: tool_use
-					toolStart := map[string]interface{}{
-						"type":  "content_block_start",
-						"index": blockIndex,
-						"content_block": map[string]interface{}{
-							"type":  "tool_use",
-							"id":    toolID,
-							"name":  part.FunctionCall.Name,
-							"input": map[string]interface{}{},
-						},
-					}
-					toolStartBytes, _ := json.Marshal(toolStart)
-					fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", string(toolStartBytes))
+					fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", contentBlockStartPayload(blockIndex, "tool_use", toolID, part.FunctionCall.Name))
 
 					// content_block_delta: input_json_delta（一次性发完 args JSON）
-					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+					argsJSON, _ := fastMarshal(part.FunctionCall.Args)
 					if len(argsJSON) == 0 || string(argsJSON) == "null" {
 						argsJSON = []byte("{}")
 					}
-					inputDelta := map[string]interface{}{
-						"type":  "content_block_delta",
-						"index": blockIndex,
-						"delta": map[string]interface{}{"type": "input_json_delta", "partial_json": string(argsJSON)},
-					}
-					inputDeltaBytes, _ := json.Marshal(inputDelta)
-					fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(inputDeltaBytes))
+					fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", contentBlockInputJSONDeltaPayload(blockIndex, string(argsJSON)))
 
 					// content_block_stop
-					toolStop := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
-					toolStopBytes, _ := json.Marshal(toolStop)
-					fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(toolStopBytes))
+					fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", contentBlockStopPayload(blockIndex))
 					blockIndex++
 
 					flusher.Flush()
@@ -750,7 +676,7 @@ func (h *APICompatHandler) handleStreamResponse(
 					{Index: 0, Delta: OpenAIDelta{Role: "assistant", Content: "I have processed your request."}, FinishReason: nil},
 				},
 			}
-			initBytes, _ := json.Marshal(initChunk)
+			initBytes, _ := fastMarshal(initChunk)
 			fmt.Fprintf(w, "data: %s\n\n", string(initBytes))
 			flusher.Flush()
 			openAIRoleSent = true
@@ -882,49 +808,23 @@ func (h *APICompatHandler) handleStreamResponse(
 			// 关 thinking 块前补一条空串 signature_delta(仅当确实下发过 thinking_delta):
 			// 严格对齐官方序列 thinking_delta → signature_delta → content_block_stop。
 			if thinkingEmittedAny {
-				sigEvt := map[string]interface{}{
-					"type":  "content_block_delta",
-					"index": blockIndex,
-					"delta": map[string]interface{}{"type": "signature_delta", "signature": ""},
-				}
-				sigBytes, _ := json.Marshal(sigEvt)
-				fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(sigBytes))
-				blockStop := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
-				blockStopBytes, _ := json.Marshal(blockStop)
-				fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(blockStopBytes))
+				fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", contentBlockSignatureDeltaPayload(blockIndex, ""))
+				fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", contentBlockStopPayload(blockIndex))
 				blockIndex++
 			}
 			thinkingBlockOpen = false
 			thinkingEmittedAny = false
 		}
 		if textBlockOpen {
-			blockStop := map[string]interface{}{"type": "content_block_stop", "index": blockIndex}
-			blockStopBytes, _ := json.Marshal(blockStop)
-			fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(blockStopBytes))
+			fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", contentBlockStopPayload(blockIndex))
 			textBlockOpen = false
 		}
 
 		// 兜底：如果完全没有打开过任何 content block (blockIndex == 0 && !hasFunctionCall)，给 Anthropic / Claude Code 客户端发射一个空 text content block，确保 Claude Code 不会报错
 		if blockIndex == 0 && !hasFunctionCall {
-			startEvt := map[string]interface{}{
-				"type":          "content_block_start",
-				"index":         0,
-				"content_block": map[string]interface{}{"type": "text", "text": ""},
-			}
-			startBytes, _ := json.Marshal(startEvt)
-			fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", string(startBytes))
-
-			deltaEvt := map[string]interface{}{
-				"type":  "content_block_delta",
-				"index": 0,
-				"delta": map[string]interface{}{"type": "text_delta", "text": ""},
-			}
-			deltaBytes, _ := json.Marshal(deltaEvt)
-			fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", string(deltaBytes))
-
-			stopEvt := map[string]interface{}{"type": "content_block_stop", "index": 0}
-			stopBytes, _ := json.Marshal(stopEvt)
-			fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", string(stopBytes))
+			fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", contentBlockStartPayload(0, "text", "", ""))
+			fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", contentBlockTextDeltaPayload(0, ""))
+			fmt.Fprintf(w, "event: content_block_stop\ndata: %s\n\n", contentBlockStopPayload(0))
 		}
 
 		stopReason := "end_turn"
@@ -932,22 +832,8 @@ func (h *APICompatHandler) handleStreamResponse(
 			stopReason = "tool_use"
 		}
 
-		msgDelta := map[string]interface{}{
-			"type": "message_delta",
-			"delta": map[string]interface{}{
-				"stop_reason":   stopReason,
-				"stop_sequence": nil,
-			},
-			// usage 双填 input/output：官方 cumulative 语义与 NVIDIA 链(openAIChatSSEToAnthropicSSEInto)
-			// 对齐。inTokens/outTokens 取自 Gemini usageMetadata(逐帧更新,末帧权威)，
-			// 让 Claude Code 客户端上下文台账拿到上游真实消耗量,而非仅 message_start 估算值。
-			"usage": map[string]interface{}{
-				"output_tokens": outTokens,
-				"input_tokens":  inTokens,
-			},
-		}
-		msgDeltaBytes, _ := json.Marshal(msgDelta)
-		fmt.Fprintf(w, "event: message_delta\ndata: %s\n\n", string(msgDeltaBytes))
+		// usage 双填 input/output：直接复用高性能 messageDeltaPayload
+		fmt.Fprintf(w, "event: message_delta\ndata: %s\n\n", messageDeltaPayload(stopReason, outTokens, inTokens))
 
 		fmt.Fprintf(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	}

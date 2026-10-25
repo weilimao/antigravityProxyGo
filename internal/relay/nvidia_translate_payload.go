@@ -2,7 +2,6 @@ package relay
 
 import (
 	"antigravity-proxy/internal/account"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -112,7 +111,7 @@ func contentBlockStartPayload(index int, kind, id, name string) string {
 }
 
 func contentBlockTextDeltaPayload(index int, text string) string {
-	quotedText, err := json.Marshal(text)
+	quotedText, err := fastMarshal(text)
 	if err != nil {
 		quotedText = []byte(`""`)
 	}
@@ -127,7 +126,7 @@ func contentBlockTextDeltaPayload(index int, text string) string {
 }
 
 func contentBlockInputJSONDeltaPayload(index int, partialJSON string) string {
-	quoted, err := json.Marshal(partialJSON)
+	quoted, err := fastMarshal(partialJSON)
 	if err != nil {
 		quoted = []byte(`""`)
 	}
@@ -157,7 +156,7 @@ func contentBlockThinkingStartPayload(index int) string {
 
 // contentBlockThinkingDeltaPayload 构造 thinking_delta 增量负载,承载上游推理过程的分片文本。
 func contentBlockThinkingDeltaPayload(index int, thinking string) string {
-	quoted, err := json.Marshal(thinking)
+	quoted, err := fastMarshal(thinking)
 	if err != nil {
 		quoted = []byte(`""`)
 	}
@@ -174,7 +173,7 @@ func contentBlockThinkingDeltaPayload(index int, thinking string) string {
 // contentBlockSignatureDeltaPayload 构造 signature_delta 负载:关 thinking 块前发一次。
 // 对无签名上游传空串占位,保证协议形态完整,避免客户端把缺 signature_delta 的 thinking 块判为不完整而丢弃。
 func contentBlockSignatureDeltaPayload(index int, signature string) string {
-	quoted, err := json.Marshal(signature)
+	quoted, err := fastMarshal(signature)
 	if err != nil {
 		quoted = []byte(`""`)
 	}

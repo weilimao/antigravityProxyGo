@@ -229,7 +229,7 @@ func aggregateOpenAISSEStream(reader io.Reader, fallbackModel string) (*OpenAICh
 			} `json:"choices"`
 			Usage *OpenAIChatUsage `json:"usage"`
 		}
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		if err := fastUnmarshal([]byte(data), &chunk); err != nil {
 			continue
 		}
 		if chunk.ID != "" {

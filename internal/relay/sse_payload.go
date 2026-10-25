@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"encoding/json"
 	"io"
 )
 
@@ -22,15 +21,10 @@ import (
 // jsonString 把任意可序列化值 JSON-marshall 成字符串。
 // 收口各 SSE payload 构造器尾部的 marshal+string 两步样板:
 //   - 成功:返回紧凑 JSON 文本(与 `string(json.Marshal(...))` 逐字节等价);
-//   - 失败:json.Marshal 返回 err 且 b==nil → string(b)=="" —— 与原
-//     `payload, _ := json.Marshal(...); return string(payload)`(失败 payload==nil, string(nil)=="")
-//     语义逐行等价,零回归。
-//
-// 不返回 error:所有调用点的构造 map 均为合法可序列化结构,marshal 不可能失败;
-// 保留错误吞没语义仅为与原代码逐行等价,避免引入上游需处理的错误返回值改签名。
+//   - 失败:返回空字符串(与原逻辑语义逐行等价)。
+// 性能优化：使用 fastMarshalString (goccy/go-json) 替代慢速反射 encoding/json。
 func jsonString(v interface{}) string {
-	b, _ := json.Marshal(v)
-	return string(b)
+	return fastMarshalString(v)
 }
 
 // writeSSEFrame 把一帧 Anthropic SSE 写进给定 sink。

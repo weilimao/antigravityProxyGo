@@ -390,7 +390,7 @@ func OpenAIChatSSEToResponsesSSE(ctx context.Context, reader io.Reader, body io.
 			break
 		}
 		var chunk OpenAIChatStreamChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		if err := fastUnmarshal([]byte(data), &chunk); err != nil {
 			// 跳过无法解析的坏帧，不中断流
 			continue
 		}
