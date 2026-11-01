@@ -118,8 +118,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
-	// 仅对来自 18444 第三方平台调用的流式接口注入自定义提示词前缀 (原生 Antigravity 客户端保持原始载荷透传)
-	if relayUserID != "" && h.SettingsMgr != nil && len(bodyBytes) > 0 && isRealModelRequest(r.URL.Path) {
+	// 对来自 18444 第三方中继或新版 IDE 插件的流式接口注入自定义提示词前缀 (官方原生 Antigravity 客户端保持原始载荷透传)
+	if (relayUserID != "" || isNewIDEPlugin(r.Header.Get("User-Agent"))) && h.SettingsMgr != nil && len(bodyBytes) > 0 && isRealModelRequest(r.URL.Path) {
 		isStreaming := strings.Contains(r.URL.Path, "streamGenerateContent") || strings.Contains(r.URL.RawQuery, "alt=sse")
 		if isStreaming {
 			prefix := h.SettingsMgr.GetPromptPrefix()
@@ -129,9 +129,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 工具声明清洗：仅对来自 18444 第三方平台调用的模型请求清洗 tools 中的 JSON Schema，
-	// 防止第三方客户端的工具参数触发 MALFORMED_FUNCTION_CALL。原生 Antigravity 客户端保持原始请求体透传。
-	if relayUserID != "" && len(bodyBytes) > 0 && isRealModelRequest(r.URL.Path) {
+	// 工具声明清洗：对来自 18444 第三方中继或新版 IDE 插件的模型请求清洗 tools 中的 JSON Schema，
+	// 防止客户端的工具参数触发 MALFORMED_FUNCTION_CALL。官方原生 Antigravity 客户端保持原始请求体透传。
+	if (relayUserID != "" || isNewIDEPlugin(r.Header.Get("User-Agent"))) && len(bodyBytes) > 0 && isRealModelRequest(r.URL.Path) {
 		bodyBytes = cleanToolDeclarationsInBody(bodyBytes)
 	}
 
@@ -190,7 +190,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ua := strings.ToLower(r.Header.Get("User-Agent"))
 		if strings.Contains(r.URL.Path, "generativelanguage") || strings.Contains(r.URL.Path, "models") {
 			targetHost = "generativelanguage.googleapis.com"
-		} else if strings.Contains(r.URL.Path, "daily-cloudcode-pa") || strings.Contains(ua, "antigravity") {
+		} else if strings.Contains(r.URL.Path, "v1internal") || strings.Contains(r.URL.Path, "daily-cloudcode-pa") ||
+			strings.Contains(ua, "antigravity") || strings.Contains(ua, "codeassist") ||
+			strings.Contains(ua, "vscode") || strings.Contains(ua, "cursor") || strings.Contains(ua, "windsurf") || strings.Contains(ua, "trae") {
 			targetHost = "daily-cloudcode-pa.googleapis.com"
 		} else {
 			targetHost = "cloudcode-pa.googleapis.com"

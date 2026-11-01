@@ -123,8 +123,22 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 				targetModel = mapModelForProject(sc.currentModel)
 			}
 		} else if strings.Contains(localTargetPath, "v1internal") {
-			// 对于 v1internal 接口，当使用个人账号通道时，直接保留客户端传入的项目 ID，避免因权限缺失报错。
+			// 对于 v1internal 接口，当使用个人账号通道时：
+			// 若客户端传入了有效项目 ID 则优先使用；若客户端未传入（新版 IDE 插件场景），则尝试从当前账号或存储中获取项目 ID 兜底
 			targetProject = bodyJson.Project
+			if targetProject == "" {
+				if poolAccount.ProjectID != "" {
+					targetProject = poolAccount.ProjectID
+				} else if sc.h.getStoredProject != nil {
+					targetProject = sc.h.getStoredProject(poolAccount.Email)
+				}
+				if targetProject == "" && sc.h.getStoredProject != nil {
+					targetProject = sc.h.getStoredProject("default")
+				}
+				if targetProject == "" {
+					targetProject = "favorable-synapse-ttvcb" // 官方默认兜底项目 ID
+				}
+			}
 			targetModel = ""
 		} else {
 			// 对于普通账号通道，我们强行将其改写规范为默认账号请求模式：
@@ -145,14 +159,17 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 		}
 
 		// Rewrite project and model fields in JSON payload
-		// 仅对 18444 第三方平台调用 (sc.relayUserID != "") 执行 project/model 覆写与思维链注入；原生 Antigravity 客户端保持原始请求体透传
-		if sc.relayUserID != "" && len(sc.bodyBytes) > 0 && strings.Contains(customHeaders.Get("Content-Type"), "json") {
+		// 仅对 18444 第三方平台调用 (sc.relayUserID != "") 以及新版 IDE 插件/第三方宿主编辑器 (!isNativeClient)
+		// 执行 project/model 覆写与思维链注入；官方原生 Antigravity 客户端若缺失 project 字段则自动补全兜底项目 ID，其余载荷保持透传
+		isNativeClient := isNativeOfficialAntigravityClient(sc.r.Header.Get("User-Agent"))
+		needProjectInjection := strings.Contains(localTargetPath, "v1internal") && bodyJson.Project == "" && targetProject != ""
+		if (sc.relayUserID != "" || !isNativeClient || needProjectInjection) && len(sc.bodyBytes) > 0 && strings.Contains(customHeaders.Get("Content-Type"), "json") {
 			var bodyMap map[string]interface{}
 			if json.Unmarshal(sc.bodyBytes, &bodyMap) == nil {
 				bodyChanged := false
 
 				if targetProject != "" {
-					if origProjVal, exists := bodyMap["project"]; exists && origProjVal != targetProject {
+					if origProjVal, exists := bodyMap["project"]; !exists || origProjVal != targetProject {
 						bodyMap["project"] = targetProject
 						bodyChanged = true
 					}
@@ -163,8 +180,10 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 					}
 				}
 
-				// 决定最终要写入的 Model
-				finalTargetModel := targetModel
+				// 仅对 18444 中继平台或第三方宿主插件客户端改写 model/thinkingConfig，原生官方客户端保持原始模型与思维链配置
+				if sc.relayUserID != "" || !isNativeClient {
+					// 决定最终要写入的 Model
+					finalTargetModel := targetModel
 				if finalTargetModel == "" {
 					finalTargetModel = sc.currentModel
 				}
@@ -180,6 +199,18 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 								bodyMap["model"] = finalTargetModel
 							}
 							bodyChanged = true
+						}
+					} else if reqMap, ok := bodyMap["request"].(map[string]interface{}); ok {
+						if modelVal, exists := reqMap["model"].(string); exists {
+							oldModelRaw := strings.TrimPrefix(modelVal, "models/")
+							if oldModelRaw != finalTargetModel {
+								if strings.HasPrefix(modelVal, "models/") {
+									reqMap["model"] = "models/" + finalTargetModel
+								} else {
+									reqMap["model"] = finalTargetModel
+								}
+								bodyChanged = true
+							}
 						}
 					}
 				}
@@ -245,10 +276,13 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 								genConfig["maxOutputTokens"] = maxOutputTokens
 							}
 							bodyChanged = true
-						}
-
-						// 2. 处理根节点的 generationConfig 结构
-						if genConfig, ok := bodyMap["generationConfig"].(map[string]interface{}); ok {
+						} else {
+							// 2. 处理根节点的 generationConfig 结构 (无 request 包装)
+							genConfig, ok := bodyMap["generationConfig"].(map[string]interface{})
+							if !ok {
+								genConfig = make(map[string]interface{})
+								bodyMap["generationConfig"] = genConfig
+							}
 							genConfig["thinkingConfig"] = thinkingCfg
 							if maxOutputTokens > 0 {
 								genConfig["maxOutputTokens"] = maxOutputTokens
@@ -260,6 +294,7 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 							sc.h.logFn(fmt.Sprintf("🧠 [思维链覆写] 动态注入 thinkingConfig: supports=%v, budget=%d, maxOutputTokens=%d", supportsThinking, budget, maxOutputTokens))
 						}
 					}
+				}
 				}
 
 				if bodyChanged {
@@ -345,9 +380,10 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 			}
 		} else {
 			// 对于 Antigravity 个人通道网页账户：
-			// 仅对 18444 端口第三方平台调用 (sc.relayUserID != "") 执行无项目降级翻译或 generativelanguage 包装；
-			// 原生 Antigravity 客户端调用保留原始 Host、Path 与请求体，只做透传。
-			if sc.relayUserID != "" {
+			// 1. 仅对 18444 端口第三方中继 (sc.relayUserID != "") 且无项目权限时，反向翻译降级为 generativelanguage 接口；
+			// 2. 直连 18443 端口的本地客户端（包括新版 IDE 插件与白色桌面端），v1internal 请求必须保持 daily-cloudcode-pa.googleapis.com 通道，并由前序逻辑自动兜底注入默认项目 favorable-synapse-ttvcb；
+			// 3. 若调用 generativelanguage 且具备项目权限，升级封装为 daily-cloudcode-pa 专有载荷。
+			if sc.relayUserID != "" || !isNativeClient {
 				isV1Internal := strings.Contains(localTargetPath, "v1internal") && isRealModelRequest(localTargetPath)
 
 				hasCustomProject := poolAccount.ProjectID != ""
@@ -355,9 +391,8 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 					hasCustomProject = sc.h.getStoredProject(poolAccount.Email) != ""
 				}
 
-				if isV1Internal && !hasCustomProject {
-					// 核心大招：如果这是一个 v1internal 请求，且当前账号没有任何捕获的专属项目 ID，
-					// 我们直接将其反向翻译并降级为标准的 generativelanguage 接口发送，彻底规避 IAM 权限 403 限制！
+				if sc.relayUserID != "" && isV1Internal && !hasCustomProject {
+					// 仅对 18444 中继平台的无项目权限调用反向翻译为标准 generativelanguage 接口
 					localTargetHost = "generativelanguage.googleapis.com"
 					customHeaders.Set("Host", localTargetHost)
 
@@ -384,9 +419,10 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 
 					localTargetPath = fmt.Sprintf("/v1beta/models/%s:%s%s", modelName, action, queryStr)
 
-					// 剥离外层 v1internal 包体，提取内层标准的 request 字段
+					// 剥离外层 v1internal 包体，提取或清理为标准的 Gemini request 字段
 					var v1internalReq map[string]interface{}
 					if err := json.Unmarshal(finalReqBody, &v1internalReq); err == nil {
+						var targetReq map[string]interface{}
 						if innerReqRaw, exists := v1internalReq["request"]; exists {
 							if innerReq, ok := innerReqRaw.(map[string]interface{}); ok {
 								// 核心修复：codex cli 的 v1internal 可能把 tools, systemInstruction 等丢在外层
@@ -398,18 +434,31 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 										}
 									}
 								}
+								targetReq = innerReq
+							}
+						} else {
+							// 客户端请求未封装在 "request" 中（直接以 contents 根节点发送）
+							// 移除 generativelanguage 不支持的外层特定字段 (project, requestId, userAgent, enabledCreditTypes, model 等)
+							delete(v1internalReq, "project")
+							delete(v1internalReq, "requestId")
+							delete(v1internalReq, "userAgent")
+							delete(v1internalReq, "requestType")
+							delete(v1internalReq, "enabledCreditTypes")
+							delete(v1internalReq, "model")
+							targetReq = v1internalReq
+						}
 
-								// 降级翻译后执行完整的 Gemini 兼容性清洗：
-								// 1. 清除 thoughtSignature（标准 API 不支持，会触发 MALFORMED_FUNCTION_CALL）
-								// 2. 清洗工具声明中的 JSON Schema（移除 Gemini 不支持的 $schema/additionalProperties/format 等字段）
-								// 3. 注入宽松 toolConfig
-								// 这是修复 Codex CLI 频繁断连的核心手段，参考 Antigravity-Manager 的 clean_json_schema 实现
-								cleanAndPrepareGeminiRequest(innerReq)
+						if targetReq != nil {
+							// 降级翻译后执行完整的 Gemini 兼容性清洗：
+							// 1. 清除 thoughtSignature（标准 API 不支持，会触发 MALFORMED_FUNCTION_CALL）
+							// 2. 清洗工具声明中的 JSON Schema（移除 Gemini 不支持的 $schema/additionalProperties/format 等字段）
+							// 3. 注入宽松 toolConfig
+							// 这是修复 Codex CLI 频繁断连的核心手段，参考 Antigravity-Manager 的 clean_json_schema 实现
+							cleanAndPrepareGeminiRequest(targetReq)
 
-								if innerBytes, errMar := json.Marshal(innerReq); errMar == nil {
-									finalReqBody = innerBytes
-									customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
-								}
+							if targetBytes, errMar := json.Marshal(targetReq); errMar == nil {
+								finalReqBody = targetBytes
+								customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
 							}
 						}
 					}
@@ -493,11 +542,19 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 							sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 通用路由] 保留官方通用接口访问: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
 						}
 					}
+				} else {
+					if attemptIndex == 0 {
+						sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 插件路由] 兼容转发至 Google 内部接口: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
+					}
 				}
 			} else {
-				// 原生 Antigravity 客户端调用，保留原生请求头与请求体无损透传
+				// 原生 Antigravity 客户端调用，保留原生请求头与请求体透传
 				if attemptIndex == 0 {
-					sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 原生透传] 保持原始请求头与载荷无损透传: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
+					if needProjectInjection {
+						sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 原生补全] 自动注入兜底项目 ID 并透传: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
+					} else {
+						sc.h.logFn(fmt.Sprintf("🔄 [Antigravity 原生透传] 保持原始请求头与载荷无损透传: %s -> https://%s%s", sc.r.URL.Path, localTargetHost, localTargetPath))
+					}
 				}
 			}
 		}

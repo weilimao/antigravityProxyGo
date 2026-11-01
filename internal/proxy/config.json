@@ -64,5 +64,12 @@
   "debuggerLogPath": "",
   "nvidiaPreferredModels": null,
   "accountLayout": "",
-  "accountGridColumns": 0
+  "accountGridColumns": 0,
+  "poolErrorRetry": {
+    "enabled": false,
+    "switchCodes": null,
+    "retryCodes": null,
+    "switchCooldownSecs": 0,
+    "maxRetries": 0
+  }
 }

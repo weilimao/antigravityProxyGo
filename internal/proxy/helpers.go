@@ -48,6 +48,58 @@ func isAgentRequest(path string) bool {
 	return strings.Contains(p, "agent")
 }
 
+// isNativeOfficialAntigravityClient 判定请求是否来自官方原生客户端：
+// 1. 白色桌面端应用（Antigravity Desktop App，UA形如 "antigravity/2.6.0 windows/amd64 google-api-nodejs-client/10.3.0"）
+// 2. 独立版 Antigravity IDE（UA形如 "antigravity/ide/2.5.7 (vscode_client; os_type=windows; arch=amd64)"）
+// 3. 官方 Hub/Agent（UA形如 "antigravity/hub/..."）
+// 4. 官方 CLI（UA形如 "antigravity/cli/..."）
+// 5. 内部代理或核心服务（UA形如 "antigravityproxy-..."）
+//
+// 排除规则：
+// 任何包含第三方宿主编辑器特征（如 cursor, windsurf, trae, vscodium, positron, code/, code - insiders）
+// 或插件特征（plugin, extension）的请求，均视为新版 IDE 插件或外部客户端，而非官方原生客户端。
+func isNativeOfficialAntigravityClient(ua string) bool {
+	cleanUA := strings.ToLower(strings.TrimSpace(ua))
+	if cleanUA == "" {
+		return false
+	}
+
+	// 排除第三方宿主编辑器与扩展插件特征
+	if strings.Contains(cleanUA, "plugin") || strings.Contains(cleanUA, "extension") ||
+		strings.Contains(cleanUA, "cursor") || strings.Contains(cleanUA, "windsurf") ||
+		strings.Contains(cleanUA, "trae") || strings.Contains(cleanUA, "vscodium") ||
+		strings.Contains(cleanUA, "positron") ||
+		strings.Contains(cleanUA, "code/") || strings.Contains(cleanUA, "code - insiders") {
+		return false
+	}
+
+	// 官方客户端前缀匹配
+	if strings.HasPrefix(cleanUA, "antigravity/ide/") ||
+		strings.HasPrefix(cleanUA, "antigravity/hub/") ||
+		strings.HasPrefix(cleanUA, "antigravity/cli/") ||
+		strings.HasPrefix(cleanUA, "antigravityproxy-") {
+		return true
+	}
+
+	// 白色桌面端应用前缀形如 "antigravity/<version>" (如 antigravity/2.6.0 ...)
+	// 需确保紧跟版本号或斜杠，且排除如 antigravity-vscode 等自定义扩展前缀
+	if strings.HasPrefix(cleanUA, "antigravity/") {
+		return true
+	}
+
+	return false
+}
+
+// isLegacyNativeIDE 保持对历史接口的兼容，返回是否为官方原生客户端
+func isLegacyNativeIDE(ua string) bool {
+	return isNativeOfficialAntigravityClient(ua)
+}
+
+// isNewIDEPlugin 判定请求是否来自第三方宿主编辑器或新版扩展插件客户端
+func isNewIDEPlugin(ua string) bool {
+	return !isNativeOfficialAntigravityClient(ua)
+}
+
 // shouldBypassOverride 判定客户端原始模型名是否命中"按前缀绕过"白名单。
 // 命中则跳过全局模型覆写、原样透传,避免 Tab 补全等模型被改向推理上游触发 400。
 // 匹配规则:对 currentModel 去 "models/" 前缀后小写化,与白名单中每个非空前缀

@@ -68,16 +68,15 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 	ro.customHeaders.Del("host")
 
 	// User-Agent 伪装处理：
-	// 仅在使用 18444 端口第三方平台调用时 (sc.relayUserID != "")，才使用号池配置的 Hub 版本进行 User-Agent 伪装。
-	// 原生 Antigravity 客户端请求保持原本请求头透传，绝不篡改 User-Agent。
-	if sc.relayUserID != "" {
-		ua := ro.customHeaders.Get("User-Agent")
-		if ua == "" || strings.Contains(strings.ToLower(ua), "go-http-client") || strings.Contains(ua, "2.2.1") || strings.HasPrefix(ua, "antigravity/hub/") {
-			if sc.h.accountMgr != nil {
-				ro.customHeaders.Set("User-Agent", sc.h.accountMgr.GetAntigravityUserAgent())
-			} else {
-				ro.customHeaders.Set("User-Agent", account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion))
-			}
+	// 1. 官方原生 Antigravity 客户端 (isNativeOfficialAntigravityClient) 保持原本请求头透传，绝不篡改 User-Agent。
+	// 2. 18444 第三方平台调用 (sc.relayUserID != "") 以及新版 IDE 插件/第三方宿主编辑器 (!isNativeOfficialAntigravityClient)，
+	//    统一使用号池配置的 Hub 版本进行 User-Agent 伪装，避免非官方原生 UA 导致 Google 上游网关拒绝。
+	ua := ro.customHeaders.Get("User-Agent")
+	if !isNativeOfficialAntigravityClient(ua) {
+		if sc.h.accountMgr != nil {
+			ro.customHeaders.Set("User-Agent", sc.h.accountMgr.GetAntigravityUserAgent())
+		} else {
+			ro.customHeaders.Set("User-Agent", account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion))
 		}
 	}
 

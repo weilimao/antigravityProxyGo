@@ -1,3 +1,20 @@
+### v1.7.6 更新日志
+
+- **多宿主编辑器（Cursor / Windsurf / Trae / VS Code）环境深度兼容与补丁加固（重点）**：
+  - 修复 IDE 启动时 `http.noProxy` 被写入非数组类型导致主进程在 `openInBrowserWindow` 阶段抛出 `TypeError: (noProxy || []).map is not a function` 而无法创建窗口的致命缺陷；
+  - 采用强类型字符串数组结构安全合并与回写 `http.noProxy`（`defaultNoProxyHosts`），顺带自动纠正历史坏值；
+  - 增强跨平台 AppData 与用户配置目录探测能力，全面适配 Cursor、Windsurf、Trae、VS Code、VSCodium 等多编辑器环境；
+  - 实现标准 `cleanJSONC` 过滤引擎，自动剥离配置文件中的单行注释（`//`）、多行注释（`/* */`）及尾随逗号，杜绝 JSON 序列化解析异常。
+
+- **Antigravity 官方原生客户端无损透传与新版 IDE 插件流量智能分流**：
+  - 增强官方原生客户端特征识别（白色桌面端、独立 IDE、CLI 等），对原生请求严格保持原始载荷与请求头 100% 无损透传，避免破坏官方通信协议与上下文完整性；
+  - 对来自第三方宿主编辑器或新版扩展插件客户端，自动执行 Hub 版本 User-Agent 智能伪装与 Google 内部网关路由适配；
+  - 对非原生插件客户端请求体自动执行 JSON Schema 宽松清洗（`cleanAndPrepareGeminiRequest`），剔除不支持的 Schema 字段并注入安全 toolConfig，彻底消除 `MALFORMED_FUNCTION_CALL` 错误与断连问题。
+
+- **配置兜底与中继端口修正**：
+  - 补齐号池错误重试规则字段在代理配置（`internal/proxy/config.json`）中的持久化兜底结构；
+  - 修正中继配置（`internal/relay/config.json`）中 NVIDIA Worker 代理的默认监听端口。
+
 ### v1.7.5 更新日志
 
 - **号池自定义切号与错误重试规则引擎（重点）**：
