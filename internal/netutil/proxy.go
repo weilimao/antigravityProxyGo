@@ -95,15 +95,14 @@ func triggerLocalProxyDetection() {
 		}
 	}
 	cachedLocalProxyMu.Lock()
-	// 避免瞬时抖动将已识别到的本地有效代理冲掉
-	if proxyURL != nil || cachedLocalProxy == nil {
-		cachedLocalProxy = proxyURL
-	}
+	// 真实反映当前本地代理探测状态，若已退出则及时清空
+	cachedLocalProxy = proxyURL
 	cachedLocalProxyMu.Unlock()
 }
 
 // GetSystemProxy returns the system proxy configured in Windows registry, environment variables, etc.
-// It prioritizes custom SOCKS5 proxy if enabled, falls back to system proxy, and then falls back to auto-detected local VPN proxy.
+// 核心契约：系统代理开启则走系统代理；系统代理未开启则默认返回 nil 走国内直连。
+// 专属 SOCKS5 代理仅在用户显式开启时作为优先项生效。
 func GetSystemProxy(req *http.Request) (*url.URL, error) {
 	proxyConfigMu.RLock()
 	socks5Enabled := proxyConfig.CustomSocks5Enabled
@@ -137,14 +136,7 @@ func GetSystemProxy(req *http.Request) (*url.URL, error) {
 		}
 	}
 
-	// 3. 系统代理为空或被过滤时，Fallback 降级使用探测到的本地 VPN 代理端口
-	cachedLocalProxyMu.RLock()
-	localProxy := cachedLocalProxy
-	cachedLocalProxyMu.RUnlock()
-	if localProxy != nil {
-		return localProxy, nil
-	}
-
+	// 3. 系统代理未开启或为空时，严格默认走国内直连 (DIRECT)，绝不隐式劫持流量
 	return nil, nil
 }
 
