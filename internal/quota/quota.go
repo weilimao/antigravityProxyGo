@@ -22,16 +22,18 @@ import (
 )
 
 const (
-	// AntigravityIDEUserAgent 与官方 Antigravity IDE (language_server) 与上游通信的标头保持一致
-	AntigravityIDEUserAgent = "antigravity/hub/2.25.0 (aidev_client; os_type=windows; arch=amd64)"
+	// AntigravityIDEUserAgent 与官方 Antigravity IDE (language_server v2.29.0) 与上游通信的标头保持一致
+	AntigravityIDEUserAgent = "antigravity/hub/2.29.0 (aidev_client; os_type=windows; arch=amd64; cl=1013060670)"
 )
 
 type QuotaService struct {
 	sync.RWMutex
-	dataDir    string
+	dataDir               string
 	projectMap            map[string]string // email -> projectId
 	antigravityUserAgent  func() string
 	antigravityCliVersion func() string
+	// requestTemplate 读取抓包里同一接口的最新请求头和请求体。没有记录时为 nil。
+	requestTemplate func(pathNeedle string) (headers map[string]string, body []byte, ok bool)
 }
 
 func NewQuotaService() *QuotaService {
@@ -47,6 +49,16 @@ func (q *QuotaService) SetAntigravityVersionProviders(uaProvider func() string, 
 	defer q.Unlock()
 	q.antigravityUserAgent = uaProvider
 	q.antigravityCliVersion = versionProvider
+}
+
+// SetRequestTemplate 注入抓包模板。刷新 Antigravity 配额时优先按抓到的请求格式发出。
+func (q *QuotaService) SetRequestTemplate(fn func(pathNeedle string) (headers map[string]string, body []byte, ok bool)) {
+	if q == nil {
+		return
+	}
+	q.Lock()
+	q.requestTemplate = fn
+	q.Unlock()
 }
 
 // GetAntigravityUA 获取发往 Google 上游的动态 User-Agent，优先取用户界面设置的 Hub 版本
@@ -265,12 +277,19 @@ func postJson(endpointUrl string, body interface{}, headers map[string]string) (
 		return 0, nil, err
 	}
 
+	accountKey := headers["X-Internal-Account-Key"]
+	if accountKey == "" {
+		accountKey = headers["Authorization"]
+	}
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
+		if strings.EqualFold(k, "X-Internal-Account-Key") {
+			continue
+		}
 		req.Header.Set(k, v)
 	}
 
-	client := netutil.NewClient(10 * time.Second)
+	client := netutil.GetAccountClient(accountKey, 10*time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -364,20 +383,20 @@ func ExtractValidationURL(resBytes []byte) string {
 	return ""
 }
 
-func (q *QuotaService) loadCodeAssist(accessToken string, isAntigravity bool) (string, string, *float64, error) {
+func (q *QuotaService) loadCodeAssist(accessToken, accountKey string, isAntigravity bool) (string, string, *float64, error) {
 	headers := map[string]string{
 		"Authorization": "Bearer " + accessToken,
 	}
+	if accountKey != "" {
+		headers["X-Internal-Account-Key"] = accountKey
+	}
 	var body map[string]interface{}
 	if isAntigravity {
-		headers["User-Agent"] = q.GetAntigravityUA()
-		body = map[string]interface{}{
-			"metadata": map[string]interface{}{
-				"ideType":    "ANTIGRAVITY",
-				"ideVersion": q.GetAntigravityVersion(),
-				"ideName":    "antigravity",
-			},
+		headers = q.antigravityUpstreamHeaders("loadCodeAssist", accessToken)
+		if accountKey != "" {
+			headers["X-Internal-Account-Key"] = accountKey
 		}
+		body = q.loadCodeAssistBody(headers["User-Agent"])
 	} else {
 		body = make(map[string]interface{})
 	}
@@ -550,12 +569,18 @@ type RetrieveUserQuotaSummaryResponse struct {
 	} `json:"error"`
 }
 
-func (q *QuotaService) retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]account.QuotaBucket, error) {
+func (q *QuotaService) retrieveUserQuota(accessToken, project, accountKey string, isAntigravity bool) ([]account.QuotaBucket, error) {
 	headers := map[string]string{
 		"Authorization": "Bearer " + accessToken,
 	}
+	if accountKey != "" {
+		headers["X-Internal-Account-Key"] = accountKey
+	}
 	if isAntigravity {
-		headers["User-Agent"] = q.GetAntigravityUA()
+		headers = q.antigravityUpstreamHeaders("retrieveUserQuotaSummary", accessToken)
+		if accountKey != "" {
+			headers["X-Internal-Account-Key"] = accountKey
+		}
 	}
 
 	host := "cloudcode-pa.googleapis.com"
@@ -571,6 +596,9 @@ func (q *QuotaService) retrieveUserQuota(accessToken, project string, isAntigrav
 	quotaBody := map[string]interface{}{}
 	if project != "" {
 		quotaBody["project"] = project
+	}
+	if isAntigravity {
+		quotaBody = q.retrieveQuotaBody(project)
 	}
 
 	status, resBytes, err := postJson(endpointUrl, quotaBody, headers)
@@ -887,7 +915,7 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 	var credits *float64
 	var err error
 
-	project, tier, credits, err = q.loadCodeAssist(token, isAntigravity)
+	project, tier, credits, err = q.loadCodeAssist(token, acc.ID, isAntigravity)
 	if err != nil && acc.RefreshToken != "" && refreshCallback != nil {
 		var vErr *account.AccountValidationError
 		if !errors.As(err, &vErr) {
@@ -898,7 +926,7 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 				if updateTokenCallback != nil {
 					updateTokenCallback(acc.ID, newToken)
 				}
-				project, tier, credits, err = q.loadCodeAssist(token, isAntigravity)
+				project, tier, credits, err = q.loadCodeAssist(token, acc.ID, isAntigravity)
 			} else {
 				return nil, fmt.Errorf("Token refresh failed: %v", refreshErr)
 			}
@@ -934,7 +962,7 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 	}
 
 	// Step 2: retrieveUserQuota
-	buckets, err := q.retrieveUserQuota(token, project, isAntigravity)
+	buckets, err := q.retrieveUserQuota(token, project, acc.ID, isAntigravity)
 	if err != nil {
 		var vErr *account.AccountValidationError
 		if errors.As(err, &vErr) {
@@ -953,15 +981,14 @@ func (q *QuotaService) FetchQuota(acc *account.Account, refreshCallback func(*ac
 	}, nil
 }
 
-
 // loadCodeAssist 兼容包装器，以空实例执行默认元数据与 UA 探测
 func loadCodeAssist(accessToken string, isAntigravity bool) (string, string, *float64, error) {
 	var q *QuotaService
-	return q.loadCodeAssist(accessToken, isAntigravity)
+	return q.loadCodeAssist(accessToken, "", isAntigravity)
 }
 
 // retrieveUserQuota 兼容包装器，以空实例执行默认 UA 探测
 func retrieveUserQuota(accessToken, project string, isAntigravity bool) ([]account.QuotaBucket, error) {
 	var q *QuotaService
-	return q.retrieveUserQuota(accessToken, project, isAntigravity)
+	return q.retrieveUserQuota(accessToken, project, "", isAntigravity)
 }

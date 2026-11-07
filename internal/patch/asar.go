@@ -79,6 +79,18 @@ func walkAsarTree(tree map[string]interface{}, currentPath string, files *[]Asar
 	}
 }
 
+const (
+	asarInjectedMarker = "// INJECTED BY ANTIGRAVITY PROXY DESKTOP"
+	asarInjectedBlock  = `
+        // INJECTED BY ANTIGRAVITY PROXY DESKTOP
+        env['HTTP_PROXY']  = 'http://127.0.0.1:18443';
+        env['HTTPS_PROXY'] = 'http://127.0.0.1:18443';
+        env['http_proxy']  = 'http://127.0.0.1:18443';
+        env['https_proxy'] = 'http://127.0.0.1:18443';
+        env['NO_PROXY']    = 'localhost,127.0.0.1';
+        env['no_proxy']    = 'localhost,127.0.0.1';`
+)
+
 // PatchAsar reads an Electron app.asar file, injects proxy configuration into
 // dist/languageServer.js, and saves it. If a backup does not exist, it creates one.
 func PatchAsar(asarPath, caCertPath string, logCallback func(string)) error {
@@ -153,16 +165,23 @@ func PatchAsar(asarPath, caCertPath string, logCallback func(string)) error {
 	}
 
 	originalJs := string(asarData[fileStart:fileEnd])
-	if strings.Contains(originalJs, "env['HTTP_PROXY'] = 'http://127.0.0.1:18443'") {
+	markerCount := strings.Count(originalJs, asarInjectedMarker)
+	if markerCount == 1 && strings.Contains(originalJs, "env['HTTP_PROXY']") {
 		logCallback("ℹ️ languageServer.js already contains patch, skipping write.")
 		return nil
 	}
 
+	cleanedJs := originalJs
+	if markerCount > 0 {
+		cleanedJs = strings.ReplaceAll(cleanedJs, strings.ReplaceAll(asarInjectedBlock, "\n", "\r\n"), "")
+		cleanedJs = strings.ReplaceAll(cleanedJs, asarInjectedBlock, "")
+	}
+
 	// Perform patching
 	// Find setupNodeWrapper call: (0, setupNodeWrapper)(env); or similar
-	idx := strings.Index(originalJs, "setupNodeWrapper)(env)")
+	idx := strings.Index(cleanedJs, "setupNodeWrapper)(env)")
 	if idx == -1 {
-		idx = strings.Index(originalJs, "setupNodeWrapper)(process.env)")
+		idx = strings.Index(cleanedJs, "setupNodeWrapper)(process.env)")
 	}
 
 	if idx == -1 {
@@ -171,35 +190,28 @@ func PatchAsar(asarPath, caCertPath string, logCallback func(string)) error {
 
 	// Find the end of statement (e.g. semicolon)
 	stmtEnd := idx
-	for stmtEnd < len(originalJs) && originalJs[stmtEnd] != ';' {
+	for stmtEnd < len(cleanedJs) && cleanedJs[stmtEnd] != ';' {
 		stmtEnd++
 	}
-	if stmtEnd < len(originalJs) {
+	if stmtEnd < len(cleanedJs) {
 		stmtEnd++ // Include semicolon
 	}
 
 	// We extract the exact wrapper call statement
 	// Usually: (0, setupNodeWrapper)(env); or wrapper(env);
 	stmtStart := idx
-	for stmtStart > 0 && originalJs[stmtStart] != '\n' && originalJs[stmtStart] != ';' && originalJs[stmtStart] != '{' {
+	for stmtStart > 0 && cleanedJs[stmtStart] != '\n' && cleanedJs[stmtStart] != ';' && cleanedJs[stmtStart] != '{' {
 		stmtStart--
 	}
 	if stmtStart > 0 {
 		stmtStart++
 	}
 
-	wrapperCall := strings.TrimSpace(originalJs[stmtStart:stmtEnd])
+	wrapperCall := strings.TrimSpace(cleanedJs[stmtStart:stmtEnd])
 
-	injectStr := fmt.Sprintf(`%s
-        // INJECTED BY ANTIGRAVITY PROXY DESKTOP
-        env['HTTP_PROXY']  = 'http://127.0.0.1:18443';
-        env['HTTPS_PROXY'] = 'http://127.0.0.1:18443';
-        env['http_proxy']  = 'http://127.0.0.1:18443';
-        env['https_proxy'] = 'http://127.0.0.1:18443';
-        env['NO_PROXY']    = 'localhost,127.0.0.1';
-        env['no_proxy']    = 'localhost,127.0.0.1';`, wrapperCall)
+	injectStr := wrapperCall + asarInjectedBlock
 
-	newJs := originalJs[:stmtStart] + injectStr + originalJs[stmtEnd:]
+	newJs := cleanedJs[:stmtStart] + injectStr + cleanedJs[stmtEnd:]
 	newJsBytes := []byte(newJs)
 	newSize := int64(len(newJsBytes))
 	diffSize := newSize - targetFile.Size

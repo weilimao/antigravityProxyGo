@@ -66,6 +66,7 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 	ro.customHeaders.Del("content-length")
 	ro.customHeaders.Del("Host")
 	ro.customHeaders.Del("host")
+	sanitizeConflictingClientHeaders(ro.customHeaders)
 
 	// User-Agent 伪装处理：
 	// 1. 官方原生 Antigravity 客户端 (isNativeOfficialAntigravityClient) 保持原本请求头透传，绝不篡改 User-Agent。
@@ -94,7 +95,7 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 	}
 	proxyReq.Header = ro.customHeaders
 
-	resp, errDo := sc.h.client.Do(proxyReq)
+	resp, errDo := sc.h.clientForAttempt(ro).Do(proxyReq)
 	if errDo != nil {
 		// status=0: 重试循环兜底置 502 BadGateway(对应原 L1075/L1081,TestProxyHandler_Timeout 依赖)
 		return forwardOutcome{status: 0, err: errDo, finalized: true}

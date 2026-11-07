@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -30,6 +29,7 @@ type GenerationConfig struct {
 type GeminiRequest struct {
 	Contents         []Content        `json:"contents"`
 	GenerationConfig GenerationConfig `json:"generationConfig"`
+	SessionID        string           `json:"sessionId,omitempty"`
 }
 
 var (
@@ -39,20 +39,52 @@ var (
 
 // TriggerTestResponse sends a minimal generateContent request to Google/Vertex AI using the account credentials.
 func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, prompt string, getStoredProject func(string) string, refreshToken func(*Account) (string, error), getUserAgent ...func() string) (string, error) {
-	// 1. Refresh access token
-	accessToken, err := refreshToken(acc)
-	if err != nil {
-		return "", fmt.Errorf("refresh token failed: %w", err)
+	// 1. 优先复用账号仍在有效期内的 AccessToken（距离上次刷新 <50 分钟或 JWT exp 剩余 >10 分钟），
+	// 避免在多模型遍历时每个模型都强制请求一次 OAuth 刷新接口触发风控
+	accessToken := ""
+	needRefresh := true
+	if acc != nil {
+		if existingTok := strings.TrimSpace(acc.GetAccessToken()); existingTok != "" {
+			nowSec := time.Now().Unix()
+			if exp := acc.AccessTokenExp(); exp > 0 {
+				if exp-nowSec > 600 {
+					accessToken = existingTok
+					needRefresh = false
+				}
+			} else if refreshedAt := acc.GetTokenRefreshedAt(); refreshedAt > 0 && nowSec-refreshedAt < 3000 {
+				accessToken = existingTok
+				needRefresh = false
+			}
+		}
+	}
+	if needRefresh && refreshToken != nil {
+		tok, err := refreshToken(acc)
+		if err != nil {
+			return "", fmt.Errorf("refresh token failed: %w", err)
+		}
+		accessToken = tok
+		if acc != nil && strings.TrimSpace(tok) != "" {
+			acc.SetAccessToken(tok)
+		}
 	}
 
 	testPrompt := prompt
 	if testPrompt == "" {
-		testPrompt = "ok"
+		testPrompt = RandomKeepAlivePrompt()
+	}
+
+	accKey := "default"
+	if acc != nil {
+		if strings.TrimSpace(acc.ID) != "" {
+			accKey = acc.ID
+		} else if strings.TrimSpace(acc.Email) != "" {
+			accKey = acc.Email
+		}
 	}
 
 	client := triggerHTTPClient
 	if client == nil {
-		client = netutil.NewClient(15 * time.Second)
+		client = netutil.GetAccountClient(accKey, 15*time.Second)
 	}
 
 	if acc.Provider == "project" {
@@ -62,7 +94,7 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, pr
 		reqBody := GeminiRequest{
 			Contents: []Content{
 				{
-					Role: "user",
+					Role:  "user",
 					Parts: []Part{{Text: testPrompt}},
 				},
 			},
@@ -87,11 +119,26 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, pr
 		if err != nil {
 			return "", err
 		}
-		defer resp.Body.Close()
-
 		bodyBytes, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			return "", fmt.Errorf("read response body failed: %w", err)
+		}
+
+		if resp.StatusCode == http.StatusUnauthorized && !needRefresh && refreshToken != nil {
+			if tok, rErr := refreshToken(acc); rErr == nil && tok != "" {
+				retryReq, rReqErr := http.NewRequestWithContext(ctx, "POST", targetUrl, bytes.NewBuffer(jsonBytes))
+				if rReqErr == nil {
+					retryReq.Header.Set("Content-Type", "application/json")
+					retryReq.Header.Set("Authorization", "Bearer "+tok)
+					retryReq.Header.Set("x-goog-user-project", acc.ProjectID)
+					if retryResp, rDoErr := client.Do(retryReq); rDoErr == nil {
+						bodyBytes, _ = io.ReadAll(retryResp.Body)
+						retryResp.Body.Close()
+						resp = retryResp
+					}
+				}
+			}
 		}
 
 		if resp.StatusCode != http.StatusOK {
@@ -116,20 +163,21 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, pr
 		reqBody := GeminiRequest{
 			Contents: []Content{
 				{
-					Role: "user",
+					Role:  "user",
 					Parts: []Part{{Text: testPrompt}},
 				},
 			},
 			GenerationConfig: GenerationConfig{MaxOutputTokens: 1},
+			SessionID:        AccountSessionID(accKey, "keepalive"),
 		}
 
 		wrappedReq := map[string]interface{}{
-			"project":   actualProjectId,
-			"requestId": fmt.Sprintf("chat/%d-%d", time.Now().Unix(), rand.Intn(1000000)),
-			"request":   reqBody,
-			"model":     modelName,
-			"userAgent": "antigravity",
-			"requestType": "chat",
+			"project":            actualProjectId,
+			"requestId":          NewAntigravityRequestID("agent"),
+			"request":            reqBody,
+			"model":              modelName,
+			"userAgent":          "antigravity",
+			"requestType":        "chat",
 			"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
 		}
 
@@ -164,11 +212,26 @@ func TriggerTestResponse(ctx context.Context, acc *Account, modelName string, pr
 		if err != nil {
 			return "", err
 		}
-		defer resp.Body.Close()
-
 		bodyBytes, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			return "", fmt.Errorf("read response body failed: %w", err)
+		}
+
+		if resp.StatusCode == http.StatusUnauthorized && !needRefresh && refreshToken != nil {
+			if tok, rErr := refreshToken(acc); rErr == nil && tok != "" {
+				retryReq, rReqErr := http.NewRequestWithContext(ctx, "POST", targetUrl, bytes.NewBuffer(jsonBytes))
+				if rReqErr == nil {
+					retryReq.Header.Set("Content-Type", "application/json")
+					retryReq.Header.Set("Authorization", "Bearer "+tok)
+					retryReq.Header.Set("User-Agent", ua)
+					if retryResp, rDoErr := client.Do(retryReq); rDoErr == nil {
+						bodyBytes, _ = io.ReadAll(retryResp.Body)
+						retryResp.Body.Close()
+						resp = retryResp
+					}
+				}
+			}
 		}
 
 		if resp.StatusCode != http.StatusOK {

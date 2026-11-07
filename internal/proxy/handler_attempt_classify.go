@@ -35,6 +35,39 @@ func (sc *serveContext) classifyResponse(attemptIndex int, ro *routeOutcome, fo 
 	// Capture packet logging (Save to PacketCapturer) before any error short-circuit return
 	sc.h.packetCap.SavePacket(sc.r.Method, ro.targetHost, ro.targetPath, ro.customHeaders, ro.finalReqBody, headers, body, status)
 
+	// loadCodeAssist 的响应项目属于本次出站账号，供后续模型请求对齐，不写回客户端入站 Token。
+	if status == 200 && strings.Contains(ro.targetPath, "loadCodeAssist") && ro.poolAccount != nil && sc.h.setCapturedProject != nil {
+		proj := cloudaicompanionProjectID(decompressIfNeeded(body, headers))
+		if proj != "" && !isMockOrSharedDefaultProject(proj) {
+			sc.h.setCapturedProject(ro.poolAccount.Email, proj)
+			if sc.h.logFn != nil {
+				sc.h.logFn(fmt.Sprintf("🛡️ Captured loadCodeAssist project '%s' for %s", proj, ro.poolAccount.Email))
+			}
+		}
+	}
+
+	// 若客户端透传了 /v1internal:fetchAvailableModels 且响应 200，顺带提取该账号支持的模型列表并记录到账号能力画像
+	if status == 200 && strings.Contains(ro.targetPath, "fetchAvailableModels") && ro.poolAccount != nil && sc.h.accountMgr != nil {
+		rawBody := decompressIfNeeded(body, headers)
+		var parsed struct {
+			Models map[string]struct {
+				Disabled bool `json:"disabled"`
+			} `json:"models"`
+		}
+		if json.Unmarshal(rawBody, &parsed) == nil && len(parsed.Models) > 0 {
+			models := make([]string, 0, len(parsed.Models))
+			for k, v := range parsed.Models {
+				if v.Disabled || strings.HasSuffix(strings.ToLower(k), "-disabled") {
+					continue
+				}
+				models = append(models, k)
+			}
+			if len(models) > 0 {
+				sc.h.accountMgr.SetAccountSupportedModels(ro.poolAccount.ID, models)
+			}
+		}
+	}
+
 	if status >= 400 {
 		if !(status == 429 && strings.Contains(ro.targetPath, "retrieveUserQuota")) {
 			bodySnippet := string(decompressIfNeeded(body, headers))
@@ -47,6 +80,12 @@ func (sc *serveContext) classifyResponse(attemptIndex int, ro *routeOutcome, fo 
 
 	if status == 401 {
 		return 401, headers, body, false, errors.New("TOKEN_EXPIRED")
+	}
+
+	// 模型级 404 (如非 Argon / 非 Claude Opus 5.5 灰度权限账号被分流命中):
+	// 归类为 MODEL_NOT_SUPPORTED，供重试循环拉黑该账号的当前模型并立刻无感换号重试
+	if status == 404 && (isRealModelRequest(ro.targetPath) || isAgentRequest(ro.targetPath)) && sc.currentModel != "" && sc.currentModel != "unknown" {
+		return 404, headers, body, false, errors.New("MODEL_NOT_SUPPORTED")
 	}
 
 	// Handle Google Quota 429 Interception to prevent IDE infinite loop

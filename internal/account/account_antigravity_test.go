@@ -27,8 +27,9 @@ func TestManager_AntigravityCliVersion(t *testing.T) {
 	if got := m.GetAntigravityCliVersion(); got != "2.4.0" {
 		t.Errorf("custom antigravity cli version: want %q, got %q", "2.4.0", got)
 	}
-	if got := m.GetAntigravityUserAgent(); got != "antigravity/hub/2.4.0 (aidev_client; os_type=windows; arch=amd64)" {
-		t.Errorf("custom antigravity user-agent: want %q, got %q", "antigravity/hub/2.4.0 (aidev_client; os_type=windows; arch=amd64)", got)
+	want240 := FormatAntigravityUserAgent("2.4.0")
+	if got := m.GetAntigravityUserAgent(); got != want240 {
+		t.Errorf("custom antigravity user-agent: want %q, got %q", want240, got)
 	}
 
 	// 3. 空白与首尾空格自动规整
@@ -41,8 +42,9 @@ func TestManager_AntigravityCliVersion(t *testing.T) {
 	if got := m.GetAntigravityCliVersion(); got != "3.0.1" {
 		t.Errorf("trimmed version: want %q, got %q", "3.0.1", got)
 	}
-	if got := m.GetAntigravityUserAgent(); got != "antigravity/hub/3.0.1 (aidev_client; os_type=windows; arch=amd64)" {
-		t.Errorf("trimmed user-agent: want %q, got %q", "antigravity/hub/3.0.1 (aidev_client; os_type=windows; arch=amd64)", got)
+	want301 := FormatAntigravityUserAgent("3.0.1")
+	if got := m.GetAntigravityUserAgent(); got != want301 {
+		t.Errorf("trimmed user-agent: want %q, got %q", want301, got)
 	}
 
 	// 4. nil 指针防御
@@ -75,7 +77,8 @@ func TestManager_AntigravityCliVersion_Persistence(t *testing.T) {
 	if got := m2.GetAntigravityCliVersion(); got != "2.5.0" {
 		t.Fatalf("m2 AntigravityCliVersion loaded from disk = %q, want %q", got, "2.5.0")
 	}
-	if got := m2.GetAntigravityUserAgent(); got != "antigravity/hub/2.5.0 (aidev_client; os_type=windows; arch=amd64)" {
-		t.Fatalf("m2 AntigravityUserAgent loaded from disk = %q, want %q", got, "antigravity/hub/2.5.0 (aidev_client; os_type=windows; arch=amd64)")
+	want250 := FormatAntigravityUserAgent("2.5.0")
+	if got := m2.GetAntigravityUserAgent(); got != want250 {
+		t.Fatalf("m2 AntigravityUserAgent loaded from disk = %q, want %q", got, want250)
 	}
 }

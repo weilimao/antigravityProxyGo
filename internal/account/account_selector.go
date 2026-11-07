@@ -188,6 +188,10 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 
 	category := m.GetModelCategory(modelName)
 	now := time.Now().UnixNano() / int64(time.Millisecond)
+	activeAccounts = filterAccountsByModelCapability(activeAccounts, currentChannel, modelName, now)
+	if len(activeAccounts) == 0 {
+		return nil
+	}
 
 	isAvailable := func(acc *Account) bool {
 		cooldownUntil := int64(0)
@@ -335,13 +339,14 @@ func (m *Manager) ClearAccountCooldown(id string) bool {
 		return false
 	}
 	provider := acc.Provider
-	hadCooldown := len(acc.Cooldowns) > 0 || acc.CooldownUntil > 0 || acc.NoQuota
+	hadCooldown := len(acc.Cooldowns) > 0 || acc.CooldownUntil > 0 || acc.NoQuota || len(acc.UnsupportedModels) > 0
 	// 收集被恢复的冷却族名,供 OnQuotaRestored 回调感知(与 UpdateAccountCooldownFromQuota 同口径)。
 	restoredCategories := make([]string, 0, len(acc.Cooldowns))
 	for cat := range acc.Cooldowns {
 		restoredCategories = append(restoredCategories, cat)
 	}
 	acc.Cooldowns = make(map[string]int64)
+	acc.UnsupportedModels = nil
 	acc.CooldownUntil = 0
 	acc.NoQuota = false
 	m.Unlock()
@@ -418,7 +423,7 @@ func (m *Manager) GetAvailableAccountsForChannelAndGroup(channel, groupID string
 			list = append(list, a)
 		}
 	}
-	return list
+	return filterAccountsByModelCapability(list, channel, modelName, now)
 }
 
 func (m *Manager) GetAvailableAccounts(modelName string) []*Account {
@@ -489,8 +494,12 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 		return "gemini"
 	}
 
+	hasArgonBucket := false
 	for _, b := range buckets {
 		category := classifyBucket(b)
+		if category == "argon" {
+			hasArgonBucket = true
+		}
 		isExhausted := b.RemainingFraction == 0 || b.RemainPercent == 0
 		if !isExhausted {
 			continue
@@ -565,12 +574,14 @@ func (m *Manager) UpdateAccountCooldownFromQuota(id string, buckets []QuotaBucke
 	updateCatCooldown("claude", claudeExhausted, claudeResetTime)
 	if !isNvidiaAcc {
 		updateCatCooldown("argon", argonExhausted, argonResetTime)
+		if len(buckets) > 0 && (acc.HasArgonBucket == nil || *acc.HasArgonBucket != hasArgonBucket) {
+			v := hasArgonBucket
+			acc.HasArgonBucket = &v
+			changed = true
+		}
 	}
 
-	// NVIDIA 号池走独立的 "nvidia" 冷却类别，与 gemini/claude 解耦：
-	// 仅当本次刷新观察到"nvidia 冷却键实际存在且本次配额已满额恢复"时，
-	// updateCatCooldown 才会记入 restoredCategories 并触发 OnQuotaRestored；
-	// 无前置冷却的常态满额刷新不再误触发自动刷新日志。
+	// NVIDIA 号池走独立的 "nvidia" 冷却类别（与 gemini/claude 解耦）
 	if isNvidiaAcc {
 		updateCatCooldown("nvidia", nvidiaExhausted, nvidiaResetTime)
 	}

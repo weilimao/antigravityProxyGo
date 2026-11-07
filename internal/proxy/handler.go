@@ -145,26 +145,24 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Capture active project from request body
+	// Capture active project from request body (仅捕获非 Mock/非默认占位项目，且仅绑定至匹配的真实入站 Token 所属账号)
 	if len(bodyBytes) > 0 {
 		var bodyJson struct {
 			Project string `json:"project"`
 		}
-		if json.Unmarshal(bodyBytes, &bodyJson) == nil && bodyJson.Project != "" {
-			isDefault := bodyJson.Project == "expanded-palisade-stpfc" || strings.HasPrefix(bodyJson.Project, "expanded-palisade-")
-			if !isDefault {
-				email := "default"
-				authHeader := r.Header.Get("Authorization")
-				if strings.HasPrefix(authHeader, "Bearer ") {
-					token := authHeader[7:]
-					for _, acc := range h.accountMgr.GetRawAccounts() {
-						if acc.GetAccessToken() == token {
-							email = acc.Email
-							break
-						}
+		if json.Unmarshal(bodyBytes, &bodyJson) == nil && !isMockOrSharedDefaultProject(bodyJson.Project) {
+			email := ""
+			authHeader := r.Header.Get("Authorization")
+			if strings.HasPrefix(authHeader, "Bearer ") && h.accountMgr != nil {
+				token := strings.TrimSpace(authHeader[7:])
+				for _, acc := range h.accountMgr.GetRawAccounts() {
+					if acc.GetAccessToken() == token {
+						email = acc.Email
+						break
 					}
 				}
-				// Let quotaService capture project ID
+			}
+			if email != "" {
 				if h.logFn != nil {
 					h.logFn(fmt.Sprintf("🛡️ Captured project ID '%s' for %s", bodyJson.Project, email))
 				}
@@ -215,6 +213,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isGoogleAuth := isGoogleOAuthToken(authHeader)
 
 	if (isRelayConnected || hasLocalAccounts) && strings.Contains(targetPath, "v1internal") {
+		if h.handleV1InternalPeripheralGuard(w, targetPath, isGoogleAuth) {
+			return
+		}
 		// 如果客户端已携带合法 Google 官方登录态 (ya29.)，放行 fetchUserInfo、listExperiments 和 fetchAdminControls
 		// 使客户端能从 Google 原生获取完整的用户设置及 200+ 实验特性标志（包括 remote-control-setting-enabled）；
 		// 仅对免登录模式或未认证请求，执行高保真 Mock 兜底，确保无论何种环境 Remote Control 均能正常显示。
@@ -231,15 +232,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			// 已登录 Google 账号 (ya29.)，跳过拦截透传至上游获取真实用户设置
-		} else if strings.Contains(targetPath, "loadCodeAssist") {
-			if h.logFn != nil {
-				h.logFn("⚖️ [Mock] 拦截并放行客户端权限验证 (loadCodeAssist)")
-			}
-			mockCodeAssist := `{"allowedTiers":[{"description":"Gemini-powered code suggestions and chat in multiple IDEs","id":"free-tier","isDefault":true,"name":"Antigravity","privacyNotice":{"showNotice":true}},{"description":"Unlimited coding assistant with the most powerful Gemini models","id":"standard-tier","name":"Antigravity","privacyNotice":{},"userDefinedCloudaicompanionProject":true,"usesGcpTos":true}],"cloudaicompanionProject":"favorable-synapse-ttvcb","currentTier":{"description":"Gemini-powered code suggestions and chat in multiple IDEs","id":"free-tier","name":"Antigravity","privacyNotice":{"showNotice":true},"upgradeSubscriptionText":"Upgrade to get 1,500 requests per day with Agent Mode and Gemini CLI, access to Gemini in Google Cloud, plus $1,000 in Google Cloud credits","upgradeSubscriptionType":"GDP_HELIUM","upgradeSubscriptionUri":"https://codeassist.google.com/upgrade"},"gcpManaged":false,"paidTier":{"availableCredits":[{"creditType":"GOOGLE_ONE_AI","minimumCreditAmountForUsage":"50"}],"description":"Google AI Pro","id":"g1-pro-tier","name":"Google AI Pro","upgradeSubscriptionText":"You can upgrade to a Google AI Ultra plan to receive higher rate limits.","upgradeSubscriptionUri":"https://antigravity.google/g1-upgrade"},"upgradeSubscriptionUri":"https://codeassist.google.com/upgrade"}`
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(200)
-			w.Write([]byte(mockCodeAssist))
-			return
 		} else if strings.Contains(targetPath, "listExperiments") {
 			if !isGoogleAuth {
 				if h.logFn != nil {

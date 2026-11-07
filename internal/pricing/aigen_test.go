@@ -509,3 +509,35 @@ func TestManager_UpdatePricingBatch(t *testing.T) {
 		t.Error("upper-case key not normalized")
 	}
 }
+
+func TestAIPriceGenerator_HeaderSanitizationAndUserAgent(t *testing.T) {
+	var capturedUA string
+	var capturedGoogClient string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1internal:streamGenerateContent", func(w http.ResponseWriter, r *http.Request) {
+		capturedUA = r.Header.Get("User-Agent")
+		capturedGoogClient = r.Header.Get("X-Goog-Api-Client")
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, sseBody(`[{"name":"gemini-2.5-flash","input":0.075,"output":0.3,"cached":0.01875}]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	prov := &fakeTokenProvider{access: "tok", refresh: "rt", project: "real-project-123"}
+	expectedUA := "antigravity/hub/2.26.0 (aidev_client; os_type=windows; arch=amd64)"
+	g := NewAIPriceGenerator(prov.getFn, prov.refreshFn, nil,
+		WithAIEndpoint(srv.URL+"/v1internal:streamGenerateContent"),
+		WithAIClient(srv.Client()),
+		WithAIUserAgentProvider(func() string { return expectedUA }),
+	)
+
+	if _, err := g.Generate([]string{"gemini-2.5-flash"}, "acc-1", nil); err != nil {
+		t.Fatalf("Generate err: %v", err)
+	}
+	if capturedUA != expectedUA {
+		t.Errorf("expected User-Agent %q, got %q", expectedUA, capturedUA)
+	}
+	if capturedGoogClient != "" {
+		t.Errorf("expected X-Goog-Api-Client to be absent (avoid JA3/NodeJS mismatch), got %q", capturedGoogClient)
+	}
+}

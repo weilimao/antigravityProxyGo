@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -41,7 +40,7 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			modified = true
 		}
 		if _, exists := rawPayload["requestId"]; !exists {
-			rawPayload["requestId"] = fmt.Sprintf("chat/%d-%d", time.Now().Unix(), rand.Intn(1000000))
+			rawPayload["requestId"] = account.NewAntigravityRequestID("agent")
 			modified = true
 		}
 		if modified {
@@ -193,7 +192,13 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			finalErr = fmt.Errorf("no available account assigned from pool")
 			break
 		}
-		actualProjectId := poolAccount.ProjectID
+		actualProjectId := strings.TrimSpace(poolAccount.ProjectID)
+		if actualProjectId == "" && h.getStoredProject != nil && poolAccount.Email != "" {
+			actualProjectId = strings.TrimSpace(h.getStoredProject(poolAccount.Email))
+		}
+		if actualProjectId == "" && h.getStoredProject != nil {
+			actualProjectId = strings.TrimSpace(h.getStoredProject("default"))
+		}
 
 		// 构建发往谷歌的直连请求参数
 		var targetHost string
@@ -210,7 +215,7 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			targetModel := mapModelForProjectInRelay(currentModel)
 			targetPath = fmt.Sprintf("/v1/projects/%s/locations/global/publishers/google/models/%s:%s%s", poolAccount.ProjectID, targetModel, vertexAction, queryStr)
 		} else if poolAccount.Provider == "antigravity" {
-			// 个人网页账号（网页通道，使用 Cloud Code 接口）：不管有没有专属项目，都发往云助手的 v1internal 接口，若无项目 ID 则使用公共默认值
+			// 个人网页账号（网页通道，使用 Cloud Code 接口）：优先使用账号配置的 ProjectID 或 QuotaService 捕获的专属 ProjectID
 			targetHost = "daily-cloudcode-pa.googleapis.com"
 			targetPath = fmt.Sprintf("/v1internal:%s%s", action, queryStr)
 			if actualProjectId == "" {
@@ -220,10 +225,20 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			if err := json.Unmarshal(bodyBytes, &v1internalReq); err == nil {
 				if _, exists := v1internalReq["project"]; exists {
 					v1internalReq["project"] = actualProjectId
+					if attempt > 0 {
+						v1internalReq["requestId"] = account.NewAntigravityRequestID("agent")
+					}
 
 					// 注入缓存的 thoughtSignature 到 functionCall parts，
 					// 替换哨兵值为真实签名，保证 v1internal API 思考链连续性
 					if innerReq, ok := v1internalReq["request"].(map[string]interface{}); ok {
+						accKey := poolAccount.ID
+						if strings.TrimSpace(accKey) == "" {
+							accKey = poolAccount.Email
+						}
+						if _, hasSess := innerReq["sessionId"]; hasSess && accKey != "" {
+							innerReq["sessionId"] = account.AccountSessionID(accKey, sessionKey)
+						}
 						sigcache.InjectCachedSignatures(innerReq, sigcache.GetGlobal(), userSession.UserID, currentModel)
 
 						// 强效注入思考配置，强制 Gemini 上游输出带 thought:true 标记的明文思考内容
@@ -279,6 +294,23 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 			h.log("⚠️ [中继直连] 账号 %s 访问谷歌失败: %v", poolAccount.Email, errDo)
 			skippedAccounts[poolAccount.ID] = true
 			finalErr = errDo
+			continue
+		}
+
+		// 如果账号不支持当前请求的模型（404 Not Found，例如非 Argon / 非 Claude Opus 5.5 灰度权限账号），
+		// 立即将该模型在当前账号下标记 24h 模型级屏蔽，解绑会话并无缝切换下一个支持该模型的账号重试！
+		if resp.StatusCode == http.StatusNotFound && currentModel != "" && currentModel != "unknown" {
+			h.log("🚫 [中继模型能力学习] 账号 %s 不支持模型 %s (HTTP 404)，已标记 24h 模型级屏蔽并切换账号重试...", poolAccount.Email, currentModel)
+			if h.accountMgr != nil {
+				h.accountMgr.MarkAccountModelUnsupported(poolAccount.ID, currentModel, 24*time.Hour)
+			}
+			skippedAccounts[poolAccount.ID] = true
+			if finalResp != nil && finalResp.Body != nil {
+				finalResp.Body.Close()
+			}
+			finalResp = resp
+			finalErr = fmt.Errorf("model not supported on account: status 404")
+			h.sessionRouter.UnbindSession(sessionKey)
 			continue
 		}
 

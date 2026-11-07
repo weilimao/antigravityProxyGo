@@ -3,6 +3,8 @@ package autotrigger
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -153,11 +155,12 @@ func (s *Scheduler) runTask(task db.AutoTriggerTask, filterAccountID string) {
 		targetAccountIDs = task.AccountIDs
 	}
 
-	if len(targetAccountIDs) == 0 || len(task.ModelNames) == 0 {
+	if len(targetAccountIDs) == 0 {
 		return
 	}
 
 	var wg sync.WaitGroup
+	dispatchedIdx := 0
 	for _, accID := range targetAccountIDs {
 		if s.accountMgr == nil {
 			continue
@@ -167,22 +170,63 @@ func (s *Scheduler) runTask(task db.AutoTriggerTask, filterAccountID string) {
 			continue
 		}
 
-		wg.Add(1)
-		go func(targetAcc *account.Account) {
-			defer wg.Done()
+		modelsToTrigger := task.GetModelsForAccount(acc.ID)
+		if len(modelsToTrigger) == 0 {
+			continue
+		}
 
-			for _, model := range task.ModelNames {
+		staggerDelay := time.Duration(0)
+		if dispatchedIdx > 0 {
+			staggerDelay = time.Duration(dispatchedIdx*250+100+rand.Intn(400)) * time.Millisecond
+		}
+		dispatchedIdx++
+
+		wg.Add(1)
+		go func(targetAcc *account.Account, models []string, delay time.Duration) {
+			defer wg.Done()
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+
+			for modelIdx, model := range models {
+				if modelIdx > 0 {
+					time.Sleep(time.Duration(600+rand.Intn(600)) * time.Millisecond)
+				}
+				// 安全防护：若账号已明确无此模型能力（如无 Argon 桶、未开通受限模型、或处于 404 负向学习屏蔽期），主动跳过规避上游风控
+				nowMs := time.Now().UnixNano() / int64(time.Millisecond)
+				isBlocked := targetAcc.IsModelMarkedUnsupported(model, nowMs)
+				known, supported := targetAcc.ExplicitlySupportsModel(model)
+				hasNoArgonBucket := strings.Contains(strings.ToLower(model), "argon") && targetAcc.HasArgonBucket != nil && !*targetAcc.HasArgonBucket
+
+				if isBlocked || (known && !supported) || hasNoArgonBucket {
+					s.addLog(fmt.Sprintf("⚠️ [自动测试] 任务 [%s] 账号 %s 暂不支持模型 %s，已自动跳过以规避风控", task.Name, targetAcc.Email, model))
+					continue
+				}
+
 				s.addLog(fmt.Sprintf("⚡ [自动测试] 任务 [%s] 账号 %s 正在尝试自动触发模型 %s...", task.Name, targetAcc.Email, model))
 
 				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				var getStoredProject func(string) string
+				if s.quotaSvc != nil {
+					getStoredProject = s.quotaSvc.GetStoredProject
+				}
+				var refreshToken func(*account.Account) (string, error)
+				if s.authMgr != nil {
+					refreshToken = s.authMgr.RefreshToken
+				}
+				var getUserAgent func() string
+				if s.accountMgr != nil {
+					getUserAgent = s.accountMgr.GetAntigravityUserAgent
+				}
+
 				respText, err := account.TriggerTestResponse(
 					ctx,
 					targetAcc,
 					model,
 					task.Prompt,
-					s.quotaSvc.GetStoredProject,
-					s.authMgr.RefreshToken,
-					s.accountMgr.GetAntigravityUserAgent,
+					getStoredProject,
+					refreshToken,
+					getUserAgent,
 				)
 				cancel()
 
@@ -191,6 +235,9 @@ func (s *Scheduler) runTask(task db.AutoTriggerTask, filterAccountID string) {
 				if err != nil {
 					status = "failed"
 					message = err.Error()
+					if strings.Contains(message, "HTTP error 404") && s.accountMgr != nil {
+						s.accountMgr.MarkAccountModelUnsupported(targetAcc.ID, model, 24*time.Hour)
+					}
 					s.addLog(fmt.Sprintf("❌ [自动测试] 任务 [%s] 账号 %s 触发模型 %s 失败: %v", task.Name, targetAcc.Email, model, err))
 				} else {
 					s.addLog(fmt.Sprintf("✅ [自动测试] 任务 [%s] 账号 %s 触发模型 %s 成功！响应: %s", task.Name, targetAcc.Email, model, respText))
@@ -211,7 +258,7 @@ func (s *Scheduler) runTask(task db.AutoTriggerTask, filterAccountID string) {
 					s.addLog(fmt.Sprintf("⚠️ [自动测试] 保存触发历史失败: %v", dbErr))
 				}
 			}
-		}(acc)
+		}(acc, modelsToTrigger, staggerDelay)
 	}
 
 	wg.Wait()

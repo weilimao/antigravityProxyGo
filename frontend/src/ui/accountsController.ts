@@ -17,6 +17,7 @@ import { initNvidiaPreferredShuttle, setNvidiaPreferredModelsButtonVisible } fro
 import { initAutoTriggerModalEvents, switchAutoTriggerPanel } from './autoTrigger';
 export { switchAutoTriggerPanel } from './autoTrigger';
 import { initTriggerTestModalEvents, appendTriggerTestLog } from './triggerTestModal';
+import { initAccountModelsModalEvents } from './accountModelsModal';
 import { initSessionBindingsModalEvents } from './sessionBindingsModal';
 import { initNvidiaAccountModalEvents, writeNvidiaModalError, openNvidiaAccountModal } from './nvidiaAccountModal';
 import { initNvidiaBatchAssignIPModal } from './nvidiaBatchAssignIPModal';
@@ -305,6 +306,16 @@ export function updateViewTabUI() {
         }
     });
     setNvidiaPreferredModelsButtonVisible(state.currentViewTab === 'nvidia');
+
+    const btnProbe = document.getElementById('btnProbeAccountModels');
+    if (btnProbe) {
+        const isGoogleTab = state.currentViewTab === 'antigravity' || state.currentViewTab === 'project' || state.currentViewTab === 'gemini-cli' || !state.currentViewTab;
+        if (isGoogleTab) {
+            btnProbe.classList.remove('hidden');
+        } else {
+            btnProbe.classList.add('hidden');
+        }
+    }
 }
 
 // startLogin / startProjectLogin 已迁至 accountsLogin.ts(采用自包含 DOM 句柄策略,零耦合)。
@@ -834,6 +845,8 @@ export function initAccountsEvents() {
 
     // 触发测试回复 Modal：句柄赋值 + 事件绑定（已抽离 triggerTestModal.ts）
     initTriggerTestModalEvents();
+    // 账号可用模型检测 Modal：句柄赋值 + 事件绑定（已抽离 accountModelsModal.ts）
+    initAccountModelsModalEvents();
 
     // 当 DOM 挂载时，根据已经同步过的 accounts 数据对 DOM 状态进行一轮初始化
     if (state.lastBackendData) {

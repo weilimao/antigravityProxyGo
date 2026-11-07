@@ -76,6 +76,14 @@ func TestTriggerTestResponse_AntigravityUserAgentAndArgonModel(t *testing.T) {
 	if capturedBody["model"] != "gemini-4-argon-medium" {
 		t.Errorf("expected model 'gemini-4-argon-medium', got %v", capturedBody["model"])
 	}
+	reqInner, _ := capturedBody["request"].(map[string]interface{})
+	if reqInner == nil {
+		t.Fatalf("expected inner request map, got %T", capturedBody["request"])
+	}
+	sid, _ := reqInner["sessionId"].(string)
+	if !strings.HasPrefix(sid, "-") {
+		t.Errorf("expected inner request.sessionId to be negative decimal int64 string matching OfficialSessionID, got %q", sid)
+	}
 
 	// 2. 传入 Manager.GetAntigravityUserAgent 动态版本 (如 2.26.0)
 	m := NewManager()
@@ -96,7 +104,7 @@ func TestTriggerTestResponse_AntigravityUserAgentAndArgonModel(t *testing.T) {
 	if resp2 != "ok_argon" {
 		t.Errorf("expected response 'ok_argon', got %q", resp2)
 	}
-	expectedCustomUA := "antigravity/hub/2.26.0 (aidev_client; os_type=windows; arch=amd64)"
+	expectedCustomUA := FormatAntigravityUserAgent("2.26.0")
 	if capturedUA != expectedCustomUA {
 		t.Errorf("expected custom User-Agent %q, got %q", expectedCustomUA, capturedUA)
 	}

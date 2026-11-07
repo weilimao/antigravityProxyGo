@@ -102,6 +102,17 @@ type APICompatHandler struct {
 	// fixtureRequest 是单测夹具(仅测试设置非 nil): 在成功直连后记录 HTTP 元信息
 	// (targetURL / poolProvider) 供断言, 生产路径恒 nil, 无任何运行时行为影响。
 	fixtureRequest *directFixtures
+	// getStoredProject 查询 QuotaService 已捕获并持久化的账号专属 cloudaicompanionProject。
+	// 由 app_relay.go 通过 SetStoredProjectResolver 注入, 避免 OAuth 账号因 acc.ProjectID 为空而回退到公开默认项目。
+	getStoredProject func(email string) string
+}
+
+// SetStoredProjectResolver 注入账号专属 Project ID 查询闭包（通常绑定 quotaSvc.GetStoredProject）。
+func (h *APICompatHandler) SetStoredProjectResolver(fn func(email string) string) {
+	if h == nil {
+		return
+	}
+	h.getStoredProject = fn
 }
 
 // directFixtures 是 handleV1Internal 直连出站单测的请求元信息捕获(生产恒 nil,只在测试设置)。
@@ -173,19 +184,22 @@ func NewAPICompatHandler(
 		} else {
 			req.Header.Set("User-Agent", account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion))
 		}
-		// 账号专属出口伪装 IP:经 Worker 代理出口时通过 X-Egress-IP 头透传(与 NVIDIA/Grok 同口径)。
-		if acc.EgressIP != "" {
+		// 账号专属出口伪装 IP:仅在经 Worker 代理出口时通过 X-Egress-IP 头透传，直连 Google 时严禁泄露该头。
+		if workerProxyActive && acc.EgressIP != "" {
 			req.Header.Set("X-Egress-IP", strings.TrimSpace(acc.EgressIP))
 		}
 		// Worker 通用代理出口:注入 X-Target-Upstream 头让 Worker 回源到真正的 Google 上游。
 		if workerProxyActive {
 			req.Header.Set("X-Target-Upstream", originalURL)
 		}
-		httpClient := h.client
-		if strings.Contains(targetURL, "alt=sse") || strings.Contains(targetURL, "streamGenerateContent") {
-			httpClient = h.streamClient
+		accKey := acc.ID
+		if strings.TrimSpace(accKey) == "" {
+			accKey = acc.Email
 		}
-		return httpClient.Do(req)
+		if strings.Contains(targetURL, "alt=sse") || strings.Contains(targetURL, "streamGenerateContent") {
+			return netutil.GetAccountClient(accKey, 0).Do(req)
+		}
+		return netutil.GetAccountClient(accKey, 5*time.Minute).Do(req)
 	}
 	return h
 }

@@ -1,10 +1,7 @@
 /**
  * 自动化定时与刷新任务包 Modal 控制逻辑：从 accountsController.ts 抽离的独立模块。
  *
- * 高内聚：本模块承担自动化触发任务包的列表渲染、新建/编辑表单填充、保存与状态切换；
- * 自带 27 个 DOM handle、3 个模型常量与 9 个函数，由 accountsController.initAccountsEvents
- * 委托调用 initAutoTriggerModalEvents()；switchAutoTriggerPanel 被 controller re-export，
- * 保持 autotriggerHistoryController.ts 既有的 import 面零改动。
+ * 高内聚：本模块承担自动化触发任务包的列表渲染、新建/编辑表单填充、各账号独立模型配置、保存与状态切换；
  * 依赖：state（语言+账号列表）、ipcRenderer、全局 $confirm / alert；无跨簇 handle 引用。
  */
 import { ipcRenderer } from '../shared/ipc';
@@ -26,6 +23,8 @@ let btnManageAutoTrigger: HTMLButtonElement | null,
     btnEditClearAllAccounts: HTMLButtonElement | null,
     btnEditSelectAllModels: HTMLButtonElement | null,
     btnEditClearAllModels: HTMLButtonElement | null,
+    btnEditAutoFillModels: HTMLButtonElement | null,
+    btnEditSyncToAllAccounts: HTMLButtonElement | null,
     btnCancelEditTask: HTMLButtonElement | null,
     btnSaveTask: HTMLButtonElement | null;
 
@@ -37,6 +36,9 @@ let autoTriggerModal: HTMLDivElement | null,
     footerTaskEdit: HTMLDivElement | null,
     containerTaskInterval: HTMLDivElement | null,
     editAccountsGrid: HTMLDivElement | null,
+    editAccountTabsContainer: HTMLDivElement | null,
+    activeAccountLabel: HTMLSpanElement | null,
+    activeAccountSelectedCount: HTMLDivElement | null,
     editModelsGemini: HTMLDivElement | null,
     editModelsClaude: HTMLDivElement | null,
     editModelsOthers: HTMLDivElement | null,
@@ -52,6 +54,10 @@ let editTaskTriggerType: HTMLSelectElement | null,
     iconEditFetchModels: HTMLElement | null,
     textEditFetchModels: HTMLSpanElement | null,
     currentEditingTask: any = null;
+
+// 各账号专属模型配置状态字典: accountID -> modelNames[]
+let taskAccountModels: Record<string, string[]> = {};
+let activeAccountId: string | null = null;
 
 // ==================== 自动化定时与刷新任务 Modal 控制逻辑 ====================
 
@@ -76,10 +82,15 @@ export function initAutoTriggerModalEvents(): void {
     editTaskInterval = byId('editTaskInterval');
     containerTaskInterval = byId('containerTaskInterval');
     editAccountsGrid = byId('editAccountsGrid');
+    editAccountTabsContainer = byId('editAccountTabsContainer');
+    activeAccountLabel = byId('activeAccountLabel');
+    activeAccountSelectedCount = byId('activeAccountSelectedCount');
     editModelsGemini = byId('editModelsGemini');
     editModelsClaude = byId('editModelsClaude');
     editModelsOthers = byId('editModelsOthers');
     btnEditFetchModels = byId('btnEditFetchModels');
+    btnEditAutoFillModels = byId('btnEditAutoFillModels');
+    btnEditSyncToAllAccounts = byId('btnEditSyncToAllAccounts');
     iconEditFetchModels = byId('iconEditFetchModels');
     textEditFetchModels = byId('textEditFetchModels');
     editModelsStatusMsg = byId('editModelsStatusMsg');
@@ -91,6 +102,8 @@ export function initAutoTriggerModalEvents(): void {
     btnSaveTask = byId('btnSaveTask');
 
     btnEditFetchModels?.addEventListener('click', () => loadAndRenderAutoTriggerModels(currentEditingTask, true));
+    btnEditAutoFillModels?.addEventListener('click', handleAutoFillModelsForActiveAccount);
+    btnEditSyncToAllAccounts?.addEventListener('click', handleSyncModelsToAllAccounts);
     btnManageAutoTrigger?.addEventListener('click', openAutoTriggerModal);
     btnAutoTriggerModalClose?.addEventListener('click', closeAutoTriggerModal);
     btnAutoTriggerModalCloseSecondary?.addEventListener('click', closeAutoTriggerModal);
@@ -104,10 +117,26 @@ export function initAutoTriggerModalEvents(): void {
     const toggleAll = (selector: string, checked: boolean, root: ParentNode = document) =>
         root.querySelectorAll<HTMLInputElement>(selector).forEach(cb => cb.checked = checked);
 
-    btnEditSelectAllAccounts?.addEventListener('click', () => toggleAll('input[type="checkbox"]', true, editAccountsGrid || document));
-    btnEditClearAllAccounts?.addEventListener('click', () => toggleAll('input[type="checkbox"]', false, editAccountsGrid || document));
-    btnEditSelectAllModels?.addEventListener('click', () => toggleAll('.edit-model-cb', true));
-    btnEditClearAllModels?.addEventListener('click', () => toggleAll('.edit-model-cb', false));
+    btnEditSelectAllAccounts?.addEventListener('click', () => {
+        toggleAll('input[type="checkbox"]', true, editAccountsGrid || document);
+        handleAccountsSelectionChange();
+    });
+    btnEditClearAllAccounts?.addEventListener('click', () => {
+        toggleAll('input[type="checkbox"]', false, editAccountsGrid || document);
+        handleAccountsSelectionChange();
+    });
+    btnEditSelectAllModels?.addEventListener('click', () => {
+        toggleAll('.edit-model-cb', true);
+        saveCurrentAccountSelection();
+        updateActiveAccountCount();
+        updateAccountTabBadge(activeAccountId);
+    });
+    btnEditClearAllModels?.addEventListener('click', () => {
+        toggleAll('.edit-model-cb', false);
+        saveCurrentAccountSelection();
+        updateActiveAccountCount();
+        updateAccountTabBadge(activeAccountId);
+    });
 }
 
 function openAutoTriggerModal() {
@@ -199,7 +228,14 @@ function renderAutoTriggerTasksTable(tasks: Array<any>) {
                </span>`;
 
         const accCount = task.accountIds ? task.accountIds.length : 0;
-        const modelCount = task.modelNames ? task.modelNames.length : 0;
+        let modelBadgeHtml = '';
+        if (task.accountModels && Object.keys(task.accountModels).length > 0) {
+            const distinctCount = task.modelNames ? task.modelNames.length : 0;
+            modelBadgeHtml = `<span class="text-primary dark:text-primary-fixed-dim font-bold" title="${state.currentLanguage === 'zh' ? '各账号已配置专属触发模型' : 'Configured per-account'}">${distinctCount} 种 (${state.currentLanguage === 'zh' ? '按账号定制' : 'Custom'})</span>`;
+        } else {
+            const modelCount = task.modelNames ? task.modelNames.length : 0;
+            modelBadgeHtml = `${state.currentLanguage === 'zh' ? `${modelCount} 个模型` : `${modelCount} models`}`;
+        }
 
         const isChecked = task.enabled ? 'checked' : '';
 
@@ -207,7 +243,7 @@ function renderAutoTriggerTasksTable(tasks: Array<any>) {
             <td class="p-3 font-bold text-on-surface dark:text-white truncate" title="${task.name}">${task.name}</td>
             <td class="p-3">${triggerTypeBadge}</td>
             <td class="p-3 font-mono text-[11px]">${state.currentLanguage === 'zh' ? `${accCount} 个账号` : `${accCount} accounts`}</td>
-            <td class="p-3 font-mono text-[11px]">${state.currentLanguage === 'zh' ? `${modelCount} 个模型` : `${modelCount} models`}</td>
+            <td class="p-3 font-mono text-[11px]">${modelBadgeHtml}</td>
             <td class="p-3 text-center">
                 <label class="switch">
                     <input type="checkbox" class="task-toggle-cb" data-task-id="${task.id}" ${isChecked}>
@@ -295,6 +331,182 @@ function renderAutoTriggerTasksTable(tasks: Array<any>) {
     });
 }
 
+function getCheckedAccountIDs(): string[] {
+    const cbs = editAccountsGrid?.querySelectorAll('.edit-acc-cb:checked') as NodeListOf<HTMLInputElement>;
+    const ids: string[] = [];
+    cbs?.forEach(cb => ids.push(cb.value));
+    return ids;
+}
+
+function handleAccountsSelectionChange(): void {
+    const checkedIds = getCheckedAccountIDs();
+    // 为新勾选的账号初始化模型配置
+    checkedIds.forEach(id => {
+        if (!taskAccountModels[id]) {
+            // 若当前有 active 账号已配置的模型，继承其作为默认初值；否则为空数组
+            const defaultModels = activeAccountId && taskAccountModels[activeAccountId]
+                ? [...taskAccountModels[activeAccountId]]
+                : [];
+            taskAccountModels[id] = defaultModels;
+        }
+    });
+
+    if (!activeAccountId || !checkedIds.includes(activeAccountId)) {
+        activeAccountId = checkedIds.length > 0 ? checkedIds[0] : null;
+    }
+
+    renderAccountTabs();
+    updateModelCheckboxesForActiveAccount();
+}
+
+function saveCurrentAccountSelection(): void {
+    if (activeAccountId) {
+        taskAccountModels[activeAccountId] = getCurrentSelectedModelNames();
+    }
+}
+
+function updateActiveAccountCount(): void {
+    if (!activeAccountSelectedCount) return;
+    const count = activeAccountId ? (taskAccountModels[activeAccountId] || []).length : 0;
+    activeAccountSelectedCount.textContent = state.currentLanguage === 'zh'
+        ? `已选 ${count} 个模型`
+        : `${count} models selected`;
+}
+
+function updateAccountTabBadge(accId: string | null): void {
+    if (!accId || !editAccountTabsContainer) return;
+    const tabBtn = editAccountTabsContainer.querySelector(`[data-acc-id="${accId}"]`);
+    if (tabBtn) {
+        const badge = tabBtn.querySelector('.acc-tab-badge');
+        const count = (taskAccountModels[accId] || []).length;
+        if (badge) badge.textContent = `(${count})`;
+    }
+}
+
+function renderAccountTabs(): void {
+    const container = editAccountTabsContainer;
+    if (!container) return;
+    container.innerHTML = '';
+
+    const checkedIds = getCheckedAccountIDs();
+    if (checkedIds.length === 0) {
+        container.innerHTML = `<span class="text-[10.5px] text-outline italic py-0.5">${state.currentLanguage === 'zh' ? '请先勾选上方关联账号' : 'Please check accounts above first'}</span>`;
+        if (activeAccountLabel) activeAccountLabel.textContent = state.currentLanguage === 'zh' ? '未选择账号' : 'No account selected';
+        updateActiveAccountCount();
+        return;
+    }
+
+    checkedIds.forEach(accId => {
+        const acc = (state.currentAccountsList || []).find((a: any) => a.id === accId);
+        const email = acc ? acc.email : accId;
+        const count = (taskAccountModels[accId] || []).length;
+        const isActive = accId === activeAccountId;
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('data-acc-id', accId);
+        btn.className = isActive
+            ? 'flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-primary text-white shadow-sm transition-all cursor-pointer whitespace-nowrap'
+            : 'flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-on-surface dark:text-slate-300 border border-outline-variant/30 transition-all cursor-pointer whitespace-nowrap';
+
+        btn.innerHTML = `
+            <span class="truncate max-w-[150px]">${escapeHtml(email)}</span>
+            <span class="acc-tab-badge text-[10px] opacity-80">(${count})</span>
+        `;
+
+        btn.addEventListener('click', () => {
+            saveCurrentAccountSelection();
+            activeAccountId = accId;
+            renderAccountTabs();
+            updateModelCheckboxesForActiveAccount();
+        });
+
+        container.appendChild(btn);
+    });
+
+    // 更新当前正在配置的账号标签
+    if (activeAccountLabel) {
+        const activeAcc = (state.currentAccountsList || []).find((a: any) => a.id === activeAccountId);
+        if (activeAcc) {
+            const tierStr = activeAcc.tier ? ` [${activeAcc.tier}]` : '';
+            activeAccountLabel.textContent = `${activeAcc.email}${tierStr}`;
+        } else {
+            activeAccountLabel.textContent = activeAccountId || (state.currentLanguage === 'zh' ? '未选择账号' : 'None');
+        }
+    }
+    updateActiveAccountCount();
+}
+
+function updateModelCheckboxesForActiveAccount(): void {
+    if (!activeAccountId) {
+        document.querySelectorAll<HTMLInputElement>('.edit-model-cb').forEach(cb => cb.checked = false);
+        updateActiveAccountCount();
+        return;
+    }
+
+    const selectedSet = new Set<string>(taskAccountModels[activeAccountId] || []);
+    const cbs = document.querySelectorAll<HTMLInputElement>('.edit-model-cb');
+    cbs.forEach(cb => {
+        cb.checked = selectedSet.has(cb.value);
+    });
+
+    updateActiveAccountCount();
+    updateAccountTabBadge(activeAccountId);
+}
+
+function handleAutoFillModelsForActiveAccount(): void {
+    if (!activeAccountId) {
+        alert(state.currentLanguage === 'zh' ? '请先勾选并选择要配置的账号！' : 'Please select an account first!');
+        return;
+    }
+
+    const activeAcc = (state.currentAccountsList || []).find((a: any) => a.id === activeAccountId);
+    if (!activeAcc) return;
+
+    if (activeAcc.supportedModels && activeAcc.supportedModels.length > 0) {
+        taskAccountModels[activeAccountId] = [...activeAcc.supportedModels];
+        updateModelCheckboxesForActiveAccount();
+        updateAccountTabBadge(activeAccountId);
+        alert(state.currentLanguage === 'zh'
+            ? `✅ 已为账号 ${activeAcc.email} 自动填充其支持的 ${activeAcc.supportedModels.length} 个模型！`
+            : `✅ Auto-filled ${activeAcc.supportedModels.length} supported models for ${activeAcc.email}!`);
+    } else {
+        alert(state.currentLanguage === 'zh'
+            ? `⚠️ 账号 ${activeAcc.email} 尚未探测过可用模型列表。请先在账号池管理工具栏点击「检测可用模型」获取精准模型画像！`
+            : `⚠️ Account ${activeAcc.email} has not probed available models yet.`);
+    }
+}
+
+function handleSyncModelsToAllAccounts(): void {
+    if (!activeAccountId) {
+        alert(state.currentLanguage === 'zh' ? '请先勾选并选择要配置的账号！' : 'Please select an account first!');
+        return;
+    }
+
+    saveCurrentAccountSelection();
+    const currentModels = taskAccountModels[activeAccountId] || [];
+    const checkedIds = getCheckedAccountIDs();
+
+    if (checkedIds.length <= 1) {
+        alert(state.currentLanguage === 'zh' ? '当前只有一个关联账号，无需同步。' : 'Only one account selected, no need to sync.');
+        return;
+    }
+
+    const confirmMsg = state.currentLanguage === 'zh'
+        ? `确定要将当前账号 (${currentModels.length} 个模型) 的勾选配置复制同步到其余 ${checkedIds.length - 1} 个关联账号吗？`
+        : `Sync this account's model config to all other ${checkedIds.length - 1} accounts?`;
+
+    if (confirm(confirmMsg)) {
+        checkedIds.forEach(id => {
+            taskAccountModels[id] = [...currentModels];
+        });
+        renderAccountTabs();
+        alert(state.currentLanguage === 'zh'
+            ? `✅ 已成功同步至所有 ${checkedIds.length} 个关联账号！`
+            : `✅ Synced to all ${checkedIds.length} accounts!`);
+    }
+}
+
 function prepareTaskEditForm(task?: any) {
     const accGrid = editAccountsGrid;
     if (!accGrid || !editTaskId || !editTaskName || !editTaskPrompt || !editTaskTriggerType || !editTaskInterval || !containerTaskInterval || !editModelsGemini || !editModelsClaude || !editModelsOthers) return;
@@ -305,6 +517,18 @@ function prepareTaskEditForm(task?: any) {
     editTaskTriggerType.value = task?.triggerType || 'timer';
     editTaskInterval.value = task ? Math.round((task.intervalSeconds || 3600) / 60).toString() : '60';
     containerTaskInterval.classList.toggle('hidden', editTaskTriggerType.value !== 'timer');
+
+    // 初始化任务各账号专属模型映射
+    taskAccountModels = {};
+    if (task && task.accountModels && Object.keys(task.accountModels).length > 0) {
+        for (const [k, v] of Object.entries(task.accountModels)) {
+            taskAccountModels[k] = Array.isArray(v) ? [...v] : [];
+        }
+    } else if (task && Array.isArray(task.accountIds) && Array.isArray(task.modelNames)) {
+        task.accountIds.forEach((accId: string) => {
+            taskAccountModels[accId] = [...task.modelNames];
+        });
+    }
 
     accGrid.innerHTML = '';
     let currentAccs = (state.currentAccountsList || []).filter((acc: any) => acc.provider === state.currentViewTab);
@@ -323,7 +547,6 @@ function prepareTaskEditForm(task?: any) {
         accGrid.innerHTML = `<div class="col-span-2 text-outline italic">${state.currentLanguage === 'zh' ? '当前通道无可用账号' : 'No available accounts in this channel'}</div>`;
     } else {
         currentAccs.forEach((acc: any) => {
-            // 新建时默认不勾选任何账号
             const isChecked = task && task.accountIds ? task.accountIds.includes(acc.id) : false;
             const displayName = acc.provider === 'project' && acc.projectId
                 ? `${acc.email} (${state.currentLanguage === 'zh' ? '项目' : 'Project'}: ${acc.projectId})`
@@ -335,11 +558,21 @@ function prepareTaskEditForm(task?: any) {
                 <input type="checkbox" id="chk_acc_${acc.id}" value="${acc.id}" class="edit-acc-cb rounded border-outline-variant/40 text-primary focus:ring-primary cursor-pointer" ${isChecked ? 'checked' : ''}>
                 <label for="chk_acc_${acc.id}" class="truncate cursor-pointer select-none" title="${displayName}">${displayName}</label>
             `;
+            const cb = div.querySelector('.edit-acc-cb') as HTMLInputElement;
+            cb.addEventListener('change', () => {
+                handleAccountsSelectionChange();
+            });
             accGrid.appendChild(div);
         });
     }
 
     currentEditingTask = task || null;
+
+    // 确定初始 activeAccountId
+    const checkedAccs = getCheckedAccountIDs();
+    activeAccountId = checkedAccs.length > 0 ? checkedAccs[0] : null;
+
+    renderAccountTabs();
     loadAndRenderAutoTriggerModels(task);
 }
 
@@ -373,15 +606,25 @@ function renderAutoTriggerModelGroups(models: string[], selectedSet: Set<string>
             others: state.currentLanguage === 'zh' ? '暂无其它模型' : 'No other models',
         },
     });
+
+    // 绑定模型复选框即时变更事件
+    const cbs = document.querySelectorAll<HTMLInputElement>('.edit-model-cb');
+    cbs.forEach(cb => {
+        cb.addEventListener('change', () => {
+            saveCurrentAccountSelection();
+            updateActiveAccountCount();
+            updateAccountTabBadge(activeAccountId);
+        });
+    });
 }
 
 async function loadAndRenderAutoTriggerModels(task?: any, forceRefresh: boolean = false) {
     if (!editModelsGemini || !editModelsClaude || !editModelsOthers) return;
 
-    // 收集需保留勾选的模型：用户在界面已有勾选优先，其次为编辑任务的原有模型
-    const currentlyChecked = getCurrentSelectedModelNames();
-    const preserved = (currentlyChecked.length > 0)
-        ? currentlyChecked
+    // 收集当前 active 账号需保留勾选的模型
+    const activeModels = activeAccountId ? (taskAccountModels[activeAccountId] || []) : [];
+    const preserved = (activeModels.length > 0)
+        ? activeModels
         : (task && Array.isArray(task.modelNames) ? task.modelNames : []);
     const selectedSet = new Set<string>(preserved);
 
@@ -427,6 +670,7 @@ async function loadAndRenderAutoTriggerModels(task?: any, forceRefresh: boolean 
         if (iconEditFetchModels) iconEditFetchModels.classList.remove('animate-spin');
         if (btnEditFetchModels) btnEditFetchModels.disabled = false;
         if (textEditFetchModels) textEditFetchModels.textContent = state.currentLanguage === 'zh' ? '获取最新模型' : 'Fetch Models';
+        updateModelCheckboxesForActiveAccount();
     }
 }
 
@@ -444,21 +688,29 @@ async function saveAutoTriggerTask() {
     const intervalMinutes = parseInt(editTaskInterval.value || '60', 10);
     const intervalSeconds = Math.max(intervalMinutes * 60, 300);
 
-    const accCbs = editAccountsGrid?.querySelectorAll('.edit-acc-cb:checked') as NodeListOf<HTMLInputElement>;
-    const selectedAccountIDs: string[] = [];
-    accCbs?.forEach(cb => selectedAccountIDs.push(cb.value));
+    saveCurrentAccountSelection();
 
+    const selectedAccountIDs = getCheckedAccountIDs();
     if (selectedAccountIDs.length === 0) {
         alert(state.currentLanguage === 'zh' ? '请至少选择一个关联账号！' : 'Please select at least one associated account!');
         return;
     }
 
-    const modelCbs = document.querySelectorAll('.edit-model-cb:checked') as NodeListOf<HTMLInputElement>;
-    const selectedModelNames: string[] = [];
-    modelCbs?.forEach(cb => selectedModelNames.push(cb.value));
+    const cleanAccountModels: Record<string, string[]> = {};
+    const unionSet = new Set<string>();
+    let hasAnyModel = false;
 
-    if (selectedModelNames.length === 0) {
-        alert(state.currentLanguage === 'zh' ? '请至少选择一个触发测试模型！' : 'Please select at least one trigger test model!');
+    selectedAccountIDs.forEach(accId => {
+        const mList = taskAccountModels[accId] || [];
+        cleanAccountModels[accId] = mList;
+        if (mList.length > 0) {
+            hasAnyModel = true;
+            mList.forEach(m => unionSet.add(m));
+        }
+    });
+
+    if (!hasAnyModel) {
+        alert(state.currentLanguage === 'zh' ? '请至少为一个账号配置触发模型！' : 'Please select at least one trigger model for an account!');
         return;
     }
 
@@ -468,7 +720,8 @@ async function saveAutoTriggerTask() {
         id: id,
         name: name,
         accountIds: selectedAccountIDs,
-        modelNames: selectedModelNames,
+        modelNames: Array.from(unionSet),
+        accountModels: cleanAccountModels,
         prompt: prompt,
         triggerType: triggerType,
         intervalSeconds: intervalSeconds,
@@ -486,4 +739,12 @@ async function saveAutoTriggerTask() {
     } catch (err: any) {
         alert((state.currentLanguage === 'zh' ? '保存引发异常: ' : 'Exception during saving: ') + err.message);
     }
+}
+
+function escapeHtml(str: string): string {
+    return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 }

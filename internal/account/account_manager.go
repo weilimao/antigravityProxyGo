@@ -411,38 +411,60 @@ func (m *Manager) GetAccounts() []*Account {
 			cooldownsCopy[k] = v
 		}
 
+		var hasArgonCopy *bool
+		if a.HasArgonBucket != nil {
+			v := *a.HasArgonBucket
+			hasArgonCopy = &v
+		}
+		var supportedCopy []string
+		if len(a.SupportedModels) > 0 {
+			supportedCopy = make([]string, len(a.SupportedModels))
+			copy(supportedCopy, a.SupportedModels)
+		}
+		var unsupportedCopy map[string]int64
+		if len(a.UnsupportedModels) > 0 {
+			unsupportedCopy = make(map[string]int64, len(a.UnsupportedModels))
+			for k, v := range a.UnsupportedModels {
+				unsupportedCopy[k] = v
+			}
+		}
+
 		list = append(list, &Account{
-			ID:               a.ID,
-			Email:            a.Email,
-			Provider:         a.Provider,
-			ProjectID:        a.ProjectID,
-			ProjectLabel:     a.ProjectLabel,
-			ScopeType:        a.ScopeType,
-			AddedAt:          a.AddedAt,
-			Tier:             a.Tier,
-			Enabled:          a.Enabled,
-			EnableOverages:   a.EnableOverages,
-			Credits:          creditsCopy,
-			Cooldowns:        cooldownsCopy,
-			CooldownUntil:    a.CooldownUntil,
-			TwoFASecret:      a.TwoFASecret,
-			TokenRefreshedAt: a.GetTokenRefreshedAt(),
-			NoQuota:          a.NoQuota,
-			LastCheckinDate:  a.LastCheckinDate,
-			CheckinStreak:    a.CheckinStreak,
-			MaskedKey:        maskedKeyForAccount(a),
-			BaseURL:          a.BaseURL,
-			EgressIP:         a.EgressIP,
-			TokenEndpoint:    a.TokenEndpoint,
-			DefaultModel:     a.DefaultModel,
-			ModelSonnet:      a.ModelSonnet,
-			ModelOpus:        a.ModelOpus,
-			ModelHaiku:       a.ModelHaiku,
-			ModelFable:       a.ModelFable,
-			GroupID:          a.GroupID,
-			GroupName:        a.GroupName,
-			Formats:          a.Formats,
-			ValidationURL:    a.ValidationURL,
+			ID:                a.ID,
+			Email:             a.Email,
+			Provider:          a.Provider,
+			ProjectID:         a.ProjectID,
+			ProjectLabel:      a.ProjectLabel,
+			ScopeType:         a.ScopeType,
+			AddedAt:           a.AddedAt,
+			Tier:              a.Tier,
+			Enabled:           a.Enabled,
+			EnableOverages:    a.EnableOverages,
+			Credits:           creditsCopy,
+			Cooldowns:         cooldownsCopy,
+			CooldownUntil:     a.CooldownUntil,
+			TwoFASecret:       a.TwoFASecret,
+			TokenRefreshedAt:  a.GetTokenRefreshedAt(),
+			NoQuota:           a.NoQuota,
+			LastCheckinDate:   a.LastCheckinDate,
+			CheckinStreak:     a.CheckinStreak,
+			MaskedKey:         maskedKeyForAccount(a),
+			BaseURL:           a.BaseURL,
+			EgressIP:          a.EgressIP,
+			TokenEndpoint:     a.TokenEndpoint,
+			DefaultModel:      a.DefaultModel,
+			ModelSonnet:       a.ModelSonnet,
+			ModelOpus:         a.ModelOpus,
+			ModelHaiku:        a.ModelHaiku,
+			ModelFable:        a.ModelFable,
+			GroupID:           a.GroupID,
+			GroupName:         a.GroupName,
+			Formats:           a.Formats,
+			ValidationURL:     a.ValidationURL,
+			AuthExpired:       a.IsAuthExpired(),
+			HasArgonBucket:    hasArgonCopy,
+			SupportedModels:   supportedCopy,
+			UnsupportedModels: unsupportedCopy,
 		})
 	}
 	return list

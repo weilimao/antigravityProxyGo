@@ -30,14 +30,15 @@ func (a *App) handleAutoTriggerIPC(channel string, args []interface{}) (string, 
 
 	case "autotrigger:save":
 		var payload struct {
-			ID              int64    `json:"id"`
-			Name            string   `json:"name"`
-			AccountIDs      []string `json:"accountIds"`
-			ModelNames      []string `json:"modelNames"`
-			Prompt          string   `json:"prompt"`
-			TriggerType     string   `json:"triggerType"`
-			IntervalSeconds int      `json:"intervalSeconds"`
-			Enabled         bool     `json:"enabled"`
+			ID              int64               `json:"id"`
+			Name            string              `json:"name"`
+			AccountIDs      []string            `json:"accountIds"`
+			ModelNames      []string            `json:"modelNames"`
+			AccountModels   map[string][]string `json:"accountModels"`
+			Prompt          string              `json:"prompt"`
+			TriggerType     string              `json:"triggerType"`
+			IntervalSeconds int                 `json:"intervalSeconds"`
+			Enabled         bool                `json:"enabled"`
 		}
 		if len(args) > 0 {
 			bytesPayload, _ := json.Marshal(args[0])
@@ -52,8 +53,17 @@ func (a *App) handleAutoTriggerIPC(channel string, args []interface{}) (string, 
 			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "请至少选择一个账号"})
 			return data, true, nil
 		}
-		if len(payload.ModelNames) == 0 {
-			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "请至少选择一个模型"})
+		hasAnyModel := len(payload.ModelNames) > 0
+		if !hasAnyModel && len(payload.AccountModels) > 0 {
+			for _, mList := range payload.AccountModels {
+				if len(mList) > 0 {
+					hasAnyModel = true
+					break
+				}
+			}
+		}
+		if !hasAnyModel {
+			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": "请至少为一个账号配置触发模型"})
 			return data, true, nil
 		}
 
@@ -62,6 +72,7 @@ func (a *App) handleAutoTriggerIPC(channel string, args []interface{}) (string, 
 			Name:            payload.Name,
 			AccountIDs:      payload.AccountIDs,
 			ModelNames:      payload.ModelNames,
+			AccountModels:   payload.AccountModels,
 			Prompt:          payload.Prompt,
 			TriggerType:     payload.TriggerType,
 			IntervalSeconds: payload.IntervalSeconds,

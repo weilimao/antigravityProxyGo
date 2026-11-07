@@ -228,13 +228,27 @@ func (a *App) startup(ctx context.Context) {
 	a.ensureRelayInitialized()
 
 	// 5. Initialize Packet Capturer
+	resolveAccountProjectID := func(acc *account.Account) string {
+		if acc == nil {
+			return ""
+		}
+		if acc.ProjectID != "" {
+			return acc.ProjectID
+		}
+		if a.quotaSvc != nil && acc.Email != "" {
+			if pid := a.quotaSvc.GetStoredProject(acc.Email); pid != "" {
+				return pid
+			}
+		}
+		return ""
+	}
 	a.packetCap = stats.NewPacketCapturer(
 		func(id string) (string, string, string, error) {
 			acc := a.accountMgr.GetAccountByID(id)
 			if acc == nil {
 				return "", "", "", fmt.Errorf("账号不存在")
 			}
-			return acc.AccessToken, acc.RefreshToken, acc.ProjectID, nil
+			return acc.AccessToken, acc.RefreshToken, resolveAccountProjectID(acc), nil
 		},
 		func(id string) (string, error) {
 			acc := a.accountMgr.GetAccountByID(id)
@@ -247,7 +261,9 @@ func (a *App) startup(ctx context.Context) {
 			return a.settingsMgr.GetEnablePacketCapture()
 		},
 	)
+	a.packetCap.SetUserAgentProvider(a.accountMgr.GetAntigravityUserAgent)
 	a.packetCap.Init(activeDir)
+	a.quotaSvc.SetRequestTemplate(a.packetCap.LatestRequestTemplate)
 
 	// 6. Initialize AI 计费生成器(AI 一键生成计费配置后端)。与 packetCap 同款
 	// getAccountTokens/refreshAccount 闭包注入(架构与 NewPacketCapturer 逐字对齐),
@@ -258,7 +274,7 @@ func (a *App) startup(ctx context.Context) {
 			if acc == nil {
 				return "", "", "", fmt.Errorf("账号不存在")
 			}
-			return acc.AccessToken, acc.RefreshToken, acc.ProjectID, nil
+			return acc.AccessToken, acc.RefreshToken, resolveAccountProjectID(acc), nil
 		},
 		func(id string) (string, error) {
 			acc := a.accountMgr.GetAccountByID(id)
@@ -268,6 +284,7 @@ func (a *App) startup(ctx context.Context) {
 			return a.authMgr.RefreshToken(acc)
 		},
 		a.AddLog,
+		pricing.WithAIUserAgentProvider(a.accountMgr.GetAntigravityUserAgent),
 	)
 
 	// Bind UI update callbacks with concurrent-safe throttling to prevent UI rendering freeze

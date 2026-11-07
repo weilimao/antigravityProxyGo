@@ -127,6 +127,7 @@ func runMigrations(db *sql.DB, dataDir string) error {
 			name TEXT NOT NULL,
 			account_ids TEXT NOT NULL,
 			model_names TEXT NOT NULL,
+			account_models TEXT DEFAULT '{}',
 			prompt TEXT NOT NULL,
 			trigger_type TEXT NOT NULL,
 			interval_seconds INTEGER DEFAULT 0,
@@ -214,6 +215,8 @@ func runMigrations(db *sql.DB, dataDir string) error {
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN cache_status TEXT NOT NULL DEFAULT '';`)
 	// benchmark_results: 存量数据库平滑升级, 补充 status_code 字段
 	_, _ = db.Exec(`ALTER TABLE benchmark_results ADD COLUMN status_code INTEGER NOT NULL DEFAULT 0;`)
+	// auto_trigger_tasks: 存量数据库平滑升级, 补充 account_models 字段 (各账号独立模型映射)
+	_, _ = db.Exec(`ALTER TABLE auto_trigger_tasks ADD COLUMN account_models TEXT DEFAULT '{}';`)
 
 	// --- Versioned Migrations ---
 	migrationVersion := getMigrationVersion(db)

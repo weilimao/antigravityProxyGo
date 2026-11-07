@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/cert"
+	"antigravity-proxy/internal/modelfetch"
 	"antigravity-proxy/internal/patch"
 	platformapi "antigravity-proxy/internal/platform/api"
 	platformdb "antigravity-proxy/internal/platform/db"
@@ -142,6 +143,10 @@ func (a *App) ensureRelayInitialized() {
 	// 注入全局 stats.Tracker, 使 NVIDIA 中继链路能将号池用量计入
 	// 「使用趋势-NVIDIA」专用桶 (TrackNvidiaRequest), 与综合趋势桶隔离。
 	a.relayCompatAPIMgr.SetGlobalStatsTracker(a.statsTracker)
+	if a.quotaSvc != nil {
+		a.relayCompatAPIMgr.SetStoredProjectResolver(a.quotaSvc.GetStoredProject)
+		modelfetch.SetStoredProjectResolver(a.quotaSvc.GetStoredProject)
+	}
 
 	// 绑定 OCR 引擎的跨号池路由解析:使 OCR 模型下拉选中带前缀的非 Google 模型
 	// (如 nvidia/xxx、other/openai/xxx)时,OCR 出站能按模型映射路由到对应号池,

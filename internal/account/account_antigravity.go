@@ -9,18 +9,25 @@ import (
 
 const (
 	// DefaultAntigravityCliVersion 是 Antigravity 号池全局 Hub/客户端版本号的默认值,
-	// 用于发往 Google 上游的 User-Agent 身份头 (如 antigravity/hub/2.25.0 (aidev_client; os_type=windows; arch=amd64))。
+	// 用于发往 Google 上游的 User-Agent 身份头 (如 antigravity/hub/2.29.0 (aidev_client; os_type=windows; arch=amd64; cl=1013060670))。
 	// 用户可在 Antigravity 官方账号控制区配置覆盖。
-	DefaultAntigravityCliVersion = "2.25.0"
+	DefaultAntigravityCliVersion = "2.29.0"
+
+	// DefaultAntigravityBuildCL 是官方 Antigravity Desktop (language_server.exe --stamp) 内置的构建 Changelist 编号。
+	// 官方 codeassistclient.UserAgent (0x20f78e0) 恒在括号末尾附加 "; cl=<BuildChangelist>"。
+	DefaultAntigravityBuildCL = "1013060670"
 )
 
-// FormatAntigravityUserAgent 格式化 Antigravity Hub User-Agent 字符串。
+// FormatAntigravityUserAgent 格式化 Antigravity Hub User-Agent 字符串，严格对齐官方 language_server.exe (codeassistclient.UserAgent) 格式。
 func FormatAntigravityUserAgent(version string) string {
 	v := strings.TrimSpace(version)
 	if v == "" {
 		v = DefaultAntigravityCliVersion
 	}
-	return fmt.Sprintf("antigravity/hub/%s (aidev_client; os_type=windows; arch=amd64)", v)
+	if strings.HasPrefix(strings.ToLower(v), "antigravity/") {
+		return v
+	}
+	return fmt.Sprintf("antigravity/hub/%s (aidev_client; os_type=windows; arch=amd64; cl=%s)", v, DefaultAntigravityBuildCL)
 }
 
 // GetAntigravityCliVersion 返回 Antigravity 号池全局 Hub 客户端版本号(单池单值,对仗 AntigravityMaxConcurrency)。

@@ -349,6 +349,7 @@ func (pe *ProxyEngine) ReloadCertificates(dataDir string) error {
 
 func (pe *ProxyEngine) ResetConnections() {
 	pe.logFn("🔌 检测到系统从休眠中唤醒，正在重置本地连接池与活跃隧道...")
+	netutil.ResetAllAccountTransports()
 	pe.activeTunnelsMu.Lock()
 	tunnelsCount := len(pe.activeTunnels)
 	if tunnelsCount > 0 {

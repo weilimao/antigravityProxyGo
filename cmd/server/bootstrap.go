@@ -12,6 +12,7 @@ import (
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/benchmark"
 	"antigravity-proxy/internal/db"
+	"antigravity-proxy/internal/modelfetch"
 	platformdb "antigravity-proxy/internal/platform/db"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/proxy"
@@ -215,6 +216,9 @@ func NewServerInstance(cfg ServerConfig, logFn func(string)) (*ServerInstance, e
 		},
 	)
 	inst.PacketCap.Init(cfg.DataDir)
+	if inst.QuotaSvc != nil {
+		inst.QuotaSvc.SetRequestTemplate(inst.PacketCap.LatestRequestTemplate)
+	}
 
 	// 6. 装配代理引擎
 	proxyHandler := proxy.NewProxyHandler(
@@ -294,6 +298,10 @@ func NewServerInstance(cfg ServerConfig, logFn func(string)) (*ServerInstance, e
 		inst.logFn,
 	)
 	inst.RelayCompatAPIMgr.SetGlobalStatsTracker(inst.StatsTracker)
+	if inst.QuotaSvc != nil {
+		inst.RelayCompatAPIMgr.SetStoredProjectResolver(inst.QuotaSvc.GetStoredProject)
+		modelfetch.SetStoredProjectResolver(inst.QuotaSvc.GetStoredProject)
+	}
 	inst.RelayCompatAPIMgr.WireOcrRouteResolver()
 
 	inst.BenchmarkScheduler = benchmark.NewScheduler(inst.SettingsMgr, inst.RelayCompatAPIMgr, inst.logFn, nil)
@@ -411,4 +419,3 @@ func (s *ServerInstance) Shutdown(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
-

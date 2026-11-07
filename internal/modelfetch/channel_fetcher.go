@@ -6,14 +6,38 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/netutil"
 )
+
+var (
+	storedProjectResolverMu sync.RWMutex
+	storedProjectResolver   func(email string) string
+)
+
+// SetStoredProjectResolver 注入全局账号专属 Project ID 查询闭包（通常绑定 quotaSvc.GetStoredProject）。
+func SetStoredProjectResolver(fn func(email string) string) {
+	storedProjectResolverMu.Lock()
+	storedProjectResolver = fn
+	storedProjectResolverMu.Unlock()
+}
+
+func resolveStoredProjectForEmail(email string) string {
+	storedProjectResolverMu.RLock()
+	fn := storedProjectResolver
+	storedProjectResolverMu.RUnlock()
+	if fn == nil || strings.TrimSpace(email) == "" {
+		return ""
+	}
+	return strings.TrimSpace(fn(email))
+}
 
 // FetchChannelAvailableModels provides headless support for fetching channel models
 func FetchChannelAvailableModels(accountMgr *account.Manager, channel string) ([]string, error) {
@@ -41,19 +65,22 @@ func FetchChannelAvailableModels(accountMgr *account.Manager, channel string) ([
 			return nil, fmt.Errorf("号池 [%s] 下暂无已启用的有效账号，请先在【账号池】中添加该号池账号", channel)
 		}
 
-		// 权重排序：Pro / Ultra 付费层级账号具备更高的模型权限（如 Gemini 4 Argon、Claude 5.5 等），优先排在前面探测
-		tierPriority := func(tier string) int {
-			t := strings.ToLower(strings.TrimSpace(tier))
+		// 权重排序：具备 Argon 配额桶的账号与 Pro / Ultra 付费层级账号具备更高的模型权限（如 Gemini 4 Argon、Claude 5.5 等），优先排在前面探测
+		candidatePriority := func(acc *account.Account) int {
+			score := 1
+			t := strings.ToLower(strings.TrimSpace(acc.Tier))
 			if strings.Contains(t, "ultra") {
-				return 3
+				score = 3
+			} else if strings.Contains(t, "pro") {
+				score = 2
 			}
-			if strings.Contains(t, "pro") {
-				return 2
+			if acc.HasArgonBucket != nil && *acc.HasArgonBucket {
+				score += 10
 			}
-			return 1
+			return score
 		}
 		sort.SliceStable(googleCandidates, func(i, j int) bool {
-			return tierPriority(googleCandidates[i].Tier) > tierPriority(googleCandidates[j].Tier)
+			return candidatePriority(googleCandidates[i]) > candidatePriority(googleCandidates[j])
 		})
 
 		ua := ""
@@ -64,11 +91,20 @@ func FetchChannelAvailableModels(accountMgr *account.Manager, channel string) ([
 			ua = account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion)
 		}
 
-		// 跨账号探测与模型全集聚合（优先前 3 个代表性账号，去重且剔除已禁用占位模型）
+		// 跨账号探测与模型全集聚合（前 3 个代表性账号必探，且对尚未记录 SupportedModels 的账号补齐探测以建立模型能力画像）
 		modelSet := make(map[string]bool)
 		var firstErr error
 		probedCount := 0
 		for _, cand := range googleCandidates {
+			if probedCount >= 3 && len(cand.SupportedModels) > 0 {
+				for _, m := range cand.SupportedModels {
+					modelSet[m] = true
+				}
+				continue
+			}
+			if probedCount > 0 && geminiInternalTransport == nil {
+				time.Sleep(time.Duration(120+rand.Intn(230)) * time.Millisecond)
+			}
 			mList, err := fetchGeminiInternalModels(cand, ua)
 			if err != nil {
 				if firstErr == nil {
@@ -76,13 +112,13 @@ func FetchChannelAvailableModels(accountMgr *account.Manager, channel string) ([
 				}
 				continue
 			}
+			if accountMgr != nil && cand.ID != "" {
+				accountMgr.SetAccountSupportedModels(cand.ID, mList)
+			}
 			for _, m := range mList {
 				modelSet[m] = true
 			}
 			probedCount++
-			if probedCount >= 3 {
-				break
-			}
 		}
 
 		if len(modelSet) == 0 {
@@ -200,7 +236,13 @@ func fetchGeminiInternalModels(acc *account.Account, ua string) ([]string, error
 		return nil, fmt.Errorf("账号 AccessToken 为空")
 	}
 
-	projectID := acc.ProjectID
+	projectID := strings.TrimSpace(acc.ProjectID)
+	if projectID == "" && acc.Email != "" {
+		projectID = resolveStoredProjectForEmail(acc.Email)
+	}
+	if projectID == "" {
+		projectID = resolveStoredProjectForEmail("default")
+	}
 	if projectID == "" {
 		projectID = "favorable-synapse-ttvcb"
 	}
@@ -222,7 +264,16 @@ func fetchGeminiInternalModels(acc *account.Account, ua string) ([]string, error
 	}
 	req.Header.Set("User-Agent", ua)
 
-	client := &http.Client{Timeout: 30 * time.Second, Transport: getGeminiTransport()}
+	var client *http.Client
+	if geminiInternalTransport != nil {
+		client = &http.Client{Timeout: 30 * time.Second, Transport: geminiInternalTransport}
+	} else {
+		accKey := acc.ID
+		if strings.TrimSpace(accKey) == "" {
+			accKey = acc.Email
+		}
+		client = netutil.GetAccountClient(accKey, 30*time.Second)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("网络连接失败: %w", err)

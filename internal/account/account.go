@@ -67,6 +67,13 @@ type Account struct {
 	// AuthExpired 标记账号是否因 401 / 会话失效而处于「登录已过期」状态。
 	// 用于前端卡片高亮红色「已失效 (401)」状态徽章，并杜绝被误判为「冷却中」或被轮询调度。
 	AuthExpired bool `json:"authExpired,omitempty"`
+	// HasArgonBucket 记录该 Antigravity 账号在最近一次成功配额刷新中是否包含 Gemini 4 Argon 配额桶。
+	// nil 表示尚未探测过配额桶；non-nil false 表示明确无 Argon 配额桶权限；non-nil true 表示具备 Argon 配额桶权限。
+	HasArgonBucket *bool `json:"hasArgonBucket,omitempty"`
+	// SupportedModels 记录该账号最近一次通过 fetchAvailableModels 采样到的可用模型 ID 列表(小写规整)。
+	SupportedModels []string `json:"supportedModels,omitempty"`
+	// UnsupportedModels 记录该账号因上游返回 404 Model Not Found 等原因被标记为不支持的模型及过期毫秒时间戳(modelLower -> untilTimeMs)。
+	UnsupportedModels map[string]int64 `json:"unsupportedModels,omitempty"`
 }
 
 // GetAccessToken safely reads the access token under read lock.

@@ -329,6 +329,10 @@
                     <span class="material-symbols-outlined text-[14px]">verified_user</span>
                     <span data-i18n="grokCheckAuth">检查授权</span>
                 </button>
+                <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim bg-outline-variant/10 hover:bg-primary/10 border border-outline-variant/20 hover:border-primary/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none cursor-pointer" id="btnProbeAccountModels" title="一键检测各个账号真实可用模型清单，识别 Gemini 4 Argon 与 Claude 5.5 权限并标记不可用模型" data-i18n-title="btnProbeAccountModelsTitle">
+                    <span class="material-symbols-outlined text-[14px]" id="iconProbeModels">fact_check</span>
+                    <span data-i18n="btnProbeAccountModelsLabel">检测可用模型</span>
+                </button>
                 <button class="flex items-center gap-1 text-[11px] font-medium text-outline dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim bg-outline-variant/10 hover:bg-primary/10 border border-outline-variant/20 hover:border-primary/30 px-2.5 py-1 rounded-lg transition-all duration-200 select-none" id="btnRefreshAllQuota" title="刷新当前页签账号配额" data-i18n-title="btnRefreshAllQuotaTitle">
                     <span class="material-symbols-outlined text-[14px]" id="btnRefreshAllIcon">sync</span>
                     <span data-i18n="btnRefreshAllQuotaLabel">刷新配额</span>

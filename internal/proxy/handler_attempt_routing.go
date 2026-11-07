@@ -3,16 +3,12 @@ package proxy
 import (
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/relay"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // handler_attempt_routing.go: routeForAttempt —— 号池账号选择 + 项目/模型/URL/载荷重写。
@@ -37,7 +33,8 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 	usePool := false
 	var poolChannel string
 
-	isPoolReq := isRealModelRequest(localTargetPath) || isAgentRequest(localTargetPath) || localTargetHost == "aiplatform.googleapis.com"
+	isGoogleAuth := isGoogleOAuthToken(sc.r.Header.Get("Authorization"))
+	isPoolReq := shouldRouteV1InternalThroughPool(localTargetPath, localTargetHost, isGoogleAuth)
 
 	if isPoolReq {
 		usePool = true
@@ -106,9 +103,8 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 		var bodyJson struct {
 			Project string `json:"project"`
 		}
-		bodyParsed := false
 		if len(sc.bodyBytes) > 0 {
-			bodyParsed = json.Unmarshal(sc.bodyBytes, &bodyJson) == nil
+			_ = json.Unmarshal(sc.bodyBytes, &bodyJson)
 		}
 
 		if poolAccount.Provider == "project" {
@@ -123,22 +119,9 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 				targetModel = mapModelForProject(sc.currentModel)
 			}
 		} else if strings.Contains(localTargetPath, "v1internal") {
-			// 对于 v1internal 接口，当使用个人账号通道时：
-			// 若客户端传入了有效项目 ID 则优先使用；若客户端未传入（新版 IDE 插件场景），则尝试从当前账号或存储中获取项目 ID 兜底
-			targetProject = bodyJson.Project
-			if targetProject == "" {
-				if poolAccount.ProjectID != "" {
-					targetProject = poolAccount.ProjectID
-				} else if sc.h.getStoredProject != nil {
-					targetProject = sc.h.getStoredProject(poolAccount.Email)
-				}
-				if targetProject == "" && sc.h.getStoredProject != nil {
-					targetProject = sc.h.getStoredProject("default")
-				}
-				if targetProject == "" {
-					targetProject = "favorable-synapse-ttvcb" // 官方默认兜底项目 ID
-				}
-			}
+			// 对于 v1internal 接口，优先使用当前分配账号（poolAccount）自身的真实 Project ID，
+			// 杜绝新会话分流或 429 切号时沿用客户端主账号或本地 Mock 的 Project ID 导致跨号污染。
+			targetProject = sc.resolvePoolAccountProject(poolAccount, bodyJson.Project)
 			targetModel = ""
 		} else {
 			// 对于普通账号通道，我们强行将其改写规范为默认账号请求模式：
@@ -148,29 +131,43 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 			targetModel = ""
 		}
 
-		// Let quotaService capture project ID using the authenticated pool account email
-		if bodyParsed && bodyJson.Project != "" {
-			isDefault := bodyJson.Project == "expanded-palisade-stpfc" || strings.HasPrefix(bodyJson.Project, "expanded-palisade-")
-			if !isDefault {
-				if sc.h.setCapturedProject != nil {
-					sc.h.setCapturedProject(poolAccount.Email, bodyJson.Project)
+		// Rewrite project and model fields in JSON payload.
+		// 官方原生客户端只替换顶层 project 字符串，其余字节保持客户端原样。
+		// 18444 与第三方插件仍走整包改写（模型名、思维链）。
+		isNativeClient := isNativeOfficialAntigravityClient(sc.r.Header.Get("User-Agent"))
+		nativePassthrough := isNativeClient && sc.relayUserID == ""
+		// loadCodeAssist 的请求体只有 metadata，没有 project 字段。写进去上游直接 400。
+		allowsProjectField := !strings.Contains(strings.ToLower(localTargetPath), "loadcodeassist")
+		needProjectInjection := allowsProjectField && strings.Contains(localTargetPath, "v1internal") && targetProject != "" && bodyJson.Project != targetProject
+		if nativePassthrough && len(sc.bodyBytes) > 0 && strings.Contains(customHeaders.Get("Content-Type"), "json") {
+			if replaced, ok := rewriteNativePassthroughIdentity(
+				sc.bodyBytes,
+				poolAccount,
+				targetProject,
+				bodyJson.Project,
+				sc.sessionKey,
+				attemptIndex,
+				allowsProjectField && strings.Contains(localTargetPath, "v1internal"),
+			); ok {
+				finalReqBody = replaced
+				customHeaders.Set("Content-Length", strconv.Itoa(len(finalReqBody)))
+				if attemptIndex == 0 && needProjectInjection {
+					sc.h.logFn(fmt.Sprintf("🛡️ Injected project ID '%s' into payload.", targetProject))
 				}
 			}
-		}
-
-		// Rewrite project and model fields in JSON payload
-		// 仅对 18444 第三方平台调用 (sc.relayUserID != "") 以及新版 IDE 插件/第三方宿主编辑器 (!isNativeClient)
-		// 执行 project/model 覆写与思维链注入；官方原生 Antigravity 客户端若缺失 project 字段则自动补全兜底项目 ID，其余载荷保持透传
-		isNativeClient := isNativeOfficialAntigravityClient(sc.r.Header.Get("User-Agent"))
-		needProjectInjection := strings.Contains(localTargetPath, "v1internal") && bodyJson.Project == "" && targetProject != ""
-		if (sc.relayUserID != "" || !isNativeClient || needProjectInjection) && len(sc.bodyBytes) > 0 && strings.Contains(customHeaders.Get("Content-Type"), "json") {
+		} else if (sc.relayUserID != "" || !isNativeClient) && len(sc.bodyBytes) > 0 && strings.Contains(customHeaders.Get("Content-Type"), "json") {
 			var bodyMap map[string]interface{}
 			if json.Unmarshal(sc.bodyBytes, &bodyMap) == nil {
 				bodyChanged := false
 
-				if targetProject != "" {
+				if targetProject != "" && allowsProjectField {
 					if origProjVal, exists := bodyMap["project"]; !exists || origProjVal != targetProject {
 						bodyMap["project"] = targetProject
+						bodyChanged = true
+					}
+				} else if !allowsProjectField {
+					if _, exists := bodyMap["project"]; exists {
+						delete(bodyMap, "project")
 						bodyChanged = true
 					}
 				} else {
@@ -180,8 +177,8 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 					}
 				}
 
-				// 仅对 18444 中继平台或第三方宿主插件客户端改写 model/thinkingConfig，原生官方客户端保持原始模型与思维链配置
-				if sc.relayUserID != "" || !isNativeClient {
+				// 仅对 18444 中继平台或第三方宿主插件客户端的非 fetchAvailableModels 请求改写 model/thinkingConfig，原生官方客户端保持原始模型与思维链配置
+				if (sc.relayUserID != "" || !isNativeClient) && !strings.Contains(localTargetPath, "fetchAvailableModels") {
 					// 决定最终要写入的 Model
 					finalTargetModel := targetModel
 				if finalTargetModel == "" {
@@ -487,28 +484,16 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 								modelName = sc.currentModel
 							}
 
-							if sc.rawSessionKey != "" {
-								hasher := sha256.New()
-								hasher.Write([]byte(sc.rawSessionKey))
-								standardReq["sessionId"] = "-" + hex.EncodeToString(hasher.Sum(nil))[:16]
-							} else {
-								standardReq["sessionId"] = fmt.Sprintf("-%d", time.Now().UnixNano()/1e6)
+							accKey := poolAccount.ID
+							if strings.TrimSpace(accKey) == "" {
+								accKey = poolAccount.Email
 							}
-
-							actualProjectId := poolAccount.ProjectID
-							if actualProjectId == "" && sc.h.getStoredProject != nil {
-								actualProjectId = sc.h.getStoredProject(poolAccount.Email)
-							}
-							if actualProjectId == "" {
-								actualProjectId = sc.h.getStoredProject("default")
-							}
-							if actualProjectId == "" {
-								actualProjectId = "favorable-synapse-ttvcb" // 最终兜底
-							}
+							standardReq["sessionId"] = account.AccountSessionID(accKey, sc.rawSessionKey)
+							actualProjectId := sc.resolvePoolAccountProject(poolAccount, "")
 
 							wrappedReq := map[string]interface{}{
 								"project":            actualProjectId,
-								"requestId":          fmt.Sprintf("agent/%d-%d", time.Now().Unix(), rand.Intn(1000000)),
+								"requestId":          account.NewAntigravityRequestID("agent"),
 								"request":            standardReq,
 								"model":              modelName,
 								"userAgent":          "antigravity",

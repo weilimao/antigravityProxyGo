@@ -176,6 +176,7 @@
     <WorkBuddyAccountModal />
     <OpenCodeAccountModal />
     <PoolErrorRetryModal />
+    <AccountModelsModal />
   </div>
 </template>
 
@@ -214,6 +215,7 @@ import BenchmarkConfigModal from './components/modals/BenchmarkConfigModal.vue';
 import WorkBuddyAccountModal from './components/modals/WorkBuddyAccountModal.vue';
 import OpenCodeAccountModal from './components/modals/OpenCodeAccountModal.vue';
 import PoolErrorRetryModal from './components/modals/PoolErrorRetryModal.vue';
+import AccountModelsModal from './components/modals/AccountModelsModal.vue';
 import { initPoolErrorRetryEvents } from './ui/poolErrorRetryModal';
 import { initRemoteEvents } from './ui/remoteController';
 import { setLanguage, switchView, initDashboardEvents, initModelRangeFilter } from './ui/dashboard';

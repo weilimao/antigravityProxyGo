@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/netutil"
 	"antigravity-proxy/internal/pricing"
 	"antigravity-proxy/internal/session"
 	"antigravity-proxy/internal/settings"
@@ -558,4 +559,422 @@ func TestAntigravityPassthroughVsRelaySpoof(t *testing.T) {
 		}
 	})
 }
+
+// TestMultiAccountSessionIsolationAndProjectRewrite 验证：
+// 1. 客户端仅单号登录（或免登录携带 Mock "favorable-synapse-ttvcb" / 主号 Project），开启多个新会话时自动均分至不同号池账号；
+// 2. 每个出站账号自动重写为其各自真实的专属 ProjectID（严禁将客户端的 Project 反向污染写回给其他池账号）；
+// 3. 剥离 Sec-Ch-Ua / X-Client-Data 等冲突浏览器特征头，同时保持原生 User-Agent 与模型字段不变；
+// 4. clientForAttempt 为不同池账号返回各自物理隔离的 *http.Transport 与 TLS Session Cache。
+func TestMultiAccountSessionIsolationAndProjectRewrite(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Cleanup(func() {
+		netutil.ResetAllAccountTransports()
+	})
+
+	accMgr := account.NewManager()
+	accMgr.Init(tempDir)
+	accMgr.SetPoolMode(true)
+
+	accAlpha := &account.Account{
+		ID:          "acc-alpha-id",
+		Email:       "alpha@example.com",
+		Provider:    "antigravity",
+		AccessToken: "ya29.token-alpha",
+		ProjectID:   "", // 通过 storedProjects 提供真实专属项目
+		Enabled:     true,
+	}
+	accBeta := &account.Account{
+		ID:          "acc-beta-id",
+		Email:       "beta@example.com",
+		Provider:    "antigravity",
+		AccessToken: "ya29.token-beta",
+		ProjectID:   "real-gcp-project-beta",
+		Enabled:     true,
+	}
+	accMgr.AddAccount(accAlpha)
+	accMgr.AddAccount(accBeta)
+
+	storedProjects := map[string]string{
+		"alpha@example.com": "real-gcp-project-alpha",
+	}
+	capturedPollutions := make(map[string]string)
+
+	type outboundRecord struct {
+		auth      string
+		project   string
+		model     string
+		ua        string
+		secChUa   string
+		clientDat string
+	}
+	var records []outboundRecord
+
+	mockTransport := mockRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		bodyBytes, _ := io.ReadAll(req.Body)
+		var parsed map[string]interface{}
+		_ = json.Unmarshal(bodyBytes, &parsed)
+		proj, _ := parsed["project"].(string)
+		model, _ := parsed["model"].(string)
+		records = append(records, outboundRecord{
+			auth:      req.Header.Get("Authorization"),
+			project:   proj,
+			model:     model,
+			ua:        req.Header.Get("User-Agent"),
+			secChUa:   req.Header.Get("Sec-Ch-Ua"),
+			clientDat: req.Header.Get("X-Client-Data"),
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}`)),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	h := NewProxyHandler(
+		accMgr,
+		session.NewRouter(),
+		stats.NewTracker(pricing.NewManager()),
+		stats.NewUsageTracker(pricing.NewManager()),
+		stats.NewRetryErrorLogger(),
+		stats.NewPacketCapturer(nil, nil, func() bool { return false }),
+		func(s string) {},
+		nil,
+		nil,
+		func(email, proj string) {
+			capturedPollutions[email] = proj
+		},
+		func(email string) string {
+			return storedProjects[email]
+		},
+		func() int { return 1 },
+		func() int { return 1 },
+		func() int64 { return 10 * 1024 * 1024 },
+		func() int { return 5 },
+		nil,
+		nil,
+	)
+
+	// 验证真实生产模式下 clientForAttempt 为不同账号分配物理隔离的 Transport
+	clientAlpha := h.clientForAttempt(&routeOutcome{poolAccount: accAlpha})
+	clientBeta := h.clientForAttempt(&routeOutcome{poolAccount: accBeta})
+	if clientAlpha.Transport == clientBeta.Transport {
+		t.Fatalf("expected isolated http.Transport per pool account, got shared transport")
+	}
+
+	// 切换为 mockTransport 拦截断言出站请求头与请求体
+	h.client = &http.Client{Transport: mockTransport}
+
+	nativeUA := "antigravity/hub/2.28.2 (aidev_client; os_type=windows; arch=amd64)"
+
+	// 会话 1：客户端携带 Mock 项目 "favorable-synapse-ttvcb" 与新会话 UUID 1
+	payloadConv1 := []byte(`{"project":"favorable-synapse-ttvcb","model":"gemini-3.5-pro","requestId":"agent/11111111-aaaa-bbbb-cccc-111111111111/req-1","request":{"contents":[{"parts":[{"text":"session 1"}]}]}}`)
+	req1 := httptest.NewRequest(http.MethodPost, "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent", bytes.NewReader(payloadConv1))
+	req1.Host = "daily-cloudcode-pa.googleapis.com"
+	req1.Header.Set("User-Agent", nativeUA)
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("Authorization", "Bearer ya29.ide-single-login-token")
+	req1.Header.Set("Sec-Ch-Ua", `"Chromium";v="130"`)
+	req1.Header.Set("X-Client-Data", "CJa2yQEIpbbJAQ==")
+
+	rec1 := httptest.NewRecorder()
+	h.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("session 1 expected 200, got %d", rec1.Code)
+	}
+
+	// 会话 2：客户端同样只登录了单账号（携带客户端主号项目 "ide-logged-in-account-project"），但开启了新会话 UUID 2
+	payloadConv2 := []byte(`{"project":"ide-logged-in-account-project","model":"gemini-3.5-pro","requestId":"agent/22222222-dddd-eeee-ffff-222222222222/req-1","request":{"contents":[{"parts":[{"text":"session 2"}]}]}}`)
+	req2 := httptest.NewRequest(http.MethodPost, "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent", bytes.NewReader(payloadConv2))
+	req2.Host = "daily-cloudcode-pa.googleapis.com"
+	req2.Header.Set("User-Agent", nativeUA)
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer ya29.ide-single-login-token")
+
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("session 2 expected 200, got %d", rec2.Code)
+	}
+
+	if len(records) != 2 {
+		t.Fatalf("expected 2 outbound requests, got %d", len(records))
+	}
+
+	// 断言 1: 两个新会话被自动均分到两个不同的池账号（空闲账号优先策略）
+	if records[0].auth == records[1].auth {
+		t.Fatalf("expected new conversations to be distributed to different idle accounts, both got %s", records[0].auth)
+	}
+
+	// 断言 2: 每个账号出站时的 Authorization Token 与其专属真实 ProjectID 严格对齐，绝不沿用客户端的假 Project 或主号 Project
+	expectedTokenToProj := map[string]string{
+		"Bearer ya29.token-alpha": "real-gcp-project-alpha",
+		"Bearer ya29.token-beta":  "real-gcp-project-beta",
+	}
+	for i, rec := range records {
+		wantProj, ok := expectedTokenToProj[rec.auth]
+		if !ok {
+			t.Fatalf("record[%d] unexpected Authorization header: %s", i, rec.auth)
+		}
+		if rec.project != wantProj {
+			t.Errorf("record[%d] token %s expected aligned project %q, got %q", i, rec.auth, wantProj, rec.project)
+		}
+		if rec.ua != nativeUA {
+			t.Errorf("record[%d] expected native UA %q preserved, got %q", i, nativeUA, rec.ua)
+		}
+		if rec.model != "gemini-3.5-pro" {
+			t.Errorf("record[%d] expected model gemini-3.5-pro preserved, got %q", i, rec.model)
+		}
+		if rec.secChUa != "" || rec.clientDat != "" {
+			t.Errorf("record[%d] expected conflicting browser headers stripped, got Sec-Ch-Ua=%q X-Client-Data=%q", i, rec.secChUa, rec.clientDat)
+		}
+	}
+
+	// 断言 3: 客户端请求体中的 Project 绝不能反向污染覆盖池账号 alpha 或 beta 的存储记录
+	if len(capturedPollutions) > 0 {
+		t.Errorf("expected zero cross-account project pollution, but setCapturedProject was called with: %v", capturedPollutions)
+	}
+}
+
+func TestModel404AutoSwitchAndFetchModelsPool(t *testing.T) {
+	tmpDir := t.TempDir()
+	accMgr := account.NewManager()
+	accMgr.Init(tmpDir)
+	accMgr.SetActiveChannel("antigravity")
+	accMgr.SetPoolMode(true)
+	accMgr.SetAntigravityCliVersion("2.25.0")
+
+	// acc-no-argon: 尚未探测模型列表，但实际不支持 gemini-4-argon-medium（会返回 404）
+	accNoArgon := &account.Account{
+		ID:          "acc-no-argon",
+		Email:       "weilimao666@gmail.com",
+		Provider:    "antigravity",
+		AccessToken: "ya29.tok-no-argon",
+		ProjectID:   "proj-no-argon",
+		Enabled:     true,
+	}
+	// acc-with-argon: 支持 gemini-4-argon-medium（返回 200 OK）
+	accWithArgon := &account.Account{
+		ID:          "acc-with-argon",
+		Email:       "weilimao0714@gmail.com",
+		Provider:    "antigravity",
+		AccessToken: "ya29.tok-with-argon",
+		ProjectID:   "proj-with-argon",
+		Enabled:     true,
+	}
+	accMgr.AddAccount(accNoArgon)
+	accMgr.AddAccount(accWithArgon)
+
+	var attemptedAuths []string
+	var firstFailedAuth string
+	mockTransport := mockRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		auth := req.Header.Get("Authorization")
+		attemptedAuths = append(attemptedAuths, auth)
+
+		if strings.Contains(req.URL.Path, "fetchAvailableModels") {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(`{
+					"models": {
+						"gemini-2.5-flash": {"displayName": "Gemini 2.5 Flash", "disabled": false},
+						"gemini-4-argon-medium": {"displayName": "Gemini 4 Argon (Medium)", "disabled": false},
+						"claude-opus-5-5-high": {"displayName": "Claude Opus 5.5 (High)", "disabled": false}
+					}
+				}`)),
+			}, nil
+		}
+
+		// 模拟第一个被分流命中的账号不支持 gemini-4-argon-medium 返回 404，第二个账号支持并返回 200
+		if firstFailedAuth == "" {
+			firstFailedAuth = auth
+		}
+		if auth == firstFailedAuth {
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}`)),
+			}, nil
+		}
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"response":{"candidates":[{"content":{"parts":[{"text":"argon_ok"}]}}]}}`)),
+		}, nil
+	})
+
+	h := NewProxyHandler(
+		accMgr,
+		session.NewRouter(),
+		stats.NewTracker(pricing.NewManager()),
+		stats.NewUsageTracker(pricing.NewManager()),
+		stats.NewRetryErrorLogger(),
+		stats.NewPacketCapturer(nil, nil, func() bool { return false }),
+		func(s string) { t.Logf("[404 Switch Log] %s", s) },
+		nil, nil,
+		func(email, proj string) {},
+		func(email string) string { return "" },
+		func() int { return 3 }, // getMaxRetries = 3
+		func() int { return 0 }, // getMaxRetryDelay = 0s
+		func() int64 { return 10 * 1024 * 1024 },
+		func() int { return 5 }, // getRequestTimeout = 5s
+		nil, nil,
+	)
+	h.client = &http.Client{Transport: mockTransport}
+
+	// 1. 首次请求 gemini-4-argon-medium：若先命中 acc-no-argon 返回 404，应自动标记 acc-no-argon 不支持该模型并立即无缝重试 acc-with-argon 返回 200
+	payload := []byte(`{"project":"favorable-synapse-ttvcb","model":"gemini-4-argon-medium","requestId":"agent/33333333-aaaa-bbbb-cccc-333333333333/req-1","request":{"contents":[{"parts":[{"text":"hello argon"}]}]}}`)
+	req := httptest.NewRequest(http.MethodPost, "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent", bytes.NewReader(payload))
+	req.Host = "daily-cloudcode-pa.googleapis.com"
+	req.Header.Set("User-Agent", "antigravity/hub/2.25.0 (aidev_client; os_type=windows; arch=amd64)")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer ya29.ide-token")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 404 on first account to auto-switch and succeed with 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if len(attemptedAuths) != 2 || attemptedAuths[0] == attemptedAuths[1] {
+		t.Fatalf("expected 2 attempts across 2 distinct accounts on 404 switch, got: %v", attemptedAuths)
+	}
+	if !accNoArgon.IsModelMarkedUnsupported("gemini-4-argon-medium", 0) && !accWithArgon.IsModelMarkedUnsupported("gemini-4-argon-medium", 0) {
+		t.Fatalf("expected the 404 account to have gemini-4-argon-medium marked unsupported")
+	}
+
+	// 2. fetchAvailableModels 不走号池，保留客户端自己的 Token。
+	before := len(attemptedAuths)
+	fetchReq := httptest.NewRequest(http.MethodPost, "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", strings.NewReader(`{"project":"favorable-synapse-ttvcb"}`))
+	fetchReq.Host = "daily-cloudcode-pa.googleapis.com"
+	fetchReq.Header.Set("User-Agent", "antigravity/hub/2.25.0 (aidev_client; os_type=windows; arch=amd64)")
+	fetchReq.Header.Set("Content-Type", "application/json")
+	fetchReq.Header.Set("Authorization", "Bearer ya29.ide-token")
+
+	fetchRec := httptest.NewRecorder()
+	h.ServeHTTP(fetchRec, fetchReq)
+	if fetchRec.Code != http.StatusOK {
+		t.Fatalf("expected fetchAvailableModels 200, got %d", fetchRec.Code)
+	}
+	if len(attemptedAuths) != before+1 || attemptedAuths[before] != "Bearer ya29.ide-token" {
+		t.Fatalf("fetchAvailableModels should keep the client token, got %v", attemptedAuths[before:])
+	}
+}
+
+// TestNativeLoadCodeAssistStickyAndSurgicalProject 验证官方客户端：
+// loadCodeAssist 与 fetchAvailableModels 保留桌面端自己的 Token 原样转发；
+// 只有模型请求换号池 Token，并且只替换顶层 project。
+func TestNativeLoadCodeAssistStickyAndSurgicalProject(t *testing.T) {
+	tempDir := t.TempDir()
+	accMgr := account.NewManager()
+	accMgr.Init(tempDir)
+	accMgr.SetActiveChannel("antigravity")
+	accMgr.SetPoolMode(true)
+
+	acc := &account.Account{
+		ID:          "acc-desktop",
+		Email:       "desktop@example.com",
+		Provider:    "antigravity",
+		AccessToken: "ya29.pool-desktop",
+		ProjectID:   "real-gcp-project",
+		Enabled:     true,
+	}
+	accMgr.AddAccount(acc)
+
+	var outboundAuths []string
+	var outboundBodies [][]byte
+
+	mockTransport := mockRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		outboundAuths = append(outboundAuths, req.Header.Get("Authorization"))
+		body, _ := io.ReadAll(req.Body)
+		outboundBodies = append(outboundBodies, body)
+		if strings.Contains(req.URL.Path, "loadCodeAssist") {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"cloudaicompanionProject":"real-gcp-project","currentTier":{"id":"g1-pro-tier"}}`)),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"models":{}}`)),
+		}, nil
+	})
+
+	h := NewProxyHandler(
+		accMgr,
+		session.NewRouter(),
+		stats.NewTracker(pricing.NewManager()),
+		stats.NewUsageTracker(pricing.NewManager()),
+		stats.NewRetryErrorLogger(),
+		stats.NewPacketCapturer(nil, nil, func() bool { return false }),
+		func(string) {},
+		nil, nil,
+		func(string, string) {},
+		func(string) string { return "" },
+		func() int { return 0 },
+		func() int { return 0 },
+		func() int64 { return 10 * 1024 * 1024 },
+		func() int { return 5 },
+		nil, nil,
+	)
+	h.client = &http.Client{Transport: mockTransport}
+
+	nativeUA := "antigravity/2.29.0 windows/amd64"
+	loadBody := []byte(`{"metadata":{"ideName":"antigravity","ideVersion":"2.29.0","platform":"WINDOWS_AMD64"}}`)
+	loadReq := httptest.NewRequest(http.MethodPost, "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist", bytes.NewReader(loadBody))
+	loadReq.Host = "daily-cloudcode-pa.googleapis.com"
+	loadReq.Header.Set("User-Agent", nativeUA)
+	loadReq.Header.Set("Content-Type", "application/json")
+	loadReq.Header.Set("Authorization", "Bearer ya29.client-login")
+	loadRec := httptest.NewRecorder()
+	h.ServeHTTP(loadRec, loadReq)
+	if loadRec.Code != http.StatusOK {
+		t.Fatalf("loadCodeAssist status %d body %s", loadRec.Code, loadRec.Body.String())
+	}
+	if !strings.Contains(loadRec.Body.String(), "real-gcp-project") {
+		t.Fatalf("loadCodeAssist was not forwarded: %s", loadRec.Body.String())
+	}
+	if len(outboundBodies) != 1 || !bytes.Equal(outboundBodies[0], loadBody) {
+		t.Fatalf("loadCodeAssist body changed\nwant: %s\ngot:  %s", loadBody, outboundBodies[0])
+	}
+
+	fetchReq := httptest.NewRequest(http.MethodPost, "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", strings.NewReader(`{"project":"real-gcp-project"}`))
+	fetchReq.Host = "daily-cloudcode-pa.googleapis.com"
+	fetchReq.Header.Set("User-Agent", nativeUA)
+	fetchReq.Header.Set("Content-Type", "application/json")
+	fetchReq.Header.Set("Authorization", "Bearer ya29.client-login")
+	fetchRec := httptest.NewRecorder()
+	h.ServeHTTP(fetchRec, fetchReq)
+	if fetchRec.Code != http.StatusOK {
+		t.Fatalf("fetchAvailableModels status %d", fetchRec.Code)
+	}
+	if len(outboundAuths) != 2 || outboundAuths[0] != "Bearer ya29.client-login" || outboundAuths[1] != outboundAuths[0] {
+		t.Fatalf("bootstrap calls should keep the desktop token: %v", outboundAuths)
+	}
+
+	raw := []byte(`{"enabledCreditTypes":["GOOGLE_ONE_AI"],"model":"gemini-3.5-flash","project":"client-project","userAgent":"antigravity","requestId":"agent/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/req-1","request":{"contents":[{"parts":[{"text":"keep project client-project"}]}]}}`)
+	genReq := httptest.NewRequest(http.MethodPost, "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent", bytes.NewReader(raw))
+	genReq.Host = "daily-cloudcode-pa.googleapis.com"
+	genReq.Header.Set("User-Agent", nativeUA)
+	genReq.Header.Set("Content-Type", "application/json")
+	genReq.Header.Set("Authorization", "Bearer ya29.client-login")
+	genRec := httptest.NewRecorder()
+	h.ServeHTTP(genRec, genReq)
+	if genRec.Code != http.StatusOK {
+		t.Fatalf("generateContent status %d", genRec.Code)
+	}
+	want, ok := replaceTopLevelJSONString(raw, "project", "real-gcp-project")
+	if !ok {
+		t.Fatal("fixture replace failed")
+	}
+	if len(outboundBodies) != 3 || !bytes.Equal(outboundBodies[2], want) {
+		t.Fatalf("model body was rewritten beyond project\nwant: %s\ngot:  %s", want, outboundBodies[len(outboundBodies)-1])
+	}
+	if len(outboundAuths) != 3 || outboundAuths[2] != "Bearer ya29.pool-desktop" {
+		t.Fatalf("model request token = %v", outboundAuths)
+	}
+}
+
+
 

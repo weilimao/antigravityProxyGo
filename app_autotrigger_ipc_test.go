@@ -75,3 +75,64 @@ func TestApp_AutoTriggerRun_IPC(t *testing.T) {
 		t.Fatalf("expected success: true, got error: %s", resObj.Error)
 	}
 }
+
+func TestApp_AutoTriggerSave_AccountModels_IPC(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_ipc_save_models.db")
+	if err := db.InitDB(dbPath); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer db.CloseDB()
+
+	app := &App{}
+
+	savePayload := map[string]interface{}{
+		"name":       "Per Account IPC Task",
+		"accountIds": []string{"acc-1", "acc-2"},
+		"accountModels": map[string][]string{
+			"acc-1": {"gemini-2.5-flash", "gemini-4-argon-high"},
+			"acc-2": {"gemini-2.5-flash"},
+		},
+		"prompt":          "ok",
+		"triggerType":     "timer",
+		"intervalSeconds": 3600,
+		"enabled":         true,
+	}
+
+	resp, handled, err := app.handleAutoTriggerIPC("autotrigger:save", []interface{}{savePayload})
+	if err != nil || !handled {
+		t.Fatalf("handleAutoTriggerIPC autotrigger:save failed: %v", err)
+	}
+
+	var resObj struct {
+		Success bool               `json:"success"`
+		Error   string             `json:"error"`
+		Task    db.AutoTriggerTask `json:"task"`
+	}
+	if err := json.Unmarshal([]byte(resp), &resObj); err != nil {
+		t.Fatalf("unmarshal resp failed: %v", err)
+	}
+	if !resObj.Success {
+		t.Fatalf("expected save success, got error: %s", resObj.Error)
+	}
+
+	savedID := resObj.Task.ID
+	defer func() {
+		_ = db.DeleteAutoTriggerTask(savedID)
+	}()
+
+	// 从 DB 重新查出校验
+	loaded, err := db.GetAutoTriggerTask(savedID)
+	if err != nil || loaded == nil {
+		t.Fatalf("failed to load saved task from DB: %v", err)
+	}
+	if len(loaded.AccountModels) != 2 {
+		t.Errorf("expected 2 accounts in AccountModels, got %d", len(loaded.AccountModels))
+	}
+	if len(loaded.GetModelsForAccount("acc-1")) != 2 {
+		t.Errorf("expected 2 models for acc-1, got %v", loaded.GetModelsForAccount("acc-1"))
+	}
+	if len(loaded.GetModelsForAccount("acc-2")) != 1 {
+		t.Errorf("expected 1 model for acc-2, got %v", loaded.GetModelsForAccount("acc-2"))
+	}
+}

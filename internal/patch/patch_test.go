@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -49,13 +50,19 @@ func TestUpdateSettings_MultiEditorAndRestore(t *testing.T) {
 		if url, ok := parsed["jetski.cloudCodeUrl"].(string); !ok || url != "http://127.0.0.1:18443" {
 			t.Errorf("Expected jetski.cloudCodeUrl in %s to be http://127.0.0.1:18443, got %v", dir, parsed["jetski.cloudCodeUrl"])
 		}
-		if proxy, ok := parsed["http.proxy"].(string); !ok || proxy != "http://127.0.0.1:18443" {
-			t.Errorf("Expected http.proxy in %s to be http://127.0.0.1:18443, got %v", dir, parsed["http.proxy"])
-		}
-		if noProxy, ok := parsed["http.noProxy"].([]interface{}); !ok {
-			t.Errorf("Expected http.noProxy in %s to be a JSON array (IDE crashes on string), got %T: %v", dir, parsed["http.noProxy"], parsed["http.noProxy"])
-		} else if len(noProxy) != 2 || noProxy[0] != "localhost" || noProxy[1] != "127.0.0.1" {
-			t.Errorf("Expected http.noProxy in %s to be [localhost 127.0.0.1], got %v", dir, noProxy)
+		if strings.Contains(dir, "Antigravity") {
+			if proxy, ok := parsed["http.proxy"].(string); !ok || proxy != "http://127.0.0.1:18443" {
+				t.Errorf("Expected http.proxy in %s to be http://127.0.0.1:18443, got %v", dir, parsed["http.proxy"])
+			}
+			if noProxy, ok := parsed["http.noProxy"].([]interface{}); !ok {
+				t.Errorf("Expected http.noProxy in %s to be a JSON array (IDE crashes on string), got %T: %v", dir, parsed["http.noProxy"], parsed["http.noProxy"])
+			} else if len(noProxy) != 2 || noProxy[0] != "localhost" || noProxy[1] != "127.0.0.1" {
+				t.Errorf("Expected http.noProxy in %s to be [localhost 127.0.0.1], got %v", dir, noProxy)
+			}
+		} else if _, exists := parsed["http.proxy"]; exists {
+			t.Errorf("host editor %s must not receive http.proxy, got %v", dir, parsed["http.proxy"])
+		} else if _, exists := parsed["http.noProxy"]; exists {
+			t.Errorf("host editor %s must not receive http.noProxy, got %v", dir, parsed["http.noProxy"])
 		}
 		if fontSize, ok := parsed["editor.fontSize"].(float64); !ok || fontSize != 14 {
 			t.Errorf("Expected editor.fontSize in %s to be preserved as 14, got %v", dir, parsed["editor.fontSize"])
@@ -254,6 +261,9 @@ func TestUpdateSettings_JSONCAndEdgeCases(t *testing.T) {
 	if parsedCode["jetski.cloudCodeUrl"] != "http://127.0.0.1:18443" {
 		t.Errorf("Expected jetski.cloudCodeUrl injected in Code, got %v", parsedCode["jetski.cloudCodeUrl"])
 	}
+	if _, exists := parsedCode["http.proxy"]; exists {
+		t.Errorf("Code must not receive http.proxy, got %v", parsedCode["http.proxy"])
+	}
 	if parsedCode["editor.tabSize"] != float64(2) {
 		t.Errorf("Expected editor.tabSize preserved as 2, got %v", parsedCode["editor.tabSize"])
 	}
@@ -270,6 +280,9 @@ func TestUpdateSettings_JSONCAndEdgeCases(t *testing.T) {
 	if parsedCursor["jetski.cloudCodeUrl"] != "http://127.0.0.1:18443" {
 		t.Errorf("Expected jetski.cloudCodeUrl in Cursor, got %v", parsedCursor["jetski.cloudCodeUrl"])
 	}
+	if _, exists := parsedCursor["http.proxy"]; exists {
+		t.Errorf("Cursor must not receive http.proxy, got %v", parsedCursor["http.proxy"])
+	}
 
 	// 验证 3: Windsurf 自动初始化文件
 	windsurfContent, err := os.ReadFile(filepath.Join(windsurfDir, "settings.json"))
@@ -282,6 +295,9 @@ func TestUpdateSettings_JSONCAndEdgeCases(t *testing.T) {
 	}
 	if parsedWindsurf["jetski.cloudCodeUrl"] != "http://127.0.0.1:18443" {
 		t.Errorf("Expected jetski.cloudCodeUrl in Windsurf, got %v", parsedWindsurf["jetski.cloudCodeUrl"])
+	}
+	if _, exists := parsedWindsurf["http.proxy"]; exists {
+		t.Errorf("Windsurf must not receive http.proxy, got %v", parsedWindsurf["http.proxy"])
 	}
 
 	// 执行清理恢复
@@ -337,6 +353,9 @@ func TestUpdateSettings_CustomDataDirAndRoamingResolution(t *testing.T) {
 		if parsed["jetski.cloudCodeUrl"] != "http://127.0.0.1:18443" {
 			t.Errorf("Expected %s settings to have jetski.cloudCodeUrl, got %v", name, parsed["jetski.cloudCodeUrl"])
 		}
+		if _, exists := parsed["http.proxy"]; exists {
+			t.Errorf("Expected %s host editor to stay free of http.proxy, got %v", name, parsed["http.proxy"])
+		}
 	}
 
 	// 停用清理
@@ -357,5 +376,117 @@ func TestUpdateSettings_CustomDataDirAndRoamingResolution(t *testing.T) {
 		if _, exists := parsed["http.noProxy"]; exists {
 			t.Errorf("Expected %s settings to have http.noProxy deleted", name)
 		}
+	}
+}
+
+func TestUpdateSettings_HostEditorStripsInjectedProxy(t *testing.T) {
+	appData := t.TempDir()
+	homeDir := t.TempDir()
+
+	cursorDir := filepath.Join(appData, "Cursor", "User")
+	if err := os.MkdirAll(cursorDir, 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	poisoned := []byte(`{
+  "http.proxy": "http://127.0.0.1:18443",
+  "http.noProxy": ["localhost", "127.0.0.1"],
+  "jetski.cloudCodeUrl": "http://127.0.0.1:18443",
+  "window.autoDetectColorScheme": true
+}`)
+	if err := os.WriteFile(filepath.Join(cursorDir, "settings.json"), poisoned, 0644); err != nil {
+		t.Fatalf("failed to write settings: %v", err)
+	}
+
+	if err := UpdateSettings(true, appData, homeDir); err != nil {
+		t.Fatalf("UpdateSettings(true) error: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(cursorDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("failed to read settings: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("failed to parse settings: %v", err)
+	}
+	if _, exists := parsed["http.proxy"]; exists {
+		t.Errorf("injected http.proxy should be stripped from Cursor, got %v", parsed["http.proxy"])
+	}
+	if _, exists := parsed["http.noProxy"]; exists {
+		t.Errorf("injected http.noProxy should be stripped from Cursor, got %v", parsed["http.noProxy"])
+	}
+	if parsed["jetski.cloudCodeUrl"] != "http://127.0.0.1:18443" {
+		t.Errorf("jetski.cloudCodeUrl should stay, got %v", parsed["jetski.cloudCodeUrl"])
+	}
+	if parsed["window.autoDetectColorScheme"] != true {
+		t.Errorf("user setting should stay, got %v", parsed["window.autoDetectColorScheme"])
+	}
+}
+
+func buildMockAsar(t *testing.T, jsContent string) []byte {
+	t.Helper()
+	jsBytes := []byte(jsContent)
+	root := map[string]interface{}{
+		"files": map[string]interface{}{
+			"dist": map[string]interface{}{
+				"files": map[string]interface{}{
+					"languageServer.js": map[string]interface{}{
+						"offset": "0",
+						"size":   len(jsBytes),
+					},
+				},
+			},
+		},
+	}
+	jsonBytes, err := json.Marshal(root)
+	if err != nil {
+		t.Fatalf("failed to marshal mock asar header: %v", err)
+	}
+	jsonSize := uint32(len(jsonBytes))
+	padding := uint32(0)
+	if jsonSize%4 != 0 {
+		padding = 4 - (jsonSize % 4)
+	}
+	headerSize := jsonSize + padding + 8
+	buf := make([]byte, 16+int(jsonSize+padding)+len(jsBytes))
+	writeUint32(buf, 0, 4)
+	writeUint32(buf, 4, headerSize)
+	writeUint32(buf, 8, headerSize-4)
+	writeUint32(buf, 12, jsonSize)
+	copy(buf[16:], jsonBytes)
+	copy(buf[16+int(jsonSize+padding):], jsBytes)
+	return buf
+}
+
+func TestPatchAsar_IdempotentAndDeduplicates(t *testing.T) {
+	tmpDir := t.TempDir()
+	asarPath := filepath.Join(tmpDir, "app.asar")
+
+	// 模拟已重复注入两次的 languageServer.js
+	duplicatedJs := "function start(env) {\n    (0, a.setupNodeWrapper)(env);" + asarInjectedBlock + asarInjectedBlock + "\n    return env;\n}"
+	if err := os.WriteFile(asarPath, buildMockAsar(t, duplicatedJs), 0644); err != nil {
+		t.Fatalf("failed to write mock asar: %v", err)
+	}
+
+	var logs []string
+	if err := PatchAsar(asarPath, "", func(msg string) { logs = append(logs, msg) }); err != nil {
+		t.Fatalf("first PatchAsar failed: %v", err)
+	}
+
+	afterFirst, err := os.ReadFile(asarPath)
+	if err != nil {
+		t.Fatalf("read after first patch failed: %v", err)
+	}
+	if count := strings.Count(string(afterFirst), asarInjectedMarker); count != 1 {
+		t.Errorf("expected exactly 1 injected marker after deduplication, got %d", count)
+	}
+
+	// 再次执行 PatchAsar，验证幂等跳过
+	logs = nil
+	if err := PatchAsar(asarPath, "", func(msg string) { logs = append(logs, msg) }); err != nil {
+		t.Fatalf("second PatchAsar failed: %v", err)
+	}
+	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1], "already contains patch") {
+		t.Errorf("expected second PatchAsar to skip with 'already contains patch', got logs: %v", logs)
 	}
 }

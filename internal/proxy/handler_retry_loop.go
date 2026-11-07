@@ -157,6 +157,7 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 
 		isRetryable := isCustomSwitch ||
 			isCustomRetry ||
+			errStr == "MODEL_NOT_SUPPORTED" ||
 			errStr == "CAPACITY_EXHAUSTED" ||
 			errStr == "QUOTA_EXHAUSTED" ||
 			errStr == "RATE_LIMITED" ||
@@ -168,6 +169,12 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 		if lastUsedAccount != nil {
 			accId := lastUsedAccount.ID
 			email := lastUsedAccount.Email
+
+			if errAttempt.Error() == "MODEL_NOT_SUPPORTED" {
+				sc.h.logFn(fmt.Sprintf("🚫 [模型能力学习] 账号 %s 不支持模型 %s (上游 404)，已标记 24h 模型级屏蔽并自动切换支持该模型的账号重试...", email, sc.currentModel))
+				sc.h.accountMgr.MarkAccountModelUnsupported(accId, sc.currentModel, 24*time.Hour)
+				sc.h.sessionRouter.UnbindSession(sc.sessionKey)
+			}
 
 			if errAttempt.Error() == "TOKEN_EXPIRED" && sc.h.tokenRefresh != nil {
 				sc.h.logFn(fmt.Sprintf("🔑 [负载均衡] 检测到账号 %s Token 已过期 (401)。正在自动刷新...", email))
@@ -294,6 +301,16 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 		}
 
 		shouldRetry := isRetryable && attempt < maxRetries
+		if errAttempt.Error() == "MODEL_NOT_SUPPORTED" {
+			targetChan := sc.h.getGoogleChannel()
+			if sc.targetHost == "aiplatform.googleapis.com" {
+				targetChan = "project"
+			}
+			avail := sc.h.accountMgr.GetAvailableAccountsForChannel(targetChan, sc.currentModel)
+			if len(avail) == 0 {
+				shouldRetry = false
+			}
+		}
 		if errAttempt.Error() == "QUOTA_EXHAUSTED" {
 			// If all active accounts of the target channel are cooled down, do not retry further
 			targetChan := sc.h.getGoogleChannel()
@@ -348,7 +365,7 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 			sc.logRequestToTracker(429, errAttempt.Error())
 
 			if !sc.headersSent {
-				if (isCustomSwitch || isCustomRetry) && status > 0 && len(body) > 0 {
+				if (isCustomSwitch || isCustomRetry || errStr == "MODEL_NOT_SUPPORTED") && status > 0 && len(body) > 0 {
 					for k, values := range headers {
 						for _, v := range values {
 							w.Header().Add(k, v)

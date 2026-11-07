@@ -86,6 +86,31 @@ func isStringSlice(raw interface{}) bool {
 	return false
 }
 
+// hostEditorDirNames 是插件宿主编辑器的配置目录名。
+// 这些编辑器只需要 jetski.cloudCodeUrl 把 Cloud Code 指到本地代理。
+// 禁止写入 http.proxy：那会把编辑器自己的流量（例如 Cursor 的 api2.cursor.sh）整机拖进 18443。
+var hostEditorDirNames = []string{
+	"Code",
+	"Code - Insiders",
+	"Cursor",
+	"Windsurf",
+	"Trae",
+	"VSCodium",
+	"Positron",
+}
+
+// isHostEditorSettings 判断路径是不是宿主编辑器的 User/settings.json。
+func isHostEditorSettings(path string) bool {
+	cleaned := filepath.Clean(path)
+	for _, name := range hostEditorDirNames {
+		suffix := string(filepath.Separator) + filepath.Join(name, "User", "settings.json")
+		if len(cleaned) >= len(suffix) && strings.EqualFold(cleaned[len(cleaned)-len(suffix):], suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // isDefaultNoProxy 判断当前取值是否恰好等于工具注入的默认值，用于停用时安全移除，
 // 避免误删用户自定义的绕过列表。
 func isDefaultNoProxy(raw interface{}) bool {
@@ -218,8 +243,10 @@ func UpdateSettings(enable bool, appData, homeDir string) error {
 					initSettings := map[string]interface{}{
 						"jetski.cloudCodeUrl":                "http://127.0.0.1:18443",
 						"antigravity.serverStartupTimeoutMs": 60000,
-						"http.proxy":                         "http://127.0.0.1:18443",
-						"http.noProxy":                       append([]string(nil), defaultNoProxyHosts...),
+					}
+					if !isHostEditorSettings(path) {
+						initSettings["http.proxy"] = "http://127.0.0.1:18443"
+						initSettings["http.noProxy"] = append([]string(nil), defaultNoProxyHosts...)
 					}
 					if bytesData, err := json.MarshalIndent(initSettings, "", "  "); err == nil {
 						_ = os.WriteFile(path, bytesData, 0644)
@@ -261,18 +288,31 @@ func UpdateSettings(enable bool, appData, homeDir string) error {
 				settings["antigravity.serverStartupTimeoutMs"] = 60000
 				changed = true
 			}
-			if currProxy, ok := settings["http.proxy"].(string); !ok || currProxy != "http://127.0.0.1:18443" {
-				settings["http.proxy"] = "http://127.0.0.1:18443"
-				changed = true
-			}
-			// http.noProxy 必须是数组。历史版本写入的是逗号分隔字符串，会让 IDE 主进程
-			// 在 getValue("http.noProxy").map(...) 处抛 TypeError 并无法创建窗口，
-			// 因此这里无条件按数组回写，顺带修正已存在的历史坏值。
-			currHosts := parseNoProxyHosts(settings["http.noProxy"])
-			mergedHosts, hostsChanged := mergeNoProxyHosts(currHosts, defaultNoProxyHosts...)
-			if hostsChanged || !isStringSlice(settings["http.noProxy"]) {
-				settings["http.noProxy"] = mergedHosts
-				changed = true
+			if isHostEditorSettings(path) {
+				// 历史版本曾把 http.proxy 写进 Cursor / VS Code 等宿主，这里顺手清掉。
+				// 只删除本工具写入的 18443，用户自己的代理配置保留。
+				if currProxy, ok := settings["http.proxy"].(string); ok && currProxy == "http://127.0.0.1:18443" {
+					delete(settings, "http.proxy")
+					changed = true
+				}
+				if _, hasProxy := settings["http.proxy"]; !hasProxy && isDefaultNoProxy(settings["http.noProxy"]) {
+					delete(settings, "http.noProxy")
+					changed = true
+				}
+			} else {
+				if currProxy, ok := settings["http.proxy"].(string); !ok || currProxy != "http://127.0.0.1:18443" {
+					settings["http.proxy"] = "http://127.0.0.1:18443"
+					changed = true
+				}
+				// http.noProxy 必须是数组。历史版本写入的是逗号分隔字符串，会让 IDE 主进程
+				// 在 getValue("http.noProxy").map(...) 处抛 TypeError 并无法创建窗口，
+				// 因此这里无条件按数组回写，顺带修正已存在的历史坏值。
+				currHosts := parseNoProxyHosts(settings["http.noProxy"])
+				mergedHosts, hostsChanged := mergeNoProxyHosts(currHosts, defaultNoProxyHosts...)
+				if hostsChanged || !isStringSlice(settings["http.noProxy"]) {
+					settings["http.noProxy"] = mergedHosts
+					changed = true
+				}
 			}
 			if !changed {
 				return true

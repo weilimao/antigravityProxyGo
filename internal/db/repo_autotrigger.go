@@ -8,16 +8,31 @@ import (
 )
 
 type AutoTriggerTask struct {
-	ID              int64      `json:"id"`
-	Name            string     `json:"name"`
-	AccountIDs      []string   `json:"accountIds"`
-	ModelNames      []string   `json:"modelNames"`
-	Prompt          string     `json:"prompt"`
-	TriggerType     string     `json:"triggerType"` // "timer" or "quota_refreshed"
-	IntervalSeconds int        `json:"intervalSeconds"`
-	NextTriggerTime *time.Time `json:"nextTriggerTime"`
-	Enabled         bool       `json:"enabled"`
-	CreatedAt       time.Time  `json:"createdAt"`
+	ID              int64               `json:"id"`
+	Name            string              `json:"name"`
+	AccountIDs      []string            `json:"accountIds"`
+	ModelNames      []string            `json:"modelNames"`
+	AccountModels   map[string][]string `json:"accountModels,omitempty"`
+	Prompt          string              `json:"prompt"`
+	TriggerType     string              `json:"triggerType"` // "timer" or "quota_refreshed"
+	IntervalSeconds int                 `json:"intervalSeconds"`
+	NextTriggerTime *time.Time          `json:"nextTriggerTime"`
+	Enabled         bool                `json:"enabled"`
+	CreatedAt       time.Time           `json:"createdAt"`
+}
+
+// GetModelsForAccount 获取指定账号在当前任务中应触发的模型列表。
+// 优先使用该账号专属配置的 AccountModels[accountID]；若未配置则优雅回退至任务全局 ModelNames。
+func (t *AutoTriggerTask) GetModelsForAccount(accountID string) []string {
+	if t == nil {
+		return nil
+	}
+	if len(t.AccountModels) > 0 {
+		if models, ok := t.AccountModels[accountID]; ok && len(models) > 0 {
+			return models
+		}
+	}
+	return t.ModelNames
 }
 
 // SaveAutoTriggerTask inserts a new task or updates an existing one
@@ -29,8 +44,22 @@ func SaveAutoTriggerTask(task *AutoTriggerTask) error {
 		return fmt.Errorf("database not initialized")
 	}
 
+	// 若未显式传入全局 ModelNames，但配置了各账号的 AccountModels，提取各账号模型的并集填充 ModelNames 保持兼容
+	if len(task.ModelNames) == 0 && len(task.AccountModels) > 0 {
+		seen := make(map[string]bool)
+		for _, models := range task.AccountModels {
+			for _, m := range models {
+				if !seen[m] {
+					seen[m] = true
+					task.ModelNames = append(task.ModelNames, m)
+				}
+			}
+		}
+	}
+
 	accIDsBytes, _ := json.Marshal(task.AccountIDs)
 	modNamesBytes, _ := json.Marshal(task.ModelNames)
+	accModelsBytes, _ := json.Marshal(task.AccountModels)
 
 	var nextTimeStr sql.NullString
 	if task.NextTriggerTime != nil {
@@ -45,9 +74,9 @@ func SaveAutoTriggerTask(task *AutoTriggerTask) error {
 
 	if task.ID == 0 {
 		// Insert
-		query := `INSERT INTO auto_trigger_tasks (name, account_ids, model_names, prompt, trigger_type, interval_seconds, next_trigger_time, enabled)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-		res, err := GlobalDB.Exec(query, task.Name, string(accIDsBytes), string(modNamesBytes), task.Prompt, task.TriggerType, task.IntervalSeconds, nextTimeStr, enabledInt)
+		query := `INSERT INTO auto_trigger_tasks (name, account_ids, model_names, account_models, prompt, trigger_type, interval_seconds, next_trigger_time, enabled)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		res, err := GlobalDB.Exec(query, task.Name, string(accIDsBytes), string(modNamesBytes), string(accModelsBytes), task.Prompt, task.TriggerType, task.IntervalSeconds, nextTimeStr, enabledInt)
 		if err != nil {
 			return err
 		}
@@ -57,9 +86,9 @@ func SaveAutoTriggerTask(task *AutoTriggerTask) error {
 		}
 	} else {
 		// Update
-		query := `UPDATE auto_trigger_tasks SET name = ?, account_ids = ?, model_names = ?, prompt = ?, trigger_type = ?, interval_seconds = ?, next_trigger_time = ?, enabled = ?
+		query := `UPDATE auto_trigger_tasks SET name = ?, account_ids = ?, model_names = ?, account_models = ?, prompt = ?, trigger_type = ?, interval_seconds = ?, next_trigger_time = ?, enabled = ?
                   WHERE id = ?`
-		_, err := GlobalDB.Exec(query, task.Name, string(accIDsBytes), string(modNamesBytes), task.Prompt, task.TriggerType, task.IntervalSeconds, nextTimeStr, enabledInt, task.ID)
+		_, err := GlobalDB.Exec(query, task.Name, string(accIDsBytes), string(modNamesBytes), string(accModelsBytes), task.Prompt, task.TriggerType, task.IntervalSeconds, nextTimeStr, enabledInt, task.ID)
 		if err != nil {
 			return err
 		}
@@ -89,7 +118,7 @@ func ListAutoTriggerTasks() ([]AutoTriggerTask, error) {
 		return nil, fmt.Errorf("database not initialized")
 	}
 
-	rows, err := GlobalDB.Query("SELECT id, name, account_ids, model_names, prompt, trigger_type, interval_seconds, next_trigger_time, enabled, created_at FROM auto_trigger_tasks ORDER BY id DESC")
+	rows, err := GlobalDB.Query("SELECT id, name, account_ids, model_names, account_models, prompt, trigger_type, interval_seconds, next_trigger_time, enabled, created_at FROM auto_trigger_tasks ORDER BY id DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -99,16 +128,20 @@ func ListAutoTriggerTasks() ([]AutoTriggerTask, error) {
 	for rows.Next() {
 		var task AutoTriggerTask
 		var accIDsStr, modNamesStr, createdAtStr string
+		var accModelsStr sql.NullString
 		var nextTimeStr sql.NullString
 		var enabledInt int
 
-		err := rows.Scan(&task.ID, &task.Name, &accIDsStr, &modNamesStr, &task.Prompt, &task.TriggerType, &task.IntervalSeconds, &nextTimeStr, &enabledInt, &createdAtStr)
+		err := rows.Scan(&task.ID, &task.Name, &accIDsStr, &modNamesStr, &accModelsStr, &task.Prompt, &task.TriggerType, &task.IntervalSeconds, &nextTimeStr, &enabledInt, &createdAtStr)
 		if err != nil {
 			return nil, err
 		}
 
 		_ = json.Unmarshal([]byte(accIDsStr), &task.AccountIDs)
 		_ = json.Unmarshal([]byte(modNamesStr), &task.ModelNames)
+		if accModelsStr.Valid && accModelsStr.String != "" && accModelsStr.String != "{}" {
+			_ = json.Unmarshal([]byte(accModelsStr.String), &task.AccountModels)
+		}
 		task.Enabled = enabledInt == 1
 
 		if nextTimeStr.Valid && nextTimeStr.String != "" {
@@ -169,14 +202,15 @@ func GetAutoTriggerTask(id int64) (*AutoTriggerTask, error) {
 		return nil, fmt.Errorf("database not initialized")
 	}
 
-	row := GlobalDB.QueryRow("SELECT id, name, account_ids, model_names, prompt, trigger_type, interval_seconds, next_trigger_time, enabled, created_at FROM auto_trigger_tasks WHERE id = ?", id)
+	row := GlobalDB.QueryRow("SELECT id, name, account_ids, model_names, account_models, prompt, trigger_type, interval_seconds, next_trigger_time, enabled, created_at FROM auto_trigger_tasks WHERE id = ?", id)
 
 	var task AutoTriggerTask
 	var accIDsStr, modNamesStr, createdAtStr string
+	var accModelsStr sql.NullString
 	var nextTimeStr sql.NullString
 	var enabledInt int
 
-	err := row.Scan(&task.ID, &task.Name, &accIDsStr, &modNamesStr, &task.Prompt, &task.TriggerType, &task.IntervalSeconds, &nextTimeStr, &enabledInt, &createdAtStr)
+	err := row.Scan(&task.ID, &task.Name, &accIDsStr, &modNamesStr, &accModelsStr, &task.Prompt, &task.TriggerType, &task.IntervalSeconds, &nextTimeStr, &enabledInt, &createdAtStr)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -186,6 +220,9 @@ func GetAutoTriggerTask(id int64) (*AutoTriggerTask, error) {
 
 	_ = json.Unmarshal([]byte(accIDsStr), &task.AccountIDs)
 	_ = json.Unmarshal([]byte(modNamesStr), &task.ModelNames)
+	if accModelsStr.Valid && accModelsStr.String != "" && accModelsStr.String != "{}" {
+		_ = json.Unmarshal([]byte(accModelsStr.String), &task.AccountModels)
+	}
 	task.Enabled = enabledInt == 1
 
 	if nextTimeStr.Valid && nextTimeStr.String != "" {

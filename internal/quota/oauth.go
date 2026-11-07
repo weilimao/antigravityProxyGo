@@ -171,8 +171,18 @@ func (am *AuthManager) RefreshToken(acc *account.Account) (string, error) {
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", acc.RefreshToken)
 
-	client := netutil.NewClient(15 * time.Second)
-	resp, err := client.PostForm("https://oauth2.googleapis.com/token", form)
+	req, errReq := http.NewRequest("POST", "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
+	if errReq != nil {
+		promise.err = errReq
+		return "", errReq
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if acc.Provider == "antigravity" {
+		req.Header.Set("User-Agent", am.getAntigravityUA())
+	}
+
+	client := netutil.GetAccountClient(accountId, 15*time.Second)
+	resp, err := client.Do(req)
 	if err != nil {
 		promise.err = err
 		return "", err
@@ -229,6 +239,15 @@ func (am *AuthManager) RefreshToken(acc *account.Account) (string, error) {
 	return promise.token, nil
 }
 
+func (am *AuthManager) getAntigravityUA() string {
+	if am != nil && am.accountMgr != nil {
+		if ua := strings.TrimSpace(am.accountMgr.GetAntigravityUserAgent()); ua != "" {
+			return ua
+		}
+	}
+	return account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion)
+}
+
 func (am *AuthManager) GetUserEmail(accessToken, provider string) (string, error) {
 	req, err := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
 	if err != nil {
@@ -236,10 +255,10 @@ func (am *AuthManager) GetUserEmail(accessToken, provider string) (string, error
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	if provider == "antigravity" {
-		req.Header.Set("User-Agent", "Code-Assist/1.22.4 (JetBrains; Windows 11 10.0; x86_64) cloudaicompanion/1.22.4")
+		req.Header.Set("User-Agent", am.getAntigravityUA())
 	}
 
-	client := netutil.NewClient(10 * time.Second)
+	client := netutil.GetAccountClient("Bearer "+accessToken, 10*time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -316,8 +335,17 @@ func (am *AuthManager) ExchangeCodeForTokenManual(code, verifier string) (*Token
 	form.Set("grant_type", "authorization_code")
 	form.Set("redirect_uri", officialRedirectURI)
 
-	client := netutil.NewClient(15 * time.Second)
-	resp, err := client.PostForm("https://oauth2.googleapis.com/token", form)
+	req, errReq := http.NewRequest("POST", "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
+	if errReq != nil {
+		return nil, errReq
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", am.getAntigravityUA())
+
+	tempKey := "oauth-exchange:" + code
+	defer netutil.CloseAccountTransport(tempKey)
+	client := netutil.GetAccountClient(tempKey, 15*time.Second)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -433,8 +461,18 @@ func (am *AuthManager) StartLogin(provider string, openBrowser func(string)) (ma
 		form.Set("grant_type", "authorization_code")
 		form.Set("redirect_uri", redirectUri)
 
-		client := netutil.NewClient(15 * time.Second)
-		resp, err := client.PostForm("https://oauth2.googleapis.com/token", form)
+
+		req, errReq := http.NewRequestWithContext(ctx, "POST", "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
+		if errReq != nil {
+			resultChan <- loginResult{err: errReq}
+			return
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("User-Agent", am.getAntigravityUA())
+		tempKey := "oauth-login:" + code
+		defer netutil.CloseAccountTransport(tempKey)
+		client := netutil.GetAccountClient(tempKey, 15*time.Second)
+		resp, err := client.Do(req)
 		if err != nil {
 			resultChan <- loginResult{err: err}
 			return

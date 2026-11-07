@@ -43,8 +43,15 @@ type PacketCapturer struct {
 	getAccountTokens    func(id string) (string, string, string, error) // returns token, refreshToken, projectId, error
 	refreshAccount      func(id string) (string, error)
 	enablePacketCapture func() bool
+	uaProvider          func() string
 	saveTimeout         *time.Timer
 	saveTimeoutLock     sync.Mutex
+}
+
+func (pc *PacketCapturer) SetUserAgentProvider(fn func() string) {
+	pc.Lock()
+	defer pc.Unlock()
+	pc.uaProvider = fn
 }
 
 func NewPacketCapturer(
@@ -151,7 +158,6 @@ func (pc *PacketCapturer) scheduleSave() {
 	})
 }
 
-
 func (pc *PacketCapturer) GetPacketKey(method, host, urlPath string) string {
 	cleanPath := strings.Split(urlPath, "?")[0]
 	if cleanPath == "" {
@@ -171,6 +177,82 @@ func (pc *PacketCapturer) IsCaptured(method, host, urlPath string) bool {
 		}
 	}
 	return false
+}
+
+// LatestRequestTemplate 返回路径包含 pathNeedle 的最新一条抓包的请求头和请求体。
+// 列表按新到旧存放。Authorization 在落库时已脱敏，调用方必须换上当前账号的 Token。
+func (pc *PacketCapturer) LatestRequestTemplate(pathNeedle string) (map[string]string, []byte, bool) {
+	if pc == nil {
+		return nil, nil, false
+	}
+	needle := strings.ToLower(strings.TrimSpace(pathNeedle))
+	if needle == "" {
+		return nil, nil, false
+	}
+
+	pc.RLock()
+	defer pc.RUnlock()
+	for _, p := range pc.packets {
+		if p == nil || !strings.Contains(strings.ToLower(p.Path), needle) {
+			continue
+		}
+		headers := packetHeaderMap(p.ReqHeaders)
+		body := packetBodyBytes(p.ReqBody)
+		if len(headers) == 0 && len(body) == 0 {
+			continue
+		}
+		return headers, body, true
+	}
+	return nil, nil, false
+}
+
+func packetHeaderMap(v interface{}) map[string]string {
+	out := make(map[string]string)
+	switch h := v.(type) {
+	case map[string]string:
+		for k, val := range h {
+			out[k] = val
+		}
+	case map[string][]string:
+		for k, vals := range h {
+			if len(vals) > 0 {
+				out[k] = vals[0]
+			}
+		}
+	case map[string]interface{}:
+		for k, val := range h {
+			switch t := val.(type) {
+			case string:
+				out[k] = t
+			case []interface{}:
+				if len(t) > 0 {
+					if s, ok := t[0].(string); ok {
+						out[k] = s
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+func packetBodyBytes(v interface{}) []byte {
+	switch b := v.(type) {
+	case nil:
+		return nil
+	case json.RawMessage:
+		return append([]byte(nil), b...)
+	case []byte:
+		return append([]byte(nil), b...)
+	case string:
+		return []byte(b)
+	default:
+		raw, err := json.Marshal(b)
+		if err != nil {
+			return nil
+		}
+		return raw
+	}
 }
 
 // ExtractUserAgent 从多种可能的 Header 结构中提取 User-Agent 字符串
@@ -295,12 +377,12 @@ func (pc *PacketCapturer) SavePacket(method, host, urlPath string, reqHeaders ma
 	cleanHeaders := func(headers map[string][]string) map[string]string {
 		res := make(map[string]string)
 		sensitiveKeys := map[string]bool{
-			"authorization":   true,
-			"cookie":          true,
-			"x-goog-api-key":  true,
-			"api-key":         true,
-			"proxy-auth":      true,
-			"proxy-cookie":    true,
+			"authorization":  true,
+			"cookie":         true,
+			"x-goog-api-key": true,
+			"api-key":        true,
+			"proxy-auth":     true,
+			"proxy-cookie":   true,
 		}
 		for k, values := range headers {
 			lowerK := strings.ToLower(k)
@@ -589,12 +671,21 @@ func (pc *PacketCapturer) AnalyzePackets(accountId string, sourceType string) (s
 			return 0, nil, err
 		}
 
+		ua := "antigravity/hub/2.25.0 (aidev_client; os_type=windows; arch=amd64)"
+		pc.RLock()
+		uaFn := pc.uaProvider
+		pc.RUnlock()
+		if uaFn != nil {
+			if v := strings.TrimSpace(uaFn()); v != "" {
+				ua = v
+			}
+		}
+
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("User-Agent", "antigravity/ide/2.8.4 windows/amd64")
-		req.Header.Set("X-Goog-Api-Client", "gl-node/22.21.1")
+		req.Header.Set("User-Agent", ua)
 
-		client := netutil.NewClient(120 * time.Second)
+		client := netutil.GetAccountClient("packet:"+accountId, 120*time.Second)
 		resp, err := client.Do(req)
 		if err != nil {
 			return 0, nil, err

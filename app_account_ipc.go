@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/modelfetch"
 )
 
 // handleAccountIPC 处理账号相关的自定义 IPC invoke 呼叫(批量触发测试回复 / 批量删除 / 明文查看 Key),
@@ -43,6 +44,45 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 	}
 
 	switch channel {
+	case "accounts:probe-models":
+		var payload struct {
+			Channel    string   `json:"channel"`
+			AccountIDs []string `json:"accountIds"`
+		}
+		if len(args) > 0 {
+			bytesPayload, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(bytesPayload, &payload)
+		}
+		ch := payload.Channel
+		if ch == "" && a.accountMgr != nil {
+			ch = a.accountMgr.GetActiveChannel()
+		}
+		a.AddLog(fmt.Sprintf("🔍 [模型能力检测] 开始检测渠道 [%s] 下各账号的真实可用模型与受限模型权限...", ch))
+		var getStoredProj func(string) string
+		if a.quotaSvc != nil {
+			getStoredProj = a.quotaSvc.GetStoredProject
+		}
+		var refreshTok func(*account.Account) (string, error)
+		if a.authMgr != nil {
+			refreshTok = a.authMgr.RefreshToken
+		}
+		resp := modelfetch.ProbeAccountsModels(
+			a.accountMgr,
+			getStoredProj,
+			refreshTok,
+			ch,
+			payload.AccountIDs,
+		)
+		if resp.Success {
+			a.emitAccountsRes()
+			a.AddLog(fmt.Sprintf("✅ [模型能力检测] 检测完成！共检测 %d 个账号，支持 Argon: %d 个，支持 Claude 5.5: %d 个",
+				resp.Summary.TotalAccounts, resp.Summary.ArgonSupportedCount, resp.Summary.Opus55SupportedCount))
+		} else {
+			a.AddLog(fmt.Sprintf("❌ [模型能力检测] 检测失败: %s", resp.Error))
+		}
+		data, err := marshalResponse(resp)
+		return data, true, err
+
 	case "accounts:trigger-test-response":
 		var payload struct {
 			AccountIDs []string `json:"accountIds"`
@@ -121,6 +161,9 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 					cancel()
 
 					if err != nil {
+						if strings.Contains(err.Error(), "HTTP error 404") && a.accountMgr != nil {
+							a.accountMgr.MarkAccountModelUnsupported(targetAcc.ID, model, 24*time.Hour)
+						}
 						a.AddLog(fmt.Sprintf("❌ [测试回复] 账号 %s 触发模型 %s 失败: %v", targetAcc.Email, model, err))
 						modelResults[mIdx] = ModelResult{
 							Model:   model,

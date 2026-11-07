@@ -42,3 +42,7 @@ antigravity-web-platform
 
 # 生产环境配置（包含敏感密码）
 *.prod.yaml
+
+# 临时分析调试截图
+/*.png
+

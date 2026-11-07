@@ -85,6 +85,8 @@ type AIPriceGenerator struct {
 	logFn            func(string)
 	endpointURL      string
 	client           *http.Client
+	customClient     bool
+	uaProvider       func() string
 	model            string
 }
 
@@ -98,7 +100,15 @@ func WithAIEndpoint(url string) AIPriceGeneratorOption {
 
 // WithAIClient 覆盖 http.Client(单测注入指向 httptest 的 client)。
 func WithAIClient(c *http.Client) AIPriceGeneratorOption {
-	return func(g *AIPriceGenerator) { g.client = c }
+	return func(g *AIPriceGenerator) {
+		g.client = c
+		g.customClient = c != nil
+	}
+}
+
+// WithAIUserAgentProvider 注入动态 Antigravity Hub User-Agent 提供器。
+func WithAIUserAgentProvider(fn func() string) AIPriceGeneratorOption {
+	return func(g *AIPriceGenerator) { g.uaProvider = fn }
 }
 
 // WithAIModel 覆盖生成模型(单测注入小模型)。
@@ -185,12 +195,12 @@ func (g *AIPriceGenerator) Generate(models []string, accountId string, progressF
 	// 先尝试带 googleSearch grounding 联网检索,失败再降级纯知识。
 	g.notifyProgress(progressFn, "grounding-search", "正在联网检索各厂商官方定价页...")
 	// text 与 sources 一起追踪本次(及可能降级重试后的最终)联网结果。
-	text, sources, err := g.generateOnce(accessToken, projectID, models, true)
+	text, sources, err := g.generateOnce(accountId, accessToken, projectID, models, true)
 	// grounding 失败(非 401,即非鉴权问题)则去掉 tools 重试一次纯知识。
 	if err != nil && !isAuthError(err) && isGroundingRejection(err) {
 		g.logf("grounding 工具被上游拒收(%v),降级为纯知识库生成", err)
 		g.notifyProgress(progressFn, "grounding-degraded", "联网检索被上游拒收,降级为知识库估算(结果将标「未联网」)")
-		text, sources, err = g.generateOnce(accessToken, projectID, models, false)
+		text, sources, err = g.generateOnce(accountId, accessToken, projectID, models, false)
 	}
 	// 401 鉴权失败 + 有 refreshToken → 刷新 token 后重试一次(与 packet.go:590 一致)。
 	if err != nil && isAuthError(err) && refreshToken != "" && g.refreshAccount != nil {
@@ -203,9 +213,9 @@ func (g *AIPriceGenerator) Generate(models []string, accountId string, progressF
 		}
 		g.notifyProgress(progressFn, "grounding-search", "凭证已刷新,正在联网检索厂商官方定价页...")
 		// 刷新后优先按原 wantTools=true 重试(若 401 发生在 grounding 阶段而上游其实支持工具)。
-		text, sources, err = g.generateOnce(newToken, projectID, models, true)
+		text, sources, err = g.generateOnce(accountId, newToken, projectID, models, true)
 		if err != nil && !isAuthError(err) && isGroundingRejection(err) {
-			text, sources, err = g.generateOnce(newToken, projectID, models, false)
+			text, sources, err = g.generateOnce(accountId, newToken, projectID, models, false)
 		}
 	}
 	if err != nil {
@@ -275,7 +285,7 @@ func (g *AIPriceGenerator) Generate(models []string, accountId string, progressF
 //   - 鉴权错误(isAuthError):含 "HTTP 401" 文本 → 上层走 refreshAccount 重试
 //   - grounding 拒收(isGroundingRejection):HTTP 400 + grounding 关键词 → 上层去 tools 重试
 //   - 其他: 直接返回,上层不重试
-func (g *AIPriceGenerator) generateOnce(token, projectID string, models []string, wantTools bool) (string, []WebRef, error) {
+func (g *AIPriceGenerator) generateOnce(accountId, token, projectID string, models []string, wantTools bool) (string, []WebRef, error) {
 	if g == nil || g.client == nil {
 		return "", nil, errors.New("AIPriceGenerator: nil service or client")
 	}
@@ -293,12 +303,21 @@ func (g *AIPriceGenerator) generateOnce(token, projectID string, models []string
 	if err != nil {
 		return "", nil, fmt.Errorf("create AI pricing request: %w", err)
 	}
+	ua := "antigravity/hub/2.25.0 (aidev_client; os_type=windows; arch=amd64)"
+	if g.uaProvider != nil {
+		if v := strings.TrimSpace(g.uaProvider()); v != "" {
+			ua = v
+		}
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", "antigravity/ide/2.8.4 windows/amd64")
-	req.Header.Set("X-Goog-Api-Client", "gl-node/22.21.1")
+	req.Header.Set("User-Agent", ua)
 
-	resp, err := g.client.Do(req)
+	httpClient := g.client
+	if !g.customClient && strings.TrimSpace(accountId) != "" {
+		httpClient = netutil.GetAccountClient("aigen:"+accountId, 120*time.Second)
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", nil, fmt.Errorf("execute AI pricing request: %w", err)
 	}

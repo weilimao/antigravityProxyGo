@@ -151,11 +151,24 @@
         </div>
       </div>
 
-      <!-- 选择模型 -->
+      <!-- 各账号独立配置触发测试模型 -->
       <div class="border-t border-outline-variant/20 pt-3">
         <div class="flex items-center justify-between mb-1.5">
-          <label class="block text-[11px] font-bold text-outline dark:text-outline-variant" data-i18n="labelSelectModels">选择触发测试模型</label>
+          <div class="flex items-center gap-2">
+            <label class="block text-[11px] font-bold text-outline dark:text-outline-variant" data-i18n="labelSelectModels">各账号触发模型配置</label>
+            <span class="text-[10px] text-primary dark:text-primary-fixed-dim bg-primary/10 px-1.5 py-0.2 rounded font-medium">按账号独立触发</span>
+          </div>
           <div class="flex items-center gap-2 text-[10px]">
+            <button type="button" id="btnEditAutoFillModels" class="flex items-center gap-0.5 text-primary dark:text-primary-fixed-dim hover:underline font-medium cursor-pointer" title="根据当前账号真实开通模型一键自动匹配填充">
+              <span class="material-symbols-outlined text-[13px]">auto_fix_high</span>
+              <span>按可用模型填充</span>
+            </button>
+            <span class="text-outline/30">|</span>
+            <button type="button" id="btnEditSyncToAllAccounts" class="flex items-center gap-0.5 text-outline hover:text-primary hover:underline font-medium cursor-pointer" title="将当前账号勾选的模型配置复制同步到所有已选账号">
+              <span class="material-symbols-outlined text-[13px]">content_copy</span>
+              <span>同步到全部账号</span>
+            </button>
+            <span class="text-outline/30">|</span>
             <button type="button" id="btnEditFetchModels" class="flex items-center gap-0.5 text-primary hover:underline font-medium cursor-pointer" title="点击调用接口获取最新可用模型">
               <span class="material-symbols-outlined text-[13px]" id="iconEditFetchModels">sync</span>
               <span id="textEditFetchModels">获取最新模型</span>
@@ -166,8 +179,24 @@
             <button type="button" id="btnEditClearAllModels" class="text-outline hover:text-primary hover:underline font-medium cursor-pointer" data-i18n="btnClearAll">清空</button>
           </div>
         </div>
+
+        <!-- 已选账号切换标签栏 (Tabs) -->
+        <div id="editAccountTabsContainer" class="flex items-center gap-1.5 overflow-x-auto py-1 mb-2 scrollbar-thin">
+          <!-- 动态渲染已选账号 Tab -->
+        </div>
+
+        <!-- 当前配置账号状态条 -->
+        <div class="flex items-center justify-between px-2.5 py-1 bg-slate-100/70 dark:bg-white/5 rounded-t-lg border-t border-x border-outline-variant/30 text-[10.5px]">
+          <div class="flex items-center gap-1.5 font-medium text-on-surface dark:text-slate-200" id="activeAccountInfoBar">
+            <span class="material-symbols-outlined text-[14px] text-primary">manage_accounts</span>
+            <span>正在配置账号:</span>
+            <span id="activeAccountLabel" class="font-bold text-primary dark:text-primary-fixed-dim">未选择账号</span>
+          </div>
+          <div class="text-[10px] text-outline" id="activeAccountSelectedCount">已选 0 个模型</div>
+        </div>
+
         <!-- 模型选择网格 -->
-        <div class="grid grid-cols-3 gap-3 p-3 bg-slate-50/50 dark:bg-slate-900/20 border border-outline-variant/30 rounded-xl max-h-36 overflow-y-auto text-[11px] text-on-surface dark:text-slate-200">
+        <div class="grid grid-cols-3 gap-3 p-3 bg-slate-50/50 dark:bg-slate-900/20 border border-outline-variant/30 rounded-b-xl max-h-36 overflow-y-auto text-[11px] text-on-surface dark:text-slate-200">
           <!-- Gemini -->
           <div class="space-y-1">
             <div class="font-bold text-[10px] text-outline uppercase tracking-wider pb-0.5 border-b border-outline-variant/10">Gemini Models</div>

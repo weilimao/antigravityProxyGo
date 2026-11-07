@@ -1,3 +1,23 @@
+### v1.7.7 更新日志
+
+- **逆向深度对齐官方 Antigravity Desktop (v2.29.0) TLS ClientHello 指纹与协议契约（重点防风控）**：
+  - **TLS ClientHello 1:1 精确对齐**：逆向官方二进制程序 `language_server_windows_x64.exe`（`codeassistclient.CreateCloudCodeHTTPClient` @ `0x20f6c60`），将出站隔离传输层配置对齐为 `ForceAttemptHTTP2: false` 与 `ClientSessionCache: nil`，使出站 TLS ClientHello 不发送 `ALPN (0x0010)`、`SessionTicket (0x0023)`、`PSKKeyExchangeModes (0x002d)` 与 `PreSharedKey (0x0029)` 扩展，JA3/JA4 请求指纹与官方桌面端 100% 一致；
+  - **User-Agent 构建号全链路动态注入**：User-Agent 升级为包含官方构建号格式 `antigravity/hub/<ver> (aidev_client; os_type=windows; arch=amd64; cl=1013060670)`，默认版本升级为 `2.29.0`，全系统（MITM 代理、中继接口、测试保活、配额刷新）统一实时联动前端界面「Hub版本」配置；
+  - **官方 sessionId 协议规范落地**：对话与自动化保活请求对齐官方负十进制整数会话规范（`sessionId: "-..."`），消除字符串/缺失导致的特征识别；
+  - **ASAR 补丁幂等与自动去重**：增强 Electron `app.asar` 代理环境注入逻辑，实现智能检测、幂等跳过与历史重复注入块自动剥离收敛。
+
+- **号池可用模型主动探测与受限模型（Argon / Claude 5.5）可视化及智能调度隔离**：
+  - 账号管理工具栏新增「检测可用模型」功能与可视化弹窗（`AccountModelsModal.vue`），主动批量探测各账号真实开通模型，并直观罗列受限模型（Argon / Claude 5.5）；
+  - 调度器构建三层能力画像与 404 负向记忆学习机制，遇到受限模型时自动规避不支持账号、精准分发至已开通账号，杜绝 404 换号风控。
+
+- **自动化触发任务支持各账号独立指定模型**：
+  - 自动化触发任务配置弹窗全面升级，支持为号池中不同账号独立指定触发测试模型，避免因账号权限差异触发 404；
+  - 支持账号标签栏便捷切换、基于探测结果一键填充及配置同步。
+
+- **单账号物理隔离连接池与出站项目 ID 动态清洗**：
+  - 实现按账号独立的 HTTP 连接池，彻底消除多账号交替复用连接引发的跨账号关联风控；
+  - 请求转发时出站 project 字段严格动态替换为目标账号绑定项目 ID，阻断客户端项目信息反向污染。
+
 ### v1.7.6 更新日志
 
 - **多宿主编辑器（Cursor / Windsurf / Trae / VS Code）环境深度兼容与补丁加固（重点）**：
