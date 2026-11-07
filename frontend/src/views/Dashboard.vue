@@ -490,13 +490,25 @@
 <!-- 模型统计面板 -->
 <div class="hidden" id="modelsContent">
 <!-- 时间范围筛选: 全部(复用全量累计) / 今日 / 近三日 / 近七天(后端 request_logs 聚合) -->
-<div class="flex items-center gap-2 p-3 border-b border-outline-variant/30 bg-slate-50/60 dark:bg-white/[0.02]" id="modelRangeBar">
+<div class="flex items-center gap-3 p-3 border-b border-outline-variant/30 bg-slate-50/60 dark:bg-white/[0.02]" id="modelRangeBar">
+<!-- 统计维度切换: 按模型 / 按账号 -->
+<div class="flex items-center gap-1.5" id="statDimensionBar">
+<span class="text-[11px] font-bold text-outline dark:text-outline-variant mr-1" data-i18n="dimensionLabel">维度</span>
+<div class="flex gap-1 bg-slate-100 dark:bg-white/5 p-0.5 rounded-lg text-[10px]" id="statDimensionSelector">
+<button class="px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold" data-sdim="model" data-i18n="dimModel">按模型</button>
+<button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-sdim="account" data-i18n="dimAccount">按账号</button>
+</div>
+</div>
+<div class="h-4 w-[1px] bg-outline-variant/40"></div>
+<!-- 时间范围筛选 -->
+<div class="flex items-center gap-1.5">
 <span class="text-[11px] font-bold text-outline dark:text-outline-variant mr-1" data-i18n="rangeLabel">范围</span>
 <div class="flex gap-1 bg-slate-100 dark:bg-white/5 p-0.5 rounded-lg text-[10px]" id="modelRangeSelector">
 <button class="px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold" data-mrange="all" data-i18n="rangeAll">全部</button>
 <button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-mrange="today" data-i18n="rangeToday">今日</button>
 <button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-mrange="3d" data-i18n="range3d">近三天</button>
 <button class="px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium" data-mrange="7d" data-i18n="range7d">近七天</button>
+</div>
 </div>
 </div>
 <!-- 虚拟列表视口容器 (限制最大高度，吸顶表头) -->
@@ -519,13 +531,51 @@
 </tbody>
 </table>
 </div>
+<!-- 账号维度统计列表视口容器 -->
+<div id="accountsTableScrollContainer" class="hidden overflow-y-auto max-h-[500px] relative">
+<table class="w-full text-left border-collapse" id="accountsTable">
+<thead class="sticky top-0 bg-slate-50/95 dark:bg-[#1a1f30]/95 backdrop-blur-sm z-10 border-b border-outline-variant/50 shadow-xs select-none">
+<tr class="border-b border-outline-variant/50 bg-slate-50/50 dark:bg-white/5">
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider min-w-[220px]" data-i18n="colAccount">账号</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider min-w-[220px]" data-i18n="colModel">模型</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right" data-i18n="colRequests">请求次数</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right" data-i18n="colTotalTokens">总Tokens</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right" data-i18n="colInputTokens">输入Tokens</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right" data-i18n="colOutputTokens">输出Tokens</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right" data-i18n="colCachedTokens">缓存Tokens</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right" data-i18n="colCost">总成本</th>
+<th class="p-3 text-[11px] font-bold text-outline uppercase tracking-wider text-right" data-i18n="colAvgCost">平均成本</th>
+</tr>
+</thead>
+<tbody class="text-[13px] text-on-surface dark:text-white divide-y divide-outline-variant/20">
+<!-- JS 填充 -->
+</tbody>
+</table>
+</div>
 <!-- 底部虚拟滚动摘要栏与回到顶部 -->
 <div id="modelsTableFooter" class="p-2.5 px-4 border-t border-outline-variant/30 flex justify-between items-center text-[12px] text-outline bg-slate-50/40 dark:bg-white/[0.01] select-none">
-<div class="flex items-center gap-2">
+<div class="flex items-center gap-2" id="footerModelInfo">
 <span>共 <span id="modelStatsTotalCount" class="font-bold text-on-surface dark:text-white">0</span> 个模型</span>
 <span class="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/10 text-slate-500 dark:text-slate-400">虚拟滚动已启用</span>
 </div>
+<div class="hidden items-center gap-3" id="footerAccountInfo">
+<div class="flex items-center gap-1.5">
+<span>共 <span id="accountStatsTotalCount" class="font-bold text-on-surface dark:text-white">0</span> 个账号</span>
+<span class="text-outline/40">·</span>
+<span><span id="accountStatsModelCount" class="font-bold text-on-surface dark:text-white">0</span> 个模型项</span>
+<span class="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/10 text-slate-500 dark:text-slate-400 ml-1">虚拟滚动已启用</span>
+</div>
+<div class="flex items-center gap-1 border-l border-outline-variant/30 pl-2.5">
+<button id="btnExpandAllAccounts" class="text-[11px] text-primary hover:underline hover:bg-primary/5 px-1.5 py-0.5 rounded transition-colors cursor-pointer select-none" data-i18n="btnExpandAll">全部展开</button>
+<span class="text-outline/30">|</span>
+<button id="btnCollapseAllAccounts" class="text-[11px] text-outline hover:text-primary hover:underline hover:bg-primary/5 px-1.5 py-0.5 rounded transition-colors cursor-pointer select-none" data-i18n="btnCollapseAll">全部折叠</button>
+</div>
+</div>
 <button id="btnScrollToTopModels" class="hidden text-[11px] text-primary hover:underline cursor-pointer items-center gap-0.5 px-2 py-1 rounded hover:bg-primary/5 transition-colors font-medium" title="回到列表顶部">
+<span class="material-symbols-outlined text-[14px]">vertical_align_top</span>
+<span>回到顶部</span>
+</button>
+<button id="btnScrollToTopAccounts" class="hidden text-[11px] text-primary hover:underline cursor-pointer items-center gap-0.5 px-2 py-1 rounded hover:bg-primary/5 transition-colors font-medium" title="回到列表顶部">
 <span class="material-symbols-outlined text-[14px]">vertical_align_top</span>
 <span>回到顶部</span>
 </button>

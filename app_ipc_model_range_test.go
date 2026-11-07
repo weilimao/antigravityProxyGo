@@ -212,3 +212,90 @@ func TestIPCModelRange_TimeWindows_QueriesDB(t *testing.T) {
 		t.Errorf("7d 聚合应包含 model-5days-ago")
 	}
 }
+
+func TestIPCModelRange_AccountStats(t *testing.T) {
+	tempDir := t.TempDir()
+	if err := db.InitDB(tempDir); err != nil {
+		t.Fatalf("初始化测试数据库失败: %v", err)
+	}
+	defer func() {
+		db.CloseDB()
+		db.GlobalDB = nil
+	}()
+
+	pricingMgr := pricing.NewManager()
+	pricingMgr.Init(tempDir)
+	tracker := stats.NewTracker(pricingMgr)
+	tracker.Init(tempDir)
+	usageTracker := stats.NewUsageTracker(pricingMgr)
+	usageTracker.Init(tempDir)
+
+	now := time.Now()
+	todayLog := &db.RequestLog{
+		Timestamp:    now.Format(time.RFC3339),
+		Mode:         "local",
+		UserID:       "alice@test.com",
+		Method:       "POST",
+		Host:         "api.google.com",
+		Path:         "/v1/chat",
+		ModelName:    "gemini-3.8-flash-high",
+		InTokens:     100,
+		OutTokens:    20,
+		CachedTokens: 80,
+		Cost:         0.001,
+		StatusCode:   200,
+	}
+	if err := db.InsertRequestLog(todayLog); err != nil {
+		t.Fatalf("插入 today 日志失败: %v", err)
+	}
+
+	app := &App{
+		ctx:          context.Background(),
+		statsTracker: tracker,
+		usageTracker: usageTracker,
+	}
+
+	// 1. 验证 today 返回 accounts
+	resTodayRaw, _, err := app.handleIOInvokeIPC("stats:model-range", []interface{}{"today"})
+	if err != nil {
+		t.Fatalf("handleIOInvokeIPC today 报错: %v", err)
+	}
+	var resToday struct {
+		Range string `json:"range"`
+		Stats struct {
+			Models   map[string]*db.ModelStatsSummary   `json:"models"`
+			Accounts map[string]*db.AccountStatsSummary `json:"accounts"`
+		} `json:"stats"`
+	}
+	if err := json.Unmarshal([]byte(resTodayRaw), &resToday); err != nil {
+		t.Fatalf("反序列化 today 响应失败: %v", err)
+	}
+	if len(resToday.Stats.Accounts) != 1 {
+		t.Fatalf("today 应返回 1 个账号, 实际返回 %d", len(resToday.Stats.Accounts))
+	}
+	accAlice, ok := resToday.Stats.Accounts["alice@test.com"]
+	if !ok {
+		t.Fatalf("today 应包含 alice@test.com")
+	}
+	if accAlice.RequestCount != 1 || accAlice.Models["gemini-3.8-flash-high"] == nil {
+		t.Errorf("alice 统计或模型不匹配: %+v", accAlice)
+	}
+
+	// 2. 验证 all 返回 accounts
+	resAllRaw, _, err := app.handleIOInvokeIPC("stats:model-range", []interface{}{"all"})
+	if err != nil {
+		t.Fatalf("handleIOInvokeIPC all 报错: %v", err)
+	}
+	var resAll struct {
+		Range string `json:"range"`
+		Stats struct {
+			Accounts map[string]interface{} `json:"accounts"`
+		} `json:"stats"`
+	}
+	if err := json.Unmarshal([]byte(resAllRaw), &resAll); err != nil {
+		t.Fatalf("反序列化 all 响应失败: %v", err)
+	}
+	if resAll.Stats.Accounts == nil {
+		t.Errorf("all 应返回非空 accounts")
+	}
+}

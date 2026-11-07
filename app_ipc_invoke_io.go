@@ -9,6 +9,7 @@ import (
 
 	"antigravity-proxy/internal/db"
 	"antigravity-proxy/internal/dialogs"
+	"antigravity-proxy/internal/stats"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -162,17 +163,35 @@ func (a *App) handleIOInvokeIPC(channel string, args []interface{}) (string, boo
 			} else {
 				models = db.QueryModelStatsSince("")
 			}
+			var accounts interface{}
+			if a.usageTracker != nil {
+				if usagePayload := a.usageTracker.GetPayload(); usagePayload != nil {
+					if uState, ok := usagePayload.(stats.UsageState); ok && len(uState.Accounts) > 0 {
+						accounts = uState.Accounts
+					}
+				}
+			}
+			if accounts == nil {
+				accounts = db.QueryAccountStatsSince("")
+			}
 			return marshalResponse(map[string]interface{}{
 				"range": rangeKey,
-				"stats": map[string]interface{}{"models": models},
+				"stats": map[string]interface{}{
+					"models":   models,
+					"accounts": accounts,
+				},
 			})
 		default:
 			return "", false, nil // 未识别 range, 交后续 handler fall-through
 		}
 		models := db.QueryModelStatsSince(since)
+		accounts := db.QueryAccountStatsSince(since)
 		return marshalResponse(map[string]interface{}{
 			"range": rangeKey,
-			"stats": map[string]interface{}{"models": models},
+			"stats": map[string]interface{}{
+				"models":   models,
+				"accounts": accounts,
+			},
 		})
 	}
 

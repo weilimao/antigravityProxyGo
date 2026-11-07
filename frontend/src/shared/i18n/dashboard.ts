@@ -96,6 +96,16 @@ export const dashboardZh: Record<string, string> = {
     benchmarkSortAsc: "升序(最快在前)",
     benchmarkSortDesc: "降序(最慢在前)",
     benchmarkRankTitle: "响应速度排名第 {n}",
+    dimensionLabel: "维度",
+    dimModel: "按模型",
+    dimAccount: "按账号",
+    colAccount: "账号",
+    colModels: "请求模型",
+    colCachedTokens: "缓存Tokens",
+    accountStatsTotalCountLabel: "共 {0} 个账号",
+    allModelsSummary: "全部模型汇总",
+    btnExpandAll: "全部展开",
+    btnCollapseAll: "全部折叠",
 };
 
 export const dashboardEn: Record<string, string> = {
@@ -192,4 +202,14 @@ export const dashboardEn: Record<string, string> = {
     benchmarkSortAsc: "Ascending (fastest first)",
     benchmarkSortDesc: "Descending (slowest first)",
     benchmarkRankTitle: "Speed rank #{n}",
+    dimensionLabel: "Dimension",
+    dimModel: "By Model",
+    dimAccount: "By Account",
+    colAccount: "Account",
+    colModels: "Models Used",
+    colCachedTokens: "Cached Tokens",
+    accountStatsTotalCountLabel: "Total {0} accounts",
+    allModelsSummary: "All Models Summary",
+    btnExpandAll: "Expand All",
+    btnCollapseAll: "Collapse All",
 };

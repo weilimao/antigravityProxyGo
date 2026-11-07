@@ -39,6 +39,10 @@ export interface DashboardState {
     // 涵盖全部 77+ 模型与数十万次历史累计, 并支持 stats-updated 实时增量更新); 'today'/'3d'/'7d'
     // 为时间窗口切片筛选(经 stats:model-range 从 SQLite request_logs 聚合)。
     currentModelRange: 'all' | 'today' | '3d' | '7d';
+    // currentStatDimension: 统计维度筛选。'model' = 按模型统计 (默认); 'account' = 按账号统计
+    currentStatDimension: 'model' | 'account';
+    // filteredAccountStats: 窗口切片或全量下的账号用量聚合缓存
+    filteredAccountStats: any | null;
     // filteredModelStats: 窗口切片筛选模式(today/3d/7d)下的 per-model 聚合结果缓存({models:{...}} 形状)。
     // 切范围后写入并冻结视图, 避免受全量实时 tick 干扰; 当切回 'all' 时重置为 null 并直连 statsData。
     filteredModelStats: any | null;
@@ -129,6 +133,8 @@ const state: DashboardState = {
     activeView: 'dashboard',
     statsData: null,
     currentModelRange: 'all',
+    currentStatDimension: 'model',
+    filteredAccountStats: null,
     filteredModelStats: null,
     usageData: null,
     benchmarkData: null,

@@ -13,8 +13,9 @@ import * as chartRenderer from './chartRenderer';
 import * as usageDetails from './usageDetails';
 import * as pricingController from './pricingController';
 import * as hitRateFilter from './hitRateFilter';
-import { renderModelsTable, initModelRangeFilter } from './dashboardModelStats';
-export { renderModelsTable, initModelRangeFilter };
+import { renderModelsTable, initModelRangeFilter, switchStatDimension } from './dashboardModelStats';
+import { renderAccountsTable } from './dashboardAccountStats';
+export { renderModelsTable, initModelRangeFilter, switchStatDimension, renderAccountsTable };
 import { refreshDataDir } from './migrationController';
 import { initAppVersion } from './updaterController';
 import { startOtpTimer, stopOtpTimer } from './otpController';
@@ -862,12 +863,22 @@ export function renderActiveView() {
 
         // 3. Render sub-tabs table (only the active one!)
         if (state.activeTab === 'models') {
-            // 模型统计表: 在「全部」范围(或尚未设置切片时)始终渲染全量实时的 stats(statsData),
-            // 支持新请求实时刷新; 在用户显式选定 'today' / '3d' / '7d' 时, 渲染固化的 DB 聚合快照。
-            if (state.currentModelRange === 'all' || !state.filteredModelStats) {
-                renderModelsTable(stats);
+            // 模型统计面板: 支持按模型与按账号双维度。
+            if (state.currentStatDimension === 'account') {
+                if (state.currentModelRange === 'all' || !state.filteredAccountStats) {
+                    const allAccounts = (state.statsData && state.statsData.usage && state.statsData.usage.accounts)
+                        ? state.statsData.usage.accounts
+                        : (state.usageData ? state.usageData.accounts : {});
+                    renderAccountsTable(allAccounts);
+                } else {
+                    renderAccountsTable(state.filteredAccountStats);
+                }
             } else {
-                renderModelsTable(state.filteredModelStats);
+                if (state.currentModelRange === 'all' || !state.filteredModelStats) {
+                    renderModelsTable(stats);
+                } else {
+                    renderModelsTable(state.filteredModelStats);
+                }
             }
         } else if (state.activeTab === 'logs') {
             renderLogsTable();

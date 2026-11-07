@@ -3,6 +3,7 @@ import state from './dashboardState';
 import i18n from '../shared/i18n';
 import * as chartRenderer from './chartRenderer';
 import { calculateVirtualWindow } from './useVirtualList';
+import { renderAccountsTable, initAccountStatsEvents, clearAccountsVirtualTable } from './dashboardAccountStats';
 
 export const MODEL_ITEM_HEIGHT = 44;
 export const MODEL_BUFFER_ROWS = 5;
@@ -263,11 +264,80 @@ export function cleanupModelStatsVirtualList(): void {
 /**
  * 绑定模型统计表的时间范围筛选按钮 (全部 / 今日 / 近三日 / 近七天)
  */
+
+/**
+ * 切换模型统计面板的统计维度 (按模型 / 按账号)
+ */
+export function switchStatDimension(dimension: 'model' | 'account'): void {
+    state.currentStatDimension = dimension;
+
+    const dimSelector = document.getElementById('statDimensionSelector');
+    if (dimSelector) {
+        const buttons = dimSelector.querySelectorAll('button[data-sdim]');
+        const activeClass = 'px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold';
+        const inactiveClass = 'px-2.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 rounded-md transition-all font-medium';
+        buttons.forEach((b: any) => {
+            b.className = b.getAttribute('data-sdim') === dimension ? activeClass : inactiveClass;
+        });
+    }
+
+    const modelsContainer = document.getElementById('modelsTableScrollContainer');
+    const accountsContainer = document.getElementById('accountsTableScrollContainer');
+    const footerModel = document.getElementById('footerModelInfo');
+    const footerAccount = document.getElementById('footerAccountInfo');
+    const btnTopModels = document.getElementById('btnScrollToTopModels');
+    const btnTopAccounts = document.getElementById('btnScrollToTopAccounts');
+
+    if (dimension === 'account') {
+        if (modelsContainer) modelsContainer.classList.add('hidden');
+        if (accountsContainer) accountsContainer.classList.remove('hidden');
+        if (footerModel) footerModel.classList.add('hidden');
+        if (footerAccount) {
+            footerAccount.classList.remove('hidden');
+            footerAccount.classList.add('flex');
+        }
+        if (btnTopModels) btnTopModels.classList.add('hidden');
+
+        const accountsData = state.filteredAccountStats || (state.statsData?.usage?.accounts) || (state.usageData?.accounts) || {};
+        renderAccountsTable(accountsData);
+    } else {
+        if (accountsContainer) accountsContainer.classList.add('hidden');
+        if (modelsContainer) modelsContainer.classList.remove('hidden');
+        if (footerAccount) {
+            footerAccount.classList.add('hidden');
+            footerAccount.classList.remove('flex');
+        }
+        if (footerModel) footerModel.classList.remove('hidden');
+        if (btnTopAccounts) btnTopAccounts.classList.add('hidden');
+
+        clearAccountsVirtualTable();
+
+        const modelsData = state.filteredModelStats || state.statsData;
+        renderModelsTable(modelsData);
+    }
+}
+
 export function initModelRangeFilter(): void {
     const sel = document.getElementById('modelRangeSelector');
     if (!sel) return;
 
     initModelStatsVirtualList();
+    initAccountStatsEvents();
+
+    // 绑定统计维度切换器 (按模型 / 按账号)
+    const dimSel = document.getElementById('statDimensionSelector');
+    if (dimSel) {
+        const dimBtns = dimSel.querySelectorAll('button[data-sdim]');
+        dimBtns.forEach((btn) => {
+            if (!btn.hasAttribute('data-bound')) {
+                btn.setAttribute('data-bound', 'true');
+                btn.addEventListener('click', () => {
+                    const dim = (btn.getAttribute('data-sdim') || 'model') as 'model' | 'account';
+                    switchStatDimension(dim);
+                });
+            }
+        });
+    }
 
     const buttons = sel.querySelectorAll('button[data-mrange]');
     const activeClass = 'px-2.5 py-0.5 text-[10px] bg-white dark:bg-[#1a1f30] text-primary dark:text-primary-fixed-dim rounded-md shadow-sm font-semibold';
@@ -282,11 +352,16 @@ export function initModelRangeFilter(): void {
         // 切换时间范围后平滑滚回顶部，避免停留在旧范围的深层滚动偏置
         scrollToTopModels(false);
 
-        // 选定「全部」范围：直接使用全局全量 statsData, 置空 filteredModelStats 允许实时刷新
+        // 选定「全部」范围：直接使用全局全量 statsData, 置空 filtered 缓存允许实时刷新
         if (range === 'all') {
             state.filteredModelStats = null;
+            state.filteredAccountStats = null;
             if (state.statsData) {
                 renderModelsTable(state.statsData);
+                const allAccounts = (state.statsData && state.statsData.usage && state.statsData.usage.accounts)
+                    ? state.statsData.usage.accounts
+                    : (state.usageData ? state.usageData.accounts : {});
+                renderAccountsTable(allAccounts);
                 return;
             }
         }
@@ -297,18 +372,29 @@ export function initModelRangeFilter(): void {
             if (state.currentModelRange !== range) return;
             const res = typeof resRaw === 'string' ? JSON.parse(resRaw) : resRaw;
             const stats = (res && res.stats) ? res.stats : res;
+            const models = (stats && stats.models) ? stats.models : {};
+            const accounts = (stats && stats.accounts) ? stats.accounts : {};
+
             if (range === 'all') {
                 state.filteredModelStats = null;
+                state.filteredAccountStats = null;
                 renderModelsTable(stats || { models: {} });
+                renderAccountsTable(accounts || state.statsData?.usage?.accounts || {});
             } else {
                 state.filteredModelStats = stats || { models: {} };
+                state.filteredAccountStats = accounts || {};
                 renderModelsTable(state.filteredModelStats);
+                renderAccountsTable(state.filteredAccountStats);
             }
         } catch (e) {
             console.error('[Dashboard] model range fetch failed', e);
             if (state.currentModelRange !== range) return;
             state.filteredModelStats = null;
-            if (state.statsData) renderModelsTable(state.statsData);
+            state.filteredAccountStats = null;
+            if (state.statsData) {
+                renderModelsTable(state.statsData);
+                renderAccountsTable(state.statsData.usage?.accounts || {});
+            }
         }
     };
 
@@ -322,12 +408,17 @@ export function initModelRangeFilter(): void {
     // 首屏初始化：如果当前范围是 'all' 且已有实时 statsData，直接渲染全量；否则拉取一次
     if (state.currentModelRange === 'all') {
         state.filteredModelStats = null;
+        state.filteredAccountStats = null;
         if (state.statsData) {
             renderModelsTable(state.statsData);
+            renderAccountsTable(state.statsData.usage?.accounts || {});
         } else {
             applyRange('all');
         }
     } else if (state.filteredModelStats === null) {
         applyRange(state.currentModelRange || 'all');
     }
+
+    // 初始化维度视图状态
+    switchStatDimension(state.currentStatDimension || 'model');
 }

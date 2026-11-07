@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 )
 
 type SummaryStats struct {
@@ -21,6 +22,26 @@ type ModelStatsSummary struct {
 	OutTokens    int     `json:"outTokens"`
 	CachedTokens int     `json:"cachedTokens"`
 	Cost         float64 `json:"cost"`
+}
+
+type AccountModelStats struct {
+	Model        string  `json:"model"`
+	RequestCount int     `json:"requestCount"`
+	InputTokens  int     `json:"inputTokens"`
+	OutputTokens int     `json:"outputTokens"`
+	CachedTokens int     `json:"cachedTokens"`
+	TotalCost    float64 `json:"totalCost"`
+}
+
+type AccountStatsSummary struct {
+	AccountID    string                        `json:"accountId"`
+	Email        string                        `json:"email"`
+	RequestCount int                           `json:"requestCount"`
+	InputTokens  int                           `json:"inputTokens"`
+	OutputTokens int                           `json:"outputTokens"`
+	CachedTokens int                           `json:"cachedTokens"`
+	TotalCost    float64                       `json:"totalCost"`
+	Models       map[string]*AccountModelStats `json:"models"`
 }
 
 type HourlyTrendSummary struct {
@@ -116,6 +137,67 @@ func QueryModelStatsSince(sinceISO string) map[string]*ModelStatsSummary {
 				OutTokens:    outT,
 				CachedTokens: cacheT,
 				Cost:         math.Round(cost*1000000.0) / 1000000.0,
+			}
+		}
+	}
+	return out
+}
+
+
+
+// QueryAccountStatsSince 聚合指定时间点之后的 per-account 统计及其模型明细列表,
+// 供「模型统计」表切换到「按账号」维度并按时间范围(全部/今日/近三天/近七天)筛选。
+func QueryAccountStatsSince(sinceISO string) map[string]*AccountStatsSummary {
+	out := make(map[string]*AccountStatsSummary)
+	if GlobalDB == nil {
+		return out
+	}
+
+	query := `SELECT COALESCE(NULLIF(TRIM(user_id), ''), '直连') AS account_key, model_name, count(*), sum(in_tokens), sum(out_tokens), sum(cached_tokens), sum(cost) FROM request_logs`
+	var args []interface{}
+	if sinceISO != "" {
+		query += " WHERE timestamp >= ?"
+		args = append(args, sinceISO)
+	}
+	query += " GROUP BY account_key, model_name"
+
+	rows, err := GlobalDB.Query(query, args...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var accountKey, modelName string
+		var reqs, inT, outT, cacheT int
+		var cost float64
+		if err := rows.Scan(&accountKey, &modelName, &reqs, &inT, &outT, &cacheT, &cost); err == nil {
+			if strings.TrimSpace(modelName) == "" {
+				modelName = "unknown"
+			}
+			acc, exists := out[accountKey]
+			if !exists {
+				acc = &AccountStatsSummary{
+					AccountID: accountKey,
+					Email:     accountKey,
+					Models:    make(map[string]*AccountModelStats),
+				}
+				out[accountKey] = acc
+			}
+			acc.RequestCount += reqs
+			acc.InputTokens += inT
+			acc.OutputTokens += outT
+			acc.CachedTokens += cacheT
+			acc.TotalCost = math.Round((acc.TotalCost+cost)*1000000.0) / 1000000.0
+
+			mCost := math.Round(cost*1000000.0) / 1000000.0
+			acc.Models[modelName] = &AccountModelStats{
+				Model:        modelName,
+				RequestCount: reqs,
+				InputTokens:  inT,
+				OutputTokens: outT,
+				CachedTokens: cacheT,
+				TotalCost:    mCost,
 			}
 		}
 	}
