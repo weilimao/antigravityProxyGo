@@ -25,6 +25,14 @@ let downloadedInstallerPath: string | null = null;
 let updaterState = 'idle';
 let isManualCheck = false;
 
+function formatVersion(ver?: string | null): string {
+    if (!ver) return '';
+    const trimmed = String(ver).trim();
+    if (!trimmed) return '';
+    const clean = trimmed.replace(/^v+/i, '');
+    return clean ? `v${clean}` : '';
+}
+
 function showModal() {
     updateModal = document.getElementById('updateModal');
     updateModalContainer = document.getElementById('updateModalContainer');
@@ -107,8 +115,8 @@ export function setUpdaterUIState(uiState: string, info: any = {}) {
         showModal();
         updateModalIcon.textContent = 'rocket_launch';
         updateModalIcon.className = 'material-symbols-outlined text-[36px] text-amber-500 animate-none';
-        updateModalStatusTitle.textContent = (dict.updateAvailable || '发现新版本可用！') + ` (v${info.latestVersion})`;
-        updateModalStatusMsg.textContent = `${dict.currentVersionLabel || '当前版本'}: v${info.currentVersion}`;
+        updateModalStatusTitle.textContent = `${dict.updateAvailable || '发现新版本可用！'} (${formatVersion(info.latestVersion)})`;
+        updateModalStatusMsg.textContent = `${dict.currentVersionLabel || '当前版本'}: ${formatVersion(info.currentVersion)}`;
         
         if (info.releaseNotes) {
             updateModalChangelogContainer.classList.remove('hidden');
@@ -140,7 +148,7 @@ export function setUpdaterUIState(uiState: string, info: any = {}) {
             updateModalIcon.textContent = 'check_circle';
             updateModalIcon.className = 'material-symbols-outlined text-[36px] text-emerald-500 animate-none';
             updateModalStatusTitle.textContent = dict.alreadyLatest || '已是最新版本';
-            updateModalStatusMsg.textContent = `${dict.currentVersionLabel || '当前版本'}: v${info.currentVersion || '1.0.4'}`;
+            updateModalStatusMsg.textContent = `${dict.currentVersionLabel || '当前版本'}: ${formatVersion(info.currentVersion || '1.0.4')}`;
             
             updateModalActions.classList.remove('hidden');
             btnUpdateModalConfirm.classList.add('hidden');
@@ -208,7 +216,7 @@ export async function initAppVersion() {
     try {
         const ver = await ipcRenderer.invoke('app:get-version');
         if (lblCurrentVersion) {
-            lblCurrentVersion.textContent = `v${ver}`;
+            lblCurrentVersion.textContent = formatVersion(ver);
         }
     } catch (err) {
         console.error('Failed to get app version:', err);
