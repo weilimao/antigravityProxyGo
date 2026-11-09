@@ -63,7 +63,7 @@ func TestAntigravityQuotaFallsBackToDesktopCaptureShape(t *testing.T) {
 
 	loadBody := q.loadCodeAssistBody(headers["User-Agent"])
 	metadata, _ := loadBody["metadata"].(map[string]interface{})
-	if metadata["ideVersion"] != "2.29.0" || metadata["platform"] != "WINDOWS_AMD64" || metadata["ideName"] != "antigravity" {
+	if metadata["ideVersion"] != "2.29.1" || metadata["platform"] != "WINDOWS_AMD64" || metadata["ideName"] != "antigravity" {
 		t.Fatalf("metadata = %#v", metadata)
 	}
 }

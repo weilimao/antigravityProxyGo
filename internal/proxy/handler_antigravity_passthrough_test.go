@@ -171,7 +171,7 @@ func TestAntigravityPassthroughVsRelaySpoof(t *testing.T) {
 		}
 
 		// 核心断言 1: 18444 第三方中继调用必须正确伪装为号池配置的 Hub 版本
-		expectedHubUA := "antigravity/hub/2.21.1 (aidev_client; os_type=windows; arch=amd64)"
+		expectedHubUA := accMgr.GetAntigravityUserAgent()
 		if capturedUA != expectedHubUA {
 			t.Errorf("User-Agent mismatch for relay request! Expected %q, got %q", expectedHubUA, capturedUA)
 		}
@@ -204,7 +204,7 @@ func TestAntigravityPassthroughVsRelaySpoof(t *testing.T) {
 		}
 
 		// 核心断言 1: 新版 IDE 插件请求必须自动伪装为合法 Antigravity Hub UA，规避上游拦截
-		expectedHubUA := "antigravity/hub/2.21.1 (aidev_client; os_type=windows; arch=amd64)"
+		expectedHubUA := accMgr.GetAntigravityUserAgent()
 		if capturedUA != expectedHubUA {
 			t.Errorf("User-Agent mismatch for new IDE plugin! Expected %q, got %q", expectedHubUA, capturedUA)
 		}
@@ -303,7 +303,7 @@ func TestAntigravityPassthroughVsRelaySpoof(t *testing.T) {
 		}
 
 		// 核心断言 4: User-Agent 伪装为合法 Hub UA
-		expectedHubUA := "antigravity/hub/2.21.1 (aidev_client; os_type=windows; arch=amd64)"
+		expectedHubUA := accMgr.GetAntigravityUserAgent()
 		if capturedUA != expectedHubUA {
 			t.Errorf("Expected UA spoofed to %q, got %q", expectedHubUA, capturedUA)
 		}
@@ -445,7 +445,7 @@ func TestAntigravityPassthroughVsRelaySpoof(t *testing.T) {
 		}
 
 		// 断言: 扩展插件 UA 必须被正确伪装为官方 Hub UA，绝不能保留未认证的 antigravity-vscode 暴露给谷歌上游
-		expectedHubUA := "antigravity/hub/2.21.1 (aidev_client; os_type=windows; arch=amd64)"
+		expectedHubUA := accMgr.GetAntigravityUserAgent()
 		if capturedUA != expectedHubUA {
 			t.Errorf("Expected UA to be spoofed to Hub version, got %q", capturedUA)
 		}

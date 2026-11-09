@@ -154,7 +154,9 @@ export function updateViewTabUI() {
             }
             if (antigravityCliVersionWrap) antigravityCliVersionWrap.classList.remove('hidden');
             if (antigravityCliVersion && state.lastBackendData) {
-                antigravityCliVersion.value = state.lastBackendData.antigravityCliVersion || '2.25.0';
+                if (document.activeElement !== antigravityCliVersion) {
+                    antigravityCliVersion.value = state.lastBackendData.antigravityCliVersion || '2.29.1';
+                }
             }
             // Antigravity Tab:Worker 代理出口 toggle+URL input 随容器一起显隐,回填自 settings 层。
             if (antigravityWorkerProxyWrap) antigravityWorkerProxyWrap.classList.remove('hidden');
@@ -738,7 +740,7 @@ export function initAccountsEvents() {
     if (antigravityCliVersion) {
         let acvDebounce: ReturnType<typeof setTimeout> | null = null;
         antigravityCliVersion.addEventListener('change', (e: any) => {
-            const v = (e.target.value || '').trim() || '2.25.0';
+            const v = (e.target.value || '').trim() || '2.29.1';
             e.target.value = v;
             if (acvDebounce) clearTimeout(acvDebounce);
             acvDebounce = setTimeout(() => {

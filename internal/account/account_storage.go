@@ -104,6 +104,7 @@ type poolConfigOnDisk struct {
 	NvidiaMaxConcurrency      int             `json:"nvidiaMaxConcurrency,omitempty"`
 	AntigravityMaxConcurrency int             `json:"antigravityMaxConcurrency,omitempty"`
 	AntigravityCliVersion     string          `json:"antigravityCliVersion,omitempty"`
+	AntigravityBuildCL        string          `json:"antigravityBuildCL,omitempty"`
 	ProjectMaxConcurrency     int             `json:"projectMaxConcurrency,omitempty"`
 	OtherMaxConcurrency       map[string]int  `json:"otherMaxConcurrency,omitempty"`
 	OtherWorkerProxyURLs    map[string]string `json:"otherWorkerProxyUrls,omitempty"`
@@ -238,6 +239,7 @@ func (m *Manager) marshalPoolConfig() ([]byte, error) {
 		NvidiaMaxConcurrency:      m.nvidiaMaxConcurrency,
 		AntigravityMaxConcurrency: m.antigravityMaxConcurrency,
 		AntigravityCliVersion:     m.antigravityCliVersion,
+		AntigravityBuildCL:        m.antigravityBuildCL,
 		ProjectMaxConcurrency:     m.projectMaxConcurrency,
 		OtherMaxConcurrency:       m.otherMaxConcurrency,
 		OtherWorkerProxyURLs:    m.otherWorkerProxyURLs,
@@ -353,6 +355,7 @@ func (m *Manager) loadPoolConfigIntoMemory() {
 	}
 	m.antigravityMaxConcurrency = cfg.AntigravityMaxConcurrency
 	m.antigravityCliVersion = strings.TrimSpace(cfg.AntigravityCliVersion)
+	m.antigravityBuildCL = strings.TrimSpace(cfg.AntigravityBuildCL)
 	m.projectMaxConcurrency = cfg.ProjectMaxConcurrency
 	if cfg.OtherMaxConcurrency != nil {
 		m.otherMaxConcurrency = make(map[string]int, len(cfg.OtherMaxConcurrency))
@@ -518,6 +521,7 @@ func (m *Manager) migrateLegacyFile() error {
 		NvidiaMaxConcurrency:      parsed.NvidiaMaxConcurrency,
 		AntigravityMaxConcurrency: parsed.AntigravityMaxConcurrency,
 		AntigravityCliVersion:     parsed.AntigravityCliVersion,
+		AntigravityBuildCL:        parsed.AntigravityBuildCL,
 		ProjectMaxConcurrency:     parsed.ProjectMaxConcurrency,
 		OtherMaxConcurrency:       parsed.OtherMaxConcurrency,
 		GrokMaxConcurrency:        parsed.GrokMaxConcurrency,

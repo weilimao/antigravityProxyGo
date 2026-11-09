@@ -7,7 +7,7 @@ import (
 
 // desktopQuotaUserAgent 是抓包里桌面端 retrieveUserQuotaSummary 的请求头。
 // 抓包列表里没有可用样本时，额度刷新按这一份格式发往上游。
-const desktopQuotaUserAgent = "antigravity/hub/2.29.0 (aidev_client; os_type=windows; arch=amd64; cl=1013060670)"
+const desktopQuotaUserAgent = "antigravity/hub/2.29.1 (aidev_client; os_type=windows; arch=amd64; cl=1015941558)"
 
 func (q *QuotaService) lookupTemplate(pathNeedle string) (map[string]string, []byte, bool) {
 	if q == nil {

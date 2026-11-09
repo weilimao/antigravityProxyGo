@@ -174,6 +174,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targetHost := "cloudcode-pa.googleapis.com"
+	// 动态嗅探官方原生客户端版本号与 CL 构建号（无感自动学习并对齐号池指纹）
+	inboundUA := r.Header.Get("User-Agent")
+	if ver, cl, ok := SniffAntigravityVersion(inboundUA); ok && h.accountMgr != nil {
+		if h.accountMgr.UpdateAntigravityVersionAndCL(ver, cl) && h.logFn != nil {
+			h.logFn(fmt.Sprintf("🛡️ [自动嗅探] 从官方客户端流量捕获到最新版本: v%s (CL: %s)，已自动同步号池全局指纹", ver, cl))
+		}
+	}
 	targetPath := r.URL.Path + r.URL.RawQuery
 	if r.URL.RawQuery != "" {
 		targetPath = r.URL.Path + "?" + r.URL.RawQuery

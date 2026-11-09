@@ -129,6 +129,10 @@ func (a *App) startup(ctx context.Context) {
 
 	// 4. Initialize Accounts & Session Router
 	a.accountMgr = account.NewManager()
+	a.accountMgr.SetOnAntigravityVersionUpdated(func(version, buildCL string) {
+		a.emitAccountsRes()
+		a.AddLog(fmt.Sprintf("🔄 [指纹同步] 官方 Antigravity Hub 版本自动更新为: %s (CL: %s)", version, buildCL))
+	})
 	a.workbuddyOAuthMgr = account.NewWorkBuddyOAuthManager(a.accountMgr)
 	a.workbuddyOAuthMgr.SetOnSuccess(func(acc *account.Account) {
 		a.emitAccountsRes()

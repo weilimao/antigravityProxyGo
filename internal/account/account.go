@@ -246,8 +246,11 @@ type AccountsData struct {
 	OtherWorkerProxyEnabled map[string]bool   `json:"otherWorkerProxyEnabled,omitempty"`
 	// AntigravityCliVersion 持久化 Antigravity 号池全局 Hub/客户端版本号(号池单值,对仗 AntigravityMaxConcurrency)。
 	// 用于发往 Google 上游的 User-Agent 身份头(如 antigravity/hub/<ver> (aidev_client; os_type=windows; arch=amd64))。
-	// 空串=未配置, GetAntigravityCliVersion 回退默认 DefaultAntigravityCliVersion("2.3.1")。
+	// 空串=未配置, GetAntigravityCliVersion 回退默认 DefaultAntigravityCliVersion("2.29.1")。
 	AntigravityCliVersion string `json:"antigravityCliVersion,omitempty"`
+	// AntigravityBuildCL 持久化 Antigravity 官方 Language Server 的构建 Changelist 编号。
+	// 空串=未配置, GetAntigravityBuildCL 回退默认 DefaultAntigravityBuildCL("1015941558")。
+	AntigravityBuildCL string `json:"antigravityBuildCL,omitempty"`
 	// GrokMaxConcurrency 持久化 Grok 号池单账号在途并发上限(单池单值,与 NvidiaMaxConcurrency 同口径)。
 	GrokMaxConcurrency int `json:"grokMaxConcurrency,omitempty"`
 	// GrokCliVersion 持久化 Grok 号池全局 CLI 客户端版本号(号池单值,对仗 GrokMaxConcurrency)。
@@ -311,8 +314,13 @@ type Manager struct {
 	// 与 otherLBModes 同范式。详见 account_other.go 的 OtherCooldownRule 注释。
 	otherCooldownRules map[string]*OtherCooldownRule
 	// antigravityCliVersion 持久化 Antigravity 号池全局 Hub/客户端版本号(单池单值,对仗 antigravityMaxConcurrency);
-	// 空串=未配置, GetAntigravityCliVersion 回退默认 DefaultAntigravityCliVersion("2.3.1")。
+	// 空串=未配置, GetAntigravityCliVersion 回退默认 DefaultAntigravityCliVersion("2.29.1")。
 	antigravityCliVersion string
+	// antigravityBuildCL 持久化 Antigravity 官方 Language Server 的构建 Changelist 编号。
+	// 空串=未配置, GetAntigravityBuildCL 回退默认 DefaultAntigravityBuildCL("1015941558")。
+	antigravityBuildCL string
+	// onAntigravityVersionUpdated 是版本/CL嗅探更新时的回调通知函数。
+	onAntigravityVersionUpdated func(version, buildCL string)
 	// grokMaxConcurrency 是 Grok 号池单账号在途并发上限(单池单值,与 nvidiaMaxConcurrency 同口径);
 	// 0/负数=未配置,Get 时回退默认 10。
 	grokMaxConcurrency int

@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	// AntigravityIDEUserAgent 与官方 Antigravity IDE (language_server v2.29.0) 与上游通信的标头保持一致
-	AntigravityIDEUserAgent = "antigravity/hub/2.29.0 (aidev_client; os_type=windows; arch=amd64; cl=1013060670)"
+	// AntigravityIDEUserAgent 与官方 Antigravity IDE (language_server v2.29.1) 与上游通信的标头保持一致
+	AntigravityIDEUserAgent = "antigravity/hub/2.29.1 (aidev_client; os_type=windows; arch=amd64; cl=1015941558)"
 )
 
 type QuotaService struct {
