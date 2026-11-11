@@ -39,8 +39,6 @@ func NormalizePoolErrorRetry(cfg PoolErrorRetryConfig) PoolErrorRetryConfig {
 		out.SwitchCooldownSecs = 0
 	} else if out.SwitchCooldownSecs > MaxSwitchCooldownSecs {
 		out.SwitchCooldownSecs = MaxSwitchCooldownSecs
-	} else if out.SwitchCooldownSecs == 0 && cfg.Enabled {
-		out.SwitchCooldownSecs = DefaultSwitchCooldownSecs
 	}
 
 	if out.MaxRetries <= 0 {

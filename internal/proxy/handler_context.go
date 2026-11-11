@@ -70,6 +70,9 @@ type serveContext struct {
 	// retry-loop 写入,logRequestToTracker 读
 	currentAttemptIndex int
 
+	// retry-loop 写入,routing/retry-loop 读: 单次请求内已切出的失败账号 ID 集合
+	excludedAccountIDs map[string]bool
+
 	// routing 写入(poolAccount.Email),logRequestToTracker 内兜底 "直连"
 	allocatedAccount string
 
@@ -125,4 +128,75 @@ func (sc *serveContext) attemptRequest(attemptIndex int) (int, map[string][]stri
 		return fo.status, fo.headers, fo.body, fo.streamed, fo.err
 	}
 	return sc.classifyResponse(attemptIndex, ro, fo)
+}
+
+// markAccountExcluded 将失败并触发切号的账号记入本次请求级排除集合，
+// 防止即使未设置全局冷静期（如 SwitchCooldownSecs=0）时粘性路由立刻弹回同一账号。
+func (sc *serveContext) markAccountExcluded(accID string) {
+	if sc == nil || accID == "" {
+		return
+	}
+	if sc.excludedAccountIDs == nil {
+		sc.excludedAccountIDs = make(map[string]bool)
+	}
+	sc.excludedAccountIDs[accID] = true
+}
+
+// filterExcludedAccounts 从候选列表中剔除本次请求内已切出的失败账号。
+func (sc *serveContext) filterExcludedAccounts(accounts []*account.Account) []*account.Account {
+	if sc == nil || len(sc.excludedAccountIDs) == 0 || len(accounts) == 0 {
+		return accounts
+	}
+	filtered := make([]*account.Account, 0, len(accounts))
+	for _, a := range accounts {
+		if a != nil && !sc.excludedAccountIDs[a.ID] {
+			filtered = append(filtered, a)
+		}
+	}
+	return filtered
+}
+
+// selectCandidatePoolAccounts 统一计算指定通道下当前请求可用的候选账号列表与单账号并发上限。
+// 同时供 retry-loop 的粘性跟踪与 routeForAttempt 的正式选号复用，确保两者过滤口径完全一致。
+func (sc *serveContext) selectCandidatePoolAccounts(channel string) ([]*account.Account, int) {
+	available := sc.h.accountMgr.GetAvailableAccountsForChannel(channel, sc.currentModel)
+
+	isPoolEnabled := false
+	if channel == "project" {
+		isPoolEnabled = sc.h.accountMgr.GetProjectPoolMode()
+	} else if channel == "nvidia" {
+		isPoolEnabled = sc.h.accountMgr.GetNvidiaPoolMode()
+	} else {
+		isPoolEnabled = sc.h.accountMgr.GetPoolMode()
+	}
+	if !isPoolEnabled && len(available) > 0 {
+		available = []*account.Account{available[0]}
+	}
+
+	available = sc.filterExcludedAccounts(available)
+
+	var limit int
+	if channel == "project" {
+		limit = sc.h.accountMgr.GetProjectMaxConcurrency()
+	} else {
+		limit = sc.h.accountMgr.GetAntigravityMaxConcurrency()
+	}
+	return available, limit
+}
+
+// hasAlternativeAccount 判断除 currentAccID 外，当前通道号池是否还存在其他未排除的可用账号。
+func (sc *serveContext) hasAlternativeAccount(channel, currentAccID string) bool {
+	available, _ := sc.selectCandidatePoolAccounts(channel)
+	for _, a := range available {
+		if a != nil && a.ID != currentAccID {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAnyNonExcludedAccount 判断当前通道号池是否还存在任何可用且未被本次请求排除的账号。
+func (sc *serveContext) hasAnyNonExcludedAccount(channel string) bool {
+	available, _ := sc.selectCandidatePoolAccounts(channel)
+	return len(available) > 0
 }

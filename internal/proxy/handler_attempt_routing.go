@@ -42,30 +42,12 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 	}
 
 	if usePool {
-		available := sc.h.accountMgr.GetAvailableAccountsForChannel(poolChannel, sc.currentModel)
-
-		// 如果通道未开启负载均衡（池模式关闭），限制 available 仅包含第一个激活账号
-		// 确保所有会话和请求均使用同一个单账号
-		isPoolEnabled := false
-		if poolChannel == "project" {
-			isPoolEnabled = sc.h.accountMgr.GetProjectPoolMode()
-		} else {
-			isPoolEnabled = sc.h.accountMgr.GetPoolMode()
-		}
-		if !isPoolEnabled && len(available) > 0 {
-			available = []*account.Account{available[0]}
-		}
+		available, limit := sc.selectCandidatePoolAccounts(poolChannel)
 
 		// 并发限制:按上限过滤超限账号再喂 sessionRouter(保持 sticky/round-robin 语义,
 		// sessionRouter 既有「原绑定不可用→删除改绑」分支会永久迁移达上限的 sticky 号,零改共享组件)。
 		// 过滤集空则取在途并发最少的号允许超额降级(对齐用户「绝不硬拒」预期),
 		// 此时不再走 sessionRouter 绑定(超额临时号,不永久改绑到超额状态)。
-		var limit int
-		if poolChannel == "project" {
-			limit = sc.h.accountMgr.GetProjectMaxConcurrency()
-		} else {
-			limit = sc.h.accountMgr.GetAntigravityMaxConcurrency()
-		}
 		filtered := sc.h.accountMgr.FilterByConcurrency(available, limit)
 		if len(filtered) > 0 {
 			poolAccount = sc.h.sessionRouter.GetOrAssignAccount(sc.sessionKey, filtered, sc.h.logFn)

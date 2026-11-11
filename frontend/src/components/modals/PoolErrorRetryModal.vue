@@ -46,7 +46,7 @@
           class="w-32 px-3 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all text-center" />
         <span class="text-[12px] text-outline">秒 (0 表示不进入长期冷静期，仅本次单次请求内切号)</span>
       </div>
-      <div class="text-[11px] text-outline mt-0.5" data-i18n="poolErrorRetryCooldownSecsTip">切换账号时对原账号设置的冷却秒数 (0~86400，默认 60 秒，填 0 仅单次请求切号)</div>
+      <div class="text-[11px] text-outline mt-0.5" data-i18n="poolErrorRetryCooldownSecsTip">切换账号时对原账号设置的冷却秒数 (0~604800，默认 60 秒，填 0 仅在本次请求内切号避让)</div>
     </div>
 
     <!-- 当前号直接重试状态码 -->
@@ -59,7 +59,7 @@
         placeholder="例如 500, 502, 504"
         data-i18n-placeholder="poolErrorRetryRetryCodesPlaceholder"
         class="w-full px-3 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all font-mono" />
-      <div class="text-[11px] text-outline mt-0.5" data-i18n="poolErrorRetryRetryCodesTip">遇到这些报错状态码时，不更换账号，直接在当前账号上重试；支持逗号分隔与 5xx 简写</div>
+      <div class="text-[11px] text-outline mt-0.5" data-i18n="poolErrorRetryRetryCodesTip">遇到这些报错状态码时，先在当前账号原地重试；同号重试次数用完后若号池有其他可用账号将自动切换，支持逗号分隔与 5xx 简写</div>
     </div>
 
     <!-- 最大重试次数 -->
@@ -71,7 +71,7 @@
           class="w-32 px-3 py-2 bg-white dark:bg-[#151b2b] border border-outline-variant/40 rounded-lg text-[13px] text-on-surface dark:text-white focus:outline-none focus:border-primary transition-all text-center" />
         <span class="text-[12px] text-outline">次 (建议 1~5 次)</span>
       </div>
-      <div class="text-[11px] text-outline mt-0.5" data-i18n="poolErrorRetryMaxRetriesTip">单次请求遇到报错时的最大尝试次数 (1~10，默认 3 次)</div>
+      <div class="text-[11px] text-outline mt-0.5" data-i18n="poolErrorRetryMaxRetriesTip">开启自定义策略后将覆盖全局常规设置中的最大重试次数；单次请求遇到报错时的最大尝试次数 (1~10，默认 3 次)</div>
     </div>
 
     <template #footer>

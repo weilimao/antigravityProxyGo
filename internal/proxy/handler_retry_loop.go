@@ -32,6 +32,7 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 	var lastUsedAccount *account.Account
 	var lastAccountID string
 	var lastAccountFailCount int
+	var sameAccountStartAttempt int
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		select {
@@ -57,31 +58,11 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if usePoolForRetry {
-			available := sc.h.accountMgr.GetAvailableAccountsForChannel(retryChannel, sc.currentModel)
-
-			// 如果通道未开启负载均衡（池模式关闭），限制 available 仅包含第一个激活账号
-			// 确保所有会话和请求均使用同一个单账号
-			isPoolEnabled := false
-			if retryChannel == "project" {
-				isPoolEnabled = sc.h.accountMgr.GetProjectPoolMode()
-			} else if retryChannel == "nvidia" {
-				isPoolEnabled = sc.h.accountMgr.GetNvidiaPoolMode()
-			} else {
-				isPoolEnabled = sc.h.accountMgr.GetPoolMode()
-			}
-			if !isPoolEnabled && len(available) > 0 {
-				available = []*account.Account{available[0]}
-			}
+			available, retryLimit := sc.selectCandidatePoolAccounts(retryChannel)
 
 			// 并发过滤(与 routeForAttempt 同口径):避免二次 GetOrAssignAccount 的 lastUsedAccount
 			// 指向已过滤的超限账号 → 误冷却。本循环仅做 sticky 跟踪(供下方冷静期/Token 刷新寻址),
 			// 不 acquire/release(routeForAttempt+forwardForAttempt 已严格配对)。
-			var retryLimit int
-			if retryChannel == "project" {
-				retryLimit = sc.h.accountMgr.GetProjectMaxConcurrency()
-			} else {
-				retryLimit = sc.h.accountMgr.GetAntigravityMaxConcurrency()
-			}
 			filtered := sc.h.accountMgr.FilterByConcurrency(available, retryLimit)
 			if len(filtered) > 0 {
 				lastUsedAccount = sc.h.sessionRouter.GetOrAssignAccount(sc.sessionKey, filtered, nil)
@@ -94,8 +75,10 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 			if lastUsedAccount.ID != lastAccountID {
 				lastAccountID = lastUsedAccount.ID
 				lastAccountFailCount = 0
+				sameAccountStartAttempt = attempt
 			}
 		}
+		sameAccountLimit := computeSameAccountLimit(maxRetries, sameAccountStartAttempt)
 
 		status, headers, body, isStreamed, errAttempt := sc.attemptRequest(attempt)
 
@@ -166,6 +149,12 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 			errStr == "SERVER_ERROR" ||
 			errStr == "STREAM_INTERRUPTED"
 
+		targetChan := sc.h.getGoogleChannel()
+		if sc.targetHost == "aiplatform.googleapis.com" {
+			targetChan = "project"
+		}
+		switchedAccount := false
+
 		if lastUsedAccount != nil {
 			accId := lastUsedAccount.ID
 			email := lastUsedAccount.Email
@@ -174,6 +163,8 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 				sc.h.logFn(fmt.Sprintf("🚫 [模型能力学习] 账号 %s 不支持模型 %s (上游 404)，已标记 24h 模型级屏蔽并自动切换支持该模型的账号重试...", email, sc.currentModel))
 				sc.h.accountMgr.MarkAccountModelUnsupported(accId, sc.currentModel, 24*time.Hour)
 				sc.h.sessionRouter.UnbindSession(sc.sessionKey)
+				sc.markAccountExcluded(accId)
+				switchedAccount = true
 			}
 
 			if errAttempt.Error() == "TOKEN_EXPIRED" && sc.h.tokenRefresh != nil {
@@ -192,13 +183,19 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 				sc.h.logFn(fmt.Sprintf("❌ [负载均衡] 检测到账号 %s 积分已耗尽。标记冷静期并获取真实配额...", email))
 				sc.h.accountMgr.UpdateAccountCredits(accId, 0)
 				sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+5*60*1000, sc.currentModel)
+				if sc.hasAlternativeAccount(targetChan, accId) {
+					sc.markAccountExcluded(accId)
+					switchedAccount = true
+				}
 
-				go func(a *account.Account) {
-					res, qErr := sc.h.quotaFetch(a)
-					if qErr == nil && res != nil {
-						sc.h.accountMgr.UpdateAccountQuota(a.ID, res)
-					}
-				}(lastUsedAccount)
+				if sc.h.quotaFetch != nil {
+					go func(a *account.Account) {
+						res, qErr := sc.h.quotaFetch(a)
+						if qErr == nil && res != nil {
+							sc.h.accountMgr.UpdateAccountQuota(a.ID, res)
+						}
+					}(lastUsedAccount)
+				}
 			}
 
 			if errAttempt.Error() == "RATE_LIMITED" {
@@ -207,74 +204,65 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 				// 改挂 10s 短冷静期 + 异步 quotaFetch 真实配额兜底自愈:
 				//   - 几秒后 quotaFetch 回来若配额正常,冷静期被 UpdateAccountQuota->OnQuotaRestored 提前清零;
 				//   - 若配额真有问题则维持冷静期,下轮 retry 自然 reassign 切号。
-				// 这把 antigravity 个人号同 sessionKey 并发挤同号产生的 200ms~3s 瞬时拒绝,
-				// 与主请求占槽的并发争用隔离开,不再升级成 5 分钟拉黑 -> 子 agent 雪崩。
 				sc.h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 瞬时速率/并发限制 (RATE_LIMITED)。标记 10s 短冷静期并异步校准配额...", email))
 				sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+10*1000, sc.currentModel)
+				if sc.hasAlternativeAccount(targetChan, accId) {
+					sc.markAccountExcluded(accId)
+					switchedAccount = true
+				}
 
-				go func(a *account.Account) {
-					res, qErr := sc.h.quotaFetch(a)
-					if qErr == nil && res != nil {
-						sc.h.accountMgr.UpdateAccountQuota(a.ID, res)
-					}
-				}(lastUsedAccount)
+				if sc.h.quotaFetch != nil {
+					go func(a *account.Account) {
+						res, qErr := sc.h.quotaFetch(a)
+						if qErr == nil && res != nil {
+							sc.h.accountMgr.UpdateAccountQuota(a.ID, res)
+						}
+					}(lastUsedAccount)
+				}
 			}
 
 			if errAttempt.Error() == "CAPACITY_EXHAUSTED" {
-				sc.h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 模型容量耗尽 (CAPACITY_EXHAUSTED，服务超载或限频)。标记临时冷静期并同步获取真实配额...", email))
-				sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+5*60*1000, sc.currentModel)
-
-				res, qErr := sc.h.quotaFetch(lastUsedAccount)
-				if qErr == nil && res != nil {
-					sc.h.accountMgr.UpdateAccountQuota(lastUsedAccount.ID, res)
-					// 重新检查当前冷静期状态，确认是否清零
-					refreshedAcc := sc.h.accountMgr.GetAccountByID(lastUsedAccount.ID)
-					if refreshedAcc != nil {
-						cat := sc.h.accountMgr.GetModelCategory(sc.currentModel)
-						cooldown := int64(0)
-						if refreshedAcc.Cooldowns != nil {
-							if c, ok := refreshedAcc.Cooldowns[cat]; ok {
-								cooldown = c
-							}
-						} else {
-							cooldown = refreshedAcc.CooldownUntil
-						}
-						if cooldown == 0 {
-							sc.h.logFn(fmt.Sprintf("✅ [负载均衡] 账号 %s 额度充足，已同步解除冷静期，恢复可用状态。", email))
-						}
-					}
-				} else if qErr != nil {
-					sc.h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 同步刷新配额失败: %v", email, qErr))
+				lastAccountFailCount++
+				hasAlt := sc.hasAlternativeAccount(targetChan, accId)
+				if hasAlt && lastAccountFailCount >= sameAccountLimit {
+					sc.h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 连续遇到模型容量耗尽 (CAPACITY_EXHAUSTED) 达到 %d/%d 次。标记临时冷静期 (60s) 并切换账号重试...", email, lastAccountFailCount, sameAccountLimit))
+					sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+60*1000, sc.currentModel)
+					sc.markAccountExcluded(accId)
+					switchedAccount = true
+				} else {
+					sc.h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 模型容量耗尽 (CAPACITY_EXHAUSTED，第 %d/%d 次)。标记临时冷静期并同步获取真实配额...", email, lastAccountFailCount, sameAccountLimit))
+					sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+5*60*1000, sc.currentModel)
+					sc.syncVerifyQuotaOnCapacityExhausted(lastUsedAccount, email)
 				}
 			} else if errAttempt.Error() == "QUOTA_EXHAUSTED" {
 				sc.h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 配额已耗尽 (QUOTA_EXHAUSTED)。标记冷静期并获取真实配额...", email))
 				sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+5*60*1000, sc.currentModel)
+				if sc.hasAlternativeAccount(targetChan, accId) {
+					sc.markAccountExcluded(accId)
+					switchedAccount = true
+				}
 
-				go func(a *account.Account) {
-					res, qErr := sc.h.quotaFetch(a)
-					if qErr == nil && res != nil {
-						sc.h.accountMgr.UpdateAccountQuota(a.ID, res)
-					}
-				}(lastUsedAccount)
+				if sc.h.quotaFetch != nil {
+					go func(a *account.Account) {
+						res, qErr := sc.h.quotaFetch(a)
+						if qErr == nil && res != nil {
+							sc.h.accountMgr.UpdateAccountQuota(a.ID, res)
+						}
+					}(lastUsedAccount)
+				}
 			}
 
 			if errAttempt.Error() == "SERVER_ERROR" {
 				lastAccountFailCount++
-				if lastAccountFailCount >= 3 {
-					sc.h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 连续遇到服务器错误 (%d) 达到 %d 次。标记临时冷静期 (60s) 并切换账号重试...", email, status, lastAccountFailCount))
-					sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+60*1000, sc.currentModel)
-				} else {
-					sc.h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 遇到服务器错误 (%d)（第 %d/3 次）。不标记冷静期，将继续用当前账号尝试...", email, status, lastAccountFailCount))
+				if sc.handleThresholdRetrySwitch(accId, email, "服务器错误", status, lastAccountFailCount, sameAccountLimit, settings.DefaultSwitchCooldownSecs, targetChan) {
+					switchedAccount = true
 				}
 			}
 
 			if errAttempt.Error() == "STREAM_INTERRUPTED" {
 				lastAccountFailCount++
-				if lastAccountFailCount >= 3 {
-					sc.h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 连续遇到流式中断达到 %d 次。标记临时冷静期 (60s) 并切换账号重试...", email, lastAccountFailCount))
-					sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+60*1000, sc.currentModel)
-				} else {
-					sc.h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 遇到流式中断（第 %d/3 次）。不标记冷静期，将继续用当前账号尝试...", email, lastAccountFailCount))
+				if sc.handleThresholdRetrySwitch(accId, email, "流式中断", status, lastAccountFailCount, sameAccountLimit, settings.DefaultSwitchCooldownSecs, targetChan) {
+					switchedAccount = true
 				}
 			}
 
@@ -283,6 +271,8 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 				if poolErrorRule != nil && poolErrorRule.SwitchCooldownSecs >= 0 {
 					cooldownSecs = poolErrorRule.SwitchCooldownSecs
 				}
+				sc.markAccountExcluded(accId)
+				switchedAccount = true
 				if cooldownSecs > 0 {
 					sc.h.logFn(fmt.Sprintf("🔀 [负载均衡] 账号 %s 遇到报错 (%d) 命中自定义切号规则。设置临时冷静期 (%ds) 并切换下一个账号重试...", email, status, cooldownSecs))
 					sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+int64(cooldownSecs)*1000, sc.currentModel)
@@ -292,7 +282,14 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if isCustomRetry {
-				sc.h.logFn(fmt.Sprintf("🔁 [负载均衡] 账号 %s 遇到报错 (%d) 命中自定义重试规则。不设置冷静期，继续使用当前账号重试...", email, status))
+				lastAccountFailCount++
+				cooldownSecs := settings.DefaultSwitchCooldownSecs
+				if poolErrorRule != nil && poolErrorRule.SwitchCooldownSecs >= 0 {
+					cooldownSecs = poolErrorRule.SwitchCooldownSecs
+				}
+				if sc.handleThresholdRetrySwitch(accId, email, "自定义重试报错", status, lastAccountFailCount, sameAccountLimit, cooldownSecs, targetChan) {
+					switchedAccount = true
+				}
 			}
 
 			if errAttempt.Error() == "CAPACITY_EXHAUSTED" || errAttempt.Error() == "QUOTA_EXHAUSTED" {
@@ -301,42 +298,14 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 		}
 
 		shouldRetry := isRetryable && attempt < maxRetries
-		if errAttempt.Error() == "MODEL_NOT_SUPPORTED" {
-			targetChan := sc.h.getGoogleChannel()
-			if sc.targetHost == "aiplatform.googleapis.com" {
-				targetChan = "project"
-			}
-			avail := sc.h.accountMgr.GetAvailableAccountsForChannel(targetChan, sc.currentModel)
-			if len(avail) == 0 {
+		if errAttempt.Error() == "MODEL_NOT_SUPPORTED" || isCustomSwitch {
+			if !sc.hasAnyNonExcludedAccount(targetChan) {
 				shouldRetry = false
 			}
 		}
 		if errAttempt.Error() == "QUOTA_EXHAUSTED" {
-			// If all active accounts of the target channel are cooled down, do not retry further
-			targetChan := sc.h.getGoogleChannel()
-			if sc.targetHost == "aiplatform.googleapis.com" {
-				targetChan = "project"
-			}
-			hasAvail := false
-			for _, a := range sc.h.accountMgr.GetRawAccounts() {
-				if a.Provider != targetChan || !a.Enabled {
-					continue
-				}
-				cat := sc.h.accountMgr.GetModelCategory(sc.currentModel)
-				cooldown := int64(0)
-				if a.Cooldowns != nil {
-					if c, ok := a.Cooldowns[cat]; ok {
-						cooldown = c
-					}
-				} else {
-					cooldown = a.CooldownUntil
-				}
-				if cooldown == 0 || time.Now().UnixNano()/1e6 >= cooldown {
-					hasAvail = true
-					break
-				}
-			}
-			if !hasAvail {
+			// If all active accounts of the target channel are cooled down or excluded, do not retry further
+			if !sc.hasAnyNonExcludedAccount(targetChan) {
 				shouldRetry = false
 			}
 		}
@@ -345,12 +314,14 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 			jitter := rand.Float64() * 500.0
 			maxDelayMs := float64(sc.h.getMaxRetryDelay() * 1000)
 			delay := math.Min(float64(sc.h.statsTracker.GetTotalRetries()*1000), maxDelayMs) + jitter
-			if isCustomSwitch {
-				sc.h.logFn(fmt.Sprintf("%s 🔀 请求遇到状态码 %d，命中自定义切号规则。将在 %dms 后切换账号重试...", sc.logPrefix, status, int(delay)))
+			if isCustomSwitch || (isCustomRetry && switchedAccount) {
+				sc.h.logFn(fmt.Sprintf("%s 🔀 请求遇到状态码 %d，将在 %dms 后切换下一个账号重试...", sc.logPrefix, status, int(delay)))
 			} else if isCustomRetry {
 				sc.h.logFn(fmt.Sprintf("%s 🔁 请求遇到状态码 %d，命中自定义重试规则。将在 %dms 后当前账号重试...", sc.logPrefix, status, int(delay)))
-			} else {
+			} else if switchedAccount {
 				sc.h.logFn(fmt.Sprintf("%s ⚠️ 请求失败 (%s)。将在 %dms 后自动切换账号重试...", sc.logPrefix, errAttempt.Error(), int(delay)))
+			} else {
+				sc.h.logFn(fmt.Sprintf("%s ⚠️ 请求失败 (%s)。将在 %dms 后重试...", sc.logPrefix, errAttempt.Error(), int(delay)))
 			}
 
 			sc.h.errLogger.Log("RETRY", sc.targetPath, sc.currentModel, sc.allocatedAccount, attempt+1, errAttempt.Error())
@@ -390,4 +361,72 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// computeSameAccountLimit 根据总重试上限与当前账号切入位置计算本账号允许的连续同号重试阈值，
+// 保证不会因单个账号耗尽全部全局重试次数而丧失切换至下一可用账号的机会。
+func computeSameAccountLimit(maxRetries, sameAccountStartAttempt int) int {
+	if maxRetries <= 0 {
+		return 1
+	}
+	limit := 3
+	if remainingBudget := maxRetries - sameAccountStartAttempt; remainingBudget > 0 && remainingBudget < limit {
+		limit = remainingBudget
+	}
+	return limit
+}
+
+// syncVerifyQuotaOnCapacityExhausted 在遇到 CAPACITY_EXHAUSTED 且尚未达到切号阈值时同步查询配额，
+// 若账号自身配额确实正常则自动解除 5 分钟误冷却以支持原号短重试。
+func (sc *serveContext) syncVerifyQuotaOnCapacityExhausted(acc *account.Account, email string) {
+	if sc.h.quotaFetch == nil || acc == nil {
+		return
+	}
+	res, qErr := sc.h.quotaFetch(acc)
+	if qErr == nil && res != nil {
+		sc.h.accountMgr.UpdateAccountQuota(acc.ID, res)
+		refreshedAcc := sc.h.accountMgr.GetAccountByID(acc.ID)
+		if refreshedAcc != nil {
+			cat := sc.h.accountMgr.GetModelCategory(sc.currentModel)
+			cooldown := int64(0)
+			if refreshedAcc.Cooldowns != nil {
+				if c, ok := refreshedAcc.Cooldowns[cat]; ok {
+					cooldown = c
+				}
+			} else {
+				cooldown = refreshedAcc.CooldownUntil
+			}
+			if cooldown == 0 {
+				sc.h.logFn(fmt.Sprintf("✅ [负载均衡] 账号 %s 额度充足，已同步解除冷静期，恢复可用状态。", email))
+			}
+		}
+	} else if qErr != nil {
+		sc.h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 同步刷新配额失败: %v", email, qErr))
+	}
+}
+
+// handleThresholdRetrySwitch 统一处理同号连续失败（SERVER_ERROR / STREAM_INTERRUPTED / 自定义重试）后的阈值切号判定：
+// 达到同号重试上限且号池仍有其他可用账号时，挂临时冷静期（若 >0）并加入本请求排除集合，返回 true；
+// 若号池无其他可用账号则保留原号继续完成剩余重试机会，返回 false。
+func (sc *serveContext) handleThresholdRetrySwitch(accId, email, errKind string, status, failCount, sameAccountLimit, cooldownSecs int, targetChan string) bool {
+	statusDesc := ""
+	if status > 0 {
+		statusDesc = fmt.Sprintf(" (%d)", status)
+	}
+	if failCount >= sameAccountLimit {
+		if sc.hasAlternativeAccount(targetChan, accId) {
+			if cooldownSecs > 0 {
+				sc.h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 连续遇到%s%s达到 %d/%d 次。标记临时冷静期 (%ds) 并切换账号重试...", email, errKind, statusDesc, failCount, sameAccountLimit, cooldownSecs))
+				sc.h.accountMgr.SetAccountCooldown(accId, time.Now().UnixNano()/1e6+int64(cooldownSecs)*1000, sc.currentModel)
+			} else {
+				sc.h.logFn(fmt.Sprintf("❌ [负载均衡] 账号 %s 连续遇到%s%s达到 %d/%d 次。不设全局冷静期，本次请求内切换下一账号重试...", email, errKind, statusDesc, failCount, sameAccountLimit))
+			}
+			sc.markAccountExcluded(accId)
+			return true
+		}
+		sc.h.logFn(fmt.Sprintf("⚠️ [负载均衡] 账号 %s 连续遇到%s%s达到 %d/%d 次，当前号池无其他可用账号，将继续用当前账号尝试...", email, errKind, statusDesc, failCount, sameAccountLimit))
+		return false
+	}
+	sc.h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 遇到%s%s（第 %d/%d 次）。不标记冷静期，将继续用当前账号尝试...", email, errKind, statusDesc, failCount, sameAccountLimit))
+	return false
 }

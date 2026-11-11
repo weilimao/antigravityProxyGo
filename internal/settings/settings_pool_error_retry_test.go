@@ -45,6 +45,17 @@ func TestPoolErrorRetry_Normalize(t *testing.T) {
 	if normalized.MaxRetries != 10 {
 		t.Errorf("expected MaxRetries 10, got %d", normalized.MaxRetries)
 	}
+
+	// 显式配置 SwitchCooldownSecs=0 且 Enabled=true 时应保留 0（仅单次请求内切号，不强制改回 60）
+	zeroCD := NormalizePoolErrorRetry(PoolErrorRetryConfig{
+		Enabled:            true,
+		SwitchCodes:        []int{503},
+		SwitchCooldownSecs: 0,
+		MaxRetries:         3,
+	})
+	if zeroCD.SwitchCooldownSecs != 0 {
+		t.Errorf("expected explicit SwitchCooldownSecs 0 to be preserved, got %d", zeroCD.SwitchCooldownSecs)
+	}
 }
 
 func TestPoolErrorRetry_MatchAction(t *testing.T) {

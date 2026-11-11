@@ -105,8 +105,12 @@ export function closePoolErrorRetryModal(): void {
 export function submitPoolErrorRetry(): void {
     const swCodes = parseStatusCodes(poolErrorRetrySwitchCodesText.value);
     const rtCodes = parseStatusCodes(poolErrorRetryRetryCodesText.value);
-    const cdSecs = Math.max(0, Math.min(86400 * 7, Number(poolErrorRetryCooldownSecs.value) || 60));
-    const retries = Math.max(1, Math.min(10, Number(poolErrorRetryMaxRetries.value) || 3));
+    const rawCdStr = String(poolErrorRetryCooldownSecs.value ?? '').trim();
+    const rawCd = rawCdStr === '' ? 60 : Number(rawCdStr);
+    const cdSecs = Math.max(0, Math.min(86400 * 7, Number.isFinite(rawCd) ? rawCd : 60));
+    const rawRetriesStr = String(poolErrorRetryMaxRetries.value ?? '').trim();
+    const rawRetries = rawRetriesStr === '' ? 3 : Number(rawRetriesStr);
+    const retries = Math.max(1, Math.min(10, Number.isFinite(rawRetries) ? Math.floor(rawRetries) : 3));
 
     const payload: PoolErrorRetryData = {
         enabled: !!poolErrorRetryEnabled.value,
