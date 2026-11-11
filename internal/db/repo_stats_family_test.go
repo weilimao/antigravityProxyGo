@@ -36,6 +36,7 @@ func TestRequestLog_FamilyRoundTrip(t *testing.T) {
 		Path:            "/nvidia/v1/chat/completions",
 		SessionID:       "tok-1",
 		Family:          "nvidia",
+		HitModel:        "meta/llama-3.1-70b-instruct",
 		ReasoningEffort: "max",
 	}
 	if err := InsertRequestLog(nv); err != nil {
@@ -57,6 +58,7 @@ func TestRequestLog_FamilyRoundTrip(t *testing.T) {
 		Host:       "daily-cloudcode-pa.googleapis.com",
 		Path:       "/v1internal:streamGenerateContent",
 		Family:     "", // gemini/claude 直连: 空
+		HitModel:   "gemini-3.8-flash-n",
 	}
 	if err := InsertRequestLog(legacy); err != nil {
 		t.Fatalf("InsertRequestLog(legacy): %v", err)
@@ -83,6 +85,8 @@ func TestRequestLog_FamilyRoundTrip(t *testing.T) {
 		}
 	} else if got.ReasoningEffort != "max" {
 		t.Errorf("nvidia reasoning_effort round-trip = %q, want %q", got.ReasoningEffort, "max")
+	} else if got.HitModel != "meta/llama-3.1-70b-instruct" {
+		t.Errorf("nvidia hit_model round-trip = %q, want %q", got.HitModel, "meta/llama-3.1-70b-instruct")
 	}
 	if got := byReq["gem-rt-1"]; got == nil || got.Family != "" {
 		if got == nil {
@@ -92,6 +96,8 @@ func TestRequestLog_FamilyRoundTrip(t *testing.T) {
 		}
 	} else if got.ReasoningEffort != "" {
 		t.Errorf("legacy reasoning_effort round-trip = %q, want empty", got.ReasoningEffort)
+	} else if got.HitModel != "gemini-3.8-flash-n" {
+		t.Errorf("gemini hit_model round-trip = %q, want %q", got.HitModel, "gemini-3.8-flash-n")
 	}
 }
 

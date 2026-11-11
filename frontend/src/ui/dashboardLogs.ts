@@ -130,6 +130,8 @@ export interface LogsRowSlot {
     path: HTMLTableCellElement;
     sessionId: HTMLTableCellElement;
     modelName: HTMLSpanElement;
+    hitModelRow: HTMLDivElement;
+    hitModelText: HTMLSpanElement;
     reasoningBadge: HTMLSpanElement;
     nvidiaBadge: HTMLSpanElement;
     account: HTMLSpanElement;
@@ -196,8 +198,19 @@ export function buildLogsRowSlot(): LogsRowSlot {
     modelNameRow.appendChild(modelName);
     modelNameRow.appendChild(reasoningBadge);
     modelNameRow.appendChild(nvidiaBadge);
+
+    const hitModelRow = document.createElement('div');
+    hitModelRow.className = 'flex items-center gap-1 min-w-0';
+    hitModelRow.style.display = 'none';
+    const hitBadge = makeSpan('text-[8.5px] px-1 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-sans font-medium flex-none');
+    hitBadge.textContent = '命中';
+    const hitModelText = makeSpan('text-[10px] text-emerald-600 dark:text-emerald-400 font-data-mono truncate font-medium');
+    hitModelRow.appendChild(hitBadge);
+    hitModelRow.appendChild(hitModelText);
+
     const account = makeSpan('text-[10px] text-slate-400 dark:text-slate-500 font-data-mono truncate');
     modelDiv.appendChild(modelNameRow);
+    modelDiv.appendChild(hitModelRow);
     modelDiv.appendChild(account);
     modelCell.appendChild(modelDiv);
 
@@ -242,7 +255,7 @@ export function buildLogsRowSlot(): LogsRowSlot {
     tr.appendChild(statusCell);
     tr.appendChild(btnCell);
 
-    return { tr, timestamp, method, host, methodHostCell, path, sessionId, modelName, reasoningBadge, nvidiaBadge, account, modelCell, inTokens, outTokens, cost, responseTime, duration, hitRate, cacheBadge, httpCode, viewBtn };
+    return { tr, timestamp, method, host, methodHostCell, path, sessionId, modelName, hitModelRow, hitModelText, reasoningBadge, nvidiaBadge, account, modelCell, inTokens, outTokens, cost, responseTime, duration, hitRate, cacheBadge, httpCode, viewBtn };
 }
 
 export function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
@@ -265,7 +278,24 @@ export function updateLogsRowSlot(slot: LogsRowSlot, log: any, dict: any) {
     slot.sessionId.setAttribute('title', log.sessionId || '-');
 
     slot.modelName.textContent = log.model || '-';
-    slot.modelCell.setAttribute('title', formatDisplayModel(log.model, log.reasoningEffort));
+
+    // 命中模型徽章 (上游真实命中版本, 如 gemini-3.8-flash-n)
+    if (log.hitModel) {
+        slot.hitModelRow.style.display = 'flex';
+        slot.hitModelText.textContent = log.hitModel;
+        slot.hitModelText.setAttribute('title', `上游命中模型: ${log.hitModel}`);
+    } else {
+        slot.hitModelRow.style.display = 'none';
+    }
+
+    const titleParts = [`入站模型: ${formatDisplayModel(log.model, log.reasoningEffort)}`];
+    if (log.hitModel) {
+        titleParts.push(`命中模型: ${log.hitModel}`);
+    }
+    if (log.account) {
+        titleParts.push(`分发账号: ${log.account}`);
+    }
+    slot.modelCell.setAttribute('title', titleParts.join('\n'));
 
     // 思考等级微标签 (high / max / low 等)
     if (log.reasoningEffort && log.reasoningEffort !== 'none') {

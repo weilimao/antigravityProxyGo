@@ -36,8 +36,11 @@
             <span class="text-white font-medium font-mono">{{ item?.account || '-' }}</span>
           </div>
           <div>
-            <span class="text-slate-500 text-10px block">命中模型</span>
+            <span class="text-slate-500 text-10px block">入站 / 命中模型</span>
             <span class="text-indigo-300 font-mono font-bold">{{ item?.model || '-' }}</span>
+            <span v-if="item?.hitModel" class="text-emerald-400 font-mono text-[11px] block mt-0.5">
+              命中: {{ item.hitModel }}
+            </span>
           </div>
           <div>
             <span class="text-slate-500 text-10px block">响应耗时 / TTFT</span>

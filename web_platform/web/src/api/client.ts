@@ -316,6 +316,7 @@ export interface LogItem {
   path: string
   sessionId: string
   model: string
+  hitModel?: string
   account: string
   inTokens: number
   outTokens: number
@@ -354,6 +355,7 @@ export interface LogSummary {
 
 export interface ModelPerfStat {
   model: string
+  hitModel?: string
   count: number
   avgDurationMs: number
   avgTtftMs: number

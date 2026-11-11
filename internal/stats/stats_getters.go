@@ -93,6 +93,18 @@ func (t *Tracker) GetRecentRequestHeaders() interface{} {
 	return t.requests[0].RequestHeaders
 }
 
+// GetRecentRequestHitModel 轻量级读取最近一条内存请求日志的 HitModel, 供单测端到端
+// 断言命中真实模型版本落库链路(logCtx.HitModel → stats.RequestLog.HitModel)真实闭环。
+// 无日志时返回 ""。读锁内取值, 不回切片别名。
+func (t *Tracker) GetRecentRequestHitModel() string {
+	t.RLock()
+	defer t.RUnlock()
+	if len(t.requests) == 0 {
+		return ""
+	}
+	return t.requests[0].HitModel
+}
+
 // GetRecentRequestReasoningEffort 轻量级读取最近一条内存请求日志的 ReasoningEffort, 供单测端到端
 // 断言命中思考等级落库链路(logCtx.ReasoningEffort → stats.RequestLog.ReasoningEffort)
 // 真实闭环而非恒 ""(前端「模型」列命中思考等级后缀渲染的口径)。

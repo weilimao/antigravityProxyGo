@@ -421,9 +421,11 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// 成功路径统一收尾记账: 从尾部环形缓冲一次解析 usageMetadata(流式/非流式各字段同帧权威)。
+	// 成功路径统一收尾记账: 从尾部环形缓冲一次解析 usageMetadata 与命中模型 modelVersion(流式/非流式各字段同帧权威)。
 	if finalResp.StatusCode == http.StatusOK {
-		if in, out, cached := googleUsageFromRaw(tw.Bytes()); in > 0 || out > 0 {
+		rawTail := tw.Bytes()
+		logCtx.HitModel = googleModelVersionFromRaw(rawTail)
+		if in, out, cached := googleUsageFromRaw(rawTail); in > 0 || out > 0 {
 			h.recordGoogleUsage(userSession, currentModel, in, out, cached, finalPoolAccount, logCtx)
 		}
 	}

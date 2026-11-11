@@ -77,6 +77,7 @@ type serveContext struct {
 	inTokens     int
 	outTokens    int
 	cachedTokens int
+	hitModel     string
 
 	// logRequestToTracker 经 h.logRequestToTracker(&logged, ...) 读写
 	logged bool
@@ -106,6 +107,7 @@ func (sc *serveContext) logRequestToTracker(statusCode int, errDetail string) {
 		sc.startTime,
 		sc.targetHost,
 		sc.firstByteRec,
+		sc.hitModel,
 	)
 }
 

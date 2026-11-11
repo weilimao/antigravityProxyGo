@@ -59,6 +59,8 @@ type googleLogCtx struct {
 	// stats.RequestLog.RequestHeaders,使前端「请求参数详情」弹窗能展示入站请求头而非
 	// 「无请求头数据」兜底。
 	ReqHeaders interface{}
+	// HitModel 记录上游响应中真正返回命中的模型版本(如 modelVersion: "gemini-3.8-flash-n")。
+	HitModel string
 }
 
 // googleReqLogSeq 是 Antigravity 直连请求日志(落点5)的全局原子递增序列, 语义与
@@ -162,6 +164,7 @@ func (h *APICompatHandler) recordGoogleUsage(userSession *RelaySession, model st
 			Host:           logCtx.Host,
 			Path:           logCtx.Path,
 			Model:          model,
+			HitModel:       logCtx.HitModel,
 			InTokens:       input,
 			OutTokens:      output,
 			CachedTokens:   cached,
@@ -233,7 +236,17 @@ var (
 	googRePromptTokens    = regexp.MustCompile(`"promptTokenCount"\s*:\s*(\d+)`)
 	googReCandidateTokens = regexp.MustCompile(`"candidatesTokenCount"\s*:\s*(\d+)`)
 	googReCachedTokens    = regexp.MustCompile(`"cachedContentTokenCount"\s*:\s*(\d+)`)
+	googReModelVersion    = regexp.MustCompile(`"modelVersion"\s*:\s*"([^"]+)"`)
 )
+
+// googleModelVersionFromRaw 从响应体字节中解析上游真正命中的模型版本 (modelVersion)。
+// 流式 SSE 或非流式 JSON 下取最后一个匹配 (与 usageMetadata 同口径)。未解析到返回空串。
+func googleModelVersionFromRaw(raw []byte) string {
+	if matches := googReModelVersion.FindAllSubmatch(raw, -1); len(matches) > 0 {
+		return string(matches[len(matches)-1][1])
+	}
+	return ""
+}
 
 // googleUsageFromRaw 从响应体字节中解析用量 (in/out/cached)。
 // findLastInt 复刻 proxy.classifyResponse 的取末个匹配语义: 流式 SSE 每帧都会带 usageMetadata,

@@ -361,6 +361,7 @@ type AdminLogItem struct {
 	CacheStatus     string  `json:"cacheStatus"`
 	StatusCode      int     `json:"statusCode"`
 	Family          string  `json:"family"`
+	HitModel        string  `json:"hitModel,omitempty"`
 	ReasoningEffort string  `json:"reasoningEffort"`
 	RequestBody     string  `json:"requestBody,omitempty"`
 	RequestHeaders  string  `json:"requestHeaders,omitempty"`

@@ -52,6 +52,10 @@
         <span class="text-outline" data-i18n="reqAccount">分发账号</span>
         <span class="font-data-mono text-on-surface dark:text-white font-semibold" id="modalAccount">-</span>
       </div>
+      <div class="flex flex-col gap-1 hidden" id="modalHitModelWrapper">
+        <span class="text-outline" data-i18n="colHitModel">命中模型</span>
+        <span class="font-data-mono text-emerald-600 dark:text-emerald-400 font-semibold" id="modalHitModel">-</span>
+      </div>
     </div>
     <!-- JSON 双栏区：左=请求头 右=请求体 -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3 flex-1 min-h-0">

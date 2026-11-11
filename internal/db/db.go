@@ -96,6 +96,8 @@ func runMigrations(db *sql.DB, dataDir string) error {
 		-- 上游的值, 非客户端原始意图档)。供前端请求日志「模型」列追加 (档) 后缀展示。
 		-- 空串=客户端未开思考 / 全局关 / 上游无 reasoning_effort 概念(gemini/claude 直连)。
 		reasoning_effort TEXT NOT NULL DEFAULT '',
+		-- hit_model: 上游真正返回命中的模型版本(如 modelVersion: "gemini-3.8-flash-n")。
+		hit_model TEXT NOT NULL DEFAULT '',
 		-- request_body/request_headers: 本地模式请求报文(Truncate 截断后的 JSON 文本, 空串=未存)。
 		-- 仅最新 N 条保留(由 PruneLocalRequestBodies 依 stats.MaxRequestLogs 口径周期性置空老行),
 		-- 供「查看详情」弹窗跨重启可读; 标量历史行永久保留(hourly trends 重建依赖)。
@@ -207,6 +209,8 @@ func runMigrations(db *sql.DB, dataDir string) error {
 	// 置于 first_byte_ms 之后, 与 repo_stats / repo_query 的 SELECT/INSERT 列序一致; 幂等 ALTER 兼容
 	// 既有库(列已存在时 SQLite 返回 "duplicate column" 错误, 忽略即可)。旧数据默认空串 = 不渲染后缀。
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT '';`)
+	// hit_model: 上游真正返回命中的模型版本(如 modelVersion: "gemini-3.8-flash-n"), 幂等 ALTER。
+	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN hit_model TEXT NOT NULL DEFAULT '';`)
 	// request_body/request_headers: 本地模式请求报文落库(替代 stats.json 全量持久化的 12MB JSON 膨胀)。
 	// 幂等 ALTER 兼容既有库(列已存在时 "duplicate column" 错误, 忽略即可)。旧数据默认空串。
 	_, _ = db.Exec(`ALTER TABLE request_logs ADD COLUMN request_body TEXT NOT NULL DEFAULT '';`)

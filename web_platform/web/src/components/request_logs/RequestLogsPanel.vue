@@ -203,6 +203,10 @@
             <td>
               <div class="flex flex-col gap-0.5">
                 <span class="font-mono font-medium text-white">{{ item.model }}</span>
+                <div v-if="item.hitModel" class="flex items-center gap-1 text-[10px] text-emerald-400 font-mono">
+                  <span class="px-1 py-0.2 rounded bg-emerald-500/10 border border-emerald-500/20 text-[9px] font-sans">命中</span>
+                  <span>{{ item.hitModel }}</span>
+                </div>
                 <span v-if="item.path" class="text-[10px] font-mono text-slate-500 truncate max-w-xs">{{ item.path }}</span>
               </div>
             </td>

@@ -94,6 +94,9 @@ type RequestLog struct {
 	// 前端可据此为 NVIDIA 行渲染专属 badge/筛选,既可合并入主列表又便于按族区分,
 	// 不污染 NVIDIA 专用趋势桶(nvidiaTrends)与综合趋势桶(trends)的物理隔离语义。
 	Family string `json:"family"`
+	// HitModel 记录上游真正返回命中的模型版本(如 Gemini 上游响应体中的 modelVersion: "gemini-3.8-flash-n")。
+	// 空串表示上游未返回该字段或旧日志未采集。
+	HitModel string `json:"hitModel,omitempty"`
 	// ReasoningEffort 记录本次请求「命中上游」的思考等级(low/medium/high/max/none 等)。
 	// 取映射折叠后真正发给上游的值(非客户端原始意图档),故:
 	//   - NVIDIA-NIM deepseek 模式 low/medium 折叠成 high → 此处记 "high";max → "max";
@@ -135,6 +138,9 @@ type RequestLogLite struct {
 	// Family 与 RequestLog.Family 同义, 轻量投影随之下行到 IPC 热路径,
 	// 供前端按族渲染 badge/筛选, 不携带 requestBody/requestHeaders(按需经 GetRequestDetails 拉取)。
 	Family string `json:"family"`
+	// HitModel 与 RequestLog.HitModel 同义, 轻量投影随之下行到 IPC 热路径,
+	// 供前端在请求日志展示上游命中的真实模型版本(如 [命中] gemini-3.8-flash-n)。空串 → 不渲染。
+	HitModel string `json:"hitModel,omitempty"`
 	// ReasoningEffort 与 RequestLog.ReasoningEffort 同义, 轻量投影随之下行到 IPC 热路径,
 	// 供前端在请求日志「模型」列追加 (档) 后缀展示命中思考等级。空串 → 不渲染后缀。
 	ReasoningEffort string `json:"reasoningEffort"`
@@ -148,6 +154,7 @@ func toRequestLogLite(r *RequestLog) RequestLogLite {
 		Host:            r.Host,
 		Path:            r.Path,
 		Model:           r.Model,
+		HitModel:        r.HitModel,
 		InTokens:        r.InTokens,
 		OutTokens:       r.OutTokens,
 		CachedTokens:    r.CachedTokens,

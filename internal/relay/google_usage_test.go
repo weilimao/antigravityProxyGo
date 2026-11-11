@@ -62,6 +62,33 @@ func TestGoogleTailWriter_KeepsTail(t *testing.T) {
 	}
 }
 
+// TestGoogleModelVersionFromRaw 验证上游响应中 modelVersion (命中模型) 的精确解析
+func TestGoogleModelVersionFromRaw(t *testing.T) {
+	// 场景 1: 用户实际线上流式 SSE 采样帧
+	userSSEChunk := []byte(`data: {"response": {"candidates": [{"content": {"role": "model","parts": [{"thought": true,"text": "test"}]}}],"usageMetadata": {"promptTokenCount": 309508,"totalTokenCount": 309681,"thoughtsTokenCount": 173},"modelVersion": "gemini-3.8-flash-n","responseId": "0-fzaumiEdfS0_gP9d-DOQ"},"traceId": "f0fbee032726ef3a","metadata": {}}`)
+	if got := googleModelVersionFromRaw(userSSEChunk); got != "gemini-3.8-flash-n" {
+		t.Errorf("googleModelVersionFromRaw(userSSEChunk) = %q, want \"gemini-3.8-flash-n\"", got)
+	}
+
+	// 场景 2: 非流式 JSON 响应
+	jsonResp := []byte(`{"response": {"candidates": [], "modelVersion": "gemini-2.5-pro", "responseId": "123"}}`)
+	if got := googleModelVersionFromRaw(jsonResp); got != "gemini-2.5-pro" {
+		t.Errorf("googleModelVersionFromRaw(jsonResp) = %q, want \"gemini-2.5-pro\"", got)
+	}
+
+	// 场景 3: 冒号周围有格式化空格
+	spaced := []byte(`"modelVersion"  :  "gemini-3.8-flash-custom"`)
+	if got := googleModelVersionFromRaw(spaced); got != "gemini-3.8-flash-custom" {
+		t.Errorf("googleModelVersionFromRaw(spaced) = %q, want \"gemini-3.8-flash-custom\"", got)
+	}
+
+	// 场景 4: 响应中无 modelVersion
+	noMv := []byte(`{"response": {"candidates": []}}`)
+	if got := googleModelVersionFromRaw(noMv); got != "" {
+		t.Errorf("googleModelVersionFromRaw(noMv) = %q, want empty string", got)
+	}
+}
+
 // TestGoogleTailWriter_TruncatesHugeResponse 验证超过容量上限时只保留最近 N 字节
 // (恒占内存 ≤ maxLen, 超大非流式 JSON 也不 OOM), 且尾部 usage 仍在保留窗口内可解析。
 func TestGoogleTailWriter_TruncatesHugeResponse(t *testing.T) {
@@ -119,6 +146,7 @@ func TestRecordGoogleUsage_FiresAllLandings_WhenTrackerInjected(t *testing.T) {
 		StatusCode:   200,
 		StartTs:      start,
 		FirstByteRec: rec,
+		HitModel:     "gemini-3.8-flash-n",
 	}
 	handler.recordGoogleUsage(userSession, "gemini-3-flash-agent", 100, 30, 40000, acc, logCtx)
 
@@ -130,6 +158,9 @@ func TestRecordGoogleUsage_FiresAllLandings_WhenTrackerInjected(t *testing.T) {
 	}
 	if got := gt.GetRequestLogCount(); got != beforeLogs+1 {
 		t.Errorf("落点5 not fired: request log count = %d, want %d (delta +1)", got, beforeLogs+1)
+	}
+	if got := gt.GetRecentRequestHitModel(); got != "gemini-3.8-flash-n" {
+		t.Errorf("落点5 HitModel = %q, want \"gemini-3.8-flash-n\"", got)
 	}
 
 	pools := gt.GetPoolStatsCopy()
@@ -247,11 +278,11 @@ func TestHandleV1Internal_DirectSuccess_RecordsUsage(t *testing.T) {
 		if !strings.Contains(url, "daily-cloudcode-pa.googleapis.com") {
 			t.Errorf("unexpected target url: %s", url)
 		}
-		// 合法 200: 末尾带 usageMetadata(cached 命中), 无任何报错/权限头。
+		// 合法 200: 末尾带 usageMetadata(cached 命中) 与 modelVersion, 无任何报错/权限头。
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(`{"candidates":[{"content":{"parts":[{"text":"hi"}]}}],"usageMetadata":{"promptTokenCount":222,"candidatesTokenCount":4,"cachedContentTokenCount":150}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"candidates":[{"content":{"parts":[{"text":"hi"}]}}],"usageMetadata":{"promptTokenCount":222,"candidatesTokenCount":4,"cachedContentTokenCount":150},"modelVersion":"gemini-3.8-flash-n"}`)),
 		}, nil
 	}
 	defer func() { handler.finalRequester = origRequester }()
@@ -290,6 +321,9 @@ func TestHandleV1Internal_DirectSuccess_RecordsUsage(t *testing.T) {
 	}
 	if last := gt.GetRecentRequestCacheStatus(); last != "HIT" {
 		t.Errorf("端到端 CacheStatus = %q, want \"HIT\" (cached=150)", last)
+	}
+	if gotHit := gt.GetRecentRequestHitModel(); gotHit != "gemini-3.8-flash-n" {
+		t.Errorf("端到端 HitModel = %q, want \"gemini-3.8-flash-n\"", gotHit)
 	}
 	// 入站请求头/请求体端到端落库:handleV1Internal 装配 logCtx 时注入 ReqBody/ReqHeaders,
 	// 经 recordGoogleUsage 落到 stats.RequestLog, 使前端「请求参数详情」弹窗能展示入站

@@ -25,6 +25,7 @@ var (
 	rePromptTokens    = regexp.MustCompile(`"promptTokenCount"\s*:\s*(\d+)`)
 	reCandidateTokens = regexp.MustCompile(`"candidatesTokenCount"\s*:\s*(\d+)`)
 	reCachedTokens    = regexp.MustCompile(`"cachedContentTokenCount"\s*:\s*(\d+)`)
+	reModelVersion    = regexp.MustCompile(`"modelVersion"\s*:\s*"([^"]+)"`)
 	// reNonEmptyText 匹配 "text": " 后跟至少一个非引号字符，用于判断响应是否含非空文本。
 	// 模型返回 functionCall 时 text 常为空，属于正常工具调用响应，不应判为空响应。
 	reNonEmptyText = regexp.MustCompile(`"text"\s*:\s*"[^"]`)
@@ -224,6 +225,7 @@ func (h *ProxyHandler) logRequestToTracker(
 	startTime time.Time,
 	targetHost string,
 	firstByteRec *stats.FirstByteRecorder,
+	hitModel string,
 ) {
 	if *logged {
 		return
@@ -299,6 +301,7 @@ func (h *ProxyHandler) logRequestToTracker(
 		Host:           targetHost,
 		Path:           logPath,
 		Model:          currentModel,
+		HitModel:       hitModel,
 		Account:        allocatedAccount,
 		InTokens:       inTokens,
 		OutTokens:      outTokens,

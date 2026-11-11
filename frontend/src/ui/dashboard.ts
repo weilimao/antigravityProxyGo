@@ -130,6 +130,7 @@ export function renderLogsTable() {
         return (log.host || '').toLowerCase().includes(q) ||
             (log.path || '').toLowerCase().includes(q) ||
             (log.model || '').toLowerCase().includes(q) ||
+            (log.hitModel || '').toLowerCase().includes(q) ||
             (log.account || '').toLowerCase().includes(q) ||
             (log.sessionId || '').toLowerCase().includes(q) ||
             (log.method || '').toLowerCase().includes(q);

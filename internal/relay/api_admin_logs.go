@@ -36,6 +36,7 @@ type AdminLogItem struct {
 	CacheStatus     string  `json:"cacheStatus"`
 	StatusCode      int     `json:"statusCode"`
 	Family          string  `json:"family"`
+	HitModel        string  `json:"hitModel,omitempty"`
 	ReasoningEffort string  `json:"reasoningEffort"`
 	RequestBody     string  `json:"requestBody,omitempty"`
 	RequestHeaders  string  `json:"requestHeaders,omitempty"`
@@ -337,7 +338,7 @@ func (h *APIHandler) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 			id, req_id, timestamp, mode, user_id, model_name,
 			in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost,
 			duration_ms, first_byte_ms, status_code,
-			method, host, path, session_id, family, reasoning_effort, cache_status
+			method, host, path, session_id, family, hit_model, reasoning_effort, cache_status
 		FROM request_logs
 		WHERE %s
 		ORDER BY id DESC
@@ -354,7 +355,7 @@ func (h *APIHandler) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 				&item.ID, &item.ReqID, &item.Timestamp, &rawMode, &item.Account, &item.Model,
 				&item.InTokens, &item.OutTokens, &item.CachedTokens, &item.Cost, &item.InputCost, &item.OutputCost, &item.CachedCost,
 				&item.DurationMs, &item.FirstByteMs, &item.StatusCode,
-				&item.Method, &item.Host, &item.Path, &item.SessionID, &item.Family, &item.ReasoningEffort, &item.CacheStatus,
+				&item.Method, &item.Host, &item.Path, &item.SessionID, &item.Family, &item.HitModel, &item.ReasoningEffort, &item.CacheStatus,
 			); err == nil {
 				if t, parseErr := time.Parse(time.RFC3339, item.Timestamp); parseErr == nil {
 					item.Timestamp = t.Format(time.RFC3339)
@@ -433,7 +434,7 @@ func (h *APIHandler) handleAdminLogDetail(w http.ResponseWriter, r *http.Request
 				id, req_id, timestamp, mode, user_id, model_name,
 				in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost,
 				duration_ms, first_byte_ms, status_code,
-				method, host, path, session_id, family, reasoning_effort,
+				method, host, path, session_id, family, hit_model, reasoning_effort,
 				request_body, request_headers, cache_status
 			FROM request_logs
 			WHERE id = ?
@@ -445,7 +446,7 @@ func (h *APIHandler) handleAdminLogDetail(w http.ResponseWriter, r *http.Request
 				id, req_id, timestamp, mode, user_id, model_name,
 				in_tokens, out_tokens, cached_tokens, cost, input_cost, output_cost, cached_cost,
 				duration_ms, first_byte_ms, status_code,
-				method, host, path, session_id, family, reasoning_effort,
+				method, host, path, session_id, family, hit_model, reasoning_effort,
 				request_body, request_headers, cache_status
 			FROM request_logs
 			WHERE req_id = ?
@@ -458,7 +459,7 @@ func (h *APIHandler) handleAdminLogDetail(w http.ResponseWriter, r *http.Request
 		&l.ID, &l.ReqID, &l.Timestamp, &l.Mode, &l.UserID, &l.ModelName,
 		&l.InTokens, &l.OutTokens, &l.CachedTokens, &l.Cost, &l.InputCost, &l.OutputCost, &l.CachedCost,
 		&l.DurationMs, &l.FirstByteMs, &l.StatusCode,
-		&l.Method, &l.Host, &l.Path, &l.SessionID, &l.Family, &l.ReasoningEffort,
+		&l.Method, &l.Host, &l.Path, &l.SessionID, &l.Family, &l.HitModel, &l.ReasoningEffort,
 		&l.RequestBody, &l.RequestHeaders, &l.CacheStatus,
 	)
 	if err != nil {

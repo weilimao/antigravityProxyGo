@@ -202,6 +202,7 @@ func (sc *serveContext) classifyResponse(attemptIndex int, ro *routeOutcome, fo 
 		pm := rePromptTokens.FindAllStringSubmatch(bodyStr, -1)
 		cm := reCandidateTokens.FindAllStringSubmatch(bodyStr, -1)
 		cc := reCachedTokens.FindAllStringSubmatch(bodyStr, -1)
+		mv := reModelVersion.FindAllStringSubmatch(bodyStr, -1)
 
 		if len(pm) > 0 && len(pm[len(pm)-1]) > 1 {
 			sc.inTokens, _ = strconv.Atoi(pm[len(pm)-1][1])
@@ -211,6 +212,9 @@ func (sc *serveContext) classifyResponse(attemptIndex int, ro *routeOutcome, fo 
 		}
 		if len(cc) > 0 && len(cc[len(cc)-1]) > 1 {
 			sc.cachedTokens, _ = strconv.Atoi(cc[len(cc)-1][1])
+		}
+		if len(mv) > 0 && len(mv[len(mv)-1]) > 1 {
+			sc.hitModel = mv[len(mv)-1][1]
 		}
 
 		if sc.inTokens > 0 || sc.outTokens > 0 {

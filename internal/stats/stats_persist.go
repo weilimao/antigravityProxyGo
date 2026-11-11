@@ -269,6 +269,7 @@ func (t *Tracker) migrateLegacyRequestsToDB(legacy []*RequestLog) {
 			Path:            r.Path,
 			SessionID:       r.SessionID,
 			Family:          r.Family,
+			HitModel:        r.HitModel,
 			ReasoningEffort: r.ReasoningEffort,
 			RequestBody:     requestBodyToDBString(r.RequestBody),
 			RequestHeaders:  requestBodyToDBString(r.RequestHeaders),
@@ -321,6 +322,7 @@ func (t *Tracker) recentRequestRingFromDB() []*RequestLog {
 			DurationMs:      r.DurationMs,
 			FirstByteMs:     r.FirstByteMs,
 			Family:          r.Family,
+			HitModel:        r.HitModel,
 			ReasoningEffort: r.ReasoningEffort,
 		})
 	}

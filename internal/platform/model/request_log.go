@@ -10,6 +10,7 @@ type RequestLog struct {
 	UserID       string    `gorm:"size:64;index;not null" json:"userId"`
 	Account      string    `gorm:"size:128;index" json:"account"`
 	ModelName    string    `gorm:"size:128;index;not null" json:"model"`
+	HitModel     string    `gorm:"size:128;index" json:"hitModel"`
 	InTokens     int       `gorm:"default:0" json:"inTokens"`
 	OutTokens    int       `gorm:"default:0" json:"outTokens"`
 	CachedTokens int       `gorm:"default:0" json:"cachedTokens"`

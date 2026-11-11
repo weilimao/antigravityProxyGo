@@ -6,7 +6,7 @@ import (
 )
 
 func TestAppVersion_Consistency(t *testing.T) {
-	expectedVersion := "1.7.8"
+	expectedVersion := "1.7.9"
 
 	if appVersion != expectedVersion {
 		t.Fatalf("expected appVersion to be %s, got %s", expectedVersion, appVersion)

@@ -104,6 +104,31 @@ func TestRequestLogLite_FirstByteProjection(t *testing.T) {
 	// 不在此处重复构造, 仅断言「打点后非 0」这一关键链路。
 }
 
+// TestRequestLogLite_HitModelProjection 验证 RequestLog.HitModel 经 toRequestLogLite
+// 端到端投影到 RequestLogLite.HitModel, 供仪表盘热路径读出、前端展示命中模型徽章。
+func TestRequestLogLite_HitModelProjection(t *testing.T) {
+	rl := &RequestLog{
+		ID:        "test_req_hit_model",
+		Timestamp: time.Now().Format("01/02 15:04:05"),
+		Model:     "gemini-3.8-flash-high",
+		HitModel:  "gemini-3.8-flash-n",
+	}
+	lite := toRequestLogLite(rl)
+	if lite.HitModel != "gemini-3.8-flash-n" {
+		t.Fatalf("toRequestLogLite lost HitModel: lite=%q saved=%q", lite.HitModel, rl.HitModel)
+	}
+	if lite.Model != "gemini-3.8-flash-high" {
+		t.Errorf("toRequestLogLite lost Model: lite=%q saved=%q", lite.Model, rl.Model)
+	}
+
+	// 空串正常投影
+	rlEmpty := &RequestLog{ID: "test_empty_hit", Model: "gpt-4"}
+	liteEmpty := toRequestLogLite(rlEmpty)
+	if liteEmpty.HitModel != "" {
+		t.Errorf("toRequestLogLite empty HitModel: lite=%q want empty", liteEmpty.HitModel)
+	}
+}
+
 // TestRequestLogLite_ReasoningEffortProjection 验证 RequestLog.ReasoningEffort 经 toRequestLogLite
 // 端到端投影到 RequestLogLite.ReasoningEffort, 供仪表盘热路径读出、前端「模型」列追加 (档) 后缀。
 // 这条不变式是后端打点 → 内存结构 → IPC 投影链路不丢命中思考等级的保证。

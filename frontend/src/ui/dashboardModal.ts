@@ -27,6 +27,8 @@ let modalStatus: HTMLElement | null = null;
 let modalCost: HTMLElement | null = null;
 let modalAccount: HTMLElement | null = null;
 let modalAccountWrapper: HTMLElement | null = null;
+let modalHitModel: HTMLElement | null = null;
+let modalHitModelWrapper: HTMLElement | null = null;
 let modalFirstByte: HTMLElement | null = null;
 let modalDuration: HTMLElement | null = null;
 let modalJsonArea: HTMLElement | null = null;
@@ -49,6 +51,8 @@ modalStatus = document.getElementById('modalStatus');
 modalCost = document.getElementById('modalCost');
 modalAccount = document.getElementById('modalAccount');
 modalAccountWrapper = document.getElementById('modalAccountWrapper');
+modalHitModel = document.getElementById('modalHitModel');
+modalHitModelWrapper = document.getElementById('modalHitModelWrapper');
 modalFirstByte = document.getElementById('modalFirstByte');
 modalDuration = document.getElementById('modalDuration');
 modalJsonArea = document.getElementById('modalJsonArea');
@@ -168,6 +172,13 @@ export function showModal(log: any) {
         if (modalAccount) modalAccount.textContent = log.account;
     } else {
         if (modalAccountWrapper) modalAccountWrapper.classList.add('hidden');
+    }
+
+    if (log.hitModel) {
+        if (modalHitModelWrapper) modalHitModelWrapper.classList.remove('hidden');
+        if (modalHitModel) modalHitModel.textContent = log.hitModel;
+    } else {
+        if (modalHitModelWrapper) modalHitModelWrapper.classList.add('hidden');
     }
 
     const inT = log.inTokens || 0;
