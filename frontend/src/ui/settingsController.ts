@@ -47,6 +47,9 @@ export function initSettings() {
         const systemConsole = document.getElementById('systemConsole');
         const chkEnableAutoStart = document.getElementById('chkEnableAutoStart') as HTMLInputElement | null;
         const chkEnableSilentStart = document.getElementById('chkEnableSilentStart') as HTMLInputElement | null;
+        const chkEnableProxyRetry = document.getElementById('chkEnableProxyRetry') as HTMLInputElement | null;
+        const rowMaxRetries = document.getElementById('rowMaxRetries');
+        const rowMaxRetryDelay = document.getElementById('rowMaxRetryDelay');
         const numMaxRetries = document.getElementById('numMaxRetries') as HTMLInputElement | null;
         const numMaxRetryDelay = document.getElementById('numMaxRetryDelay') as HTMLInputElement | null;
         const numMaxRequestBodyMB = document.getElementById('numMaxRequestBodyMB') as HTMLInputElement | null;
@@ -204,6 +207,35 @@ export function initSettings() {
                 } catch (err) {
                     console.error('[SettingsController] Failed to save silent start settings:', err);
                 }
+            });
+        }
+
+        function updateRetryInputsState(enabled: boolean) {
+            if (numMaxRetries) {
+                numMaxRetries.disabled = !enabled;
+            }
+            if (numMaxRetryDelay) {
+                numMaxRetryDelay.disabled = !enabled;
+            }
+            if (rowMaxRetries) {
+                rowMaxRetries.style.opacity = enabled ? '1' : '0.4';
+                rowMaxRetries.style.pointerEvents = enabled ? 'auto' : 'none';
+            }
+            if (rowMaxRetryDelay) {
+                rowMaxRetryDelay.style.opacity = enabled ? '1' : '0.4';
+                rowMaxRetryDelay.style.pointerEvents = enabled ? 'auto' : 'none';
+            }
+        }
+
+        if (chkEnableProxyRetry) {
+            chkEnableProxyRetry.addEventListener('change', (e: any) => {
+                const enabled = !!e.target.checked;
+                try {
+                    ipcRenderer.send('settings:set-retry-enabled', enabled);
+                } catch (err) {
+                    console.error('[SettingsController] Failed to save retry enabled:', err);
+                }
+                updateRetryInputsState(enabled);
             });
         }
 
@@ -530,6 +562,9 @@ export function refreshSettingsUI() {
         const systemConsole = document.getElementById('systemConsole');
         const chkEnableAutoStart = document.getElementById('chkEnableAutoStart') as HTMLInputElement | null;
         const chkEnableSilentStart = document.getElementById('chkEnableSilentStart') as HTMLInputElement | null;
+        const chkEnableProxyRetry = document.getElementById('chkEnableProxyRetry') as HTMLInputElement | null;
+        const rowMaxRetries = document.getElementById('rowMaxRetries');
+        const rowMaxRetryDelay = document.getElementById('rowMaxRetryDelay');
         const numMaxRetries = document.getElementById('numMaxRetries') as HTMLInputElement | null;
         const numMaxRetryDelay = document.getElementById('numMaxRetryDelay') as HTMLInputElement | null;
 
@@ -548,6 +583,26 @@ export function refreshSettingsUI() {
             if (startupOptions) {
                 chkEnableAutoStart.checked = !!startupOptions.autoStart;
                 chkEnableSilentStart.checked = !!startupOptions.silentStart;
+            }
+        }
+
+        if (chkEnableProxyRetry) {
+            const retryEnabled = ipcRenderer.sendSync('settings:get-retry-enabled');
+            const isEnabled = retryEnabled !== null && retryEnabled !== undefined ? !!retryEnabled : true;
+            chkEnableProxyRetry.checked = isEnabled;
+            if (numMaxRetries) {
+                numMaxRetries.disabled = !isEnabled;
+            }
+            if (numMaxRetryDelay) {
+                numMaxRetryDelay.disabled = !isEnabled;
+            }
+            if (rowMaxRetries) {
+                rowMaxRetries.style.opacity = isEnabled ? '1' : '0.4';
+                rowMaxRetries.style.pointerEvents = isEnabled ? 'auto' : 'none';
+            }
+            if (rowMaxRetryDelay) {
+                rowMaxRetryDelay.style.opacity = isEnabled ? '1' : '0.4';
+                rowMaxRetryDelay.style.pointerEvents = isEnabled ? 'auto' : 'none';
             }
         }
 

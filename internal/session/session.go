@@ -28,10 +28,11 @@ const (
 
 // 包级预编译正则：避免每次请求重复编译，消除 GC 压力
 var (
-	reAgentReqID = regexp.MustCompile(`"requestId"\s*:\s*"(?:agent|trajectory|flow)[\\/]+([a-fA-F0-9-]+)`)
-	reConvID     = regexp.MustCompile(`"conversationId"\s*:\s*"([a-fA-F0-9-]+)"`)
-	reBrainPath  = regexp.MustCompile(`(?:brain|artifacts)[\\/]+([a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})?)`)
-	reSessionID  = regexp.MustCompile(`"sessionId"\s*:\s*"?([a-fA-F0-9-]+|-?\d+)"?`)
+	reAgentReqID       = regexp.MustCompile(`"requestId"\s*:\s*"(?:agent|trajectory|flow)[\\/]+([a-fA-F0-9-]+)`)
+	reConvID           = regexp.MustCompile(`"conversationId"\s*:\s*"([a-fA-F0-9-]+)"`)
+	reBrainPath        = regexp.MustCompile(`(?:brain|artifacts)[\\/]+([a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})?)`)
+	reSessionID        = regexp.MustCompile(`"sessionId"\s*:\s*"?([a-fA-F0-9-]+|-?\d+)"?`)
+	reCompanionRequest = regexp.MustCompile(`"requestType"\s*:\s*"(?:agent_monitoring|web_search|command_adjudicator|terminal_classifier)"`)
 )
 
 type SessionEntry struct {
@@ -127,6 +128,11 @@ func (r *Router) ExtractSessionKey(req *http.Request, reqBody []byte) string {
 	// 从请求体中提取稳定的会话级/周期级特征，作为 sessionKey 的后缀进行更精细的分流
 	if len(reqBody) > 0 {
 		bodyStr := string(reqBody)
+
+		// 0. 伴生/守护性请求防碎片化：对于后台安全审查、监控、网页检索等伴生调用，不提取临时随机单次 ID，直接返回 baseKey 触发亲和性收敛
+		if reCompanionRequest.MatchString(bodyStr) {
+			return baseKey
+		}
 
 		// 1. 最高优先级：提取显式业务会话/轨迹/智能体 ID (Antigravity/Gemini-CLI 原生规范: agent/<conv-id>/...)
 		matchAgent := reAgentReqID.FindStringSubmatch(bodyStr)
@@ -279,27 +285,111 @@ func sessionHeaderClientPrefix(ua string) string {
 	}
 }
 
+// parseBaseSessionKey 分解会话键，分离出客户端根基键(baseKey)与业务子后缀(subSuffix)。
+// 格式规则示例:
+//   "auth:acc:<hex16>:<subId>" -> baseKey="auth:acc:<hex16>", subSuffix="<subId>"
+//   "auth:acc:<hex16>"         -> baseKey="auth:acc:<hex16>", subSuffix=""
+//   "sock:acc:<ip>:<subId>"    -> baseKey="sock:acc:<ip>",    subSuffix="<subId>"
+//   "sock:acc:<ip>"            -> baseKey="sock:acc:<ip>",    subSuffix=""
+//   "acc:<id>:<subId>"         -> baseKey="acc:<id>",         subSuffix="<subId>"
+//   "acc:<id>"                 -> baseKey="acc:<id>",         subSuffix=""
+func parseBaseSessionKey(sessionKey string) (baseKey string, subSuffix string) {
+	parts := strings.Split(sessionKey, ":")
+	if strings.HasPrefix(sessionKey, "auth:acc:") || strings.HasPrefix(sessionKey, "auth:prj:") ||
+		strings.HasPrefix(sessionKey, "sock:acc:") || strings.HasPrefix(sessionKey, "sock:prj:") {
+		if len(parts) >= 4 {
+			baseKey = strings.Join(parts[:3], ":")
+			subSuffix = strings.Join(parts[3:], ":")
+			return baseKey, subSuffix
+		}
+		return sessionKey, ""
+	}
+	if strings.HasPrefix(sessionKey, "acc:") || strings.HasPrefix(sessionKey, "prj:") {
+		if len(parts) >= 3 {
+			baseKey = strings.Join(parts[:2], ":")
+			subSuffix = strings.Join(parts[2:], ":")
+			return baseKey, subSuffix
+		}
+		return sessionKey, ""
+	}
+	if idx := strings.LastIndex(sessionKey, ":"); idx != -1 {
+		return sessionKey[:idx], sessionKey[idx+1:]
+	}
+	return sessionKey, ""
+}
+
+// getActiveSiblingAccountLocked 必须在调用方持有读锁或写锁的前提下调用。
+// 查找属于 baseKey + ":" 命名空间下且未超时的最新活跃子会话账号。
+func (r *Router) getActiveSiblingAccountLocked(baseKey string, availableAccounts []*account.Account, now int64) *account.Account {
+	if baseKey == "" || len(availableAccounts) == 0 {
+		return nil
+	}
+
+	availMap := make(map[string]*account.Account, len(availableAccounts))
+	for _, a := range availableAccounts {
+		availMap[a.ID] = a
+	}
+
+	var latestAccount *account.Account
+	var latestTime int64
+
+	childPrefix := baseKey + ":"
+	for key, entry := range r.sessionMap {
+		if strings.HasPrefix(key, childPrefix) {
+			if now-entry.LastActive < sessionTTLMS {
+				if acc, ok := availMap[entry.AccountID]; ok {
+					if entry.LastActive > latestTime {
+						latestTime = entry.LastActive
+						latestAccount = acc
+					}
+				}
+			}
+		}
+	}
+	return latestAccount
+}
+
 func (r *Router) GetOrAssignAccount(sessionKey string, availableAccounts []*account.Account, logFn func(string)) *account.Account {
 	if len(availableAccounts) == 0 {
 		return nil
 	}
 
 	now := time.Now().UnixNano() / int64(time.Millisecond)
+	baseKey, subSuffix := parseBaseSessionKey(sessionKey)
 
-	// ── Fast path: read-lock only ──────────────────────────────────────────
-	// In the vast majority of requests the session is already bound, so we
-	// try a cheap RLock first to avoid serialising every goroutine behind a
-	// global write lock.
+	// ── 场景 A: 伴生/守护请求 (subSuffix 为空) ────────────────────────────
+	// 针对 gemini-3.5-flash-lite、agent_monitoring、terminal check 等无会话后缀的伴随调用：
+	// 动态收敛至同客户端 (baseKey) 下当前活跃的主任务会话账号，且绝不持久化写入 sessionMap[baseKey]，
+	// 既防止跨号审查代码的指纹风险，又彻底避免反向污染 baseKey 导致后续新会话被薅单号。
+	if subSuffix == "" {
+		r.RLock()
+		siblingAccount := r.getActiveSiblingAccountLocked(baseKey, availableAccounts, now)
+		_, hasSelf := r.sessionMap[sessionKey]
+		r.RUnlock()
+
+		if siblingAccount != nil {
+			if hasSelf {
+				r.Lock()
+				delete(r.sessionMap, sessionKey)
+				r.Unlock()
+				r.scheduleSave()
+			}
+			if logFn != nil {
+				logFn(fmt.Sprintf("🔒 [伴生收敛] 伴生审查请求 %s 动态收敛至当前活跃对话账号: %s", sessionKey, siblingAccount.Email))
+			}
+			return siblingAccount
+		}
+	}
+
+	// ── 场景 B: 独立业务会话或常规请求 ──────────────────────────────────
+	// 1. Fast path: 既有会话粘性命中检查 (read-lock)
 	r.RLock()
 	existing, found := r.sessionMap[sessionKey]
 	r.RUnlock()
 
 	if found {
-		// Validate the bound account still exists in the available pool
 		for _, a := range availableAccounts {
 			if a.ID == existing.AccountID {
-				// Refresh last-active timestamp – needs a write lock, but only
-				// for this tiny update so contention is minimal.
 				r.Lock()
 				r.sessionMap[sessionKey] = SessionEntry{
 					AccountID:  existing.AccountID,
@@ -313,18 +403,25 @@ func (r *Router) GetOrAssignAccount(sessionKey string, availableAccounts []*acco
 				return a
 			}
 		}
-		// Bound account no longer available – fall through to re-assign
 		if logFn != nil {
 			logFn(fmt.Sprintf("🔄 [粘性路由] 会话 %s 原绑定账号不可用，重新分配...", sessionKey))
 		}
 	}
 
-	// ── Slow path: write-lock for new assignment ───────────────────────────
+	// 2. Slow path: 写锁内分配新账号 (纯正负载均衡，空闲账号优先打散)
 	r.Lock()
 	defer r.Unlock()
 
-	// Re-check inside the write lock to avoid TOCTOU race where two goroutines
-	// both missed the fast path and are racing to assign for the same key.
+	// Double-check inside write lock
+	if subSuffix == "" {
+		if siblingAccount := r.getActiveSiblingAccountLocked(baseKey, availableAccounts, now); siblingAccount != nil {
+			if logFn != nil {
+				logFn(fmt.Sprintf("🔒 [伴生收敛] 伴生审查请求 %s 动态收敛至当前活跃对话账号: %s", sessionKey, siblingAccount.Email))
+			}
+			return siblingAccount
+		}
+	}
+
 	if existing2, found2 := r.sessionMap[sessionKey]; found2 {
 		for _, a := range availableAccounts {
 			if a.ID == existing2.AccountID {
@@ -333,11 +430,10 @@ func (r *Router) GetOrAssignAccount(sessionKey string, availableAccounts []*acco
 				return a
 			}
 		}
-		// Still invalid – clear stale entry before assigning
 		delete(r.sessionMap, sessionKey)
 	}
 
-	// Strategy 1: prefer idle accounts
+	// Strategy 1: prefer idle accounts (打散分配给空闲账号)
 	boundAccountIDs := make(map[string]bool, len(r.sessionMap))
 	for _, entry := range r.sessionMap {
 		boundAccountIDs[entry.AccountID] = true
@@ -444,10 +540,23 @@ func (r *Router) LoadFromDisk() {
 		return
 	}
 
+	hasChildren := make(map[string]bool)
+	for key := range parsed {
+		base, sub := parseBaseSessionKey(key)
+		if sub != "" {
+			hasChildren[base] = true
+		}
+	}
+
 	now := time.Now().UnixNano() / int64(time.Millisecond)
 	loaded := 0
 	r.sessionMap = make(map[string]SessionEntry)
 	for key, entry := range parsed {
+		// 历史脏数据自愈：若同客户端已存在明确的子会话，过滤无会话后缀的冗余 bare baseKey 记录
+		_, sub := parseBaseSessionKey(key)
+		if sub == "" && hasChildren[key] {
+			continue
+		}
 		if now-entry.LastActive <= sessionTTLMS {
 			r.sessionMap[key] = entry
 			loaded++

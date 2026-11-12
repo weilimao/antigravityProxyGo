@@ -19,8 +19,11 @@ import (
 
 func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 	maxRetries := sc.h.getMaxRetries()
+	if !sc.h.isRetryEnabled() {
+		maxRetries = 0
+	}
 	var poolErrorRule *settings.PoolErrorRetryConfig
-	if sc.h.SettingsMgr != nil {
+	if sc.h.isRetryEnabled() && sc.h.SettingsMgr != nil {
 		rule := sc.h.SettingsMgr.GetPoolErrorRetry()
 		if rule.Enabled {
 			poolErrorRule = &rule
@@ -104,6 +107,27 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 
 		if sc.r.Context().Err() != nil {
 			sc.h.logFn(fmt.Sprintf("%s ⏹️ 客户端已取消连接，终止后续 503 重试与账号切换。", sc.logPrefix))
+			return
+		}
+
+		// 如果全局停用了代理重试，请求不走任何代理软件重试与切号，默认透传上游原生响应
+		if !sc.h.isRetryEnabled() {
+			sc.h.logFn(fmt.Sprintf("%s ❌ [代理重试已停用] 上游请求失败，透传原生响应: %v", sc.logPrefix, errAttempt))
+			sc.logRequestToTracker(status, errAttempt.Error())
+
+			if !sc.headersSent {
+				for k, values := range headers {
+					for _, v := range values {
+						w.Header().Add(k, v)
+					}
+				}
+				statusCode := status
+				if statusCode <= 0 {
+					statusCode = http.StatusBadGateway
+				}
+				w.WriteHeader(statusCode)
+				w.Write(body)
+			}
 			return
 		}
 

@@ -536,6 +536,10 @@ func (a *App) handleSettingsIPCSend(channel string, args []interface{}) bool {
 		_ = a.settingsMgr.SetSilentStart(getBoolArg(0))
 		return true
 
+	case "settings:set-retry-enabled":
+		_ = a.settingsMgr.SetRetryEnabled(getBoolArg(0))
+		return true
+
 	case "settings:set-max-retries":
 		_ = a.settingsMgr.SetMaxRetries(getIntArg(0))
 		return true

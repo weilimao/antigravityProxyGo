@@ -96,14 +96,21 @@
 </div>
 <!-- 代理参数设置卡片 -->
 <div class="glass-card rounded-xl p-6 flex flex-col gap-4">
+<div class="flex items-center justify-between">
 <h2 class="text-[15px] font-bold text-on-surface dark:text-white flex items-center gap-2">
 <span class="material-symbols-outlined text-primary text-[20px]">refresh</span>
 <span data-i18n="proxySettingTitle">代理重试设置</span>
 </h2>
+<!-- Toggle Switch -->
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="chkEnableProxyRetry" type="checkbox" checked />
+<div class="w-11 h-6 bg-slate-200 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+</label>
+</div>
 <p class="text-xs text-outline leading-relaxed" data-i18n="proxySettingTip">
-                配置代理在遭遇服务器临时算力不足等错误时的最大重试次数。
+                配置代理在遭遇服务器临时算力不足等错误时的重试策略。关闭后将停用代理层重试与切号，默认透传上游原生响应。
             </p>
-<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2 transition-opacity duration-200" id="rowMaxRetries">
 <div class="flex flex-col gap-0.5">
 <span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="maxRetriesLabel">最大重试次数</span>
 <span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="maxRetriesDesc">请求失败时的重试上限（默认 20 次）。</span>
@@ -112,7 +119,7 @@
 <input class="w-20 px-3 py-1 text-[12px] bg-slate-50 dark:bg-white/5 border border-outline-variant/60 rounded-md focus:outline-none text-on-surface dark:text-white font-bold text-center" id="numMaxRetries" max="100" min="1" type="number">
 </input></div>
 </div>
-<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2">
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-4 mt-2 transition-opacity duration-200" id="rowMaxRetryDelay">
 <div class="flex flex-col gap-0.5">
 <span class="text-[13px] font-bold text-on-surface dark:text-white" data-i18n="maxRetryDelayLabel">最大重试延迟上限 (秒)</span>
 <span class="text-[11px] text-outline text-wrap max-w-[80%]" data-i18n="maxRetryDelayDesc">连续多次重试时的最大等待退避时间（默认 10 秒）。</span>

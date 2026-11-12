@@ -39,6 +39,7 @@ func (m *Manager) Init(defaultPath string) {
 		IsInterceptMode:               false,
 		AutoStart:                     false,
 		SilentStart:                   false,
+		RetryEnabled:                  true,
 		MaxRetries:                    20,
 		MaxRetryDelay:                 10,
 		RelaySSRFBlock:                true,
@@ -124,6 +125,7 @@ func (m *Manager) loadConfig() {
 		}
 
 		parsed = Config{
+			RetryEnabled:                  true,
 			EnablePacketCapture:           true,
 			EnableCustomCompression:       true,
 			MaxTokensThreshold:            100000,
@@ -177,6 +179,9 @@ func (m *Manager) loadConfig() {
 	// rather than the Go zero value (false).
 	needSave := false
 	if rawMap != nil {
+		if _, exists := rawMap["retryEnabled"]; !exists {
+			parsed.RetryEnabled = true
+		}
 		if _, exists := rawMap["relaySSRFBlock"]; !exists {
 			parsed.RelaySSRFBlock = true
 		}
@@ -542,6 +547,7 @@ func EnsureConfigExists(defaultPath string) (string, error) {
 			IsInterceptMode:       false,
 			AutoStart:             false,
 			SilentStart:           false,
+			RetryEnabled:          true,
 			RelayEnabled:          false,
 			RelayPort:             "18444",
 			RemoteHost:            "",

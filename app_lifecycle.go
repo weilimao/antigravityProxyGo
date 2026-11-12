@@ -525,6 +525,7 @@ func (a *App) domReady(ctx context.Context) {
 			"autoStart":   a.settingsMgr.GetAutoStart(),
 			"silentStart": a.settingsMgr.GetSilentStart(),
 		},
+		"settings:get-retry-enabled":      a.settingsMgr.GetRetryEnabled(),
 		"settings:get-max-retries":         a.settingsMgr.GetMaxRetries(),
 		"settings:get-max-retry-delay":     a.settingsMgr.GetMaxRetryDelay(),
 		"settings:get-max-request-body-mb": a.settingsMgr.GetMaxRequestBodyMB(),

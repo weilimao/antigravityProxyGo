@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"antigravity-proxy/internal/account"
 )
 
 func authHashHex(t *testing.T, token string) string {
@@ -324,5 +327,148 @@ func TestExtractSessionKey_AntigravityAndFilter(t *testing.T) {
 			t.Fatalf("expected %q, got %q", want, got)
 		}
 	})
+}
+
+func TestParseBaseSessionKey(t *testing.T) {
+	tests := []struct {
+		input     string
+		wantBase  string
+		wantSub   string
+	}{
+		{"auth:acc:b2536da2af2504a6:e6963aea", "auth:acc:b2536da2af2504a6", "e6963aea"},
+		{"auth:acc:b2536da2af2504a6", "auth:acc:b2536da2af2504a6", ""},
+		{"auth:prj:1234567890abcdef:subtask", "auth:prj:1234567890abcdef", "subtask"},
+		{"auth:prj:1234567890abcdef", "auth:prj:1234567890abcdef", ""},
+		{"sock:acc:192.168.1.1:task8888", "sock:acc:192.168.1.1", "task8888"},
+		{"sock:acc:192.168.1.1", "sock:acc:192.168.1.1", ""},
+		{"acc:custom123:sub456", "acc:custom123", "sub456"},
+		{"acc:custom123", "acc:custom123", ""},
+	}
+
+	for _, tt := range tests {
+		base, sub := parseBaseSessionKey(tt.input)
+		if base != tt.wantBase || sub != tt.wantSub {
+			t.Errorf("parseBaseSessionKey(%q) = (%q, %q), want (%q, %q)", tt.input, base, sub, tt.wantBase, tt.wantSub)
+		}
+	}
+}
+
+func TestExtractSessionKey_CompanionRequest(t *testing.T) {
+	r := NewRouter()
+	token := "tok-test-token-123456789"
+	mkReq := func() *http.Request {
+		req, _ := http.NewRequest("POST", "http://example.com/v1internal:streamGenerateContent", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		return req
+	}
+	wantBase := "auth:" + authHashHex(t, token)
+
+	t.Run("agent_monitoring 请求: 即使有随机 requestId 也不提取后缀, 回退 baseKey", func(t *testing.T) {
+		reqBody := []byte(`{
+			"model": "gemini-3.5-flash-lite",
+			"requestType": "agent_monitoring",
+			"requestId": "agent_monitoring/75899def-79c8-4120-b1a2-e4636e74dea8"
+		}`)
+		got := r.ExtractSessionKey(mkReq(), reqBody)
+		if got != wantBase {
+			t.Fatalf("expected base key %q, got %q (不应提取 agent_monitoring 随机单次 ID)", wantBase, got)
+		}
+	})
+
+	t.Run("web_search 辅助请求: 回退 baseKey", func(t *testing.T) {
+		reqBody := []byte(`{
+			"model": "gemini-3.5-flash-lite",
+			"requestType": "web_search"
+		}`)
+		got := r.ExtractSessionKey(mkReq(), reqBody)
+		if got != wantBase {
+			t.Fatalf("expected base key %q, got %q", wantBase, got)
+		}
+	})
+}
+
+func TestGetOrAssignAccount_CompanionAffinity(t *testing.T) {
+	tempDir := t.TempDir()
+	r := NewRouter()
+	r.Init(tempDir)
+
+	acc1 := &account.Account{ID: "acc-1", Email: "acc1@gmail.com"}
+	acc2 := &account.Account{ID: "acc-2", Email: "acc2@gmail.com"}
+	acc3 := &account.Account{ID: "acc-3", Email: "acc3@gmail.com"}
+	pool := []*account.Account{acc1, acc2, acc3}
+
+	baseA := "auth:acc:clientAAA12345"
+	sessionMainA := baseA + ":main0001"
+
+	// 1. 客户端 A 发起第一个独立对话 (main0001)
+	assignedMain1 := r.GetOrAssignAccount(sessionMainA, pool, nil)
+	if assignedMain1 == nil {
+		t.Fatalf("expected account assigned for %s", sessionMainA)
+	}
+
+	// 2. 紧接着发起伴生 flash-lite 请求 (只有 baseA，无子会话后缀)
+	assignedCompanion1 := r.GetOrAssignAccount(baseA, pool, nil)
+	if assignedCompanion1 == nil {
+		t.Fatalf("expected account assigned for companion %s", baseA)
+	}
+	// 核心断言: 伴生审查请求必须与主任务账号 100% 相同
+	if assignedCompanion1.ID != assignedMain1.ID {
+		t.Fatalf("CRITICAL: companion request account mismatch! Got %s, want %s", assignedCompanion1.Email, assignedMain1.Email)
+	}
+
+	// 3. 客户端 A 打开第二个独立对话 (新后缀 main0002)，必须触发负载均衡打散至空闲账号！
+	time.Sleep(5 * time.Millisecond)
+	sessionMainA2 := baseA + ":main0002"
+	assignedMain2 := r.GetOrAssignAccount(sessionMainA2, pool, nil)
+	if assignedMain2.ID == assignedMain1.ID {
+		t.Fatalf("负载均衡失效: 第二个独立对话 %s 不应再薅第一个对话的账号 %s, 应分配给空闲账号!", sessionMainA2, assignedMain1.Email)
+	}
+
+	// 4. 在对话 2 刚刚活跃之后，发起伴生 flash-lite 请求，必须动态跟随至对话 2 的账号！
+	assignedCompanion2 := r.GetOrAssignAccount(baseA, pool, nil)
+	if assignedCompanion2.ID != assignedMain2.ID {
+		t.Fatalf("伴生请求应跟随最近活跃的对话 2 (%s), 实际分配了 %s", assignedMain2.Email, assignedCompanion2.Email)
+	}
+
+	// 5. 切回对话 1 继续交互，随后的伴生请求应动态切换回对话 1 的账号！
+	time.Sleep(5 * time.Millisecond)
+	rehitMain1 := r.GetOrAssignAccount(sessionMainA, pool, nil)
+	if rehitMain1.ID != assignedMain1.ID {
+		t.Fatalf("对话 1 应保持粘性绑定 %s, got %s", assignedMain1.Email, rehitMain1.Email)
+	}
+	assignedCompanionBack := r.GetOrAssignAccount(baseA, pool, nil)
+	if assignedCompanionBack.ID != assignedMain1.ID {
+		t.Fatalf("伴生请求应随活跃对话切回 %s, got %s", assignedMain1.Email, assignedCompanionBack.Email)
+	}
+
+	// 6. 验证 sessionMap 未被冗余 bare baseKey 污染
+	r.RLock()
+	_, hasBareBase := r.sessionMap[baseA]
+	r.RUnlock()
+	if hasBareBase {
+		t.Fatalf("sessionMap 不应留存无后缀伴生基键 %s", baseA)
+	}
+
+	// 7. 另一个独立的客户端 B (不同的 baseKey)
+	baseB := "auth:acc:clientBBB67890"
+	sessionMainB := baseB + ":taskB001"
+	assignedMainB := r.GetOrAssignAccount(sessionMainB, pool, nil)
+
+	// 客户端 B 的伴生请求必须收敛到客户端 B 的账号
+	assignedCompanionB := r.GetOrAssignAccount(baseB, pool, nil)
+	if assignedCompanionB.ID != assignedMainB.ID {
+		t.Fatalf("client B companion mismatch: got %s, want %s", assignedCompanionB.Email, assignedMainB.Email)
+	}
+
+	// 8. 验证持久化与重新加载后的亲和性一致性
+	r.SaveToDisk()
+	r2 := NewRouter()
+	r2.Init(tempDir)
+	time.Sleep(10 * time.Millisecond)
+	// 重新加载后，最近活跃的是 main0001 (步骤5) 或按加载时间一致，伴生请求应继承活跃对话
+	reloaded := r2.GetOrAssignAccount(baseA, pool, nil)
+	if reloaded.ID != assignedMain1.ID {
+		t.Fatalf("after reload, companion account %s != %s", reloaded.Email, assignedMain1.Email)
+	}
 }
 

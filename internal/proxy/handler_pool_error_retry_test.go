@@ -590,3 +590,47 @@ func TestGlobalRetry_ServerErrorThresholdWithMaxRetries3Switches(t *testing.T) {
 		t.Fatalf("expected 4th attempt on distinct 3rd account, got %v", tokens)
 	}
 }
+
+// TestProxyHandler_RetryDisabled_PassthroughNativeResponse 验证全局代理重试停用（RetryEnabled=false）时：
+// 1. 请求仅执行 1 次（不进行重试、退避和切号）；
+// 2. 原汁原味透传上游的原生 HTTP 状态码与响应体，不伪造 429。
+func TestProxyHandler_RetryDisabled_PassthroughNativeResponse(t *testing.T) {
+	tempDir := t.TempDir()
+	settingsMgr := settings.NewManager()
+	settingsMgr.Init(tempDir)
+	_ = settingsMgr.SetRetryEnabled(false)
+
+	acc1 := &account.Account{ID: "acc-1", Email: "user1@gmail.com", Provider: "antigravity", AccessToken: "token-acc-1", Enabled: true}
+	acc2 := &account.Account{ID: "acc-2", Email: "user2@gmail.com", Provider: "antigravity", AccessToken: "token-acc-2", Enabled: true}
+
+	var reqCount int32
+	nativeErrorBody := `{"error":{"code":503,"message":"upstream model service unavailable"}}`
+
+	transport := mockRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&reqCount, 1)
+		return &http.Response{
+			StatusCode: 503,
+			Body:       io.NopCloser(strings.NewReader(nativeErrorBody)),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	h, _ := newTestPoolRetryHandler(t, []*account.Account{acc1, acc2}, 20, nil, transport, settingsMgr)
+	req := httptest.NewRequest("POST", "http://127.0.0.1:8045/v1internal:generateContent", bytes.NewBufferString(`{"contents":[]}`))
+	req = req.WithContext(context.Background())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	// 1. 验证上游只被调用了 1 次 (未发生任何二次重试)
+	if count := atomic.LoadInt32(&reqCount); count != 1 {
+		t.Fatalf("expected exactly 1 attempt when retry is disabled, got %d", count)
+	}
+
+	// 2. 验证客户端收到的是原汁原味的原生 503 与 body，而不是被代理篡改的 429
+	if rec.Code != 503 {
+		t.Fatalf("expected native status 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != nativeErrorBody {
+		t.Fatalf("expected native body %q, got %q", nativeErrorBody, rec.Body.String())
+	}
+}

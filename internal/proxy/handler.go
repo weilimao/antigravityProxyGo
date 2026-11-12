@@ -40,6 +40,9 @@ type ProxyHandler struct {
 	client                 *http.Client
 	SettingsMgr            settings.ManagerInterface
 
+	// 全局代理重试开关注入
+	getRetryEnabled func() bool
+
 	// 远程中继转发相关
 	getRemoteRelay func() RemoteRelayInterface
 	remoteClient   *http.Client
@@ -85,6 +88,23 @@ func NewProxyHandler(
 		relayQuotaCheck:        relayQuotaCheck,
 		client:                 netutil.NewClient(10 * time.Minute),
 	}
+}
+
+// isRetryEnabled 判断是否启用全局代理重试。优先使用注入函数（便于单元测试），
+// 其次从 SettingsMgr 动态读取，缺失时默认开启（兼容旧行为）。
+func (h *ProxyHandler) isRetryEnabled() bool {
+	if h.getRetryEnabled != nil {
+		return h.getRetryEnabled()
+	}
+	if h.SettingsMgr != nil {
+		return h.SettingsMgr.GetRetryEnabled()
+	}
+	return true
+}
+
+// SetRetryEnabledFunc 显式注入重试开关判断函数，供测试或动态上下文覆盖
+func (h *ProxyHandler) SetRetryEnabledFunc(fn func() bool) {
+	h.getRetryEnabled = fn
 }
 
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

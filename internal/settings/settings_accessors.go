@@ -294,6 +294,18 @@ func (m *Manager) SetEnablePacketCapture(enable bool) error {
 	return setSetting(m, func(c *Config, v bool) { c.EnablePacketCapture = v }, enable)
 }
 
+func (m *Manager) GetRetryEnabled() bool {
+	return getSetting(m, func(c *Config) bool {
+		return c.RetryEnabled
+	})
+}
+
+func (m *Manager) SetRetryEnabled(enabled bool) error {
+	return setSetting(m, func(c *Config, v bool) {
+		c.RetryEnabled = v
+	}, enabled)
+}
+
 func (m *Manager) GetMaxRetries() int {
 	return getSetting(m, func(c *Config) int {
 		if c.MaxRetries <= 0 {

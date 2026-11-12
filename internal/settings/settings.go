@@ -128,6 +128,7 @@ type Config struct {
 	IsInterceptMode      bool                `json:"isInterceptMode"`
 	AutoStart            bool                `json:"autoStart"`
 	SilentStart          bool                `json:"silentStart"`
+	RetryEnabled         bool                `json:"retryEnabled"`
 	MaxRetries           int                 `json:"maxRetries"`
 	MaxRetryDelay        int                 `json:"maxRetryDelay"`
 	RelayEnabled         bool                `json:"relayEnabled"`
@@ -306,6 +307,8 @@ type ManagerInterface interface {
 	SetAutoStart(enabled bool) error
 	GetSilentStart() bool
 	SetSilentStart(enabled bool) error
+	GetRetryEnabled() bool
+	SetRetryEnabled(enabled bool) error
 	GetMaxRetries() int
 	SetMaxRetries(retries int) error
 	GetMaxRetryDelay() int

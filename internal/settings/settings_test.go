@@ -54,6 +54,55 @@ func TestSettings_RequestTimeout(t *testing.T) {
 	}
 }
 
+func TestSettings_RetryEnabled(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "antigravity-settings-retry-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	mgr := NewManager()
+	mgr.Init(tempDir)
+
+	// 1. 验证默认值为 true (启用代理重试)
+	if enabled := mgr.GetRetryEnabled(); !enabled {
+		t.Errorf("Expected default RetryEnabled to be true, got %v", enabled)
+	}
+
+	// 2. 验证 Setter/Getter
+	if err := mgr.SetRetryEnabled(false); err != nil {
+		t.Fatalf("Failed to set retry enabled to false: %v", err)
+	}
+	if enabled := mgr.GetRetryEnabled(); enabled {
+		t.Errorf("Expected RetryEnabled to be false after set, got %v", enabled)
+	}
+
+	// 3. 验证新建 Manager 重新加载配置能够正确持久化读取 false
+	newMgr := NewManager()
+	newMgr.Init(tempDir)
+	if enabled := newMgr.GetRetryEnabled(); enabled {
+		t.Errorf("Expected reloaded RetryEnabled to be false, got %v", enabled)
+	}
+
+	// 4. 验证旧版本没有 retryEnabled 字段时能够平滑回退为 true
+	legacyDir, err := os.MkdirTemp("", "antigravity-legacy-settings-test")
+	if err != nil {
+		t.Fatalf("Failed to create legacy temp dir: %v", err)
+	}
+	defer os.RemoveAll(legacyDir)
+
+	legacyConfigJSON := `{"dataDirectory":"","maxRetries":20}`
+	if err := os.WriteFile(filepath.Join(legacyDir, "config.json"), []byte(legacyConfigJSON), 0644); err != nil {
+		t.Fatalf("Failed to write legacy config: %v", err)
+	}
+
+	legacyMgr := NewManager()
+	legacyMgr.Init(legacyDir)
+	if enabled := legacyMgr.GetRetryEnabled(); !enabled {
+		t.Errorf("Expected legacy config without retryEnabled to default to true, got %v", enabled)
+	}
+}
+
 func TestSettings_RelayModelMappingRetention(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "antigravity-settings-mapping-test")
 	if err != nil {
