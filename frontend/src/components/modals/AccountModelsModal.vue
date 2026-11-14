@@ -4,9 +4,9 @@
     containerId="accountModelsModalContainer"
     closeBtnId="btnAccountModelsModalClose"
     icon="fact_check"
-    maxWidth="w-[880px] max-w-[95vw]"
+    maxWidth="w-[980px] max-w-[95vw]"
     maxHeight="max-h-[90vh]"
-    bodyClass="p-5 overflow-y-auto flex-grow space-y-4 max-h-[70vh]"
+    bodyClass="p-5 overflow-y-auto flex-grow space-y-4 max-h-[72vh]"
   >
     <template #header-title>
       <span class="text-sm font-bold text-on-surface dark:text-white" data-i18n="accountModelsModalTitle">账号可用模型检测结果</span>
@@ -18,28 +18,48 @@
       <span class="material-symbols-outlined text-primary text-[18px] flex-shrink-0 mt-0.5">verified_user</span>
       <div class="space-y-1">
         <div class="font-bold text-primary dark:text-primary-fixed-dim">
-          模型权限已识别 · 自动跳过机制已实时生效
+          全池动态模型能力画像 · 自动跳过机制已实时生效
         </div>
         <div class="text-[11.5px] text-outline dark:text-slate-300">
-          系统已精准画像各个账号的可用模型列表。后续向上游请求指定模型时（例如 <span class="font-mono text-purple-600 dark:text-purple-400 font-semibold">Gemini 4 Argon</span> 或 <span class="font-mono text-amber-600 dark:text-amber-400 font-semibold">Claude Opus 5.5</span> 系列），负载均衡与中继将<strong class="text-emerald-600 dark:text-emerald-400">自动跳过不支持该模型的账号</strong>，直接分配至可用账号，杜绝 404 错误与频繁换号风控。
+          系统已动态比对号池全部账号的真实可用模型（无需写死模型清单，自动发现新模型与灰度权限差异）。后续请求任何模型时，负载均衡与中继将<strong class="text-emerald-600 dark:text-emerald-400">自动跳过不支持该模型的账号</strong>并直接分发至下一个可用账号，杜绝 404 报错与频繁换号风控。
         </div>
       </div>
     </div>
 
-    <!-- 核心模型权限概览徽章卡片 -->
+    <!-- 核心统计概览徽章卡片 -->
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-[12px]">
       <div class="bg-slate-50 dark:bg-slate-900/30 p-3 rounded-xl border border-outline-variant/20 flex flex-col justify-between gap-1">
         <span class="text-outline dark:text-outline-variant text-[11px] font-medium">检测账号总数</span>
         <div class="text-lg font-bold text-on-surface dark:text-white font-mono" id="statProbeTotalAccounts">0</div>
       </div>
       <div class="bg-slate-50 dark:bg-slate-900/30 p-3 rounded-xl border border-outline-variant/20 flex flex-col justify-between gap-1">
-        <span class="text-outline dark:text-outline-variant text-[11px] font-medium">Gemini 4 Argon 可用账号</span>
-        <div class="text-lg font-bold text-purple-600 dark:text-purple-400 font-mono" id="statProbeArgonCount">0</div>
+        <span class="text-outline dark:text-outline-variant text-[11px] font-medium">全池发现模型数</span>
+        <div class="text-lg font-bold text-primary dark:text-primary-fixed-dim font-mono" id="statProbeAllModelsCount">0</div>
       </div>
       <div class="bg-slate-50 dark:bg-slate-900/30 p-3 rounded-xl border border-outline-variant/20 flex flex-col justify-between gap-1">
-        <span class="text-outline dark:text-outline-variant text-[11px] font-medium">Claude Opus 5.5 可用账号</span>
-        <div class="text-lg font-bold text-amber-600 dark:text-amber-400 font-mono" id="statProbeOpus55Count">0</div>
+        <span class="text-outline dark:text-outline-variant text-[11px] font-medium">差异受限模型数 (动态识别)</span>
+        <div class="text-lg font-bold text-purple-600 dark:text-purple-400 font-mono" id="statProbeDiffModelsCount">0</div>
       </div>
+    </div>
+
+    <!-- 动态模型覆盖分布与筛选栏 -->
+    <div id="accountModelsCoverageSection" class="hidden bg-slate-50/70 dark:bg-slate-900/20 p-3 rounded-xl border border-outline-variant/20 space-y-2.5">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <span class="text-[11.5px] font-bold text-on-surface dark:text-slate-200 flex items-center gap-1.5">
+          <span class="material-symbols-outlined text-[15px] text-purple-500">hub</span>
+          <span>号池模型覆盖分布（点击标签可筛选支持账号）</span>
+        </span>
+        <div class="relative w-full sm:w-56">
+          <span class="material-symbols-outlined text-[14px] text-outline absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none">search</span>
+          <input
+            id="accountModelsSearchInput"
+            type="text"
+            placeholder="搜索模型名或账号邮箱..."
+            class="w-full pl-8 pr-2.5 py-1 text-[11.5px] rounded-lg border border-outline-variant/30 bg-white dark:bg-slate-900/60 text-on-surface dark:text-white focus:outline-none focus:border-primary"
+          />
+        </div>
+      </div>
+      <div id="accountModelsCoverageChips" class="flex flex-wrap gap-1.5"></div>
     </div>
 
     <!-- 检测进度加载或错误信息 -->
@@ -54,9 +74,9 @@
         <table class="w-full text-left border-collapse table-fixed text-[12px]">
           <thead>
             <tr class="bg-slate-50 dark:bg-[#1a1f30] text-outline dark:text-outline-variant text-[11px] border-b border-outline-variant/30 sticky top-0 z-10">
-              <th class="p-3 font-bold w-[30%]">账号邮箱 / 层级</th>
-              <th class="p-3 font-bold w-[46%]">不可用模型 (请求时自动跳过)</th>
-              <th class="p-3 font-bold text-center w-[24%]">可用模型详情</th>
+              <th class="p-3 font-bold w-[25%]">账号邮箱 / 层级</th>
+              <th class="p-3 font-bold w-[34%]">不可用模型 (请求时自动跳过)</th>
+              <th class="p-3 font-bold w-[41%]">可用模型清单 (差异模型置顶高亮)</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-outline-variant/10 text-on-surface dark:text-slate-200" id="accountModelsTableBody">

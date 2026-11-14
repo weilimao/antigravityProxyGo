@@ -69,7 +69,7 @@ func NewIsolatedTransport() *http.Transport {
 		DialContext:           DialContext,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   2,
-		IdleConnTimeout:       90 * time.Second,
+		IdleConnTimeout:       30 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		ForceAttemptHTTP2:     false,
@@ -121,6 +121,24 @@ func GetAccountClient(accountKey string, timeout time.Duration) *http.Client {
 	return &http.Client{
 		Transport: GetAccountTransport(accountKey),
 		Timeout:   timeout,
+	}
+}
+
+// CloseAccountIdleConnections 仅关闭指定账号专属连接池中的空闲连接（保留 Transport 实例及 TLS 配置）。
+// 适用于遇到传输层 EOF / connection reset 时驱逐可能残留的半关闭 TCP 连接，避免下次重试复用坏连接。
+func CloseAccountIdleConnections(accountKey string) {
+	key := NormalizeAccountTransportKey(accountKey)
+	if key == "" {
+		if sharedTransport != nil {
+			sharedTransport.CloseIdleConnections()
+		}
+		return
+	}
+	accountTransportsMu.RLock()
+	tr, exists := accountTransports[key]
+	accountTransportsMu.RUnlock()
+	if exists && tr != nil {
+		tr.CloseIdleConnections()
 	}
 }
 

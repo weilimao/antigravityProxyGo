@@ -423,7 +423,7 @@ func (m *Manager) GetAvailableAccountsForChannelAndGroup(channel, groupID string
 			list = append(list, a)
 		}
 	}
-	return filterAccountsByModelCapability(list, channel, modelName, now)
+	return filterAccountsByModelCapabilityWithPool(list, channel, modelName, now, anyPoolAccountExplicitlySupports(m.accounts, channel, modelName))
 }
 
 func (m *Manager) GetAvailableAccounts(modelName string) []*Account {

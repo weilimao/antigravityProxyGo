@@ -76,11 +76,13 @@ func (a *Account) ExplicitlySupportsModel(modelName string) (bool, bool) {
 			return true, true
 		}
 	}
-	// 兼容不带档位后缀或带 -thinking 后缀的同代模型别名（如 claude-opus-5-5 / claude-opus-5-5-thinking -> claude-opus-5-5-high）
-	for _, prefix := range []string{"gemini-4-argon", "claude-opus-5-5", "claude-sonnet-5-5"} {
-		if norm == prefix || norm == prefix+"-thinking" {
-			for _, m := range a.SupportedModels {
-				if strings.HasPrefix(normalizeCapabilityModel(m), prefix) {
+	// 兼容不带档位后缀或带 -thinking 后缀的同代模型别名（如 gemini-4-hydrogen / claude-opus-5-5-thinking -> *-high）
+	baseAlias := strings.TrimSuffix(norm, "-thinking")
+	if baseAlias != "" {
+		for _, m := range a.SupportedModels {
+			cm := normalizeCapabilityModel(m)
+			for _, tierSuffix := range []string{"-xhigh", "-high", "-medium", "-low"} {
+				if cm == baseAlias+tierSuffix {
 					return true, true
 				}
 			}
@@ -189,9 +191,36 @@ func (m *Manager) MarkAccountModelUnsupported(id, modelName string, ttl time.Dur
 	}
 }
 
+// anyPoolAccountExplicitlySupports 检查全池同一渠道启用账号（含冷却中）是否至少有一个已明确支持该模型。
+// 调用方需持有 m.RLock() 或 m.Lock()。
+func anyPoolAccountExplicitlySupports(accounts []*Account, channel, modelName string) bool {
+	norm := normalizeCapabilityModel(modelName)
+	if norm == "" {
+		return false
+	}
+	for _, a := range accounts {
+		if a == nil || !a.Enabled || a.IsAuthExpired() || a.Provider != channel {
+			continue
+		}
+		if a.AccessToken == "" && a.RefreshToken == "" {
+			continue
+		}
+		if known, supported := a.ExplicitlySupportsModel(norm); known && supported {
+			return true
+		}
+	}
+	return false
+}
+
 // filterAccountsByModelCapability 对已通过基础启用/冷却校验的候选账号列表执行模型能力过滤。
 // 调用方需已持有 m.RLock() 或 m.Lock()。
 func filterAccountsByModelCapability(candidates []*Account, channel, modelName string, nowMs int64) []*Account {
+	return filterAccountsByModelCapabilityWithPool(candidates, channel, modelName, nowMs, false)
+}
+
+// filterAccountsByModelCapabilityWithPool 在 filterAccountsByModelCapability 基础上引入全池支持感知：
+// 当池内（含冷却中）已知存在支持该模型的账号时，严禁回退到已明确不支持该模型的账号。
+func filterAccountsByModelCapabilityWithPool(candidates []*Account, channel, modelName string, nowMs int64, poolHasExplicitSupport bool) []*Account {
 	if len(candidates) == 0 {
 		return candidates
 	}
@@ -220,6 +249,7 @@ func filterAccountsByModelCapability(candidates []*Account, channel, modelName s
 	// 2. 第二道防线：基于 SupportedModels 白名单与 HasArgonBucket 配额桶画像优选。
 	isArgon := strings.Contains(normModel, "argon")
 	isGated := isHighTierGatedModel(normModel)
+	hasExplicitlyUnsupported := false
 
 	var confirmedSupported []*Account
 	var unprobedWithArgon []*Account
@@ -231,8 +261,10 @@ func filterAccountsByModelCapability(candidates []*Account, channel, modelName s
 		if known {
 			if supported {
 				confirmedSupported = append(confirmedSupported, acc)
+			} else {
+				// known && !supported: 明确无该模型权限，跳过不放入优选集
+				hasExplicitlyUnsupported = true
 			}
-			// known && !supported: 明确无该模型权限，不放入优选集
 			continue
 		}
 
@@ -251,10 +283,10 @@ func filterAccountsByModelCapability(candidates []*Account, channel, modelName s
 		}
 	}
 
-	// 针对 Gemini 4 Argon 与 Claude 5.5 等高权限受限模型：
+	// 动态差异模型（号池中存在明确不支持的账号）或高权限受限模型：
 	// 按「白名单明确支持 -> 拥有 Argon 配额桶 -> Pro/Ultra 付费层级 -> 其余未探测账号」梯队收敛，
-	// 确保只要池内存在高确定性支持账号，负载均衡与粘性哈希绝不落入无权限账号。
-	if isGated {
+	// 确保只要池内存在已确认支持的可用账号，负载均衡与粘性哈希绝不落入无权限或未确认账号。
+	if isGated || hasExplicitlyUnsupported {
 		if len(confirmedSupported) > 0 {
 			return confirmedSupported
 		}
@@ -267,12 +299,16 @@ func filterAccountsByModelCapability(candidates []*Account, channel, modelName s
 		if len(unprobedOther) > 0 {
 			return unprobedOther
 		}
-		// 保底：若所有账号此前都被判为无桶/未包含（例如刚升级权限但尚未刷新配额），回退非 404 候选集防死锁
+		// 若全池已知存在支持该模型的账号（只是当前在冷却），绝不回退到明确不支持的账号
+		if poolHasExplicitSupport {
+			return nil
+		}
+		// 保底：若全池均未收录该模型（如上游刚上新且本地尚未重探），回退非 404 候选集防死锁
 		return candidates
 	}
 
-	// 针对常规模型（如 gemini-2.5-flash / claude-sonnet-4-6）：
-	// 排除明确不支持(known && !supported)的账号，合并所有明确支持与未采样账号参与均衡轮询。
+	// 针对全员通用的常规模型：
+	// 合并所有明确支持与未采样账号参与均衡轮询。
 	regularAllowed := make([]*Account, 0, len(confirmedSupported)+len(unprobedWithArgon)+len(unprobedPaid)+len(unprobedOther))
 	regularAllowed = append(regularAllowed, confirmedSupported...)
 	regularAllowed = append(regularAllowed, unprobedWithArgon...)
@@ -280,6 +316,9 @@ func filterAccountsByModelCapability(candidates []*Account, channel, modelName s
 	regularAllowed = append(regularAllowed, unprobedOther...)
 	if len(regularAllowed) > 0 {
 		return regularAllowed
+	}
+	if poolHasExplicitSupport {
+		return nil
 	}
 	return candidates
 }

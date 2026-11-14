@@ -121,10 +121,10 @@ func TestProbeAccountsModels_MultiAccountFilteringAndMissingTag(t *testing.T) {
 		resultMap[res.ID] = res
 	}
 
-	// 验证 acc-1 (全部具备)
+	// 验证 acc-1 (仅缺 acc-2 独有的 gemini-2.5-pro，其余 8 个核心模型全部具备)
 	res1 := resultMap["acc-1"]
-	if len(res1.MissingModels) != 0 {
-		t.Errorf("acc-1 should have 0 missing models, got: %v", res1.MissingModels)
+	if len(res1.MissingModels) != 1 || res1.MissingModels[0] != "gemini-2.5-pro" {
+		t.Errorf("acc-1 should dynamically only miss [gemini-2.5-pro], got: %v", res1.MissingModels)
 	}
 	if res1.SupportedCount != 8 {
 		t.Errorf("acc-1 should have 8 supported models, got: %d", res1.SupportedCount)
@@ -257,5 +257,98 @@ func TestProbeAccountsModels_TargetAccountFilter(t *testing.T) {
 	}
 	if resp.Results[0].ID != "acc-b" {
 		t.Errorf("expected probed account ID 'acc-b', got '%s'", resp.Results[0].ID)
+	}
+}
+
+func TestProbeAccountsModels_DynamicDifferentiatedModels(t *testing.T) {
+	tmpDir := t.TempDir()
+	mgr := account.NewManager()
+	mgr.Init(tmpDir)
+	mgr.SetAntigravityCliVersion("2.31.2")
+
+	mgr.AddAccount(&account.Account{ID: "acc-new", Email: "new@example.com", Provider: "antigravity", Tier: "Pro", AccessToken: "tok-new", Enabled: true})
+	mgr.AddAccount(&account.Account{ID: "acc-old", Email: "old@example.com", Provider: "antigravity", Tier: "Pro", AccessToken: "tok-old", Enabled: true})
+
+	geminiInternalTransport = mockRTFunc(func(req *http.Request) (*http.Response, error) {
+		tok := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+		wHeader := make(http.Header)
+		wHeader.Set("Content-Type", "application/json")
+		var body string
+		if tok == "tok-new" {
+			body = `{
+				"models": {
+					"gemini-2.5-flash": {"disabled": false},
+					"gemini-4-hydrogen-high": {"disabled": false},
+					"gemini-4-hydrogen-medium": {"disabled": false},
+					"gemini-4-hydrogen-low": {"disabled": false},
+					"gemini-4-hydrogen-xhigh": {"disabled": false},
+					"gemini-flash-worker-agy": {"disabled": false},
+					"gemini-5-nova-pro": {"disabled": false}
+				}
+			}`
+		} else {
+			body = `{
+				"models": {
+					"gemini-2.5-flash": {"disabled": false},
+					"claude-opus-4-6-thinking": {"disabled": false},
+					"claude-sonnet-4-6": {"disabled": false}
+				}
+			}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     wHeader,
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+	defer func() {
+		geminiInternalTransport = nil
+	}()
+
+	resp := ProbeAccountsModels(mgr, nil, nil, "antigravity", nil)
+	if !resp.Success {
+		t.Fatalf("ProbeAccountsModels failed: %s", resp.Error)
+	}
+
+	if resp.Summary.ValidProbedCount != 2 {
+		t.Fatalf("expected ValidProbedCount=2, got %d", resp.Summary.ValidProbedCount)
+	}
+	if len(resp.Summary.AllPoolModels) != 9 {
+		t.Fatalf("expected 9 pool models, got %d: %v", len(resp.Summary.AllPoolModels), resp.Summary.AllPoolModels)
+	}
+	if len(resp.Summary.CommonModels) != 1 || resp.Summary.CommonModels[0] != "gemini-2.5-flash" {
+		t.Errorf("expected CommonModels=[gemini-2.5-flash], got %v", resp.Summary.CommonModels)
+	}
+	// 全池共有 8 个差异模型（含 Hydrogen 4档、worker、nova、以及反向 4.6 两款）
+	if len(resp.Summary.DifferentiatedModels) != 8 {
+		t.Errorf("expected 8 DifferentiatedModels, got %d: %v", len(resp.Summary.DifferentiatedModels), resp.Summary.DifferentiatedModels)
+	}
+
+	// 验证家族聚合是否包含 gemini-4-hydrogen (1/2)
+	foundHydrogenFam := false
+	for _, fam := range resp.Summary.FamilyCoverage {
+		if fam.Family == "gemini-4-hydrogen" {
+			foundHydrogenFam = true
+			if !fam.IsDifferentiated || fam.SupportedCount != 1 || fam.TotalProbed != 2 || len(fam.Models) != 4 {
+				t.Errorf("unexpected gemini-4-hydrogen family coverage: %+v", fam)
+			}
+		}
+	}
+	if !foundHydrogenFam {
+		t.Errorf("expected gemini-4-hydrogen in FamilyCoverage, got %+v", resp.Summary.FamilyCoverage)
+	}
+
+	resMap := make(map[string]AccountModelCapabilityInfo)
+	for _, r := range resp.Results {
+		resMap[r.ID] = r
+	}
+
+	// acc-new 应缺失 claude-opus-4-6-thinking 和 claude-sonnet-4-6
+	if len(resMap["acc-new"].MissingModels) != 2 {
+		t.Errorf("acc-new expected 2 missing models (4.6 series), got %v", resMap["acc-new"].MissingModels)
+	}
+	// acc-old 应缺失 hydrogen 4档 + worker + nova 共 6 个新模型
+	if len(resMap["acc-old"].MissingModels) != 6 {
+		t.Errorf("acc-old expected 6 missing models, got %v", resMap["acc-old"].MissingModels)
 	}
 }

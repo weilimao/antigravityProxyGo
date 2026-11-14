@@ -74,7 +74,7 @@ export function initRemoteEvents() {
             if (typeof (window as any).refreshSettingsUI === 'function') {
                 (window as any).refreshSettingsUI();
             }
-            ipcRenderer.send('get-accounts');
+            ipcRenderer.send('accounts:get');
         } catch (e) {
             console.warn('[RemoteController] Failed to refresh views on remote:mode-changed:', e);
         }
@@ -377,6 +377,9 @@ function updateRemoteStatusUI(status: any) {
 
     } else {
         stopStatsSync();
+        if (state.callbacks.updateAggregateQuotaUI) {
+            state.callbacks.updateAggregateQuotaUI();
+        }
     }
 
     const currentMode = (isConnected && isEnabled) ? 'server' : 'local';
@@ -392,7 +395,7 @@ function updateRemoteStatusUI(status: any) {
             if (typeof (window as any).refreshSettingsUI === 'function') {
                 (window as any).refreshSettingsUI();
             }
-            ipcRenderer.send('get-accounts');
+            ipcRenderer.send('accounts:get');
         } catch (e) {
             console.warn('[RemoteController] Failed to trigger view refresh on mode switch:', e);
         }

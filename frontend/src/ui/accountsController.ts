@@ -655,12 +655,35 @@ export function initAccountsEvents() {
 
     if (poolModeToggle) {
         poolModeToggle.addEventListener('change', (e: any) => {
+            const enabled = !!e.target.checked;
             if (state.currentViewTab === 'project') {
-                ipcRenderer.send('pool:toggle-project', e.target.checked);
+                ipcRenderer.send('pool:toggle-project', enabled);
+                if (state.lastBackendData) {
+                    state.lastBackendData.projectPoolMode = enabled;
+                    if (enabled) {
+                        state.lastBackendData.poolMode = false;
+                        state.lastBackendData.nvidiaPoolMode = false;
+                        state.lastBackendData.otherPoolMode = false;
+                        state.lastBackendData.grokPoolMode = false;
+                        state.lastBackendData.activeChannel = 'project';
+                        state.currentActiveChannel = 'project';
+                    }
+                }
             /* } else if (state.currentViewTab === 'gemini-cli') {
                 ipcRenderer.send('pool:toggle-gemini-cli', e.target.checked); */
             } else {
-                ipcRenderer.send('pool:toggle', e.target.checked);
+                ipcRenderer.send('pool:toggle', enabled);
+                if (state.lastBackendData) {
+                    state.lastBackendData.poolMode = enabled;
+                    if (enabled) {
+                        state.lastBackendData.projectPoolMode = false;
+                        state.lastBackendData.nvidiaPoolMode = false;
+                        state.lastBackendData.otherPoolMode = false;
+                        state.lastBackendData.grokPoolMode = false;
+                        state.lastBackendData.activeChannel = 'antigravity';
+                        state.currentActiveChannel = 'antigravity';
+                    }
+                }
             }
             updatePoolModeUI();
             updateAggregateQuotaUI();

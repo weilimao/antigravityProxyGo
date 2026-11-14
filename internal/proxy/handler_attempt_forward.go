@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"antigravity-proxy/internal/account"
+	"antigravity-proxy/internal/netutil"
 	"bytes"
 	"context"
 	"errors"
@@ -96,6 +97,20 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 	proxyReq.Header = ro.customHeaders
 
 	resp, errDo := sc.h.clientForAttempt(ro).Do(proxyReq)
+	if errDo != nil && ctx.Err() == nil && sc.r.Context().Err() == nil && isTransientNetworkErr(errDo) {
+		// 遇到底层传输层瞬时错误（如 Keep-Alive 陈旧连接 EOF / 连接重置）且请求未超时、客户端未主动断开时，
+		// 立即驱逐该账号/Token 连接池中的半关闭空闲连接，并在转发层原地新建连接透明重发 1 次，
+		// 使负载均衡与直连外围端点（如 listExperiments / fetchUserInfo）均能无感自愈。
+		accKey := resolveAttemptTransportKey(ro)
+		netutil.CloseAccountIdleConnections(accKey)
+		if retryReq, errRetryReq := http.NewRequestWithContext(ctx, sc.r.Method, targetUrl, bytes.NewReader(ro.finalReqBody)); errRetryReq == nil {
+			retryReq.Header = ro.customHeaders.Clone()
+			resp, errDo = sc.h.clientForAttempt(ro).Do(retryReq)
+			if errDo != nil && isTransientNetworkErr(errDo) {
+				netutil.CloseAccountIdleConnections(accKey)
+			}
+		}
+	}
 	if errDo != nil {
 		// status=0: 重试循环兜底置 502 BadGateway(对应原 L1075/L1081,TestProxyHandler_Timeout 依赖)
 		return forwardOutcome{status: 0, err: errDo, finalized: true}
@@ -271,4 +286,22 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 		err:       nil,
 		finalized: false,
 	}
+}
+
+func resolveAttemptTransportKey(ro *routeOutcome) string {
+	if ro == nil {
+		return ""
+	}
+	if ro.poolAccount != nil {
+		if id := strings.TrimSpace(ro.poolAccount.ID); id != "" {
+			return id
+		}
+		if email := strings.TrimSpace(ro.poolAccount.Email); email != "" {
+			return email
+		}
+	}
+	if ro.customHeaders != nil {
+		return strings.TrimSpace(ro.customHeaders.Get("Authorization"))
+	}
+	return ""
 }

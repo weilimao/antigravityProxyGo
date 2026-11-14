@@ -509,6 +509,10 @@ export function switchView(viewName: string) {
 
     if (viewName === 'dashboard') {
         ensureBenchmarkTimer();
+        state.callbacks.updateAggregateQuotaUI();
+        if (!state.currentAccountsList || state.currentAccountsList.length === 0) {
+            ipcRenderer.send('accounts:get');
+        }
     } else {
         stopBenchmarkTimer();
     }

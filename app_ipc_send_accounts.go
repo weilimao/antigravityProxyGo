@@ -124,6 +124,7 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		} else {
 			a.AddLog("🔄 Antigravity Load Balancing disabled. Using a single active account.")
 		}
+		a.emitAccountsRes()
 		return true
 
 	case "pool:toggle-project":
@@ -133,6 +134,7 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		} else {
 			a.AddLog("🔄 Project API Load Balancing disabled. Using a single active project account.")
 		}
+		a.emitAccountsRes()
 		return true
 
 	case "pool:toggle-nvidia":
@@ -142,6 +144,7 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		} else {
 			a.AddLog("🔄 NVIDIA Pool Load Balancing disabled. Using a single active NVIDIA account.")
 		}
+		a.emitAccountsRes()
 		return true
 
 	case "pool:toggle-other":
@@ -153,6 +156,7 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		} else {
 			a.AddLog("🔄 Other Pool Load Balancing disabled. Using a single active account per group.")
 		}
+		a.emitAccountsRes()
 		return true
 
 	case "pool:toggle-grok":
@@ -164,6 +168,7 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		} else {
 			a.AddLog("🔄 Grok Pool Load Balancing disabled. Using a single active Grok account.")
 		}
+		a.emitAccountsRes()
 		return true
 
 	case "nvidia:set-lb-mode":

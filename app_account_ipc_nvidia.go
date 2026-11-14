@@ -59,15 +59,7 @@ func (a *App) handleAccountIPCNvidia(channel string, args []interface{}) (string
 			data, _ := marshalResponse(map[string]interface{}{"success": false, "error": err.Error()})
 			return data, true, nil
 		}
-		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":          a.accountMgr.GetAccounts(),
-			"poolMode":          a.accountMgr.GetPoolMode(),
-			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
-			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
-			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
-			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
-			"activeChannel":     a.accountMgr.GetActiveChannel(),
-		})
+		a.emitAccountsRes()
 		a.AddLog(fmt.Sprintf("✅ [NVIDIA] 添加账号成功: %s (id=%s)", in.BaseURL, id))
 		data, _ := marshalResponse(map[string]interface{}{"success": true, "id": id})
 		return data, true, nil
@@ -136,15 +128,7 @@ func (a *App) handleAccountIPCNvidia(channel string, args []interface{}) (string
 			return data, true, nil
 		}
 		a.accountMgr.RemoveAccount(id)
-		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":          a.accountMgr.GetAccounts(),
-			"poolMode":          a.accountMgr.GetPoolMode(),
-			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
-			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
-			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
-			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
-			"activeChannel":     a.accountMgr.GetActiveChannel(),
-		})
+		a.emitAccountsRes()
 		a.AddLog(fmt.Sprintf("🗑️ [NVIDIA] 已移除账号 id=%s", id))
 		data, _ := marshalResponse(map[string]interface{}{"success": true})
 		return data, true, nil
@@ -174,15 +158,7 @@ func (a *App) handleAccountIPCNvidia(channel string, args []interface{}) (string
 			return data, true, nil
 		}
 		a.accountMgr.UpdateAccountEnabled(id, enabled)
-		wailsRuntime.EventsEmit(a.ctx, "accounts-res", map[string]interface{}{
-			"accounts":          a.accountMgr.GetAccounts(),
-			"poolMode":          a.accountMgr.GetPoolMode(),
-			"projectPoolMode":   a.accountMgr.GetProjectPoolMode(),
-			"geminiCliPoolMode": a.accountMgr.GetGeminiCliPoolMode(),
-			"nvidiaPoolMode":    a.accountMgr.GetNvidiaPoolMode(),
-			"nvidiaLBMode":      a.accountMgr.GetNvidiaLBMode(),
-			"activeChannel":     a.accountMgr.GetActiveChannel(),
-		})
+		a.emitAccountsRes()
 		status := "disabled"
 		if enabled {
 			status = "enabled"

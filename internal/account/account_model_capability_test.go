@@ -142,3 +142,73 @@ func TestTriggerTestResponse_ReusesValidTokenAcrossModels(t *testing.T) {
 		t.Fatalf("expected 0 OAuth token refreshes when AccessToken is still valid for 1h, got %d", got)
 	}
 }
+
+func TestAccountModelCapabilityFilter_DynamicGatedAndAliasSkip(t *testing.T) {
+	tmpDir := t.TempDir()
+	mgr := NewManager()
+	mgr.Init(tmpDir)
+	mgr.SetActiveChannel("antigravity")
+	mgr.SetPoolMode(true)
+
+	accNew := &Account{ID: "acc-new", Email: "new@gmail.com", Provider: "antigravity", Tier: "Pro", AccessToken: "tok-new", Enabled: true}
+	accOld := &Account{ID: "acc-old", Email: "old@gmail.com", Provider: "antigravity", Tier: "Pro", AccessToken: "tok-old", Enabled: true}
+	accUnprobed := &Account{ID: "acc-unprobed", Email: "unprobed@gmail.com", Provider: "antigravity", Tier: "Pro", AccessToken: "tok-unprobed", Enabled: true}
+
+	mgr.AddAccount(accNew)
+	mgr.AddAccount(accOld)
+	mgr.AddAccount(accUnprobed)
+
+	mgr.SetAccountSupportedModels("acc-new", []string{
+		"gemini-2.5-flash",
+		"gemini-4-hydrogen-high",
+		"gemini-4-hydrogen-xhigh",
+		"gemini-flash-worker-agy",
+		"gemini-5-nova-pro",
+	})
+	mgr.SetAccountSupportedModels("acc-old", []string{
+		"gemini-2.5-flash",
+		"claude-opus-4-6-thinking",
+	})
+
+	// 1. 请求 gemini-4-hydrogen-high：跳过 acc-old 和 acc-unprobed，只选中 acc-new
+	availHydrogen := mgr.GetAvailableAccountsForChannel("antigravity", "gemini-4-hydrogen-high")
+	if len(availHydrogen) != 1 || availHydrogen[0].ID != "acc-new" {
+		t.Fatalf("expected only acc-new for gemini-4-hydrogen-high, got %+v", availHydrogen)
+	}
+
+	// 2. 请求无后缀别名 gemini-4-hydrogen / gemini-4-hydrogen-thinking：动态匹配成功，仅选 acc-new
+	availAlias := mgr.GetAvailableAccountsForChannel("antigravity", "gemini-4-hydrogen-thinking")
+	if len(availAlias) != 1 || availAlias[0].ID != "acc-new" {
+		t.Fatalf("expected only acc-new for gemini-4-hydrogen-thinking alias, got %+v", availAlias)
+	}
+
+	// 3. 请求未在任何硬编码关键字里的动态差异模型（gemini-flash-worker-agy / gemini-5-nova-pro）：同样只选 acc-new
+	for _, dynModel := range []string{"gemini-flash-worker-agy", "gemini-5-nova-pro"} {
+		availDyn := mgr.GetAvailableAccountsForChannel("antigravity", dynModel)
+		if len(availDyn) != 1 || availDyn[0].ID != "acc-new" {
+			t.Fatalf("expected only acc-new for %s, got %+v", dynModel, availDyn)
+		}
+	}
+
+	// 4. 反向差异：请求 claude-opus-4-6-thinking 时跳过 acc-new，仅选 acc-old
+	avail46 := mgr.GetAvailableAccountsForChannel("antigravity", "claude-opus-4-6-thinking")
+	if len(avail46) != 1 || avail46[0].ID != "acc-old" {
+		t.Fatalf("expected only acc-old for claude-opus-4-6-thinking, got %+v", avail46)
+	}
+
+	// 5. 当支持该模型的账号处于冷却中时，绝不回退到明确不支持的 acc-old（即使池内已无未探测账号，也返回空切片防 404 误打）
+	untilMs := time.Now().Add(10*time.Minute).UnixNano() / int64(time.Millisecond)
+	mgr.SetAccountCooldown("acc-new", untilMs, "gemini-4-hydrogen-high")
+	availWhenCooled := mgr.GetAvailableAccountsForChannel("antigravity", "gemini-4-hydrogen-high")
+	for _, a := range availWhenCooled {
+		if a.ID == "acc-old" {
+			t.Fatalf("acc-old explicitly lacks gemini-4-hydrogen-high and must NEVER be returned even when acc-new is cooled")
+		}
+	}
+	// 移除未探测账号后，池中仅剩明确不支持的 acc-old 与冷却中的 acc-new -> 应返回空切片而非回退 acc-old
+	mgr.SetAccountSupportedModels("acc-unprobed", []string{"gemini-2.5-flash"})
+	availStrictEmpty := mgr.GetAvailableAccountsForChannel("antigravity", "gemini-4-hydrogen-high")
+	if len(availStrictEmpty) != 0 {
+		t.Fatalf("expected 0 accounts when only supported account is cooled and others explicitly lack model, got %+v", availStrictEmpty)
+	}
+}

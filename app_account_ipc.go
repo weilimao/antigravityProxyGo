@@ -75,8 +75,8 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 		)
 		if resp.Success {
 			a.emitAccountsRes()
-			a.AddLog(fmt.Sprintf("✅ [模型能力检测] 检测完成！共检测 %d 个账号，支持 Argon: %d 个，支持 Claude 5.5: %d 个",
-				resp.Summary.TotalAccounts, resp.Summary.ArgonSupportedCount, resp.Summary.Opus55SupportedCount))
+			a.AddLog(fmt.Sprintf("✅ [模型能力检测] 检测完成！共检测 %d 个账号，全池共 %d 个模型，发现 %d 个账号差异化受限模型",
+				resp.Summary.TotalAccounts, len(resp.Summary.AllPoolModels), len(resp.Summary.DifferentiatedModels)))
 		} else {
 			a.AddLog(fmt.Sprintf("❌ [模型能力检测] 检测失败: %s", resp.Error))
 		}

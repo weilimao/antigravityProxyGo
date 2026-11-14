@@ -4,11 +4,14 @@ import (
 	"antigravity-proxy/internal/account"
 	"antigravity-proxy/internal/settings"
 	"encoding/json"
-	"strings"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -157,13 +160,15 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Process Errors (Rate Limits, Quota Exceeded, Token Expired, Custom Rules)
+		// Process Errors (Rate Limits, Quota Exceeded, Token Expired, Custom Rules, Network Transport Errors)
 		errStr := errAttempt.Error()
 		isCustomSwitch := strings.HasPrefix(errStr, "CUSTOM_SWITCH_ACCOUNT")
 		isCustomRetry := strings.HasPrefix(errStr, "CUSTOM_RETRY_ACCOUNT")
+		isNetworkErr := isTransientNetworkErr(errAttempt)
 
 		isRetryable := isCustomSwitch ||
 			isCustomRetry ||
+			isNetworkErr ||
 			errStr == "MODEL_NOT_SUPPORTED" ||
 			errStr == "CAPACITY_EXHAUSTED" ||
 			errStr == "QUOTA_EXHAUSTED" ||
@@ -290,6 +295,13 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			if isNetworkErr {
+				lastAccountFailCount++
+				if sc.handleThresholdRetrySwitch(accId, email, "网络传输异常", status, lastAccountFailCount, sameAccountLimit, 0, targetChan) {
+					switchedAccount = true
+				}
+			}
+
 			if isCustomSwitch {
 				cooldownSecs := settings.DefaultSwitchCooldownSecs
 				if poolErrorRule != nil && poolErrorRule.SwitchCooldownSecs >= 0 {
@@ -357,7 +369,11 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			sc.h.logFn(fmt.Sprintf("%s ❌ [负载均衡] 尝试失败: %v", sc.logPrefix, errAttempt))
-			sc.logRequestToTracker(429, errAttempt.Error())
+			if isNetworkErr && status == 0 {
+				sc.logRequestToTracker(http.StatusBadGateway, errAttempt.Error())
+			} else {
+				sc.logRequestToTracker(429, errAttempt.Error())
+			}
 
 			if !sc.headersSent {
 				if (isCustomSwitch || isCustomRetry || errStr == "MODEL_NOT_SUPPORTED") && status > 0 && len(body) > 0 {
@@ -368,6 +384,18 @@ func (sc *serveContext) runRetryLoop(w http.ResponseWriter, r *http.Request) {
 					}
 					w.WriteHeader(status)
 					w.Write(body)
+				} else if isNetworkErr && status == 0 {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadGateway)
+					errResp := map[string]interface{}{
+						"error": map[string]interface{}{
+							"code":    http.StatusBadGateway,
+							"message": fmt.Sprintf("Upstream network error: %v", errAttempt),
+							"status":  "UNAVAILABLE",
+						},
+					}
+					b, _ := json.Marshal(errResp)
+					w.Write(b)
 				} else {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(429)
@@ -453,4 +481,29 @@ func (sc *serveContext) handleThresholdRetrySwitch(accId, email, errKind string,
 	}
 	sc.h.logFn(fmt.Sprintf("⚠️ [负载均衡] 检测到账号 %s 遇到%s%s（第 %d/%d 次）。不标记冷静期，将继续用当前账号尝试...", email, errKind, statusDesc, failCount, sameAccountLimit))
 	return false
+}
+
+// isTransientNetworkErr 判定底层请求执行过程中遭遇的错误是否属于传输层瞬时异常（如 EOF、连接重置、超时等）。
+// 对确定性失败（如 DNS 不存在 no such host、客户端主动取消 context.Canceled 等）返回 false。
+func isTransientNetworkErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	low := strings.ToLower(err.Error())
+	if strings.Contains(low, "no such host") || strings.Contains(low, "context canceled") {
+		return false
+	}
+	return strings.Contains(low, "eof") ||
+		strings.Contains(low, "connection reset") ||
+		strings.Contains(low, "broken pipe") ||
+		strings.Contains(low, "use of closed network connection") ||
+		strings.Contains(low, "tls handshake timeout") ||
+		strings.Contains(low, "connection refused")
 }
