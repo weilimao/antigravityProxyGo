@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -143,35 +142,47 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 		var clientDisconnected bool = false
 		var streamErr error = nil
 		var malformedFunctionCall bool = false
-		var writeMu sync.Mutex
 		var sentBytes []byte
 
-		// 启动 SSE 心跳保活协程：如果长时间读取上游无响应/Prefill耗时极长，定期向下游写入标准 SSE 注释帧
-		heartbeatStopChan := make(chan struct{})
-		go func() {
-			ticker := time.NewTicker(10 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					// SSE 注释帧，冒号开头，无害且持续重置客户端/网关 ReadTimeout
-					writeMu.Lock()
-					_, hbErr := sc.w.Write([]byte(": keep-alive (antigravity-proxy heartbeat)\n\n"))
-					if hbErr == nil && hasFlusher {
-						flusher.Flush()
-					}
-					writeMu.Unlock()
-					if hbErr != nil {
-						return
-					}
-				case <-heartbeatStopChan:
-					return
-				case <-ctx.Done():
-					return
+		var streamFlusher http.Flusher
+		if hasFlusher {
+			streamFlusher = flusher
+		}
+		sseWriter := newSSEStreamWriter(sseStreamWriterConfig{
+			writer:            sc.w,
+			flusher:           streamFlusher,
+			heartbeatInterval: sc.h.sseHeartbeatInterval,
+			maxBufferBytes:    sc.h.sseMaxBufferBytes,
+			onPayloadEmitted: func(emitted []byte) {
+				// 检测 MALFORMED_FUNCTION_CALL：Google 上游在流中返回此 finishReason 时，
+				// 表示模型生成了格式错误的空函数调用，属于不可重试的终端错误
+				if !malformedFunctionCall && bytes.Contains(emitted, []byte("MALFORMED_FUNCTION_CALL")) {
+					malformedFunctionCall = true
+					sc.h.logFn(fmt.Sprintf("%s ⚠️ 检测到上游 MALFORMED_FUNCTION_CALL（模型生成了格式错误的空函数调用），通常因 thoughtSignature 未剥离或 toolConfig 缺失导致", sc.logPrefix))
 				}
-			}
-		}()
-		defer close(heartbeatStopChan)
+				// 真实业务首帧写回成功：触发 TTFT 打点(幂等 sync.Once, 首字节即记录,
+				// 心跳帧不经过本回调故不污染)。与 helpers.go 落日志侧 FirstByteMs 对齐。
+				sc.firstByteRec.MarkFirstByte()
+				// 仅在未超出 1MB 上限时追踪 sentBytes，避免流式传输内存无限增长
+				const maxSentBytesTrack = 1 * 1024 * 1024 // 1MB
+				if len(sentBytes) < maxSentBytesTrack {
+					remaining := maxSentBytesTrack - len(sentBytes)
+					if len(emitted) <= remaining {
+						sentBytes = append(sentBytes, emitted...)
+					} else {
+						sentBytes = append(sentBytes, emitted[:remaining]...)
+					}
+				}
+
+				// 提取 thoughtSignature 并缓存，下次请求注入到 functionCall parts
+				// 保证 v1internal API 的思考链连续性，防止模型丢失上下文后重复生成失败的工具调用
+				if sc.rawSessionKey != "" {
+					GetSignatureCache().ExtractAndCacheSignatures(emitted, sc.rawSessionKey)
+				}
+			},
+		})
+		sseWriter.Start(ctx)
+		defer sseWriter.Stop()
 
 		// 监听 Context 取消事件，一旦取消立即关闭上游响应体，强行中断阻塞的 Read
 		cancelChan := make(chan struct{})
@@ -188,42 +199,9 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 			n, errR := resp.Body.Read(buf)
 			if n > 0 {
 				chunk := buf[:n]
-				if len(chunk) > 0 {
-					// 检测 MALFORMED_FUNCTION_CALL：Google 上游在流中返回此 finishReason 时，
-					// 表示模型生成了格式错误的空函数调用，属于不可重试的终端错误
-					if !malformedFunctionCall && bytes.Contains(chunk, []byte("MALFORMED_FUNCTION_CALL")) {
-						malformedFunctionCall = true
-						sc.h.logFn(fmt.Sprintf("%s ⚠️ 检测到上游 MALFORMED_FUNCTION_CALL（模型生成了格式错误的空函数调用），通常因 thoughtSignature 未剥离或 toolConfig 缺失导致", sc.logPrefix))
-					}
-					writeMu.Lock()
-					_, writeErr := sc.w.Write(chunk)
-					if writeErr == nil && hasFlusher {
-						flusher.Flush()
-					}
-					writeMu.Unlock()
-					if writeErr != nil {
-						clientDisconnected = true
-						break
-					}
-					// 真实业务首帧写回成功：触发 TTFT 打点(幂等 sync.Once, 首字节即记录,
-					// 心跳帧不经过本分支故不污染)。与 helpers.go 落日志侧 FirstByteMs 对齐。
-					sc.firstByteRec.MarkFirstByte()
-					// 仅在未超出 1MB 上限时追踪 sentBytes，避免流式传输内存无限增长
-					const maxSentBytesTrack = 1 * 1024 * 1024 // 1MB
-					if len(sentBytes) < maxSentBytesTrack {
-						remaining := maxSentBytesTrack - len(sentBytes)
-						if len(chunk) <= remaining {
-							sentBytes = append(sentBytes, chunk...)
-						} else {
-							sentBytes = append(sentBytes, chunk[:remaining]...)
-						}
-					}
-
-					// 提取 thoughtSignature 并缓存，下次请求注入到 functionCall parts
-					// 保证 v1internal API 的思考链连续性，防止模型丢失上下文后重复生成失败的工具调用
-					if sc.rawSessionKey != "" {
-						GetSignatureCache().ExtractAndCacheSignatures(chunk, sc.rawSessionKey)
-					}
+				if writeErr := sseWriter.WriteUpstreamChunk(chunk); writeErr != nil {
+					clientDisconnected = true
+					break
 				}
 			}
 			if errR != nil {
@@ -233,6 +211,15 @@ func (sc *serveContext) forwardForAttempt(attemptIndex int, ro *routeOutcome) fo
 				}
 				break
 			}
+		}
+
+		// 若尚未提交任何业务数据即遇到上游中断，不冲刷缓冲区中残缺半帧，留给下方的 STREAM_INTERRUPTED 重试
+		if !clientDisconnected && (streamErr == nil || len(sentBytes) > 0) {
+			if flushErr := sseWriter.FlushTrailing(); flushErr != nil {
+				clientDisconnected = true
+			}
+		} else {
+			sseWriter.Stop()
 		}
 
 		if clientDisconnected {

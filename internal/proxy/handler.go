@@ -47,6 +47,10 @@ type ProxyHandler struct {
 	getRemoteRelay func() RemoteRelayInterface
 	remoteClient   *http.Client
 	remoteClientMu sync.Mutex
+
+	// 流式 SSE 心跳/帧缓冲可选覆盖参数（零值采用默认 10s / 256KB，主要便于确定性测试注入）
+	sseHeartbeatInterval time.Duration
+	sseMaxBufferBytes    int
 }
 
 func NewProxyHandler(
