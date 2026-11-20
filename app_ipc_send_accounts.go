@@ -213,6 +213,13 @@ func (a *App) handleAccountsSendIPC(channel string, args []interface{}) bool {
 		a.emitAccountsRes()
 		return true
 
+	case "accounts:set-prefer-low-tier":
+		enabled := getBoolArg(0)
+		_ = a.accountMgr.SetPreferLowTierAccount(enabled)
+		a.AddLog(fmt.Sprintf("⚖️ [模型分层路由] 优先使用低阶模型账号: %v", enabled))
+		a.emitAccountsRes()
+		return true
+
 	case "project:set-max-concurrency":
 		v := getIntArg(0)
 		a.accountMgr.SetProjectMaxConcurrency(v)

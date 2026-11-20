@@ -19,7 +19,7 @@ import (
 // 3. 规避旧版 5.5.x 导致官方登录页面提示“版本过低”的问题。
 
 // GetWorkBuddyCliVersion 返回 WorkBuddy 号池全局客户端模拟版本号。
-// 空串=未配置, 回退默认 DefaultWorkBuddyDomesticVersion ("5.7.7")。
+// 空串=未配置, 回退默认 DefaultWorkBuddyDomesticVersion ("5.11.3")。
 func (m *Manager) GetWorkBuddyCliVersion() string {
 	if m == nil {
 		return DefaultWorkBuddyDomesticVersion
@@ -35,7 +35,7 @@ func (m *Manager) GetWorkBuddyCliVersion() string {
 
 // GetWorkBuddyCliVersionRaw 返回已配置的模拟版本号原文; 空串表示未配置。
 // 与 GetWorkBuddyCliVersion 的区别是不回退默认值,便于调用方按账号区域选择默认版本
-// (国际版 5.7.6 / 国内版 5.7.7),避免国际版被国内默认版本顶替。
+// (国际版 5.7.6 / 国内版 5.11.3),避免国际版被国内默认版本顶替。
 func (m *Manager) GetWorkBuddyCliVersionRaw() string {
 	if m == nil {
 		return ""
@@ -46,7 +46,7 @@ func (m *Manager) GetWorkBuddyCliVersionRaw() string {
 }
 
 // SetWorkBuddyCliVersion 设置 WorkBuddy 号池全局客户端模拟版本号并定向落盘。
-// 入参做 TrimSpace 空白规整; 传入空串等同「未配置」, GetWorkBuddyCliVersion 会回退默认 5.7.7。
+// 入参做 TrimSpace 空白规整; 传入空串等同「未配置」, GetWorkBuddyCliVersion 会回退默认 5.11.3。
 func (m *Manager) SetWorkBuddyCliVersion(v string) {
 	if m == nil {
 		return
@@ -124,7 +124,7 @@ func fetchVersionFromUpstream() string {
 // 1. 官方更新接口 (copilot.tencent.com/v2/update) 逆向获取最新版本
 // 2. 本机 Windows 注册表已安装版本 (如 5.8.3)
 // 3. 本机安装目录中的 install-manifest.json 中的 appVersion
-// 4. 官方稳定基准默认值 (DefaultWorkBuddyDomesticVersion 5.7.7)
+// 4. 官方稳定基准默认值 (DefaultWorkBuddyDomesticVersion 5.11.3)
 func DetectWorkBuddyLatestVersion() string {
 	highest := DefaultWorkBuddyDomesticVersion
 
@@ -172,11 +172,14 @@ func detectVersionFromLocalManifests() string {
 		)
 	}
 
-	// 检查可能存在的其他盘符安装路径 (如 E:\WorkBuddyCN\resources, E:\WorkBuddyAI-Intl\resources)
+	// 检查可能存在的其他盘符安装路径 (如 E:\workbuddy-cn\resources, E:\workbuddy-intl\WorkBuddyAI\resources)
 	for _, drive := range []string{"C", "D", "E", "F"} {
 		candidateDirs = append(candidateDirs,
 			drive+`:\WorkBuddyCN\resources`,
+			drive+`:\workbuddy-cn\resources`,
 			drive+`:\WorkBuddyAI-Intl\resources`,
+			drive+`:\workbuddy-intl\WorkBuddyAI\resources`,
+			drive+`:\workbuddy-intl\resources`,
 			drive+`:\WorkBuddy\resources`,
 		)
 	}

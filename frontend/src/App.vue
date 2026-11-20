@@ -88,6 +88,13 @@
 
         <!-- 顶部右侧控制按钮 -->
         <div ref="rightSection" :class="{ 'remote-collapsed': isCollapsed }" class="flex items-center gap-2 md:gap-4 lg:gap-6 flex-shrink-0 ml-auto">
+            <!-- 一键重新打补丁并重启 Antigravity 桌面端 -->
+            <div class="flex items-center border-r border-outline-variant/30 pr-2 md:pr-4 flex-shrink-0">
+                <button id="btnRepatchRestart" class="flex items-center gap-1.5 text-[12px] font-medium text-primary dark:text-primary-fixed-dim bg-primary/5 hover:bg-primary/10 border border-primary/20 px-2.5 py-1 rounded-lg transition-all whitespace-nowrap flex-shrink-0 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed" title="Antigravity 桌面端更新后重新注入代理补丁并自动重启桌面端" data-i18n-title="repatchRestartTitle">
+                    <span class="material-symbols-outlined text-[15px] pointer-events-none">build</span>
+                    <span data-i18n="repatchRestartBtn">重新打补丁</span>
+                </button>
+            </div>
             <!-- 远程连接 -->
             <div class="flex items-center gap-1.5 md:gap-2 border-r border-outline-variant/30 pr-2 mr-1 md:pr-4 md:mr-2 flex-shrink-0">
                 <div id="remoteStatusBadge" class="hidden flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-0.5 rounded-full border whitespace-nowrap flex-shrink-0">
@@ -227,6 +234,7 @@ import { initChartFilters } from './ui/chartRenderer';
 import { initMigrationEvents } from './ui/migrationController';
 import { initUpdaterEvents } from './ui/updaterController';
 import { initRetryErrorLogsEvents } from './ui/retryErrorLogsController';
+import { initRepatchEvents } from './ui/repatchController';
 import { initAccountsGlobalEvents, refreshAccountLayoutFromCache, updateLayoutUI } from './ui/accountsController';
 
 const route = useRoute();
@@ -405,6 +413,7 @@ onMounted(() => {
     initAutotriggerHistoryEvents();
     initAccountsGlobalEvents();
     initPoolErrorRetryEvents();
+    initRepatchEvents();
     
     // Page-specific inits are now called from each page's onMounted hook
     // (see Accounts.vue, Settings.vue, Packets.vue, OTP.vue, UsageDetails.vue)

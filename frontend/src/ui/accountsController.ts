@@ -17,7 +17,7 @@ import { initNvidiaPreferredShuttle, setNvidiaPreferredModelsButtonVisible } fro
 import { initAutoTriggerModalEvents, switchAutoTriggerPanel } from './autoTrigger';
 export { switchAutoTriggerPanel } from './autoTrigger';
 import { initTriggerTestModalEvents, appendTriggerTestLog } from './triggerTestModal';
-import { initAccountModelsModalEvents } from './accountModelsModal';
+import { initAccountModelsModalEvents, syncPreferLowTierFromBackend } from './accountModelsModal';
 import { initSessionBindingsModalEvents } from './sessionBindingsModal';
 import { initNvidiaAccountModalEvents, writeNvidiaModalError, openNvidiaAccountModal } from './nvidiaAccountModal';
 import { initNvidiaBatchAssignIPModal } from './nvidiaBatchAssignIPModal';
@@ -907,6 +907,7 @@ export function initAccountsGlobalEvents() {
             // 分组子 Tab 被冲成空数组而偶发隐藏。
             state.lastBackendData = { ...(state.lastBackendData || {}), ...data };
             updatePoolErrorRetryFromBackend(data);
+            syncPreferLowTierFromBackend(state.lastBackendData);
             if (data && typeof data.activeChannel !== 'undefined') {
                 state.currentActiveChannel = data.activeChannel;
             }

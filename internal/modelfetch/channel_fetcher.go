@@ -339,7 +339,30 @@ func FetchOtherGroupModels(accountMgr *account.Manager, groupID string, directBa
 	return models, nil
 }
 
-// fetchWorkBuddyModels 从 WorkBuddy 官方配置端点 /v3/config 拉取可用模型列表。
+// isStaleOrInternalWorkBuddyModel 判定是否为 WorkBuddy 上游已失效或非 Chat 对话场景的内部模型。
+// 逆向分析与端到端实测证实: 腾讯云上游带 -lkeap (如 deepseek-r1-0528-lkeap)、-taiji、codewise-*、
+// *-completion 等在 /v2/chat/completions 均返回 code: 11102 报错，属于遗留或代码补全专用内部端点。
+func isStaleOrInternalWorkBuddyModel(id string) bool {
+	idLower := strings.ToLower(strings.TrimSpace(id))
+	if idLower == "" {
+		return true
+	}
+	if strings.Contains(idLower, "-lkeap") ||
+		strings.Contains(idLower, "-taiji") ||
+		strings.HasPrefix(idLower, "codewise-") ||
+		strings.HasSuffix(idLower, "-completion") ||
+		strings.HasSuffix(idLower, "-completions") ||
+		strings.HasPrefix(idLower, "completion-") ||
+		idLower == "default-1.1" ||
+		idLower == "default-1.2" {
+		return true
+	}
+	return false
+}
+
+// fetchWorkBuddyModels 从 WorkBuddy 官方配置端点 /v3/config 拉取可用模型列表，
+// 并对齐官方客户端 5.11.3 的 mergeModelsById 机制，将客户端基准核心模型(含 deepseek-v4.1-flash)
+// 与上游远端模型去重合并，同时过滤已失效的内部端点。
 func fetchWorkBuddyModels(acc *account.Account) ([]string, error) {
 	baseURL := strings.TrimSpace(acc.BaseURL)
 	if baseURL == "" || strings.Contains(baseURL, "codebuddy.ai") {
@@ -348,6 +371,14 @@ func fetchWorkBuddyModels(acc *account.Account) ([]string, error) {
 		} else {
 			baseURL = account.DefaultWorkBuddyBaseURL
 		}
+	}
+
+	// 确定基础基准模型: 国内版以 WorkBuddyDomesticCoreModels 为准 (含 deepseek-v4.1-flash), 国际版以 WorkBuddySupportedModels 为准
+	var baseModels []string
+	if acc.IsWorkBuddyDomestic() {
+		baseModels = account.WorkBuddyDomesticCoreModels
+	} else {
+		baseModels = account.WorkBuddySupportedModels
 	}
 
 	configURL := strings.TrimRight(baseURL, "/") + "/v3/config"
@@ -360,17 +391,22 @@ func fetchWorkBuddyModels(acc *account.Account) ([]string, error) {
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	req.Header.Set("x-codebuddy-request", "1")
+	if uid := account.GetWorkBuddyEffectiveUID(acc); strings.TrimSpace(uid) != "" {
+		req.Header.Set("X-Current-Account-Id", strings.TrimSpace(uid))
+	}
 
 	client := &http.Client{Timeout: 15 * time.Second, Transport: netutil.NewTransport()}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("网络连接失败: %w", err)
+		// 网络连接失败时优雅降级返回客户端基准模型
+		return baseModels, fmt.Errorf("网络连接失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
+		return baseModels, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
 	}
 
 	var parsed struct {
@@ -382,20 +418,36 @@ func fetchWorkBuddyModels(acc *account.Account) ([]string, error) {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, fmt.Errorf("解析上游响应 JSON 失败: %w", err)
+		return baseModels, fmt.Errorf("解析上游响应 JSON 失败: %w", err)
 	}
 
+	// 对齐官方客户端 mergeModelsById 逻辑:
+	// 1. 基准核心模型置顶呈现 (包括 deepseek-v4.1-flash, deepseek-v4-flash, hunyuan-* 等)
 	seen := make(map[string]bool)
 	var list []string
-	for _, m := range parsed.Data.Models {
-		id := strings.TrimSpace(m.ID)
-		if id != "" && !seen[id] {
-			seen[id] = true
-			list = append(list, id)
+	for _, id := range baseModels {
+		trimmed := strings.TrimSpace(id)
+		if trimmed != "" && !seen[trimmed] {
+			seen[trimmed] = true
+			list = append(list, trimmed)
 		}
 	}
+
+	// 2. 将远端 /v3/config 返回的非失效有效模型去重追加
+	for _, m := range parsed.Data.Models {
+		id := strings.TrimSpace(m.ID)
+		if id == "" || seen[id] {
+			continue
+		}
+		if isStaleOrInternalWorkBuddyModel(id) {
+			continue
+		}
+		seen[id] = true
+		list = append(list, id)
+	}
+
 	if len(list) == 0 {
-		list = account.WorkBuddySupportedModels
+		list = baseModels
 	}
 	return list, nil
 }
@@ -501,7 +553,11 @@ func FetchWorkBuddyAvailableModelsDetailed(accountMgr *account.Manager) (*WorkBu
 	}
 
 	if len(merged) == 0 {
-		merged = account.WorkBuddySupportedModels
+		if res.HasDomestic && !res.HasIntl {
+			merged = account.WorkBuddyDomesticCoreModels
+		} else {
+			merged = account.WorkBuddySupportedModels
+		}
 	}
 	res.AllModels = merged
 	return res, nil

@@ -50,6 +50,14 @@ export const commonZh: Record<string, string> = {
     colAction: "操作",
     confirm: "确定",
     cancel: "取消",
+    repatchRestartBtn: "重新打补丁",
+    repatchRestartTitle: "Antigravity 桌面端更新后重新注入代理补丁并自动重启桌面端",
+    repatchRestartRunning: "打补丁中...",
+    repatchRestartConfirm: "即将重新注入代理补丁并重启 Antigravity 桌面端。\n\n若 Antigravity 桌面端当前正在运行，将会先关闭再自动重新打开，是否继续？",
+    repatchRestartSuccess: "补丁已重新注入，并已自动重启 Antigravity 桌面端！",
+    repatchRestartNoDesktop: "代理配置与 CLI 补丁已重新注入（未检测到 Antigravity 桌面端安装目录，已跳过桌面端重启）。",
+    repatchRestartPatchedOnly: "补丁已重新注入，但自动启动 Antigravity 桌面端失败：{detail}",
+    repatchRestartFailed: "重新打补丁失败：{detail}",
 };
 
 export const commonEn: Record<string, string> = {
@@ -100,4 +108,12 @@ export const commonEn: Record<string, string> = {
     colAction: "Action",
     confirm: "Confirm",
     cancel: "Cancel",
+    repatchRestartBtn: "Re-patch",
+    repatchRestartTitle: "Re-inject proxy patch after Antigravity desktop updates and restart it automatically",
+    repatchRestartRunning: "Patching...",
+    repatchRestartConfirm: "This will re-inject the proxy patch and restart Antigravity Desktop.\n\nIf Antigravity Desktop is currently running, it will be closed and relaunched automatically. Continue?",
+    repatchRestartSuccess: "Patch re-injected and Antigravity Desktop restarted automatically!",
+    repatchRestartNoDesktop: "Proxy settings & CLI patches re-injected (Antigravity Desktop installation not found; restart skipped).",
+    repatchRestartPatchedOnly: "Patch re-injected, but failed to auto-launch Antigravity Desktop: {detail}",
+    repatchRestartFailed: "Re-patch failed: {detail}",
 };

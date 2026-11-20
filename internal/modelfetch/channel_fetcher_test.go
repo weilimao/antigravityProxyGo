@@ -131,9 +131,10 @@ func TestFetchChannelAvailableModels_WorkBuddyDualVersion(t *testing.T) {
 			"code": 0,
 			"data": map[string]any{
 				"models": []map[string]any{
-					{"id": "hunyuan-2.0-instruct"},
+					{"id": "hunyuan-2.0-instruct-custom"},
 					{"id": "glm-5.1"},
 					{"id": "deepseek-v4.1-flash"},
+					{"id": "deepseek-r1-0528-lkeap"}, // 应被过滤的失效内部模型
 				},
 			},
 		})
@@ -147,9 +148,10 @@ func TestFetchChannelAvailableModels_WorkBuddyDualVersion(t *testing.T) {
 			"code": 0,
 			"data": map[string]any{
 				"models": []map[string]any{
-					{"id": "gpt-5.5"},
-					{"id": "gemini-3.5-flash"},
+					{"id": "gpt-5.5-custom"},
+					{"id": "gemini-3.5-flash-custom"},
 					{"id": "deepseek-v4.1-flash"},
+					{"id": "kimi-k2-instruct-taiji"}, // 应被过滤的失效内部模型
 				},
 			},
 		})
@@ -181,19 +183,33 @@ func TestFetchChannelAvailableModels_WorkBuddyDualVersion(t *testing.T) {
 		t.Fatalf("FetchChannelAvailableModels failed: %v", err)
 	}
 
-	expectedModels := []string{"hunyuan-2.0-instruct", "glm-5.1", "deepseek-v4.1-flash", "gpt-5.5", "gemini-3.5-flash"}
-	if len(models) != len(expectedModels) {
-		t.Fatalf("expected %d models, got %d: %v", len(expectedModels), len(models), models)
-	}
-
 	modelMap := make(map[string]bool)
 	for _, m := range models {
 		modelMap[m] = true
 	}
-	for _, exp := range expectedModels {
-		if !modelMap[exp] {
-			t.Errorf("missing expected model: %s", exp)
-		}
+
+	// 验证必须包含国内核心基准模型
+	if !modelMap["deepseek-v4.1-flash"] {
+		t.Errorf("missing expected model deepseek-v4.1-flash")
+	}
+	if !modelMap["deepseek-v4-flash"] {
+		t.Errorf("missing expected model deepseek-v4-flash")
+	}
+
+	// 验证远端自定义模型被成功合并追加
+	if !modelMap["hunyuan-2.0-instruct-custom"] {
+		t.Errorf("missing remote merged model hunyuan-2.0-instruct-custom")
+	}
+	if !modelMap["gpt-5.5-custom"] {
+		t.Errorf("missing remote merged model gpt-5.5-custom")
+	}
+
+	// 验证已失效的内部模型被严格过滤
+	if modelMap["deepseek-r1-0528-lkeap"] {
+		t.Errorf("stale model deepseek-r1-0528-lkeap should have been filtered out")
+	}
+	if modelMap["kimi-k2-instruct-taiji"] {
+		t.Errorf("stale model kimi-k2-instruct-taiji should have been filtered out")
 	}
 
 	if domHeaderDomain != "www.workbuddy.cn" {
@@ -211,8 +227,9 @@ func TestFetchWorkBuddyAvailableModelsDetailed(t *testing.T) {
 			"code": 0,
 			"data": map[string]any{
 				"models": []map[string]any{
-					{"id": "hunyuan-2.0-instruct"},
+					{"id": "hunyuan-2.0-instruct-extra"},
 					{"id": "deepseek-v4.1-flash"},
+					{"id": "codewise-completions"}, // 应过滤
 				},
 			},
 		})
@@ -225,8 +242,9 @@ func TestFetchWorkBuddyAvailableModelsDetailed(t *testing.T) {
 			"code": 0,
 			"data": map[string]any{
 				"models": []map[string]any{
-					{"id": "gpt-5.5"},
+					{"id": "gpt-5.5-extra"},
 					{"id": "deepseek-v4.1-flash"},
+					{"id": "default-1.1"}, // 应过滤
 				},
 			},
 		})
@@ -258,11 +276,100 @@ func TestFetchWorkBuddyAvailableModelsDetailed(t *testing.T) {
 	if !details.HasDomestic || !details.HasIntl {
 		t.Fatalf("期望 HasDomestic 与 HasIntl 均为 true, 实际: dom=%v, intl=%v", details.HasDomestic, details.HasIntl)
 	}
-	if len(details.DomModels) != 2 || len(details.IntlModels) != 2 {
-		t.Fatalf("期望双端各有 2 个模型, 实际: dom=%d, intl=%d", len(details.DomModels), len(details.IntlModels))
+	// 验证合并了基准模型且追加了额外远端模型
+	domMap := make(map[string]bool)
+	for _, m := range details.DomModels {
+		domMap[m] = true
 	}
-	if len(details.AllModels) != 3 {
-		t.Fatalf("期望聚合去重后共 3 个模型, 实际: %d (%v)", len(details.AllModels), details.AllModels)
+	if !domMap["deepseek-v4.1-flash"] || !domMap["hunyuan-2.0-instruct-extra"] {
+		t.Fatalf("国内模型缺失核心或额外模型: %v", details.DomModels)
+	}
+	if domMap["codewise-completions"] {
+		t.Fatalf("国内模型未能过滤内部补全模型 codewise-completions")
+	}
+
+	intlMap := make(map[string]bool)
+	for _, m := range details.IntlModels {
+		intlMap[m] = true
+	}
+	if !intlMap["deepseek-v4.1-flash"] || !intlMap["gpt-5.5-extra"] {
+		t.Fatalf("国际模型缺失核心或额外模型: %v", details.IntlModels)
+	}
+	if intlMap["default-1.1"] {
+		t.Fatalf("国际模型未能过滤默认占位模型 default-1.1")
+	}
+}
+
+func TestFetchWorkBuddyAvailableModelsDetailed_LiveIntegration(t *testing.T) {
+	// 如果用户本地生产数据目录存在，执行一次真实的只读端到端验证
+	dataDir := `D:\antigravityProxy\data`
+	accountsFile := `D:\antigravityProxy\data\accounts_workbuddy.json`
+	if _, err := os.Stat(accountsFile); os.IsNotExist(err) {
+		t.Skip("本地 accounts_workbuddy.json 不存在，跳过线上集成验证")
+	}
+
+	mgr := account.NewManager()
+	mgr.Init(dataDir)
+
+	details, err := FetchWorkBuddyAvailableModelsDetailed(mgr)
+	if err != nil {
+		t.Fatalf("真实环境调用 FetchWorkBuddyAvailableModelsDetailed 失败: %v", err)
+	}
+
+	t.Logf("成功获取国内版模型数: %d, 国际版模型数: %d, 全量去重后模型数: %d",
+		len(details.DomModels), len(details.IntlModels), len(details.AllModels))
+
+	hasV41Flash := false
+	for _, m := range details.AllModels {
+		if m == "deepseek-v4.1-flash" {
+			hasV41Flash = true
+			break
+		}
+	}
+	if !hasV41Flash {
+		t.Fatalf("关键期望: 获取的模型列表中必须包含 deepseek-v4.1-flash，但未找到！当前模型: %v", details.AllModels)
+	}
+
+	// 确认失效模型已被成功剔除
+	for _, m := range details.AllModels {
+		if m == "deepseek-r1-0528-lkeap" || m == "kimi-k2-instruct-taiji" || m == "completion-gf" {
+			t.Fatalf("列表中不应包含已失效的内部模型: %s", m)
+		}
+	}
+}
+
+func TestIsStaleOrInternalWorkBuddyModel(t *testing.T) {
+	staleCases := []string{
+		"deepseek-r1-0528-lkeap",
+		"kimi-k2-instruct-taiji",
+		"codewise-completions",
+		"codewise-rewrite",
+		"completion-gf",
+		"hunyuan-completion",
+		"test-completions",
+		"default-1.1",
+		"default-1.2",
+		"",
+	}
+	for _, c := range staleCases {
+		if !isStaleOrInternalWorkBuddyModel(c) {
+			t.Errorf("isStaleOrInternalWorkBuddyModel(%q) = false, want true", c)
+		}
+	}
+
+	validCases := []string{
+		"deepseek-v4.1-flash",
+		"deepseek-v4-flash",
+		"deepseek-v4-pro",
+		"deepseek-v3-2-volc",
+		"hunyuan-standard",
+		"glm-5.1",
+		"qwen3-coder-pro",
+	}
+	for _, c := range validCases {
+		if isStaleOrInternalWorkBuddyModel(c) {
+			t.Errorf("isStaleOrInternalWorkBuddyModel(%q) = true, want false", c)
+		}
 	}
 }
 

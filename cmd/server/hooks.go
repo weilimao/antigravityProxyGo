@@ -140,6 +140,10 @@ func (s *ServerInstance) relayRecordUsage(allocatedAccount, userID, apiKeyID, mo
 
 // relayAuthorize 授权鉴权与配额检查回调
 func (s *ServerInstance) relayAuthorize(userID, apiKeyID, modelName string) error {
+	// 针对本地官方/默认 bypass 会话或默认本地管理员身份，免除外部租户配额校验直接放行
+	if apiKeyID == relay.APIKeyIDOfficialBypass || apiKeyID == relay.APIKeyIDDefaultBypass || userID == "default_local_admin" {
+		return nil
+	}
 	if s.RelayUserMgr == nil || s.RelayStatsMgr == nil {
 		return nil
 	}

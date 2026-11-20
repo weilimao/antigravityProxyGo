@@ -110,6 +110,9 @@ func (a *App) IPCInvoke(channel string, argsJSON string) (string, error) {
 	if res, handled, err := a.handleAntigravityBgIPCInvoke(channel, args); handled {
 		return res, err
 	}
+	if res, handled, err := a.handlePatchInvokeIPC(channel, args); handled {
+		return res, err
+	}
 	if res, handled, err := a.handleAccountsInvokeIPC(channel, args); handled {
 		return res, err
 	}

@@ -184,6 +184,31 @@ func (sc *serveContext) selectCandidatePoolAccounts(channel string) ([]*account.
 	return available, limit
 }
 
+// pickSessionPoolAccount 统一执行「候选获取 → 并发限制过滤 → 低阶优先分层收敛 → 会话路由/超额最少并发兜底」，
+// 同时供 routeForAttempt（带日志与占槽）和 retry-loop（仅跟踪 lastUsedAccount）调用，确保两侧口径一致。
+func (sc *serveContext) pickSessionPoolAccount(channel string, withRouterLog bool) (acc *account.Account, limit int, overloaded bool) {
+	available, limit := sc.selectCandidatePoolAccounts(channel)
+	filtered := sc.h.accountMgr.FilterByConcurrency(available, limit)
+	if len(filtered) > 0 {
+		routable := filtered
+		// 同会话已有活跃粘性/伴生绑定且仍在可用集中时，保持原账号不断连（避免同会话高阶思考+低阶执行跨号错位）；
+		// 仅在首次分配新会话或原绑定号已失效时，触发低阶优先分层收敛。
+		if sc.h.sessionRouter.FindStickyAccount(sc.sessionKey, filtered) == nil {
+			routable = sc.h.accountMgr.SelectPriorityTierAccounts(filtered, channel, sc.currentModel)
+		}
+		var logFn func(string)
+		if withRouterLog {
+			logFn = sc.h.logFn
+		}
+		return sc.h.sessionRouter.GetOrAssignAccount(sc.sessionKey, routable, logFn), limit, false
+	}
+	overPool := available
+	if sc.h.sessionRouter.FindStickyAccount(sc.sessionKey, available) == nil {
+		overPool = sc.h.accountMgr.SelectPriorityTierAccounts(available, channel, sc.currentModel)
+	}
+	return sc.h.accountMgr.LeastLoadedAccount(overPool), limit, true
+}
+
 // hasAlternativeAccount 判断除 currentAccID 外，当前通道号池是否还存在其他未排除的可用账号。
 func (sc *serveContext) hasAlternativeAccount(channel, currentAccID string) bool {
 	available, _ := sc.selectCandidatePoolAccounts(channel)

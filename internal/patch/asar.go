@@ -98,15 +98,6 @@ func PatchAsar(asarPath, caCertPath string, logCallback func(string)) error {
 		return fmt.Errorf("app.asar 未找到: %s", asarPath)
 	}
 
-	bakPath := asarPath + ".bak"
-	if _, err := os.Stat(bakPath); os.IsNotExist(err) {
-		// Create backup if it does not exist
-		if err := copyFile(asarPath, bakPath); err != nil {
-			return fmt.Errorf("创建 app.asar 备份失败: %v", err)
-		}
-		logCallback("💾 Created backup of original app.asar.")
-	}
-
 	asarData, err := os.ReadFile(asarPath)
 	if err != nil {
 		return err
@@ -169,6 +160,26 @@ func PatchAsar(asarPath, caCertPath string, logCallback func(string)) error {
 	if markerCount == 1 && strings.Contains(originalJs, "env['HTTP_PROXY']") {
 		logCallback("ℹ️ languageServer.js already contains patch, skipping write.")
 		return nil
+	}
+
+	// 当 app.asar 尚未包含补丁标记（首次安装或刚被官方更新覆盖）时，
+	// 必须同步创建或刷新 app.asar.bak，避免退出还原时将旧版本 .bak 写回新版 IDE。
+	bakPath := asarPath + ".bak"
+	_, bakErr := os.Stat(bakPath)
+	if markerCount == 0 {
+		if err := os.WriteFile(bakPath, asarData, 0644); err != nil {
+			return fmt.Errorf("创建 app.asar 备份失败: %v", err)
+		}
+		if os.IsNotExist(bakErr) {
+			logCallback("💾 Created backup of original app.asar.")
+		} else {
+			logCallback("💾 Refreshed app.asar.bak for updated Antigravity version.")
+		}
+	} else if os.IsNotExist(bakErr) {
+		if err := os.WriteFile(bakPath, asarData, 0644); err != nil {
+			return fmt.Errorf("创建 app.asar 备份失败: %v", err)
+		}
+		logCallback("💾 Created backup of original app.asar.")
 	}
 
 	cleanedJs := originalJs

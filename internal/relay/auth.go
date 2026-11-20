@@ -96,6 +96,18 @@ func (a *AuthManager) ValidateToken(token string) (*RelaySession, error) {
 			}, nil
 		}
 
+		// 识别本地桌面内部运维工具专用 Token (如 AI 一键生成计费 sk-local-aigen 等), 赋予默认本地管理员身份与 Bypass 标记
+		if strings.HasPrefix(token, "sk-local-") {
+			return &RelaySession{
+				Token:     token,
+				UserID:    defaultLocalAdminUserID,
+				UserKey:   "admin",
+				APIKeyID:  APIKeyIDDefaultBypass,
+				IsAdmin:   true,
+				ExpiresAt: time.Now().Add(5 * time.Minute),
+			}, nil
+		}
+
 		// 识别内部 OCR 探针专用 Token，直接安全映射至对应用户或默认管理员
 		if strings.HasPrefix(token, "sk-ant-ocr-internal-probe-") {
 			targetUserID := strings.TrimPrefix(token, "sk-ant-ocr-internal-probe-")

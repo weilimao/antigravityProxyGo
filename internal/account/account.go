@@ -272,6 +272,9 @@ type AccountsData struct {
 	OpenCodeLBMode string `json:"opencodeLbMode,omitempty"`
 	// OpenCodeMaxConcurrency 持久化 OpenCode 号池单账号在途并发上限(单池单值)。
 	OpenCodeMaxConcurrency int `json:"opencodeMaxConcurrency,omitempty"`
+	// PreferLowTierAccount 控制请求支持相同基础模型的流量时，是否优先消耗不支持更高阶差异模型
+	// （如不支持 gemini-4-hydrogen）的账号额度，以保留高阶号额度给高阶模型（默认 false）。
+	PreferLowTierAccount bool `json:"preferLowTierAccount,omitempty"`
 }
 
 type Manager struct {
@@ -313,6 +316,8 @@ type Manager struct {
 	// otherCooldownRules 按 GroupID 维度保存各组自定义冷却策略(远端状态码 → 冷却时长 + 模型过滤),
 	// 与 otherLBModes 同范式。详见 account_other.go 的 OtherCooldownRule 注释。
 	otherCooldownRules map[string]*OtherCooldownRule
+	// preferLowTierAccount 开关：默认 false；开启后同配额池请求低阶模型时优先选仅支持低阶模型的账号。
+	preferLowTierAccount bool
 	// antigravityCliVersion 持久化 Antigravity 号池全局 Hub/客户端版本号(单池单值,对仗 antigravityMaxConcurrency);
 	// 空串=未配置, GetAntigravityCliVersion 回退默认 DefaultAntigravityCliVersion("2.29.1")。
 	antigravityCliVersion string

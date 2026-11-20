@@ -53,6 +53,7 @@ type AccountModelCapabilityInfo struct {
 	Tier            string   `json:"tier"`
 	Provider        string   `json:"provider"`
 	Enabled         bool     `json:"enabled"`
+	Probed          bool     `json:"probed"`
 	HasArgonBucket  *bool    `json:"hasArgonBucket"`
 	SupportedCount  int      `json:"supportedCount"`
 	SupportedModels []string `json:"supportedModels"`
@@ -83,19 +84,8 @@ type AccountProbeResponse struct {
 	Results []AccountModelCapabilityInfo `json:"results"`
 }
 
-// ProbeAccountsModels 批量或针对指定账号探测 Google/Antigravity 号池真实可用模型列表，
-// 更新 Account.SupportedModels 并计算各账号缺失的核心受限模型。
-func ProbeAccountsModels(
-	accountMgr *account.Manager,
-	getStoredProject func(string) string,
-	refreshToken func(*account.Account) (string, error),
-	channel string,
-	targetAccountIDs []string,
-) *AccountProbeResponse {
-	if accountMgr == nil {
-		return &AccountProbeResponse{Success: false, Error: "AccountManager is nil"}
-	}
-
+// filterProbeCandidates 按渠道与可选目标账号 ID 过滤出启用的账号切片。
+func filterProbeCandidates(accountMgr *account.Manager, channel string, targetAccountIDs []string) (string, []*account.Account) {
 	ch := strings.ToLower(strings.TrimSpace(channel))
 	if ch == "" {
 		ch = "antigravity"
@@ -126,7 +116,70 @@ func ProbeAccountsModels(
 			candidates = append(candidates, acc)
 		}
 	}
+	return ch, candidates
+}
 
+// GetCachedAccountsModels 直接基于账号持久化字段 SupportedModels 组装当前渠道的全池能力画像与汇总，
+// 不触发任何远程网络探测请求，供“检测可用模型”弹窗打开时复显及单账号探测后刷新全池差异对比。
+func GetCachedAccountsModels(accountMgr *account.Manager, channel string) *AccountProbeResponse {
+	if accountMgr == nil {
+		return &AccountProbeResponse{Success: false, Error: "AccountManager is nil"}
+	}
+	_, candidates := filterProbeCandidates(accountMgr, channel, nil)
+	if len(candidates) == 0 {
+		return &AccountProbeResponse{
+			Success: true,
+			Summary: ProbeSummary{
+				CoreGatedModels: DefaultCoreGatedModels,
+			},
+			Results: []AccountModelCapabilityInfo{},
+		}
+	}
+
+	results := make([]AccountModelCapabilityInfo, len(candidates))
+	allPoolModelsSet := make(map[string]bool)
+	probedCount := 0
+
+	for i, acc := range candidates {
+		info := AccountModelCapabilityInfo{
+			ID:             acc.ID,
+			Email:          acc.Email,
+			Tier:           acc.Tier,
+			Provider:       acc.Provider,
+			Enabled:        acc.Enabled,
+			HasArgonBucket: acc.HasArgonBucket,
+		}
+		if len(acc.SupportedModels) > 0 {
+			info.Probed = true
+			info.SupportedModels = append([]string(nil), acc.SupportedModels...)
+			info.SupportedCount = len(acc.SupportedModels)
+			probedCount++
+			for _, m := range acc.SupportedModels {
+				if norm := normalizeProbeModelID(m); norm != "" {
+					allPoolModelsSet[norm] = true
+				}
+			}
+		}
+		results[i] = info
+	}
+
+	return summarizeProbeResults(results, probedCount, allPoolModelsSet)
+}
+
+// ProbeAccountsModels 批量或针对指定账号探测 Google/Antigravity 号池真实可用模型列表，
+// 更新 Account.SupportedModels 并计算各账号缺失的核心受限模型。
+func ProbeAccountsModels(
+	accountMgr *account.Manager,
+	getStoredProject func(string) string,
+	refreshToken func(*account.Account) (string, error),
+	channel string,
+	targetAccountIDs []string,
+) *AccountProbeResponse {
+	if accountMgr == nil {
+		return &AccountProbeResponse{Success: false, Error: "AccountManager is nil"}
+	}
+
+	ch, candidates := filterProbeCandidates(accountMgr, channel, targetAccountIDs)
 	if len(candidates) == 0 {
 		return &AccountProbeResponse{
 			Success: false,
@@ -163,10 +216,12 @@ func ProbeAccountsModels(
 			info.Error = err.Error()
 			// 若探测遇到临时错误但此前已持久化过 SupportedModels，使用历史缓存兜底
 			if len(acc.SupportedModels) > 0 {
+				info.Probed = true
 				info.SupportedModels = acc.SupportedModels
 				info.SupportedCount = len(acc.SupportedModels)
 			}
 		} else {
+			info.Probed = true
 			info.SupportedModels = models
 			info.SupportedCount = len(models)
 			accountMgr.SetAccountSupportedModels(acc.ID, models)
@@ -184,6 +239,14 @@ func ProbeAccountsModels(
 		results[i] = info
 	}
 
+	return summarizeProbeResults(results, len(candidates), allPoolModelsSet)
+}
+
+func summarizeProbeResults(
+	results []AccountModelCapabilityInfo,
+	probedAccountsCount int,
+	allPoolModelsSet map[string]bool,
+) *AccountProbeResponse {
 	// 确定本号池所发现的全部模型全集
 	allPoolModels := make([]string, 0, len(allPoolModelsSet))
 	for m := range allPoolModelsSet {
@@ -219,8 +282,8 @@ func ProbeAccountsModels(
 			opus55SupportedTotal++
 		}
 
-		// 若本次探测报错且无历史缓存，不编造缺失列表
-		if accInfo.Error != "" && len(accInfo.SupportedModels) == 0 {
+		// 若尚未探测（或探测报错且无历史缓存），不编造缺失列表
+		if !accInfo.Probed || (accInfo.Error != "" && len(accInfo.SupportedModels) == 0) {
 			continue
 		}
 
@@ -249,8 +312,8 @@ func ProbeAccountsModels(
 	return &AccountProbeResponse{
 		Success: true,
 		Summary: ProbeSummary{
-			TotalAccounts:        len(candidates),
-			ProbedAccounts:       len(candidates),
+			TotalAccounts:        len(results),
+			ProbedAccounts:       probedAccountsCount,
 			ValidProbedCount:     validProbedCount,
 			ArgonSupportedCount:  argonSupportedTotal,
 			Opus55SupportedCount: opus55SupportedTotal,
@@ -305,7 +368,7 @@ func buildPoolModelCoverage(results []AccountModelCapabilityInfo, allPoolModels 
 	validSets := make([]map[string]bool, 0, len(results))
 	for i := range results {
 		acc := &results[i]
-		if acc.Error != "" && len(acc.SupportedModels) == 0 {
+		if (!acc.Probed || acc.Error != "") && len(acc.SupportedModels) == 0 {
 			continue
 		}
 		validSets = append(validSets, buildSupportedModelSet(acc))

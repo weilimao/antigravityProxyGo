@@ -16,10 +16,34 @@
  *       ipcRenderer、shell(打开来源 URL)、i18n、全局 alert(沿用现有惯例,pricingController 同款)。
  * 不依赖任何跨簇 handle。
  */
+import { ref } from 'vue';
 import { ipcRenderer, shell } from '../shared/ipc';
 import i18n from '../shared/i18n';
 import state from './dashboardState';
 import { computeAiPricingCandidates } from './aiPricingCandidates';
+
+export const aiPricingMode = ref<'model' | 'account'>('model');
+export const aiPricingSelectedModel = ref<string>('');
+export const aiPricingModelOptions = ref<string[]>([]);
+
+export async function refreshAiPricingModelOptions(): Promise<void> {
+    try {
+        const mappings = await ipcRenderer.invoke('relay:get-model-mapping');
+        const fromRelay = Array.isArray(mappings)
+            ? mappings.filter((m: any) => m && m.clientModel).map((m: any) => String(m.clientModel))
+            : [];
+        const fromStats = Object.keys(state.statsData?.models || {});
+        const combined = Array.from(new Set([...fromRelay, ...fromStats, aiPricingSelectedModel.value].filter(Boolean)))
+            .sort((a, b) => a.localeCompare(b));
+        aiPricingModelOptions.value = combined;
+        if (!aiPricingSelectedModel.value && combined.length > 0) {
+            const preferred = combined.find((m) => /gemini.*flash|gpt-4o-mini|claude-3-5-haiku/i.test(m)) || combined[0];
+            aiPricingSelectedModel.value = preferred;
+        }
+    } catch (err) {
+        console.error('[AiPricing] Failed to refresh model options:', err);
+    }
+}
 
 let candidatesCache: string[] = [];
 let progressBound = false; // 防止 initAiPricingEvents 多次注册重复 pricing:ai-progress 监听
@@ -32,6 +56,7 @@ function dict() {
 function stageI18nKey(step: string): string {
     switch (step) {
         case 'fetch-token': return 'aiPricingStageFetchToken';
+        case 'calling-model': return 'aiPricingStageCallingModel';
         case 'grounding-search': return 'aiPricingStageGrounding';
         case 'grounding-degraded': return 'aiPricingStageDegraded';
         case 'token-refresh': return 'aiPricingStageRefresh';
@@ -58,6 +83,64 @@ function applyProgress(step: string): void {
     );
 }
 
+// 默认兜底常用 Antigravity 官方模型列表(当账号未执行可用模型探测时使用)。
+const DEFAULT_ANTIGRAVITY_MODELS = [
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash-lite',
+    'claude-3-5-sonnet',
+    'gemini-1.5-pro',
+    'gemini-1.5-flash',
+];
+
+// 根据选定的账号 ID 动态联动刷新该账号的模型下拉列表。
+export function updateAccountModelsSelect(accountId: string): void {
+    const sel = document.getElementById('aiPricingAccountModelSelect') as HTMLSelectElement | null;
+    if (!sel) return;
+    const d = dict();
+
+    if (!accountId) {
+        sel.innerHTML = `<option value="">${d.aiPricingAccountModelPlaceholder || '请先选择账号...'}</option>`;
+        sel.disabled = true;
+        return;
+    }
+
+    const acc = (state.currentAccountsList || []).find((a: any) => a.id === accountId);
+    let models: string[] = [];
+    let isFallback = false;
+
+    if (acc && Array.isArray(acc.supportedModels) && acc.supportedModels.length > 0) {
+        models = [...acc.supportedModels];
+    } else {
+        models = [...DEFAULT_ANTIGRAVITY_MODELS];
+        isFallback = true;
+    }
+
+    // 去重并做稳定排序(推荐模型优先)
+    const preferredOrder = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite'];
+    const sorted = Array.from(new Set(models.filter(Boolean))).sort((a, b) => {
+        const idxA = preferredOrder.indexOf(a);
+        const idxB = preferredOrder.indexOf(b);
+        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+        if (idxA !== -1) return -1;
+        if (idxB !== -1) return 1;
+        return a.localeCompare(b);
+    });
+
+    sel.disabled = false;
+    sel.innerHTML = sorted.map((m) => {
+        const isPref = preferredOrder.includes(m);
+        const tag = isFallback ? ` (${(d as any).defaultVal || '默认'})` : (isPref ? ` (${(d as any).recommended || '推荐'})` : '');
+        return `<option value="${escapeHtml(m)}">${escapeHtml(m)}${tag}</option>`;
+    }).join('');
+
+    // 默认选中最佳匹配模型
+    const bestMatch = sorted.find((m) => preferredOrder.includes(m)) || sorted[0] || '';
+    if (bestMatch) {
+        sel.value = bestMatch;
+    }
+}
+
 // 账号下拉填充:限定 Antigravity / gemini-cli provider(与 packet analyze 的「全 enabled」相比更严,
 // 避免误选 NVIDIA/Grok token 直连 daily-cloudcode-pa 失败)。
 function fillAccountSelect(): boolean {
@@ -70,12 +153,21 @@ function fillAccountSelect(): boolean {
     const pl = `<option value="" data-i18n="aiPricingAccountLabel">${d.aiPricingAccountLabel}</option>`;
     if (accs.length === 0) {
         sel.innerHTML = pl + `<option value="" disabled>${d.aiPricingNoAccount}</option>`;
+        updateAccountModelsSelect('');
         return false;
     }
     sel.innerHTML = pl + accs.map((a: any) => {
         const t = a.tier ? ` [${a.tier}]` : '';
         return `<option value="${a.id}">${a.email}${t}</option>`;
     }).join('');
+
+    // 默认选中第一个可用账号，并联动填充其模型下拉列表
+    if (accs.length > 0) {
+        sel.value = accs[0].id;
+        updateAccountModelsSelect(accs[0].id);
+    } else {
+        updateAccountModelsSelect('');
+    }
     return true;
 }
 
@@ -226,6 +318,7 @@ export function showAiPricingModal() {
         state.pricingConfig
     );
     fillAccountSelect();
+    refreshAiPricingModelOptions();
     syncGenButtonState();
     showSection('pre');
     modal.classList.remove('opacity-0', 'pointer-events-none');
@@ -263,19 +356,53 @@ export function initAiPricingEvents() {
         progressBound = true;
     }
 
+    const selAcc = document.getElementById('aiPricingAccountSelect') as HTMLSelectElement | null;
+    if (selAcc) {
+        selAcc.addEventListener('change', () => {
+            updateAccountModelsSelect(selAcc.value);
+        });
+    }
+
     if (btnGen) {
         btnGen.addEventListener('click', async () => {
-            const sel = document.getElementById('aiPricingAccountSelect') as HTMLSelectElement | null;
-            const accId = sel?.value || '';
             const d = dict();
-            if (!accId) {
-                alert(d.aiPricingErrSelectAccount);
-                return;
+            let invokePayload: any;
+            if (aiPricingMode.value === 'model') {
+                const model = aiPricingSelectedModel.value.trim();
+                if (!model) {
+                    alert(d.aiPricingErrSelectModel);
+                    return;
+                }
+                invokePayload = {
+                    mode: 'model',
+                    model: model,
+                    candidates: candidatesCache,
+                };
+            } else {
+                const sel = document.getElementById('aiPricingAccountSelect') as HTMLSelectElement | null;
+                const accId = sel?.value || '';
+                if (!accId) {
+                    alert(d.aiPricingErrSelectAccount);
+                    return;
+                }
+                const modelSel = document.getElementById('aiPricingAccountModelSelect') as HTMLSelectElement | null;
+                const model = modelSel?.value?.trim() || '';
+                if (!model) {
+                    alert((d as any).aiPricingErrSelectAccountModel || d.aiPricingErrSelectModel);
+                    return;
+                }
+                invokePayload = {
+                    mode: 'account',
+                    accountId: accId,
+                    model: model,
+                    candidates: candidatesCache,
+                };
             }
+
             if (candidatesCache.length === 0) return;
             showSection('loading');
             try {
-                const res = await ipcRenderer.invoke('pricing:ai-generate', accId, candidatesCache);
+                const res = await ipcRenderer.invoke('pricing:ai-generate', invokePayload);
                 if (res && res.error) {
                     showSection('pre');
                     applyProgress('error');

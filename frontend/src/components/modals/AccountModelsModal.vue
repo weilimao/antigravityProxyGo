@@ -4,8 +4,10 @@
     containerId="accountModelsModalContainer"
     closeBtnId="btnAccountModelsModalClose"
     icon="fact_check"
+    :noScale="true"
     maxWidth="w-[980px] max-w-[95vw]"
     maxHeight="max-h-[90vh]"
+    containerClass="shadow-xl"
     bodyClass="p-5 overflow-y-auto flex-grow space-y-4 max-h-[72vh]"
   >
     <template #header-title>
@@ -24,6 +26,27 @@
           系统已动态比对号池全部账号的真实可用模型（无需写死模型清单，自动发现新模型与灰度权限差异）。后续请求任何模型时，负载均衡与中继将<strong class="text-emerald-600 dark:text-emerald-400">自动跳过不支持该模型的账号</strong>并直接分发至下一个可用账号，杜绝 404 报错与频繁换号风控。
         </div>
       </div>
+    </div>
+
+    <!-- 优先路由低阶模型账号开关（默认关闭） -->
+    <div class="bg-slate-50/90 dark:bg-slate-900/40 p-3.5 rounded-xl border border-outline-variant/25 flex items-center justify-between gap-4">
+      <div class="space-y-0.5 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="material-symbols-outlined text-[16px] text-amber-500 flex-shrink-0">low_priority</span>
+          <span class="text-[12.5px] font-bold text-on-surface dark:text-white">优先使用低阶模型账号</span>
+          <span
+            id="preferLowTierStatusBadge"
+            class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-500/20"
+          >已关闭 (默认)</span>
+        </div>
+        <p class="text-[11.5px] text-outline dark:text-slate-300 leading-relaxed">
+          开启后，新会话请求同配额族低阶模型（如 <code class="font-mono text-[11px]">gemini-3.8-flash</code>）时，优先调度不支持更高阶差异模型（如 <code class="font-mono text-[11px]">gemini-4-hydrogen</code>）的账号，保留高阶号配额；同一活跃会话或伴生子请求会继续保留在原账号以防缓存失效与上下文错位；低阶号均冷却或并发满时自动兜底回退高阶号。关闭后立即失效。
+        </p>
+      </div>
+      <label class="relative inline-flex items-center cursor-pointer flex-shrink-0" title="开启后请求低阶模型优先消耗仅支持低阶模型的账号">
+        <input type="checkbox" id="preferLowTierAccountToggle" class="sr-only peer" />
+        <div class="w-10 h-5 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-5 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+      </label>
     </div>
 
     <!-- 核心统计概览徽章卡片 -->
@@ -74,16 +97,17 @@
         <table class="w-full text-left border-collapse table-fixed text-[12px]">
           <thead>
             <tr class="bg-slate-50 dark:bg-[#1a1f30] text-outline dark:text-outline-variant text-[11px] border-b border-outline-variant/30 sticky top-0 z-10">
-              <th class="p-3 font-bold w-[25%]">账号邮箱 / 层级</th>
-              <th class="p-3 font-bold w-[34%]">不可用模型 (请求时自动跳过)</th>
-              <th class="p-3 font-bold w-[41%]">可用模型清单 (差异模型置顶高亮)</th>
+              <th class="p-3 font-bold w-[22%]">账号邮箱 / 层级</th>
+              <th class="p-3 font-bold w-[31%]">不可用模型 (请求时自动跳过)</th>
+              <th class="p-3 font-bold w-[36%]">可用模型清单 (差异模型置顶高亮)</th>
+              <th class="p-3 font-bold w-[11%] text-center">操作</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-outline-variant/10 text-on-surface dark:text-slate-200" id="accountModelsTableBody">
             <!-- 由 accountModelsModal.ts 动态填充 -->
             <tr>
-              <td colspan="3" class="p-8 text-center text-outline italic">
-                点击下方【重新检测】开始探测各账号模型权限
+              <td colspan="4" class="p-8 text-center text-outline italic">
+                暂无缓存数据，可点击每行【单独检测】或下方【检测全部模型】
               </td>
             </tr>
           </tbody>
@@ -99,7 +123,7 @@
           class="px-3.5 py-1.5 text-[12px] font-bold text-primary dark:text-primary-fixed-dim bg-primary/10 hover:bg-primary/20 border border-primary/30 rounded-lg transition-all flex items-center gap-1.5 select-none cursor-pointer"
         >
           <span class="material-symbols-outlined text-[15px]" id="iconAccountModelsReProbe">refresh</span>
-          <span>重新检测模型</span>
+          <span>检测全部模型</span>
         </button>
         <button
           type="button"

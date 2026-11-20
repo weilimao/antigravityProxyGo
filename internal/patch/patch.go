@@ -424,59 +424,148 @@ func cleanJSONC(data []byte) []byte {
 	return out.Bytes()
 }
 
-// PatchAgentAsar handles local app.asar patching based on platform
-func PatchAgentAsar(enable bool, homeDir, tempDir, caPath string, logCallback func(string)) error {
-	var asarPath string
+// resolveAgentAsarPaths 返回当前平台候选的 Antigravity app.asar 路径（去重保序）。
+// 当传入沙箱 homeDir（与真实 os.UserHomeDir 不一致）时，仅探测沙箱目录，避免测试污染宿主机文件。
+func resolveAgentAsarPaths(homeDir string) []string {
+	var candidates []string
+	realHome, _ := os.UserHomeDir()
+	includeSystemPaths := homeDir == "" || (realHome != "" && filepath.Clean(homeDir) == filepath.Clean(realHome))
 
-	if runtime.GOOS == "windows" {
-		asarPath = filepath.Join(homeDir, "AppData", "Local", "Programs", "antigravity", "resources", "app.asar")
-	} else if runtime.GOOS == "darwin" {
-		asarPath = "/Applications/Antigravity.app/Contents/Resources/app.asar"
+	switch runtime.GOOS {
+	case "windows":
+		if homeDir != "" {
+			candidates = append(candidates,
+				filepath.Join(homeDir, "AppData", "Local", "Programs", "antigravity", "resources", "app.asar"),
+				filepath.Join(homeDir, "AppData", "Local", "Programs", "Antigravity", "resources", "app.asar"),
+				filepath.Join(homeDir, "AppData", "Local", "Programs", "Antigravity IDE", "resources", "app.asar"),
+				filepath.Join(homeDir, "AppData", "Local", "antigravity", "resources", "app.asar"),
+			)
+		}
+		if includeSystemPaths {
+			if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+				candidates = append(candidates,
+					filepath.Join(localAppData, "Programs", "antigravity", "resources", "app.asar"),
+					filepath.Join(localAppData, "Programs", "Antigravity", "resources", "app.asar"),
+					filepath.Join(localAppData, "Programs", "Antigravity IDE", "resources", "app.asar"),
+					filepath.Join(localAppData, "antigravity", "resources", "app.asar"),
+				)
+			}
+			if progFiles := os.Getenv("ProgramFiles"); progFiles != "" {
+				candidates = append(candidates,
+					filepath.Join(progFiles, "antigravity", "resources", "app.asar"),
+					filepath.Join(progFiles, "Antigravity", "resources", "app.asar"),
+					filepath.Join(progFiles, "Antigravity IDE", "resources", "app.asar"),
+				)
+			}
+			if progFilesX86 := os.Getenv("ProgramFiles(x86)"); progFilesX86 != "" {
+				candidates = append(candidates,
+					filepath.Join(progFilesX86, "antigravity", "resources", "app.asar"),
+					filepath.Join(progFilesX86, "Antigravity", "resources", "app.asar"),
+				)
+			}
+		}
+	case "darwin":
+		if homeDir != "" {
+			candidates = append(candidates,
+				filepath.Join(homeDir, "Applications", "Antigravity.app", "Contents", "Resources", "app.asar"),
+				filepath.Join(homeDir, "Applications", "Antigravity IDE.app", "Contents", "Resources", "app.asar"),
+			)
+		}
+		if includeSystemPaths {
+			candidates = append(candidates,
+				"/Applications/Antigravity.app/Contents/Resources/app.asar",
+				"/Applications/Antigravity IDE.app/Contents/Resources/app.asar",
+			)
+		}
+	default:
+		if homeDir != "" {
+			candidates = append(candidates,
+				filepath.Join(homeDir, ".local", "share", "antigravity", "resources", "app.asar"),
+			)
+		}
+		if includeSystemPaths {
+			candidates = append(candidates,
+				"/opt/antigravity/resources/app.asar",
+				"/usr/lib/antigravity/resources/app.asar",
+			)
+		}
 	}
 
-	if asarPath == "" {
+	seen := make(map[string]bool, len(candidates))
+	unique := make([]string, 0, len(candidates))
+	for _, p := range candidates {
+		cleaned := filepath.Clean(p)
+		key := cleaned
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(cleaned)
+		}
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, cleaned)
+		}
+	}
+	return unique
+}
+
+// PatchAgentAsar handles local app.asar patching based on platform
+func PatchAgentAsar(enable bool, homeDir, tempDir, caPath string, logCallback func(string)) error {
+	if logCallback == nil {
+		logCallback = func(string) {}
+	}
+
+	candidates := resolveAgentAsarPaths(homeDir)
+	if len(candidates) == 0 {
 		return nil
 	}
 
-	if _, err := os.Stat(asarPath); os.IsNotExist(err) {
+	var foundPaths []string
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			foundPaths = append(foundPaths, p)
+		}
+	}
+
+	if len(foundPaths) == 0 {
 		logCallback("⚠️ Antigravity Agent app.asar not found. Skipping auto-patch.")
 		return nil
 	}
 
-	if enable {
-		logCallback("⚙️ Auto-patching Antigravity Agent app.asar...")
-		err := PatchAsar(asarPath, caPath, logCallback)
-		if err != nil {
-			if os.IsPermission(err) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
-				logCallback("❌ ASAR 补丁写入失败：权限不足 (Permission Denied)。")
-				if runtime.GOOS == "darwin" {
-					logCallback("💡 提示：在 macOS 上，请尝试在终端执行以下命令赋予该文件写入权限：")
-					logCallback(fmt.Sprintf("   sudo chmod +w %s", asarPath))
+	for _, asarPath := range foundPaths {
+		if enable {
+			logCallback(fmt.Sprintf("⚙️ Auto-patching Antigravity Agent app.asar (%s)...", asarPath))
+			err := PatchAsar(asarPath, caPath, logCallback)
+			if err != nil {
+				if os.IsPermission(err) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+					logCallback("❌ ASAR 补丁写入失败：权限不足 (Permission Denied)。")
+					if runtime.GOOS == "darwin" {
+						logCallback("💡 提示：在 macOS 上，请尝试在终端执行以下命令赋予该文件写入权限：")
+						logCallback(fmt.Sprintf("   sudo chmod +w %s", asarPath))
+					} else {
+						logCallback("💡 提示：请尝试以管理员身份运行本程序。")
+					}
 				} else {
-					logCallback("💡 提示：请尝试以管理员身份运行本程序。")
+					logCallback(fmt.Sprintf("❌ ASAR Patching failed: %v", err))
 				}
-			} else {
-				logCallback(fmt.Sprintf("❌ ASAR Patching failed: %v", err))
+				return err
 			}
-			return err
-		}
-		logCallback("✅ Antigravity Agent patched successfully.")
-	} else {
-		logCallback("[ASAR Patcher] Restoring original app.asar...")
-		err := RestoreAsar(asarPath)
-		if err != nil {
-			if os.IsPermission(err) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
-				logCallback("❌ ASAR 恢复失败：权限不足 (Permission Denied)。")
-				if runtime.GOOS == "darwin" {
-					logCallback("💡 提示：在 macOS 上，请尝试在终端执行以下命令赋予该文件写入权限：")
-					logCallback(fmt.Sprintf("   sudo chmod +w %s", asarPath))
+			logCallback("✅ Antigravity Agent patched successfully.")
+		} else {
+			logCallback("[ASAR Patcher] Restoring original app.asar...")
+			err := RestoreAsar(asarPath)
+			if err != nil {
+				if os.IsPermission(err) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+					logCallback("❌ ASAR 恢复失败：权限不足 (Permission Denied)。")
+					if runtime.GOOS == "darwin" {
+						logCallback("💡 提示：在 macOS 上，请尝试在终端执行以下命令赋予该文件写入权限：")
+						logCallback(fmt.Sprintf("   sudo chmod +w %s", asarPath))
+					} else {
+						logCallback("💡 提示：请尝试以管理员身份运行本程序。")
+					}
 				} else {
-					logCallback("💡 提示：请尝试以管理员身份运行本程序。")
+					logCallback(fmt.Sprintf("❌ ASAR Restore failed: %v", err))
 				}
-			} else {
-				logCallback(fmt.Sprintf("❌ ASAR Restore failed: %v", err))
+				return err
 			}
-			return err
 		}
 	}
 
@@ -489,6 +578,10 @@ var patchMu sync.Mutex
 func PatchAll(enable bool, appData, homeDir, caPath string, logCallback func(string)) error {
 	patchMu.Lock()
 	defer patchMu.Unlock()
+
+	if logCallback == nil {
+		logCallback = func(string) {}
+	}
 
 	// 优先根据 appData 结构解析宿主系统配置目录；
 	// 若 appData 以 antigravity-proxy-desktop 结尾（如默认数据目录或沙箱测试环境），取其父目录；
@@ -518,6 +611,5 @@ func PatchAll(enable bool, appData, homeDir, caPath string, logCallback func(str
 	HijackCli(enable, systemAppData, homeDir, caPath, logCallback)
 
 	tempDir := filepath.Join(os.TempDir(), "antigravity-agent-asar-temp")
-	_ = PatchAgentAsar(enable, homeDir, tempDir, caPath, logCallback)
-	return nil
+	return PatchAgentAsar(enable, homeDir, tempDir, caPath, logCallback)
 }

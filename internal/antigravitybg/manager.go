@@ -448,6 +448,11 @@ func (m *Manager) LaunchApp(customPath string) error {
 	return m.pathResolver.LaunchApp(asarPath)
 }
 
+// GetPathResolver 返回底层的路径解析与桌面端进程控制器，供补丁服务复用。
+func (m *Manager) GetPathResolver() *PathResolver {
+	return m.pathResolver
+}
+
 func (m *Manager) loadStoredConfig() {
 	if m.configDir == "" {
 		return

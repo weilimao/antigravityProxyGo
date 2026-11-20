@@ -192,6 +192,7 @@ func (m *Manager) GetNextAccount(modelName string) *Account {
 	if len(activeAccounts) == 0 {
 		return nil
 	}
+	activeAccounts = m.orderAccountsByLowTierLocked(activeAccounts, currentChannel, modelName)
 
 	isAvailable := func(acc *Account) bool {
 		cooldownUntil := int64(0)
@@ -423,7 +424,8 @@ func (m *Manager) GetAvailableAccountsForChannelAndGroup(channel, groupID string
 			list = append(list, a)
 		}
 	}
-	return filterAccountsByModelCapabilityWithPool(list, channel, modelName, now, anyPoolAccountExplicitlySupports(m.accounts, channel, modelName))
+	filtered := filterAccountsByModelCapabilityWithPool(list, channel, modelName, now, anyPoolAccountExplicitlySupports(m.accounts, channel, modelName))
+	return m.orderAccountsByLowTierLocked(filtered, channel, modelName)
 }
 
 func (m *Manager) GetAvailableAccounts(modelName string) []*Account {

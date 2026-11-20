@@ -42,21 +42,10 @@ func (sc *serveContext) routeForAttempt(attemptIndex int) (*routeOutcome, error)
 	}
 
 	if usePool {
-		available, limit := sc.selectCandidatePoolAccounts(poolChannel)
-
-		// 并发限制:按上限过滤超限账号再喂 sessionRouter(保持 sticky/round-robin 语义,
-		// sessionRouter 既有「原绑定不可用→删除改绑」分支会永久迁移达上限的 sticky 号,零改共享组件)。
-		// 过滤集空则取在途并发最少的号允许超额降级(对齐用户「绝不硬拒」预期),
-		// 此时不再走 sessionRouter 绑定(超额临时号,不永久改绑到超额状态)。
-		filtered := sc.h.accountMgr.FilterByConcurrency(available, limit)
-		if len(filtered) > 0 {
-			poolAccount = sc.h.sessionRouter.GetOrAssignAccount(sc.sessionKey, filtered, sc.h.logFn)
-		} else {
-			overAcc := sc.h.accountMgr.LeastLoadedAccount(available)
-			if overAcc != nil {
-				poolAccount = overAcc
-				sc.h.logFn(fmt.Sprintf("⚠️ [并发限制] %s 池并发全满(限 %d),超额降级到最少并发号 %s", poolChannel, limit, overAcc.Email))
-			}
+		picked, limit, overloaded := sc.pickSessionPoolAccount(poolChannel, true)
+		poolAccount = picked
+		if overloaded && poolAccount != nil {
+			sc.h.logFn(fmt.Sprintf("⚠️ [并发限制] %s 池并发全满(限 %d),超额降级到最少并发号 %s", poolChannel, limit, poolAccount.Email))
 		}
 		if poolAccount == nil {
 			return nil, errors.New("QUOTA_EXHAUSTED")

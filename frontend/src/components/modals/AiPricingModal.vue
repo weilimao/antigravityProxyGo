@@ -11,15 +11,77 @@
       <span class="text-sm font-bold text-on-surface dark:text-white" data-i18n="aiPricingModalTitle">AI 一键生成计费配置</span>
     </template>
 
-    <!-- 账号选择 + 说明 -->
+    <!-- 账号/模型选择 + 说明 -->
     <div id="aiPricingPreSection" class="flex flex-col gap-4">
-      <div class="flex flex-col gap-1.5">
-        <label class="text-[11px] text-outline font-bold uppercase" data-i18n="aiPricingAccountLabel">选择用于生成的 Antigravity 账号</label>
+      <!-- 方式单选切换: 按模型 / 按账号 -->
+      <div class="flex items-center gap-5 border-b border-outline-variant/20 pb-3">
+        <label class="flex items-center gap-1.5 text-[12px] font-bold text-on-surface dark:text-white cursor-pointer select-none">
+          <input
+            type="radio"
+            name="aiPricingModeRadio"
+            value="model"
+            v-model="aiPricingMode"
+            class="w-3.5 h-3.5 text-primary focus:ring-primary cursor-pointer"
+          />
+          <span data-i18n="aiPricingModeModel">按模型生成</span>
+        </label>
+        <label class="flex items-center gap-1.5 text-[12px] font-bold text-on-surface dark:text-white cursor-pointer select-none">
+          <input
+            type="radio"
+            name="aiPricingModeRadio"
+            value="account"
+            v-model="aiPricingMode"
+            class="w-3.5 h-3.5 text-primary focus:ring-primary cursor-pointer"
+          />
+          <span data-i18n="aiPricingModeAccount">按账号生成 (Antigravity)</span>
+        </label>
+      </div>
+
+      <!-- 模式一: 按模型生成 (使用公共 ModelSearchSelect 组件) -->
+      <div v-show="aiPricingMode === 'model'" class="flex flex-col gap-1.5">
+        <label class="text-[11px] text-outline font-bold uppercase flex items-center gap-1" data-i18n="aiPricingModelLabel">
+          <span class="material-symbols-outlined text-[14px] text-primary">smart_toy</span>
+          选择用于生成的模型
+        </label>
+        <ModelSearchSelect
+          v-model="aiPricingSelectedModel"
+          :options="aiPricingModelOptions"
+          :allow-custom="true"
+          :refresh-on-open="true"
+          placeholder="搜索或输入用于生成的模型..."
+          @refresh="refreshAiPricingModelOptions"
+          class="w-full"
+        />
+        <p class="text-[11px] text-outline leading-relaxed" data-i18n="aiPricingDescModel">
+          点击开始生成后,将调用选定模型为「模型统计」中尚未登记单价的模型生成建议定价(USD/每百万 Tokens),生成完毕后可在表格中微调后确认添加。
+        </p>
+      </div>
+
+      <!-- 模式二: 按账号生成 (保留原有 Antigravity 账号直连逻辑) -->
+      <div v-show="aiPricingMode === 'account'" class="flex flex-col gap-1.5">
+        <label class="text-[11px] text-outline font-bold uppercase flex items-center gap-1" data-i18n="aiPricingAccountLabel">
+          <span class="material-symbols-outlined text-[14px] text-primary">manage_accounts</span>
+          选择用于生成的 Antigravity 账号
+        </label>
         <select id="aiPricingAccountSelect" class="w-full px-3 py-1.5 text-[13px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white">
           <!-- JS 动态填充 -->
         </select>
-        <p class="text-[11px] text-outline leading-relaxed" data-i18n="aiPricingDesc">点击开始生成后,将调用选定账号的 Gemini 模型为「模型统计」中尚未登记单价的模型生成建议定价(USD/每百万 Tokens),生成完毕后可在表格中微调后确认添加。</p>
+
+        <!-- 该账号的模型选择下拉列表 (联动切换) -->
+        <div class="flex flex-col gap-1.5 mt-1" id="aiPricingAccountModelSection">
+          <label class="text-[11px] text-outline font-bold uppercase flex items-center gap-1" data-i18n="aiPricingAccountModelLabel">
+            <span class="material-symbols-outlined text-[14px] text-primary">smart_toy</span>
+            选择用于生成的账号模型
+          </label>
+          <select id="aiPricingAccountModelSelect" class="w-full px-3 py-1.5 text-[13px] bg-white dark:bg-[#1a1f30] border border-outline-variant/60 rounded-md focus:border-primary focus:outline-none transition-shadow text-on-surface dark:text-white">
+            <!-- JS 动态填充该账号的模型列表 -->
+          </select>
+        </div>
+        <p class="text-[11px] text-outline leading-relaxed" data-i18n="aiPricingDesc">
+          点击开始生成后,将调用选定账号的 Gemini 模型为「模型统计」中尚未登记单价的模型生成建议定价(USD/每百万 Tokens),生成完毕后可在表格中微调后确认添加。
+        </p>
       </div>
+
       <button id="btnAiPricingGen" class="flex items-center justify-center gap-1.5 px-4 py-2 bg-primary text-white hover:bg-primary/90 rounded-lg text-[13px] font-bold transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
         <span class="material-symbols-outlined text-[16px]">auto_awesome</span>
         <span data-i18n="aiPricingGenBtn">开始生成</span>
@@ -69,4 +131,11 @@
 
 <script setup lang="ts">
 import BaseModal from './BaseModal.vue';
+import ModelSearchSelect from '../settings/agent-config/ModelSearchSelect.vue';
+import {
+  aiPricingMode,
+  aiPricingSelectedModel,
+  aiPricingModelOptions,
+  refreshAiPricingModelOptions,
+} from '../../ui/aiPricingController';
 </script>

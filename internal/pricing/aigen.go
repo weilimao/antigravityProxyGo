@@ -156,26 +156,28 @@ func (g *AIPriceGenerator) notifyProgress(progressFn func(stage, status string),
 }
 
 // Generate 对 models 候选列表生成单价,返回 {模型基名: AIPriceResult}。
-// accountId 必须指向一个已登录且 token 有效的 Antigravity 账号。
-// progressFn 是阶段进度回调(可为 nil):在取 token / 联网 / 降级 / 刷新 / 解析 / 完成
-// 边界被调用,上层经 wails EventsEmit 推送前端实时进度。
-//
-// 返回 map 的键严格等于输入 models 各元素(按下标对齐),与 AI 返回 name 字段解耦,
-// 避免大小写/空白漂移导致前端表格行对不上。AI 返回条目缺失时填 {0,0,0} 不报错,
-// 让用户在表格里手动补并标 Estimated。models 为空时直接返回空 map(不算错误)。
-//
-// AIPriceResult 承载 Rate + 三个质检标记:
-//   - Grounded:       本次结果是否真经联网检索取到 grounding 来源(groundingChunks 非空)
-//   - Estimated:      AI 自标估算(prompt 第 6 条)或后端 Cached 0.25× 兜底估算
-//   - AnchorConflict: 与 realPricingAnchor 真实厂商标价偏差 > 2x,前端打红色警示
-//   - Sources:        grounding 引用的官方价页 URL,前端可点开核对
+// 内部使用默认配置模型(g.model / AIModelDefault),兼容历史调用。
 func (g *AIPriceGenerator) Generate(models []string, accountId string, progressFn func(stage, status string)) (map[string]AIPriceResult, error) {
+	return g.GenerateWithModel(models, accountId, "", progressFn)
+}
+
+// GenerateWithModel 允许显式指定用于生成的模型(如 gemini-2.5-flash, gemini-2.5-pro, claude-3-5-sonnet 等)。
+// 若 model 为空,则回退使用 g.model(默认 AIModelDefault)。
+func (g *AIPriceGenerator) GenerateWithModel(models []string, accountId string, model string, progressFn func(stage, status string)) (map[string]AIPriceResult, error) {
 	result := make(map[string]AIPriceResult, len(models))
 	if len(models) == 0 {
 		return result, nil
 	}
 	if g == nil || g.getAccountTokens == nil {
 		return result, errors.New("AIPriceGenerator 未就绪")
+	}
+
+	targetModel := strings.TrimSpace(model)
+	if targetModel == "" {
+		targetModel = g.model
+	}
+	if targetModel == "" {
+		targetModel = AIModelDefault
 	}
 
 	g.notifyProgress(progressFn, "fetch-token", "正在获取账号凭证...")
@@ -193,14 +195,14 @@ func (g *AIPriceGenerator) Generate(models []string, accountId string, progressF
 	}
 
 	// 先尝试带 googleSearch grounding 联网检索,失败再降级纯知识。
-	g.notifyProgress(progressFn, "grounding-search", "正在联网检索各厂商官方定价页...")
+	g.notifyProgress(progressFn, "grounding-search", fmt.Sprintf("正在使用模型 %s 联网检索各厂商官方定价页...", targetModel))
 	// text 与 sources 一起追踪本次(及可能降级重试后的最终)联网结果。
-	text, sources, err := g.generateOnce(accountId, accessToken, projectID, models, true)
+	text, sources, err := g.generateOnce(accountId, accessToken, projectID, targetModel, models, true)
 	// grounding 失败(非 401,即非鉴权问题)则去掉 tools 重试一次纯知识。
 	if err != nil && !isAuthError(err) && isGroundingRejection(err) {
 		g.logf("grounding 工具被上游拒收(%v),降级为纯知识库生成", err)
 		g.notifyProgress(progressFn, "grounding-degraded", "联网检索被上游拒收,降级为知识库估算(结果将标「未联网」)")
-		text, sources, err = g.generateOnce(accountId, accessToken, projectID, models, false)
+		text, sources, err = g.generateOnce(accountId, accessToken, projectID, targetModel, models, false)
 	}
 	// 401 鉴权失败 + 有 refreshToken → 刷新 token 后重试一次(与 packet.go:590 一致)。
 	if err != nil && isAuthError(err) && refreshToken != "" && g.refreshAccount != nil {
@@ -211,11 +213,11 @@ func (g *AIPriceGenerator) Generate(models []string, accountId string, progressF
 			g.notifyProgress(progressFn, "error", "账号 Token 过期且自动刷新失败")
 			return result, fmt.Errorf("账号 Token 过期且自动刷新失败: %v", refreshErr)
 		}
-		g.notifyProgress(progressFn, "grounding-search", "凭证已刷新,正在联网检索厂商官方定价页...")
+		g.notifyProgress(progressFn, "grounding-search", fmt.Sprintf("凭证已刷新,正在使用模型 %s 联网检索厂商官方定价页...", targetModel))
 		// 刷新后优先按原 wantTools=true 重试(若 401 发生在 grounding 阶段而上游其实支持工具)。
-		text, sources, err = g.generateOnce(accountId, newToken, projectID, models, true)
+		text, sources, err = g.generateOnce(accountId, newToken, projectID, targetModel, models, true)
 		if err != nil && !isAuthError(err) && isGroundingRejection(err) {
-			text, sources, err = g.generateOnce(accountId, newToken, projectID, models, false)
+			text, sources, err = g.generateOnce(accountId, newToken, projectID, targetModel, models, false)
 		}
 	}
 	if err != nil {
@@ -226,6 +228,18 @@ func (g *AIPriceGenerator) Generate(models []string, accountId string, progressF
 	g.notifyProgress(progressFn, "parse-result", "正在解析定价结果...")
 	grounded := len(sources) > 0
 	extracted := extractPricingJSON(text)
+	result = buildResultMap(models, extracted, sources, grounded)
+	g.notifyProgress(progressFn, "done", "生成完成")
+	return result, nil
+}
+
+// buildResultMap 统一组装 AI 生成的定价结果 map,供 Generate 与 GenerateByModel 共享:
+// - 按输入顺序组装,缺失模型补零并标 Estimated
+// - cached 单价未公布时按 input × 0.25 兜底并标 Estimated
+// - 合并 source_url 网页引用
+// - 比对 realPricingAnchor 真实标价,偏差 > 2x 时标记 AnchorConflict
+func buildResultMap(models []string, extracted map[string]aiPriceParsed, sources []WebRef, grounded bool) map[string]AIPriceResult {
+	result := make(map[string]AIPriceResult, len(models))
 	for _, name := range models {
 		key := strings.ToLower(strings.TrimSpace(name))
 		parsed, ok := extracted[key]
@@ -267,15 +281,14 @@ func (g *AIPriceGenerator) Generate(models []string, accountId string, progressF
 			}
 		}
 		result[name] = AIPriceResult{
-			Rate:          rate,
-			Grounded:      grounded,
-			Estimated:     estimated,
+			Rate:           rate,
+			Grounded:       grounded,
+			Estimated:      estimated,
 			AnchorConflict: anchorConflictForModel(key, rate),
-			Sources:       rowSources,
+			Sources:        rowSources,
 		}
 	}
-	g.notifyProgress(progressFn, "done", "生成完成")
-	return result, nil
+	return result
 }
 
 // generateOnce 用 token 调一次上游生成定价文本与 grounding 来源。wantTools=true 时带
@@ -285,12 +298,19 @@ func (g *AIPriceGenerator) Generate(models []string, accountId string, progressF
 //   - 鉴权错误(isAuthError):含 "HTTP 401" 文本 → 上层走 refreshAccount 重试
 //   - grounding 拒收(isGroundingRejection):HTTP 400 + grounding 关键词 → 上层去 tools 重试
 //   - 其他: 直接返回,上层不重试
-func (g *AIPriceGenerator) generateOnce(accountId, token, projectID string, models []string, wantTools bool) (string, []WebRef, error) {
+func (g *AIPriceGenerator) generateOnce(accountId, token, projectID string, model string, models []string, wantTools bool) (string, []WebRef, error) {
 	if g == nil || g.client == nil {
 		return "", nil, errors.New("AIPriceGenerator: nil service or client")
 	}
+	targetModel := strings.TrimSpace(model)
+	if targetModel == "" {
+		targetModel = g.model
+	}
+	if targetModel == "" {
+		targetModel = AIModelDefault
+	}
 	prompt := buildPricingPrompt(models)
-	reqBodyMap := buildAIRequestEnvelope(projectID, prompt, g.model, wantTools)
+	reqBodyMap := buildAIRequestEnvelope(projectID, prompt, targetModel, wantTools)
 	jsonBody, err := json.Marshal(reqBodyMap)
 	if err != nil {
 		return "", nil, fmt.Errorf("marshal AI pricing request: %w", err)

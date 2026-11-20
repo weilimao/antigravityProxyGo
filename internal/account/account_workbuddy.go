@@ -35,16 +35,63 @@ const (
 	WorkBuddyPackageFreePlanIntl = "TCACA_code_035_ArVxJcGDsm" // 国际版免费套餐月度基础包 (100积分)
 )
 
-// WorkBuddySupportedModels 列出 WorkBuddy 原生支持的免费模型集合。
+// WorkBuddySupportedModels 列出 WorkBuddy 原生支持的核心可用模型集合（含国内版与国际版官方模型）。
 var WorkBuddySupportedModels = []string{
 	"deepseek-v4.1-flash",
+	"deepseek-v4-flash",
+	"deepseek-v4-pro",
+	"deepseek-v3-2-volc",
+	"deepseek-v3-1-volc",
+	"glm-5.3-flash",
+	"glm-5.3",
+	"glm-5.2",
+	"glm-5.1",
+	"glm-5.0-turbo",
+	"glm-4.7",
+	"kimi-k3-1",
+	"kimi-k2.8-preview",
+	"kimi-k2.6",
+	"kimi-k2.5",
+	"minimax-m3.1-flash",
+	"minimax-m2.7",
+	"minimax-m2.5",
+	"hy4flash-free",
+	"hy4flash",
+	"hy4std",
 	"hy4-preview-f",
 	"hy3",
 	"hunyuan-2.0-instruct",
-	"glm-5.1",
-	"minimax-m2.5",
 	"gpt-5.5",
 	"gemini-3.5-flash",
+}
+
+// WorkBuddyDomesticCoreModels 列出 WorkBuddy 国内版客户端本地内置与推荐的核心可用模型。
+// 即使上游远端 /v3/config 因灰度或接口限制未下发全量，也确保这些官方支持的聊天模型能合并呈现给用户。
+var WorkBuddyDomesticCoreModels = []string{
+	"deepseek-v4.1-flash",
+	"deepseek-v4-flash",
+	"deepseek-v4-pro",
+	"deepseek-v3-2-volc",
+	"deepseek-v3-1-volc",
+	"glm-5.3-flash",
+	"glm-5.3",
+	"glm-5.2",
+	"glm-5.1",
+	"glm-5.0-turbo",
+	"glm-4.7",
+	"kimi-k3-1",
+	"kimi-k2.8-preview",
+	"kimi-k2.6",
+	"kimi-k2.5",
+	"minimax-m3.1-flash",
+	"minimax-m2.7",
+	"minimax-m2.5",
+	"hy4flash-free",
+	"hy4flash",
+	"hy4std",
+	"hy4-preview-f",
+	"hy3",
+	"hunyuan-2.0-instruct",
 }
 
 // WorkBuddyAccountInput 是从前端/IPC 接收的 WorkBuddy 账号录入参数。

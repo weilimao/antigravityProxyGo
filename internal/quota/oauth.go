@@ -44,6 +44,8 @@ type AuthManager struct {
 	activeLogin     *activeLogin
 	// xaiLoginStates 保存进行中的 xAI 设备码登录状态(state -> result),供前端轮询。
 	xaiLoginStates map[string]*xaiLoginState
+	// endpoints 允许测试环境注入本地 OAuth mock 服务地址；生产环境保持零值即回退官方端点。
+	endpoints oauthEndpoints
 }
 
 type refreshPromise struct {
@@ -171,45 +173,9 @@ func (am *AuthManager) RefreshToken(acc *account.Account) (string, error) {
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", acc.RefreshToken)
 
-	req, errReq := http.NewRequest("POST", "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
-	if errReq != nil {
-		promise.err = errReq
-		return "", errReq
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if acc.Provider == "antigravity" {
-		req.Header.Set("User-Agent", am.getAntigravityUA())
-	}
-
-	client := netutil.GetAccountClient(accountId, 15*time.Second)
-	resp, err := client.Do(req)
+	tokenResp, err := am.doGoogleTokenRequest(context.Background(), form, accountId, 15*time.Second)
 	if err != nil {
 		promise.err = err
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		promise.err = err
-		return "", err
-	}
-
-	var tokenResp TokenResponse
-	if err := json.Unmarshal(bodyBytes, &tokenResp); err != nil {
-		promise.err = err
-		return "", err
-	}
-
-	if resp.StatusCode != 200 || tokenResp.AccessToken == "" {
-		errMsg := tokenResp.ErrorDescription
-		if errMsg == "" {
-			errMsg = tokenResp.Error
-		}
-		if errMsg == "" {
-			errMsg = fmt.Sprintf("HTTP %d", resp.StatusCode)
-		}
-		promise.err = errors.New(errMsg)
 
 		// Check if permanent refresh failure (e.g. invalid grant), and disable account automatically.
 		//
@@ -219,7 +185,7 @@ func (am *AuthManager) RefreshToken(acc *account.Account) (string, error) {
 		// 仅 Google 分支保留「单次永久失败即停用」语义——Google 端 invalid_grant 确实是 refresh_token
 		// 真失效,而本监控 5 分钟一 tick 触发频率低、单次可信度高。
 		// xAI(Grok)分支见 refreshXaiToken:走连续 2 次累计判定,不再走 isPermanent。
-		errLower := strings.ToLower(errMsg)
+		errLower := strings.ToLower(err.Error())
 		isPermanent := strings.Contains(errLower, "invalid_grant") ||
 			strings.Contains(errLower, "invalid client") ||
 			strings.Contains(errLower, "unauthorized_client")
@@ -239,26 +205,63 @@ func (am *AuthManager) RefreshToken(acc *account.Account) (string, error) {
 	return promise.token, nil
 }
 
-func (am *AuthManager) getAntigravityUA() string {
-	if am != nil && am.accountMgr != nil {
-		if ua := strings.TrimSpace(am.accountMgr.GetAntigravityUserAgent()); ua != "" {
-			return ua
-		}
+// doGoogleTokenRequest 向 Google OAuth Token 端点发起表单请求。
+// 与官方客户端保持一致，使用 Go 默认 User-Agent（不向 oauth2.googleapis.com 注入 antigravity/hub UA）。
+func (am *AuthManager) doGoogleTokenRequest(ctx context.Context, form url.Values, transportKey string, timeout time.Duration) (*TokenResponse, error) {
+	ep := am.resolveOAuthEndpoints()
+	req, err := http.NewRequestWithContext(ctx, "POST", ep.tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
 	}
-	return account.FormatAntigravityUserAgent(account.DefaultAntigravityCliVersion)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := netutil.GetAccountClient(transportKey, timeout)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return decodeGoogleTokenResponse(resp.StatusCode, bodyBytes)
+}
+
+func decodeGoogleTokenResponse(statusCode int, bodyBytes []byte) (*TokenResponse, error) {
+	var tokenResp TokenResponse
+	if err := json.Unmarshal(bodyBytes, &tokenResp); err != nil {
+		return nil, err
+	}
+	if statusCode != http.StatusOK || tokenResp.AccessToken == "" {
+		errMsg := tokenResp.ErrorDescription
+		if errMsg == "" {
+			errMsg = tokenResp.Error
+		}
+		if errMsg == "" {
+			errMsg = fmt.Sprintf("HTTP %d", statusCode)
+		}
+		return nil, errors.New(errMsg)
+	}
+	return &tokenResp, nil
 }
 
 func (am *AuthManager) GetUserEmail(accessToken, provider string) (string, error) {
-	req, err := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
+	tempKey := "Bearer " + accessToken
+	defer netutil.CloseAccountTransport(tempKey)
+	return am.getUserEmailWithTransportKey(context.Background(), accessToken, tempKey)
+}
+
+func (am *AuthManager) getUserEmailWithTransportKey(ctx context.Context, accessToken, transportKey string) (string, error) {
+	ep := am.resolveOAuthEndpoints()
+	req, err := http.NewRequestWithContext(ctx, "GET", ep.userInfoURL, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	if provider == "antigravity" {
-		req.Header.Set("User-Agent", am.getAntigravityUA())
-	}
 
-	client := netutil.GetAccountClient("Bearer "+accessToken, 10*time.Second)
+	client := netutil.GetAccountClient(transportKey, 10*time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -268,6 +271,9 @@ func (am *AuthManager) GetUserEmail(accessToken, provider string) (string, error
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("userinfo HTTP %d", resp.StatusCode)
 	}
 
 	var info UserInfo
@@ -335,44 +341,9 @@ func (am *AuthManager) ExchangeCodeForTokenManual(code, verifier string) (*Token
 	form.Set("grant_type", "authorization_code")
 	form.Set("redirect_uri", officialRedirectURI)
 
-	req, errReq := http.NewRequest("POST", "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
-	if errReq != nil {
-		return nil, errReq
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", am.getAntigravityUA())
-
 	tempKey := "oauth-exchange:" + code
 	defer netutil.CloseAccountTransport(tempKey)
-	client := netutil.GetAccountClient(tempKey, 15*time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var tokenResp TokenResponse
-	if err := json.Unmarshal(bodyBytes, &tokenResp); err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != 200 || tokenResp.AccessToken == "" {
-		errMsg := tokenResp.ErrorDescription
-		if errMsg == "" {
-			errMsg = tokenResp.Error
-		}
-		if errMsg == "" {
-			errMsg = fmt.Sprintf("HTTP Status %d", resp.StatusCode)
-		}
-		return nil, errors.New(errMsg)
-	}
-
-	return &tokenResp, nil
+	return am.doGoogleTokenRequest(context.Background(), form, tempKey, 15*time.Second)
 }
 
 func (am *AuthManager) StartLogin(provider string, openBrowser func(string)) (map[string]interface{}, error) {
@@ -395,23 +366,18 @@ func (am *AuthManager) StartLogin(provider string, openBrowser func(string)) (ma
 		cancel()
 	}()
 
-	var port = 0
 	if provider == "antigravity" {
-		port = 38121
+		return am.startAntigravityLogin(ctx, openBrowser)
 	}
 
-	// Bind temporary local listener
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	// 非 antigravity（如 gemini-cli）保留原有回调路径与 Scope 逻辑
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("无法绑定 OAuth 回调接口: %v", err)
 	}
 
 	actualPort := listener.Addr().(*net.TCPAddr).Port
 	redirectUri := fmt.Sprintf("http://127.0.0.1:%d/", actualPort)
-	if provider == "antigravity" {
-		redirectUri = fmt.Sprintf("http://127.0.0.1:%d/oauth-callback", actualPort)
-	}
-
 	clientID, clientSecret := getCredentials(provider)
 
 	scopes := []string{
@@ -420,40 +386,34 @@ func (am *AuthManager) StartLogin(provider string, openBrowser func(string)) (ma
 		"https://www.googleapis.com/auth/userinfo.profile",
 		"https://www.googleapis.com/auth/cloud-platform",
 	}
-	if provider == "antigravity" {
-		scopes = append(scopes, "https://www.googleapis.com/auth/cclog", "https://www.googleapis.com/auth/experimentsandconfigs")
-	}
 
 	scopeParam := strings.Join(scopes, " ")
 	authUrl := fmt.Sprintf("https://accounts.google.com/o/oauth2/v2/auth?client_id=%s&response_type=code&scope=%s&redirect_uri=%s&access_type=offline&prompt=consent",
 		clientID, url.QueryEscape(scopeParam), url.QueryEscape(redirectUri))
 
-	openBrowser(authUrl)
-
-	type loginResult struct {
-		email        string
-		accessToken  string
-		refreshToken string
-		err          error
+	if openBrowser != nil {
+		openBrowser(authUrl)
 	}
 
-	resultChan := make(chan loginResult, 1)
+	resultChan := make(chan oauthLoginResult, 1)
 	mux := http.NewServeMux()
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
 		if code == "" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("<html><body><h2>登录失败：未收到授权码。</h2></body></html>"))
-			resultChan <- loginResult{err: errors.New("no auth code received")}
+			_, _ = w.Write([]byte("<html><body><h2>登录失败：未收到授权码。</h2></body></html>"))
+			resultChan <- oauthLoginResult{err: errors.New("no auth code received")}
 			return
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("<html><body><h2>登录成功！您可以关闭此页面并返回 Antigravity Proxy。</h2><script>window.close()</script></body></html>"))
+		_, _ = w.Write([]byte("<html><body><h2>登录成功！您可以关闭此页面并返回 Antigravity Proxy。</h2><script>window.close()</script></body></html>"))
 
-		// Exchange code
 		form := url.Values{}
 		form.Set("client_id", clientID)
 		form.Set("client_secret", clientSecret)
@@ -461,51 +421,20 @@ func (am *AuthManager) StartLogin(provider string, openBrowser func(string)) (ma
 		form.Set("grant_type", "authorization_code")
 		form.Set("redirect_uri", redirectUri)
 
-
-		req, errReq := http.NewRequestWithContext(ctx, "POST", "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
-		if errReq != nil {
-			resultChan <- loginResult{err: errReq}
-			return
-		}
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("User-Agent", am.getAntigravityUA())
 		tempKey := "oauth-login:" + code
 		defer netutil.CloseAccountTransport(tempKey)
-		client := netutil.GetAccountClient(tempKey, 15*time.Second)
-		resp, err := client.Do(req)
+		tokenResp, err := am.doGoogleTokenRequest(ctx, form, tempKey, 15*time.Second)
 		if err != nil {
-			resultChan <- loginResult{err: err}
-			return
-		}
-		defer resp.Body.Close()
-
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			resultChan <- loginResult{err: err}
+			resultChan <- oauthLoginResult{err: fmt.Errorf("OAuth exchange failed: %w", err)}
 			return
 		}
 
-		var tokenResp TokenResponse
-		if err := json.Unmarshal(bodyBytes, &tokenResp); err != nil {
-			resultChan <- loginResult{err: err}
-			return
-		}
-
-		if resp.StatusCode != 200 || tokenResp.AccessToken == "" {
-			errMsg := tokenResp.ErrorDescription
-			if errMsg == "" {
-				errMsg = tokenResp.Error
-			}
-			resultChan <- loginResult{err: fmt.Errorf("OAuth exchange failed: %s", errMsg)}
-			return
-		}
-
-		email, err := am.GetUserEmail(tokenResp.AccessToken, provider)
-		if err != nil {
+		email, err := am.getUserEmailWithTransportKey(ctx, tokenResp.AccessToken, tempKey)
+		if err != nil || email == "" {
 			email = "Unknown"
 		}
 
-		resultChan <- loginResult{
+		resultChan <- oauthLoginResult{
 			email:        email,
 			accessToken:  tokenResp.AccessToken,
 			refreshToken: tokenResp.RefreshToken,
@@ -519,20 +448,20 @@ func (am *AuthManager) StartLogin(provider string, openBrowser func(string)) (ma
 	go server.Serve(listener)
 
 	// Wait with a 5 minutes timeout or context cancellation
-	var loginRes loginResult
+	var loginRes oauthLoginResult
 	select {
 	case loginRes = <-resultChan:
 	case <-ctx.Done():
-		loginRes = loginResult{err: errors.New("登录已取消")}
+		loginRes = oauthLoginResult{err: errors.New("登录已取消")}
 	case <-time.After(5 * time.Minute):
-		loginRes = loginResult{err: errors.New("登录超时（5分钟）")}
+		loginRes = oauthLoginResult{err: errors.New("登录超时（5分钟）")}
 	}
 
 	// Clean up server
 	ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelShutdown()
-	server.Shutdown(ctxShutdown)
-	listener.Close()
+	_ = server.Shutdown(ctxShutdown)
+	_ = listener.Close()
 
 	if loginRes.err != nil {
 		return nil, loginRes.err
@@ -564,10 +493,10 @@ func (am *AuthManager) CancelLogin() {
 
 // xaiLoginState 是进行中 xAI 设备码登录的状态条目。
 type xaiLoginState struct {
-	status  string // "pending" | "success" | "error"
-	error   string
-	data    *xaiLoginData
-	cancel  context.CancelFunc
+	status string // "pending" | "success" | "error"
+	error  string
+	data   *xaiLoginData
+	cancel context.CancelFunc
 }
 
 // xaiLoginData 是登录成功后的凭证数据,供 IPC 落库。
@@ -706,8 +635,8 @@ func (am *AuthManager) StartXaiLogin(openBrowser func(string)) (map[string]inter
 	}()
 
 	return map[string]interface{}{
-		"state":           state,
-		"user_code":         dc.UserCode,
+		"state":            state,
+		"user_code":        dc.UserCode,
 		"verification_url": authURL,
 		"expires_in":       dc.ExpiresIn,
 	}, nil

@@ -2,7 +2,9 @@
   <div
     :id="id"
     :class="[
-      hideType === 'hidden' ? 'hidden fixed inset-0 modal-backdrop-animate' : 'fixed inset-0 opacity-0 pointer-events-none transition-opacity duration-200',
+      hideType === 'hidden'
+        ? 'hidden fixed inset-0 modal-backdrop-animate will-change-[opacity]'
+        : 'fixed inset-0 opacity-0 pointer-events-none transition-opacity duration-150 will-change-[opacity]',
       'bg-slate-950/75 flex items-center justify-center',
       zIndex || 'z-50'
     ]"
@@ -10,11 +12,15 @@
     <div
       :id="containerId"
       :class="[
-        'bg-white dark:bg-[#1e2538] rounded-2xl border border-outline-variant/60 shadow-2xl flex flex-col transform scale-95 transition-transform duration-200',
+        'bg-white dark:bg-[#1e2538] rounded-2xl border border-outline-variant/60 flex flex-col',
+        noScale
+          ? 'shadow-xl'
+          : 'shadow-2xl transform scale-95 transition-transform duration-150 transform-gpu will-change-transform',
         maxWidth || 'w-[600px] max-w-[90vw]',
         maxHeight || 'max-h-[85vh]',
         containerClass
       ]"
+      :style="{ backfaceVisibility: 'hidden' }"
     >
       <!-- Modal Header -->
       <div
@@ -93,12 +99,14 @@ const props = withDefaults(
     bodyClass?: string;
     footerBg?: string;
     footerClass?: string;
+    noScale?: boolean;
   }>(),
   {
     hideType: 'opacity',
     zIndex: 'z-50',
     showHeader: true,
     showClose: true,
+    noScale: false,
   }
 );
 
@@ -116,7 +124,7 @@ function handleClose() {
     if (modal) {
       modal.classList.add('opacity-0', 'pointer-events-none');
     }
-    if (props.containerId) {
+    if (props.containerId && !props.noScale) {
       const container = document.getElementById(props.containerId);
       if (container) {
         container.classList.remove('scale-100');

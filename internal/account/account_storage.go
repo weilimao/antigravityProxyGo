@@ -119,6 +119,7 @@ type poolConfigOnDisk struct {
 	WorkBuddyCliVersion       string          `json:"workbuddyCliVersion,omitempty"`
 	OpenCodeLBMode            string          `json:"opencodeLbMode,omitempty"`
 	OpenCodeMaxConcurrency    int             `json:"opencodeMaxConcurrency,omitempty"`
+	PreferLowTierAccount      bool            `json:"preferLowTierAccount,omitempty"`
 }
 
 // ============ 写盘:定向/全量 ============
@@ -253,6 +254,7 @@ func (m *Manager) marshalPoolConfig() ([]byte, error) {
 		WorkBuddyCliVersion:       m.workbuddyCliVersion,
 		OpenCodeLBMode:            m.opencodeLBMode,
 		OpenCodeMaxConcurrency:    m.opencodeMaxConcurrency,
+		PreferLowTierAccount:      m.preferLowTierAccount,
 	}
 	m.RUnlock()
 	return json.MarshalIndent(cfg, "", "  ")
@@ -324,6 +326,7 @@ func (m *Manager) loadPoolConfigIntoMemory() {
 	m.projectPoolMode = cfg.ProjectPoolMode
 	m.geminiCliPoolMode = cfg.GeminiCliPoolMode
 	m.activeChannel = cfg.ActiveChannel
+	m.preferLowTierAccount = cfg.PreferLowTierAccount
 	if cfg.OtherLBModes != nil {
 		// 载入时统一规范化为小写 groupID,保证与 SetOtherLBMode 的 key 口径一致。
 		m.otherLBModes = make(map[string]string, len(cfg.OtherLBModes))
@@ -532,6 +535,7 @@ func (m *Manager) migrateLegacyFile() error {
 		WorkBuddyCliVersion:       parsed.WorkBuddyCliVersion,
 		OpenCodeLBMode:            parsed.OpenCodeLBMode,
 		OpenCodeMaxConcurrency:    parsed.OpenCodeMaxConcurrency,
+		PreferLowTierAccount:      parsed.PreferLowTierAccount,
 	}
 	poolBytes, pErr := json.MarshalIndent(cfg, "", "  ")
 	if pErr != nil {

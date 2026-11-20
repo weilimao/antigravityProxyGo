@@ -352,3 +352,54 @@ func TestProbeAccountsModels_DynamicDifferentiatedModels(t *testing.T) {
 		t.Errorf("acc-old expected 6 missing models, got %v", resMap["acc-old"].MissingModels)
 	}
 }
+
+func TestGetCachedAccountsModels_MixedProbedAndUnprobed(t *testing.T) {
+	tmpDir := t.TempDir()
+	mgr := account.NewManager()
+	mgr.Init(tmpDir)
+
+	mgr.AddAccount(&account.Account{
+		ID: "acc-low", Email: "low@example.com", Provider: "antigravity", AccessToken: "t1", Enabled: true,
+	})
+	mgr.AddAccount(&account.Account{
+		ID: "acc-high", Email: "high@example.com", Provider: "antigravity", AccessToken: "t2", Enabled: true,
+	})
+	mgr.AddAccount(&account.Account{
+		ID: "acc-unprobed", Email: "unprobed@example.com", Provider: "antigravity", AccessToken: "t3", Enabled: true,
+	})
+
+	mgr.SetAccountSupportedModels("acc-low", []string{"gemini-3.8-flash"})
+	mgr.SetAccountSupportedModels("acc-high", []string{"gemini-3.8-flash", "gemini-4-hydrogen-high"})
+
+	resp := GetCachedAccountsModels(mgr, "antigravity")
+	if !resp.Success {
+		t.Fatalf("GetCachedAccountsModels failed: %s", resp.Error)
+	}
+	if resp.Summary.TotalAccounts != 3 {
+		t.Fatalf("expected TotalAccounts=3, got %d", resp.Summary.TotalAccounts)
+	}
+	if resp.Summary.ProbedAccounts != 2 || resp.Summary.ValidProbedCount != 2 {
+		t.Fatalf("expected ProbedAccounts=2 ValidProbedCount=2, got probed=%d valid=%d",
+			resp.Summary.ProbedAccounts, resp.Summary.ValidProbedCount)
+	}
+	if len(resp.Summary.DifferentiatedModels) != 1 || resp.Summary.DifferentiatedModels[0] != "gemini-4-hydrogen-high" {
+		t.Fatalf("expected DifferentiatedModels=[gemini-4-hydrogen-high], got %v", resp.Summary.DifferentiatedModels)
+	}
+
+	resMap := make(map[string]AccountModelCapabilityInfo, len(resp.Results))
+	for _, r := range resp.Results {
+		resMap[r.ID] = r
+	}
+	if resMap["acc-unprobed"].Probed {
+		t.Errorf("acc-unprobed should have Probed=false")
+	}
+	if len(resMap["acc-unprobed"].MissingModels) != 0 {
+		t.Errorf("acc-unprobed should not synthesize MissingModels, got %v", resMap["acc-unprobed"].MissingModels)
+	}
+	if !resMap["acc-low"].Probed {
+		t.Errorf("acc-low should have Probed=true")
+	}
+	if len(resMap["acc-low"].MissingModels) != 1 || resMap["acc-low"].MissingModels[0] != "gemini-4-hydrogen-high" {
+		t.Errorf("acc-low expected MissingModels=[gemini-4-hydrogen-high], got %v", resMap["acc-low"].MissingModels)
+	}
+}

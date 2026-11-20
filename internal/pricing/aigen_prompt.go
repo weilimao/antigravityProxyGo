@@ -66,3 +66,9 @@ func buildPricingPrompt(models []string) string {
 	b.WriteString("\n\n现在请直接输出 JSON 数组,第一个字符必须是 '['。")
 	return b.String()
 }
+
+// BuildPricingPrompt 导出给其他模块(如 aigen_model.go)复用标准计费分析提示词构造。
+func BuildPricingPrompt(models []string) string {
+	return buildPricingPrompt(models)
+}
+

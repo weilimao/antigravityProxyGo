@@ -44,6 +44,7 @@ func (a *App) emitAccountsRes() {
 		"grokWorkerProxyUrl":            a.settingsMgr.GetGrokWorkerProxyURL(),
 		"antigravityWorkerProxyEnabled": a.settingsMgr.IsAntigravityWorkerProxyEnabled(),
 		"antigravityWorkerProxyUrl":     a.settingsMgr.GetAntigravityWorkerProxyURL(),
-		"poolErrorRetry":               a.settingsMgr.GetPoolErrorRetry(),
+		"poolErrorRetry":                a.settingsMgr.GetPoolErrorRetry(),
+		"preferLowTierAccount":          a.accountMgr.GetPreferLowTierAccount(),
 	})
 }

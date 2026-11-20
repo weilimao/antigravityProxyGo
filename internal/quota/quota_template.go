@@ -82,6 +82,7 @@ func (q *QuotaService) loadCodeAssistBody(ua string) map[string]interface{} {
 		"ideType":    "ANTIGRAVITY",
 		"ideVersion": ver,
 		"ideName":    "antigravity",
+		"pluginType": "CLOUD_CODE",
 	}
 	if strings.Contains(strings.ToLower(ua), "windows") && strings.Contains(strings.ToLower(ua), "amd64") {
 		metadata["platform"] = "WINDOWS_AMD64"

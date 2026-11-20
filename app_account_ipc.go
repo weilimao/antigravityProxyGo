@@ -44,6 +44,47 @@ func (a *App) handleAccountIPC(channel string, args []interface{}) (string, bool
 	}
 
 	switch channel {
+	case "accounts:get-cached-models":
+		var payload struct {
+			Channel string `json:"channel"`
+		}
+		if len(args) > 0 {
+			bytesPayload, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(bytesPayload, &payload)
+		}
+		ch := payload.Channel
+		if ch == "" && a.accountMgr != nil {
+			ch = a.accountMgr.GetActiveChannel()
+		}
+		resp := modelfetch.GetCachedAccountsModels(a.accountMgr, ch)
+		data, err := marshalResponse(resp)
+		return data, true, err
+
+	case "accounts:set-prefer-low-tier":
+		var payload struct {
+			Enabled bool `json:"enabled"`
+		}
+		if len(args) > 0 {
+			bytesPayload, _ := json.Marshal(args[0])
+			_ = json.Unmarshal(bytesPayload, &payload)
+		}
+		if a.accountMgr != nil {
+			if err := a.accountMgr.SetPreferLowTierAccount(payload.Enabled); err != nil {
+				data, mErr := marshalResponse(map[string]interface{}{
+					"success": false,
+					"error":   err.Error(),
+				})
+				return data, true, mErr
+			}
+			a.AddLog(fmt.Sprintf("⚖️ [模型分层路由] 优先使用低阶模型账号: %v", payload.Enabled))
+			a.emitAccountsRes()
+		}
+		data, err := marshalResponse(map[string]interface{}{
+			"success":              true,
+			"preferLowTierAccount": payload.Enabled,
+		})
+		return data, true, err
+
 	case "accounts:probe-models":
 		var payload struct {
 			Channel    string   `json:"channel"`

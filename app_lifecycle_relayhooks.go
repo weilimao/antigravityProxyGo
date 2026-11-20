@@ -153,6 +153,10 @@ func (a *App) relayRecordUsage(allocatedAccount, userID, apiKeyID, modelName str
 // 与 relayRecordUsage 同为原 startup 内联闭包提取,依赖 a.relayUserMgr / a.relayStatsMgr 与
 // db/relay 包级函数,不依赖 startup 局部变量。
 func (a *App) relayAuthorize(userID, apiKeyID, modelName string) error {
+	// 针对本地官方/默认 bypass 会话或默认本地管理员身份，免除外部租户配额校验直接放行
+	if apiKeyID == relay.APIKeyIDOfficialBypass || apiKeyID == relay.APIKeyIDDefaultBypass || userID == "default_local_admin" {
+		return nil
+	}
 	if a.relayUserMgr == nil || a.relayStatsMgr == nil {
 		return nil
 	}

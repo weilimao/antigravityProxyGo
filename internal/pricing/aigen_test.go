@@ -1,6 +1,7 @@
 package pricing
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -539,5 +540,49 @@ func TestAIPriceGenerator_HeaderSanitizationAndUserAgent(t *testing.T) {
 	}
 	if capturedGoogClient != "" {
 		t.Errorf("expected X-Goog-Api-Client to be absent (avoid JA3/NodeJS mismatch), got %q", capturedGoogClient)
+	}
+}
+
+func TestAIPriceGenerator_GenerateWithModel(t *testing.T) {
+	var capturedModel string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1internal:streamGenerateContent", func(w http.ResponseWriter, r *http.Request) {
+		var reqBody struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&reqBody)
+		capturedModel = reqBody.Model
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, sseBody(`[{"name":"gemini-2.5-pro","input":1.25,"output":5.0,"cached":0.3125}]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	prov := &fakeTokenProvider{access: "tok", refresh: "rt", project: "test-proj"}
+	g := NewAIPriceGenerator(prov.getFn, prov.refreshFn, nil,
+		WithAIEndpoint(srv.URL+"/v1internal:streamGenerateContent"),
+		WithAIClient(srv.Client()),
+	)
+
+	// 1. 显式指定自定义模型 gemini-2.5-pro
+	res, err := g.GenerateWithModel([]string{"gemini-2.5-pro"}, "acc-1", "gemini-2.5-pro", nil)
+	if err != nil {
+		t.Fatalf("GenerateWithModel err: %v", err)
+	}
+	if capturedModel != "gemini-2.5-pro" {
+		t.Errorf("expected capturedModel 'gemini-2.5-pro', got %q", capturedModel)
+	}
+	if res["gemini-2.5-pro"].Rate.Input != 1.25 {
+		t.Errorf("expected input 1.25, got %v", res["gemini-2.5-pro"].Rate.Input)
+	}
+
+	// 2. 传入空字符串，应平滑回退至默认模型
+	capturedModel = ""
+	_, err = g.GenerateWithModel([]string{"gemini-2.5-pro"}, "acc-1", "", nil)
+	if err != nil {
+		t.Fatalf("GenerateWithModel empty fallback err: %v", err)
+	}
+	if capturedModel != AIModelDefault {
+		t.Errorf("expected fallback model %q, got %q", AIModelDefault, capturedModel)
 	}
 }

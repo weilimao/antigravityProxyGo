@@ -34,7 +34,7 @@ const (
 	DefaultWorkBuddyAuthURL         = "https://www.workbuddy.ai"
 	DefaultWorkBuddyDomesticAuthURL = "https://copilot.tencent.com"
 	DefaultWorkBuddyAuthVersion     = "5.7.6"
-	DefaultWorkBuddyDomesticVersion = "5.7.7"
+	DefaultWorkBuddyDomesticVersion = "5.11.3"
 	WorkBuddyRetryCode              = 11217
 	DefaultWorkBuddyTimeout         = 300 * time.Second
 	DefaultWorkBuddyPollPeriod      = 1 * time.Second

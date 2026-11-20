@@ -349,6 +349,33 @@ func (r *Router) getActiveSiblingAccountLocked(baseKey string, availableAccounts
 	return latestAccount
 }
 
+// FindStickyAccount 检查当前会话（或当 subSuffix == "" 时同客户端 baseKey 下的活跃兄弟会话）
+// 是否已在 availableAccounts 中存在可复用的粘性/伴生绑定账号。仅执行只读查询，不新建或改写绑定。
+func (r *Router) FindStickyAccount(sessionKey string, availableAccounts []*account.Account) *account.Account {
+	if r == nil || len(availableAccounts) == 0 {
+		return nil
+	}
+	now := time.Now().UnixNano() / int64(time.Millisecond)
+	baseKey, subSuffix := parseBaseSessionKey(sessionKey)
+
+	r.RLock()
+	defer r.RUnlock()
+
+	if subSuffix == "" {
+		if siblingAccount := r.getActiveSiblingAccountLocked(baseKey, availableAccounts, now); siblingAccount != nil {
+			return siblingAccount
+		}
+	}
+	if existing, found := r.sessionMap[sessionKey]; found {
+		for _, a := range availableAccounts {
+			if a.ID == existing.AccountID {
+				return a
+			}
+		}
+	}
+	return nil
+}
+
 func (r *Router) GetOrAssignAccount(sessionKey string, availableAccounts []*account.Account, logFn func(string)) *account.Account {
 	if len(availableAccounts) == 0 {
 		return nil

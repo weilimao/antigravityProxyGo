@@ -187,7 +187,11 @@ func (h *APICompatHandler) handleV1Internal(w http.ResponseWriter, r *http.Reque
 		// sticky 选号键: 优先入口已注入的 userSession.SessionKey(按客户端会话粘性, 使同一
 		// Codex 用户的不同会话散到不同号), 空 → UserID(按用户粘性, 旧行为零回归)。
 		sessionKey := h.stickyKeyOf(userSession)
-		poolAccount := h.sessionRouter.GetOrAssignAccount(sessionKey, activeAvailable, h.logFn)
+		routableAvailable := activeAvailable
+		if h.sessionRouter.FindStickyAccount(sessionKey, activeAvailable) == nil {
+			routableAvailable = h.accountMgr.SelectPriorityTierAccounts(activeAvailable, poolChannel, currentModel)
+		}
+		poolAccount := h.sessionRouter.GetOrAssignAccount(sessionKey, routableAvailable, h.logFn)
 		if poolAccount == nil {
 			finalErr = fmt.Errorf("no available account assigned from pool")
 			break

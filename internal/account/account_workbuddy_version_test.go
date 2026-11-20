@@ -129,7 +129,7 @@ func TestBuildWorkBuddyHeaders_CustomAndDefaultVersions(t *testing.T) {
 
 	// 1. 默认版本
 	hDom := BuildWorkBuddyHeaders(accDom)
-	if hDom["X-IDE-Version"] != "5.7.7" || hDom["User-Agent"] != "WorkBuddy/5.7.7" {
+	if hDom["X-IDE-Version"] != DefaultWorkBuddyDomesticVersion || hDom["User-Agent"] != "WorkBuddy/"+DefaultWorkBuddyDomesticVersion {
 		t.Errorf("domestic default headers mismatch: X-IDE-Version=%s, UA=%s", hDom["X-IDE-Version"], hDom["User-Agent"])
 	}
 
